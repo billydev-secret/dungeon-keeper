@@ -106,6 +106,24 @@ These settings are **live and enforced** but are configured from the web dashboa
 
 - **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 115). Every game preflights `check_allowed_channel`; a channel that isn't on the allowlist refuses all games. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 115 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
 - **Per-guild per-game enable/disable** (`games_game_config`, default enabled). Checked by `check_game_enabled`.
+- **Player limits are offered only where there is a lobby.** Most Likely To and
+  Mt. Rushmore Draft create their game with `state="joining"`, so a floor and a
+  ceiling have somewhere to apply; every other game goes straight to
+  `state="playing"` and its panel offers neither. Both ceilings are clamped to
+  **25** whatever the dashboard stored, because the per-round vote is a Discord
+  `Select` and a larger lobby would 400 the message — the same reason
+  `mfk` caps its pool. Rushmore had no join cap at all until 2026-08-27: the
+  Join button appended unconditionally while the vote roster was sliced at 25,
+  so the 26th player drafted a full board and then could not be voted for.
+- **17 dials that no cog read were removed on 2026-08-27**, across WYR, AMA,
+  NHIE, Price, Rushmore and Clapback. Three were worse than inert: WYR's "Hide
+  Who Voted for What" could not have done what it said (naming is driven by a
+  separate `revealed` flag set by a host/mod button, and `anonymous` only gated
+  whether per-vote audit rows were written, so wiring it would have suppressed
+  a mod trail while hiding nothing from members); AMA's key was `screened`
+  while its cog reads `mode`; and Clapback's "Include NSFW Prompts" contradicted
+  the house rule that NSFW gates on `channel.is_nsfw()` and never on a bot-side
+  toggle.
 - **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible. This is now a *mirror*, not the record — every anonymous action is also written to `anon_audit_log` and surfaced on the admin dashboard regardless of whether this channel is configured (see `anon_audit_spec.md`).
 - **Game Host / editor role** (`games_editor_role`). Holders pass the Game-Host check for content authoring on the dashboard and can add/remove other players via `/games join|leave`.
 - **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4), set per-row on the Games Config → Allowed Channels table, and LegitLibs template/vocabulary content.
@@ -251,7 +269,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 | Knob | Default | Purpose |
 |---|---|---|
 | Per-game `enabled` | on | Toggle a game on/off for the guild |
-| Per-game `options` | empty | Free-form per-game knob bag (only a few games consume it, e.g. Photo's ping role) |
+| Per-game `options` | empty | Per-game knob bag. **Every dial a panel offers must be a key its cog reads** — `tests/web/test_game_dials_are_enforced.py` fails otherwise. Read by clapback, price, rushmore, ttl, photo and mlt; wyr, ama and nhie read none, so their panels offer none. |
 | Audit channel | unset | Mirror anonymous submissions here with original authors visible (the DB trail is always written either way) |
 | Editor / Game Host role | unset | Role whose holders pass the Game Host check on the dashboard and can move other players |
 | External tracking watches | unset | One or more (bot, channel, kind) pairs whose result messages are banked (set on Games → External Tracking); the same bot may appear in several channels |

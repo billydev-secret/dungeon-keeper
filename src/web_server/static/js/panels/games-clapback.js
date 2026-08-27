@@ -11,8 +11,6 @@ export function mount(container) {
       { key: "tags", label: "Only Use Prompts Tagged", type: "text", default: "",
         placeholder: "e.g. spicy, holiday",
         hint: "Comma-separated. Leave blank to draw from the whole bank." },
-      { key: "allow_nsfw", label: "Include NSFW Prompts", type: "bool", default: true,
-        hint: "Prompts tagged nsfw are only ever served in age-restricted channels, even when this is on." },
     ],
   });
 }

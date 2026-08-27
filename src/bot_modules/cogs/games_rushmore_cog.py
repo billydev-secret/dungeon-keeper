@@ -53,14 +53,19 @@ from bot_modules.games.utils.question_source import get_rushmore_topic, channel_
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
     DRAFT_ROUNDS,
+    MAX_PLAYERS,
+    MIN_PLAYERS,
     SKIPPED_MARKER,
     apply_backfill,
+    can_start,
+    clamp_player_limits,
     clamp_settings,
     compute_recap_stats,
     eligible_voters,
     find_who_picked,
     first_skipped_slot,
     generate_snake_order,
+    lobby_is_full,
     players_with_skips,
     tally_votes,
 )
@@ -216,10 +221,23 @@ class RushmoreJoinView(discord.ui.View):
     async def join(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         uid = interaction.user.id
+        state: dict = {}
+
         def _add(p):
-            if uid not in p.get("players", []):
-                p.setdefault("players", []).append(uid)
+            players = p.setdefault("players", [])
+            limit = int(p.get("settings", {}).get("max_players") or MAX_PLAYERS)
+            state["full"] = uid not in players and lobby_is_full(players, limit)
+            state["limit"] = limit
+            if not state["full"] and uid not in players:
+                players.append(uid)
+
         payload = await modify_payload(self.db, self.game_id, _add)
+        if state.get("full"):
+            await interaction.response.send_message(
+                f"❌ This draft is full — it takes up to {state['limit']} players.",
+                ephemeral=True,
+            )
+            return
         self.players = payload.get("players", [])
         names = self._player_names(interaction.guild)
         embed = build_join_embed(
@@ -257,8 +275,13 @@ class RushmoreJoinView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
             return
-        if len(self.players) < 3:
-            await interaction.response.send_message("Need at least 3 players to start a Mt. Rushmore draft.", ephemeral=True)
+        payload = await get_game_payload(self.db, self.game_id)
+        floor = int(payload.get("settings", {}).get("min_players") or MIN_PLAYERS)
+        if not can_start(self.players, floor):
+            await interaction.response.send_message(
+                f"Need at least {floor} players to start a Mt. Rushmore draft.",
+                ephemeral=True,
+            )
             return
 
         # Resolve topic if needed
@@ -727,9 +750,14 @@ class RushmoreCog(commands.Cog):
         mode = options.get("mode") or game_opts.get("mode") or "snake"
         if mode not in ("snake", "blitz"):
             mode = "snake"
+        min_players, max_players = clamp_player_limits(
+            options.get("min_players", game_opts.get("min_players", MIN_PLAYERS)),
+            options.get("max_players", game_opts.get("max_players", MAX_PLAYERS)),
+        )
         settings = {
             "timer": timer, "source": source, "vote_timer": vote_timer,
             "mode": mode, "tags": options.get("tags") or [],
+            "min_players": min_players, "max_players": max_players,
         }
 
         start_epoch = resolve_start_epoch(options)

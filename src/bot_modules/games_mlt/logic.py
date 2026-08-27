@@ -45,6 +45,21 @@ MIN_PLAYERS = 3
 MAX_PLAYERS = 25
 
 
+def clamp_player_limits(min_players: int, max_players: int) -> tuple[int, int]:
+    """Clamp the dashboard's player limits into what a round can actually run.
+
+    The ceiling never exceeds :data:`MAX_PLAYERS` whatever was stored — the
+    per-round vote is a Discord ``Select`` and a bigger lobby would 400 the
+    message — and a ceiling below the floor is raised to meet it, so the pair
+    can never describe a lobby nobody can start.
+    """
+    min_players = max(2, min(int(min_players or MIN_PLAYERS), MAX_PLAYERS))
+    max_players = max(2, min(int(max_players or MAX_PLAYERS), MAX_PLAYERS))
+    if max_players < min_players:
+        max_players = min_players
+    return min_players, max_players
+
+
 def lobby_is_full(players: list[int], max_players: int = MAX_PLAYERS) -> bool:
     """Return ``True`` when the lobby has reached ``max_players``.
 

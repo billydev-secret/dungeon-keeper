@@ -21,6 +21,7 @@ from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
     create_game,
+    get_game_options,
     update_game_message,
     update_game_payload,
     update_game_state,
@@ -48,6 +49,7 @@ from bot_modules.games_mlt.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
     add_player,
+    clamp_player_limits,
     apply_vote,
     bump_crowns,
     can_start,
@@ -85,14 +87,15 @@ class MLTJoinView(discord.ui.View):
         log.info("%s joined game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.setdefault("players", [])
-        if interaction.user.id not in players and lobby_is_full(players):
+        limit = int(payload.get("max_players") or MAX_PLAYERS)
+        if interaction.user.id not in players and lobby_is_full(players, limit):
             await interaction.response.send_message(
-                f"❌ This lobby is full — Most Likely To supports up to "
-                f"{MAX_PLAYERS} players.",
+                f"❌ This lobby is full — this game is set to take up to "
+                f"{limit} players.",
                 ephemeral=True,
             )
             return
-        add_player(players, interaction.user.id)
+        add_player(players, interaction.user.id, limit)
         await update_game_payload(self.db, self.game_id, payload)
 
         guild = interaction.guild
@@ -140,9 +143,10 @@ class MLTJoinView(discord.ui.View):
             return
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
-        if not can_start(players):
+        floor = int(payload.get("min_players") or MIN_PLAYERS)
+        if not can_start(players, floor):
             await interaction.response.send_message(
-                f"❌ Need at least {MIN_PLAYERS} players to start!", ephemeral=True
+                f"❌ Need at least {floor} players to start!", ephemeral=True
             )
             return
 
@@ -402,8 +406,17 @@ class MLTCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         question = options.get("question", "")
+        # The two dials this game actually has somewhere to enforce: it is one
+        # of only two with a join phase. Clamped on the way in so a value saved
+        # before the dashboard bounded them cannot outgrow the vote Select.
+        game_opts = await get_game_options(self.db, "mlt", guild_id)
+        min_players, max_players = clamp_player_limits(
+            options.get("min_players", game_opts.get("min_players", MIN_PLAYERS)),
+            options.get("max_players", game_opts.get("max_players", MAX_PLAYERS)),
+        )
         start_epoch = resolve_start_epoch(options)
-        payload = {"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or []}
+        payload = {"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or [],
+                   "min_players": min_players, "max_players": max_players}
         if start_epoch:
             payload["start_epoch"] = start_epoch
         game_id = await create_game(
@@ -702,9 +715,10 @@ class MLTCog(commands.Cog):
 
         def _add(payload):
             players = payload.setdefault("players", [])
+            state["limit"] = int(payload.get("max_players") or MAX_PLAYERS)
             state["already_in"] = uid in players
-            state["full"] = lobby_is_full(players)
-            state["added"] = add_player(players, uid)
+            state["full"] = lobby_is_full(players, state["limit"])
+            state["added"] = add_player(players, uid, state["limit"])
 
         await modify_payload(self.db, game_id, _add)
         if not state.get("added"):
@@ -713,8 +727,8 @@ class MLTCog(commands.Cog):
             if state.get("full"):
                 return (
                     False,
-                    f"This game is full — Most Likely To supports up to "
-                    f"{MAX_PLAYERS} players.",
+                    f"This game is full — it is set to take up to "
+                    f"{state.get('limit', MAX_PLAYERS)} players.",
                 )
             return False, f"**{member.display_name}** is already in this game."
         return True, f"🎲 **{member.display_name}** joined Most Likely To — in from the next round!"

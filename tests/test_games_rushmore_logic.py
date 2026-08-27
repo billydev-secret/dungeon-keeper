@@ -27,8 +27,12 @@ from bot_modules.games_rushmore.embeds import (
 )
 from bot_modules.games_rushmore.logic import (
     DRAFT_ROUNDS,
+    MAX_PLAYERS,
+    MIN_PLAYERS,
     SKIPPED_MARKER,
     apply_backfill,
+    can_start,
+    clamp_player_limits,
     clamp_settings,
     compute_recap_stats,
     eligible_voters,
@@ -36,6 +40,7 @@ from bot_modules.games_rushmore.logic import (
     first_skipped_slot,
     generate_snake_order,
     is_duplicate,
+    lobby_is_full,
     players_with_skips,
     tally_votes,
 )
@@ -900,3 +905,43 @@ def test_lobby_embed_renders_the_start_countdown():
 def test_lobby_embed_omits_the_countdown_when_none_was_set():
     embed = build_join_embed("Alice", [], topic=None)
     assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+# ── lobby limits (the dashboard dials, finally enforced) ────────────────
+
+
+def test_clamp_player_limits_never_exceeds_the_select_cap():
+    """The vote is a Discord Select, which holds 25 options. A server that
+    saved 200 while the dial was unbounded must not produce a lobby the vote
+    message cannot render."""
+    assert clamp_player_limits(2, 200) == (2, 25)
+    assert clamp_player_limits(2, 25) == (2, 25)
+
+
+def test_clamp_player_limits_raises_a_ceiling_below_its_floor():
+    """Otherwise the pair describes a lobby that can fill but never start."""
+    assert clamp_player_limits(10, 4) == (10, 10)
+
+
+def test_clamp_player_limits_treats_zero_as_unset():
+    """0 was what the old dial's "no limit" meant. There is no such thing here
+    — the Select cap is real — so it reads as "use the default"."""
+    assert clamp_player_limits(0, 0) == (MIN_PLAYERS, MAX_PLAYERS)
+
+
+def test_clamp_player_limits_floors_at_two():
+    """A one-player draft is not a game."""
+    assert clamp_player_limits(1, 25)[0] == 2
+
+
+def test_lobby_is_full_honours_a_configured_ceiling():
+    """Before this the Join button had no cap at all, and eligible_players[:25]
+    silently dropped everyone past the 25th — after they had drafted a full
+    board and could no longer be voted for."""
+    assert lobby_is_full([1, 2, 3], 3) is True
+    assert lobby_is_full([1, 2], 3) is False
+
+
+def test_can_start_honours_a_configured_floor():
+    assert can_start([1, 2, 3, 4], 5) is False
+    assert can_start([1, 2, 3, 4, 5], 5) is True
