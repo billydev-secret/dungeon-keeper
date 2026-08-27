@@ -117,6 +117,17 @@
   --s-5: 24px;
   --s-6: 32px;
   --s-7: 48px;
+  /* Tells the browser to render NATIVE control chrome in dark mode: the
+     up/down spinners on <input type="number">, checkbox and radio glyphs,
+     scrollbars, date pickers, and the focus ring's default colour.
+
+     Without this the page was dark but every native widget on it was drawn
+     with light-mode chrome — most visibly ~125 number-input spinner arrows
+     across 48 panels rendering as pale grey on a dark field. No amount of
+     `background`/`color` CSS fixes those; they are painted by the browser,
+     not by us, and `color-scheme` is the only switch. */
+  color-scheme: dark;
+
   --r-sm: 4px;
   --r:    8px;
   --sidebar-w:           240px;
@@ -3853,7 +3864,7 @@ select:not([multiple]) {
   -webkit-appearance: none;
   -moz-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23979ba3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 11px;
@@ -3865,7 +3876,7 @@ select option { background: var(--bg-input); color: var(--ink); }
    grouped rule sets `background:` shorthand and out-specifies the chevron
    rule above — restore the arrow + clearance here at higher specificity. */
 .field > label > select:not([multiple]) {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2380848e' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23979ba3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 9px center;
   background-size: 11px;
