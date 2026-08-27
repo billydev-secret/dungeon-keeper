@@ -1,4 +1,5 @@
 import { api, esc, fmtTs, fmtAge } from "../api.js";
+import { initClampCells } from "../clamp-cell.js";
 import { showTranscript } from "../transcript-modal.js";
 import { makeFilterStrip } from "../tab-strip.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
@@ -152,6 +153,10 @@ export function mountTickets(container) {
       const row = e.target.closest("tr.clickable-row");
       if (row) showTranscript(row.dataset.recordType, row.dataset.recordId);
     };
+    // Title and Description both clamp here. The expander stops propagation,
+    // so reading a cell does not also fire the row click below and open the
+    // transcript modal over the table you were reading.
+    initClampCells(tableWrap);
     const tbody = tableWrap.querySelector("tbody");
     tbody?.addEventListener("click", openRow);
     tbody?.addEventListener("keydown", (e) => {

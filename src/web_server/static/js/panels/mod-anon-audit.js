@@ -131,10 +131,7 @@ export function mount(container) {
         // Joined from the message store, never copied into the audit table.
         // Null here means either the guild keeps no message content or the
         // event produced no message at all (see migration 145).
-        render: (e) => {
-          if (!e.content) return "—";
-          return e.content.length > 120 ? e.content.slice(0, 120) + "…" : e.content;
-        },
+        render: (e) => e.content || "—",
         title: (e) => e.content || "No stored message content for this entry",
       },
       {

@@ -1970,7 +1970,52 @@ textarea.field-input { resize: vertical; }
 .badge-dim     { background: var(--rule); color: var(--ink-dim); }
 
 .user-cell   { white-space: nowrap; }
-.reason-cell { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The audit tables' one substantive column — a moderation reason, a note, a
+   filename, a confession — used to be cut to a single 260px line with the rest
+   in a title= tooltip. A tooltip is invisible to touch, unreachable by
+   keyboard in most browsers, and not selectable, so on eight panels the value
+   the page exists to show was effectively unreadable; four of the ten columns
+   had no title at all.
+
+   Three lines clears every reason, note, filename and details value in prod
+   (all under 85 characters). The few that still overflow — confession content,
+   a policy description — get a real <button> from clamp-cell.js. */
+.reason-cell { max-width: 320px; }
+.reason-cell .clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  /* LOAD-BEARING. The phone rule further down sets .data-table white-space to
+     nowrap so wide tables scroll sideways, and white-space inherits. Without
+     this override the clamp collapses to one line running off the side at
+     390px — worse than the tooltip it replaced. Measured, not assumed: four
+     lines with it, one sideways line without.
+
+     The mobile layout scan does NOT catch this; it passes either way. The
+     guard is test_the_clamp_still_wraps_at_phone_width. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.reason-cell.is-open .clamp {
+  display: block;
+  /* A 969-character confession scrolls inside its own cell rather than growing
+     the row to twenty lines and losing the table. */
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.reason-cell .clamp-more {
+  background: none;
+  border: 0;
+  padding: var(--s-0) 0;
+  margin-top: var(--s-0);
+  font: inherit;
+  font-size: var(--t-1);
+  color: var(--gold-solid);
+  cursor: pointer;
+  text-decoration: underline;
+}
 
 /* ── LegitLibs template card strips ─────────────────────────────────── */
 

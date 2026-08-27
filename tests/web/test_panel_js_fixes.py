@@ -703,3 +703,149 @@ def test_a_status_element_outside_any_guarded_form_still_clears_everything(page)
       }
     """)
     assert cleared is False
+
+
+# ── audit cells are readable without a tooltip ──────────────────────────
+
+
+_LONG = "x" * 900
+
+
+def test_a_short_reason_needs_no_expander(page):
+    """Every reason, note, filename and details value in prod is under 85
+    characters, so three lines shows all of them outright. An expander on a
+    cell that is not cut would be noise."""
+    out = page.evaluate("""
+      async () => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">spamming the same link in four channels</td>' +
+          '</tr></tbody></table>';
+        initClampCells(document.body);
+        const cell = document.querySelector('.reason-cell');
+        return {
+          wrapped: !!cell.querySelector('.clamp'),
+          hasButton: !!cell.querySelector('.clamp-more'),
+          text: cell.querySelector('.clamp').textContent,
+        };
+      }
+    """)
+    assert out["wrapped"] is True
+    assert out["hasButton"] is False, "an uncut cell should not offer More"
+    assert "four channels" in out["text"]
+
+
+def test_a_long_confession_expands_from_the_keyboard(page):
+    """The value the page exists to show was reachable only through a title
+    attribute — invisible to touch, unreachable by keyboard, not selectable.
+    A native button gets Enter and Space without a role or a keydown handler."""
+    out = page.evaluate("""
+      async (long) => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">' + long + '</td></tr></tbody></table>';
+        initClampCells(document.body);
+        const cell = document.querySelector('.reason-cell');
+        const btn = cell.querySelector('.clamp-more');
+        if (!btn) return { hasButton: false };
+        const before = btn.getAttribute('aria-expanded');
+        btn.focus();
+        const focused = document.activeElement === btn;
+        btn.click();
+        return {
+          hasButton: true, before, focused,
+          after: btn.getAttribute('aria-expanded'),
+          open: cell.classList.contains('is-open'),
+          label: btn.textContent,
+          tag: btn.tagName,
+          fullTextPresent: cell.querySelector('.clamp').textContent.length,
+        };
+      }
+    """, _LONG)
+    assert out["hasButton"] is True, "a 900-character cell was not given an expander"
+    assert out["tag"] == "BUTTON", "must be a real button, for free Enter/Space"
+    assert out["focused"] is True
+    assert (out["before"], out["after"]) == ("false", "true")
+    assert out["open"] is True
+    assert out["label"] == "Less"
+    # The whole value is in the DOM, not a 120-character slice of it.
+    assert out["fullTextPresent"] == 900
+
+
+def test_the_expander_does_not_open_the_row_behind_it(page):
+    """mod-policy-tickets binds a delegated tbody click that opens the
+    transcript modal for anything inside the row. Without stopPropagation,
+    reading a cell launches a modal over the table you were reading."""
+    fired = page.evaluate("""
+      async (long) => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr class="clickable-row">' +
+          '<td class="reason-cell">' + long + '</td></tr></tbody></table>';
+        initClampCells(document.body);
+        let rowClicks = 0;
+        document.querySelector('tbody').addEventListener('click', () => { rowClicks++; });
+        document.querySelector('.clamp-more').click();
+        return rowClicks;
+      }
+    """, _LONG)
+    assert fired == 0, "expanding a cell also triggered the row's click handler"
+
+
+def test_reinitialising_after_a_rerender_does_not_double_wrap(page):
+    """auditPanel calls this on every refresh."""
+    depth = page.evaluate("""
+      async () => {
+        const { initClampCells } = await import('/static/js/clamp-cell.js');
+        document.body.innerHTML =
+          '<table class="data-table"><tbody><tr>' +
+          '<td class="reason-cell">a reason</td></tr></tbody></table>';
+        initClampCells(document.body);
+        initClampCells(document.body);
+        return document.querySelectorAll('.reason-cell .clamp').length;
+      }
+    """)
+    assert depth == 1
+
+
+def test_the_clamp_still_wraps_at_phone_width(browser, dashboard):
+    """app.css sets `.data-table { white-space: nowrap }` under 768px so wide
+    tables scroll sideways, and white-space inherits. Without an explicit
+    override on the clamp wrapper the three-line clamp collapses to one line
+    running off the side — worse than the tooltip it replaced.
+
+    Measured: 4 lines with the override, one sideways line without it. The
+    existing mobile layout scan does NOT catch this (it passes either way),
+    which is why the check lives here.
+    """
+    ctx = browser.new_context(viewport={"width": 390, "height": 700})
+    page = ctx.new_page()
+    try:
+        page.goto(f"{dashboard.base}/", wait_until="domcontentloaded")
+        result = page.evaluate("""
+          () => {
+            document.body.innerHTML =
+              '<table class="data-table"><tbody><tr><td class="reason-cell">' +
+              'the member kept reposting the same referral link '.repeat(6) +
+              '</td></tr></tbody></table>';
+            const td = document.querySelector('.reason-cell');
+            const clamp = document.createElement('div');
+            clamp.className = 'clamp';
+            while (td.firstChild) clamp.append(td.firstChild);
+            td.append(clamp);
+            const cs = getComputedStyle(clamp);
+            return {
+              whiteSpace: cs.whiteSpace,
+              runsSideways: clamp.scrollWidth > clamp.clientWidth + 1,
+            };
+          }
+        """)
+        assert result["whiteSpace"] == "normal", (
+            "the phone rule's nowrap reached the clamp; it will render one line"
+        )
+        assert result["runsSideways"] is False
+    finally:
+        ctx.close()
+

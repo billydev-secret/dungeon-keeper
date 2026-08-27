@@ -23,10 +23,10 @@ export function mount(container) {
       {
         label: "Content",
         className: "reason-cell",
-        render: (e) => {
-          const text = e.content || "—";
-          return text.length > 120 ? text.slice(0, 120) + "…" : text;
-        },
+        // Not sliced: the cell clamps to three lines and expands in place, so
+        // a 120-char cut here only limited what "More" could ever reveal — the
+        // CSS was already cutting it at roughly 37 characters on screen.
+        render: (e) => e.content || "—",
         title: (e) => e.content || "—",
       },
       {
