@@ -42,10 +42,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bot_modules.services.economy_service import (
-    apply_credit,
     apply_debit,
     get_balance,
 )
+from bot_modules.services import economy_submission_store as store
 from bot_modules.services.voice_master_service import name_is_blocked
 
 if TYPE_CHECKING:
@@ -59,6 +59,18 @@ MAX_IMAGE_BYTES = 256 * 1024
 _OPEN_STATES = ("pending", "approved", "live")
 SPEND_KIND = "emoji_sponsor"
 REFUND_KIND = "emoji_sponsor_refund"
+
+#: The shared paid-submission mechanics. Only some of them fit this product:
+#: the sweep here is global rather than guild-scoped, the deny spans two
+#: states because of the upload limbo, and the insert has to catch the
+#: per-name unique index. Those stay below rather than bending the shared
+#: layer into shapes only one caller wants.
+PRODUCT = store.SubmissionProduct(
+    table="econ_emoji_submissions",
+    spend_kind=SPEND_KIND,
+    refund_kind=REFUND_KIND,
+    open_states=_OPEN_STATES,
+)
 
 
 @dataclass(frozen=True)
@@ -85,12 +97,7 @@ def open_submission(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
     """The member's in-flight submission (pending/approved/live), if any."""
-    placeholders = ", ".join("?" for _ in _OPEN_STATES)
-    return conn.execute(
-        "SELECT * FROM econ_emoji_submissions "
-        f"WHERE guild_id = ? AND user_id = ? AND state IN ({placeholders})",
-        (guild_id, user_id, *_OPEN_STATES),
-    ).fetchone()
+    return store.open_submission(conn, PRODUCT, guild_id, user_id)
 
 
 def open_submission_count(conn: sqlite3.Connection, guild_id: int) -> int:
@@ -202,26 +209,9 @@ def submit_sponsorship(
 
 def _refund(conn: sqlite3.Connection, row: sqlite3.Row, reason: str) -> int:
     """Give the escrow back exactly once. Returns the amount refunded."""
-    price = int(row["price"])
-    if price < 1:
-        return 0
-    cur = conn.execute(
-        "UPDATE econ_emoji_submissions SET refunded_at = ? "
-        "WHERE id = ? AND refunded_at IS NULL",
-        (time.time(), int(row["id"])),
+    return store.refund_once(
+        conn, PRODUCT.table, row, reason, refund_kind=PRODUCT.refund_kind
     )
-    if (cur.rowcount or 0) == 0:
-        return 0
-    apply_credit(
-        conn,
-        int(row["guild_id"]),
-        int(row["user_id"]),
-        price,
-        REFUND_KIND,
-        meta={"submission_id": int(row["id"]), "reason": reason},
-        booster=False,
-    )
-    return price
 
 
 def deny_submission(
@@ -262,15 +252,14 @@ def cancel_submission(
     ).fetchone()
     if row is None or int(row["user_id"]) != user_id:
         raise ValueError("That submission isn't yours to cancel.")
-    cur = conn.execute(
-        "UPDATE econ_emoji_submissions SET state = 'cancelled', resolved_at = ? "
-        "WHERE id = ? AND state = 'pending'",
-        (time.time(), submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="pending", to_state="cancelled",
+        refund_reason="cancelled",
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError("Only a still-pending submission can be cancelled.")
-    _refund(conn, row, "cancelled")
-    return _fresh(conn, submission_id)
+    return fresh
 
 
 def claim_approval(
@@ -287,14 +276,13 @@ def claim_approval(
     ).fetchone()
     if row is None:
         raise ValueError("That submission no longer exists.")
-    cur = conn.execute(
-        "UPDATE econ_emoji_submissions SET state = 'approved', resolver_id = ?, "
-        "resolved_at = ? WHERE id = ? AND state = 'pending'",
-        (resolver_id, time.time(), submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="pending", to_state="approved", resolver_id=resolver_id,
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError(f"That submission is already {row['state']}.")
-    return _fresh(conn, submission_id)
+    return fresh
 
 
 def finalize_upload(
@@ -444,9 +432,7 @@ def list_submissions(
 def get_submission(
     conn: sqlite3.Connection, submission_id: int
 ) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM econ_emoji_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
+    return store.get(conn, PRODUCT, submission_id)
 
 
 def _fresh(conn: sqlite3.Connection, submission_id: int) -> sqlite3.Row:
