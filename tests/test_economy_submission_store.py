@@ -259,6 +259,19 @@ def test_charging_inserts_the_row_and_debits_once(conn, debits):
     ]
 
 
+@pytest.mark.parametrize("price", [0, -5])
+def test_a_free_submission_is_queued_without_touching_the_ledger(conn, debits, price):
+    """The mirror of refund_once's no-op. A product whose off switch is a real
+    toggle can legitimately be priced at 0, and apply_debit rejects amounts
+    below 1 — so a free submission must queue, not fail."""
+    state, calls = debits
+    state["afford"] = False  # would block any real debit
+    sub_id = store.charge_and_insert(conn, PRODUCT, 7, 42, price, {"message": "free"})
+    assert sub_id is not None
+    assert store.get(conn, PRODUCT, sub_id)["state"] == "pending"
+    assert calls == []
+
+
 def test_a_member_who_cannot_pay_gets_no_row(conn, debits):
     """Returning None rather than raising keeps the 'you have X' sentence
     at the product, where the member-facing wording lives."""

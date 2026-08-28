@@ -1919,3 +1919,150 @@ def test_no_blocking_db_calls_in_async_bodies():
 
     source = Path(economy_loop.__file__).read_text(encoding="utf-8")
     assert _direct_open_db_calls(source) == []
+
+
+# ── Flash Theme sweep (run_theme_expiry) ───────────────────────────────
+
+THEME_CH = 6666
+
+
+def _theme_on(db_path, **overrides):
+    values = dict(
+        flash_theme_enabled=True, price_flash_theme=100,
+        theme_channel_id=THEME_CH, theme_expire_days=3, theme_hours=24,
+    )
+    values.update(overrides)
+    _enable(db_path, **values)
+
+
+def _theme(db_path, user_id=USER, title="Cursed Cooking"):
+    from bot_modules.services.economy_theme_service import submit_theme
+
+    with open_db(db_path) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, user_id, 500, "grant", actor_id=9001)
+        return submit_theme(
+            conn, settings, GUILD, user_id, title, "Post the worst thing you ate."
+        ).submission_id
+
+
+def _queue(db_path, user_id=USER, title="Cursed Cooking"):
+    from bot_modules.services.economy_theme_service import approve
+
+    sid = _theme(db_path, user_id, title)
+    with open_db(db_path) as conn:
+        approve(conn, sid, resolver_id=9001)
+    return sid
+
+
+def test_run_theme_expiry_takes_down_a_finished_theme_without_refunding(db):
+    """A theme that ran its window is a completed purchase."""
+    from bot_modules.services.economy_theme_service import go_live
+
+    _theme_on(db)
+    now = time.time()
+    sid = _queue(db)
+    with open_db(db) as conn:
+        go_live(
+            conn, sid, theme_channel_id=THEME_CH, theme_message_id=42,
+            window_seconds=86400, now=now - 2 * 86400,
+        )
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert sweep.unpins == [(THEME_CH, 42)]
+        assert sweep.refunds == []
+        assert get_balance(conn, GUILD, USER) == 400
+
+
+def test_run_theme_expiry_refunds_a_theme_no_mod_reviewed(db):
+    _theme_on(db)
+    now = time.time()
+    sid = _theme(db, user_id=USER + 1)
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE econ_theme_submissions SET created_at = ? WHERE id = ?",
+            (now - 10 * 86400, sid),
+        )
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert [n.user_id for n in sweep.refunds] == [USER + 1]
+        assert sweep.refunds[0].refund == 100
+        assert get_balance(conn, GUILD, USER + 1) == 500
+
+
+def test_run_theme_expiry_promotes_the_next_theme_when_the_channel_is_free(db):
+    _theme_on(db)
+    sid = _queue(db)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, time.time())
+        assert sweep.promote is not None
+        assert sweep.promote["id"] == sid
+        assert sweep.settings is not None
+
+
+def test_a_running_theme_blocks_promotion(db):
+    """A paid theme is never cut short to make room for the next one."""
+    from bot_modules.services.economy_theme_service import go_live
+
+    _theme_on(db)
+    now = time.time()
+    first = _queue(db, user_id=USER, title="First")
+    _queue(db, user_id=USER + 1, title="Second")
+    with open_db(db) as conn:
+        go_live(conn, first, theme_channel_id=THEME_CH, theme_message_id=42,
+                window_seconds=86400, now=now)
+    with open_db(db) as conn:
+        assert economy_loop.run_theme_expiry(conn, GUILD, now).promote is None
+
+
+def test_a_handover_happens_inside_one_tick(db):
+    """The take-down frees the channel, so the next theme is picked in the same
+    sweep rather than leaving the channel bare for an hour."""
+    from bot_modules.services.economy_theme_service import go_live
+
+    _theme_on(db)
+    now = time.time()
+    first = _queue(db, user_id=USER, title="First")
+    second = _queue(db, user_id=USER + 1, title="Second")
+    with open_db(db) as conn:
+        go_live(conn, first, theme_channel_id=THEME_CH, theme_message_id=42,
+                window_seconds=86400, now=now - 2 * 86400)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert sweep.unpins == [(THEME_CH, 42)]
+        assert sweep.promote is not None and sweep.promote["id"] == second
+
+
+def test_an_empty_queue_promotes_nothing(db):
+    """A day with no theme is a normal day — nothing is posted."""
+    _theme_on(db)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, time.time())
+        assert sweep.promote is None and sweep.unpins == [] and sweep.refunds == []
+
+
+@pytest.mark.parametrize(
+    "off",
+    [
+        pytest.param(dict(flash_theme_enabled=False), id="toggle-off"),
+        pytest.param(dict(theme_channel_id=0), id="no-channel"),
+        pytest.param(dict(enabled=False), id="economy-off"),
+    ],
+)
+def test_run_theme_expiry_skips_a_disabled_guild(db, off):
+    _theme_on(db)
+    sid = _queue(db)
+    assert sid
+    _theme_on(db, **off)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, time.time())
+        assert sweep.promote is None and sweep.unpins == [] and sweep.refunds == []
+
+
+def test_a_free_themed_day_still_runs(db):
+    """Price 0 means free here, not disabled — the toggle is the off switch."""
+    _theme_on(db, price_flash_theme=0)
+    sid = _queue(db)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, time.time())
+        assert sweep.promote is not None and sweep.promote["id"] == sid

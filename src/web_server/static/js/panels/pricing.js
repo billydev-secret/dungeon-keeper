@@ -29,7 +29,7 @@ import { api, apiPut, esc } from "../api.js";
 import { showStatus, guardForm, mountAsync } from "../config-helpers.js";
 import { DEFAULT_MAX, economyOffBanner } from "./economy-shop-shared.js";
 
-// Each entry: [key, label, {hint, max}] — `max` bounds both the input and the
+// Each entry: [key, label, {hint, min, max}] — the bounds apply to both the input and the
 // client-side check that names the offending field on save.
 const PRICE_FIELDS = [
   ["price_role_color", "Role Color, Per Week", {
@@ -74,6 +74,18 @@ const CONSUMABLE_FIELDS = [
   ["pin_expire_days", "Pin Review Window (days)", {
     hint: "A pin request nobody approves or declines within this many days expires on its own and refunds the member. 0 leaves requests queued forever.",
     max: 365,
+  }],
+  ["price_flash_theme", "Themed Day", {
+    hint: "What /bank theme costs. A member names the theme for a day, a moderator approves it, and it is announced and pinned in the theme channel when that channel is next free. Unlike everything else on this page, 0 does NOT turn it off — it makes themed days free. The off switch is the Themed Days checkbox on the Economy Settings page. Coins are taken when the request is sent, refunded if it is declined or pulled from the queue, and kept once the theme has run.",
+  }],
+  ["theme_expire_days", "Theme Review Window (days)", {
+    hint: "A theme request nobody approves or declines within this many days expires on its own and refunds the member. Themes already approved and waiting their turn never expire — they are waiting for the channel, not for you. 0 leaves requests queued forever.",
+    max: 365,
+  }],
+  ["theme_hours", "Themed Day Length (hours)", {
+    hint: "How long one theme holds the channel before it is unpinned and the next in the queue goes up. 24 is a day. Clamped to 1–168 so one purchase cannot buy the channel for a month.",
+    min: 1,
+    max: 168,
   }],
 ];
 
@@ -158,6 +170,14 @@ function fieldMax(opts) {
   return opts && opts.max != null ? opts.max : DEFAULT_MAX;
 }
 
+// Almost every dial here treats 0 as "off" or "free", so 0 is the floor by
+// default. A field opts into a higher one when 0 is genuinely meaningless for
+// it — a themed day cannot last zero hours — so the page can refuse it with a
+// named message instead of letting the API answer with a 422.
+function fieldMin(opts) {
+  return opts && opts.min != null ? opts.min : 0;
+}
+
 /**
  * The Shop & Perks checkbox governing this price, or null if it has none.
  *
@@ -196,7 +216,7 @@ function numField(key, label, opts = {}, pricing, cfg) {
     <div class="field">
       <label for="sink-${key}">${esc(label)}</label>
       <input type="number" name="${key}" id="sink-${key}" required
-        min="0" max="${fieldMax(opts)}" step="1" style="max-width:140px;" />
+        min="${fieldMin(opts)}" max="${fieldMax(opts)}" step="1" style="max-width:140px;" />
       ${offNote}
       ${hintHtml}
       ${suggest}
@@ -339,9 +359,10 @@ function wirePrices(container, cfg) {
     for (const [key, label, opts] of ALL_NUM_FIELDS) {
       const input = form.querySelector(`[name=${key}]`);
       const max = fieldMax(opts);
+      const min = fieldMin(opts);
       const n = parseInt(input.value, 10);
-      if (!Number.isFinite(n) || n < 0 || n > max) {
-        showStatus(status, false, `${label} must be a whole number from 0 to ${max}`);
+      if (!Number.isFinite(n) || n < min || n > max) {
+        showStatus(status, false, `${label} must be a whole number from ${min} to ${max}`);
         input.focus();
         return;
       }

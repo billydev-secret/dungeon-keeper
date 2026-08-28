@@ -78,6 +78,11 @@ class EconomyConfigUpdate(BaseModel):
     # Where an approved Pin of the Day gets pinned; 0 = the feature is off (it
     # also needs price_pin_of_day > 0). The picker is the on switch.
     pin_channel_id: int | None = Field(default=None, ge=0)
+    # Where a flash theme is announced and pinned. Unlike the pin above, the
+    # picker is NOT the whole on switch — flash_theme_enabled is a real
+    # toggle, so that a price of 0 can mean a free themed day.
+    theme_channel_id: int | None = Field(default=None, ge=0)
+    flash_theme_enabled: bool | None = None
     # The bounty board channel; 0 = bounties off (the picker is the on switch).
     bounty_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
@@ -192,6 +197,11 @@ class EconomyConfigUpdate(BaseModel):
     qotd_sponsor_expire_days: int | None = Field(default=None, ge=0)
     price_pin_of_day: int | None = Field(default=None, ge=0)
     pin_expire_days: int | None = Field(default=None, ge=0)
+    price_flash_theme: int | None = Field(default=None, ge=0)
+    theme_expire_days: int | None = Field(default=None, ge=0)
+    # Clamped in the service too (1..168); bounded here so the dashboard
+    # refuses the absurd value rather than silently clamping it.
+    theme_hours: int | None = Field(default=None, ge=1, le=168)
     bounty_min_stake: int | None = Field(default=None, ge=0)
     bounty_max_open: int | None = Field(default=None, ge=0)
     bounty_expire_days: int | None = Field(default=None, ge=0)

@@ -242,6 +242,43 @@ to currency.
   reached within `pin_expire_days` (default 3). Enabled only when
   `price_pin_of_day > 0` **and** `pin_channel_id` is set — a public sink, dark
   by default. One submission in flight per member.
+- **Flash Themes (built, sink — migration 188):** the sponsor pattern applied
+  to a *day* rather than a message, and the fourth consumer of
+  `economy_submission_store`. `/bank theme` opens a modal (theme name +
+  blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
+  out / `flash_theme_refund` back) and queued `pending`; a mod
+  Approves/Declines on a bank-channel card (`ThemeApproveButton` /
+  `ThemeDenyButton`, persistent) or from the dashboard's **Approvals** page.
+  Two things distinguish it from Pin of the Day, which it otherwise mirrors:
+  - **Approve posts nothing.** It moves the row to `approved` and that is all.
+    The hourly loop's `run_theme_expiry` promotes the oldest approved row
+    (`next_approved`, FIFO) *only when nothing is live*, and the caller
+    (`announce_theme`) posts one card in `theme_channel_id` and pins it —
+    the announcement and the pin are the same message. There is **no
+    supersede**: a paid theme is never cut short by a newer one, so the
+    one-live-per-guild partial index is the invariant rather than a backstop.
+    Approval does not start the clock either, or a theme approved during a
+    busy queue would expire before it ran. An empty queue posts **nothing** —
+    a day without a theme is a normal day.
+  - **`price_flash_theme = 0` does not disable it.** `flash_theme_enabled` is
+    a real toggle (the per-perk-switch convention of migration 182), so a free
+    themed day is expressible; `theme_channel_id` must also be set. This is
+    the first paid submission where a zero price means *free* rather than
+    *off*, and `charge_and_insert` skips the ledger below 1 accordingly — the
+    mirror of `refund_once`'s existing no-op.
+
+  The same sweep retires themes past `theme_hours` (clamped 1–168; **no
+  refund** — the day ran) and refunds `pending` ones no mod reached within
+  `theme_expire_days` (default 3); approved-and-waiting rows never expire.
+  Retiring runs *before* promotion in one transaction, so a handover happens
+  inside a single tick rather than leaving the channel bare for an hour.
+  Withdrawing a queued theme refunds; **taking down a running one does not**.
+  One submission in flight per member. Ships dark, price provisionally 300.
+
+  *Erasure:* a `live` row is **detached** (`user_id` → 0), not deleted — it
+  holds a pinned announcement only the sweep can take down, and the sweep
+  finds its work by reading live rows, so deleting it would strand the pin
+  permanently. See `docs/data_register.md`.
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
   A sticky **hub panel** (`EconomyCog.bounty_panel`, `build_bounty_hub_panel`)

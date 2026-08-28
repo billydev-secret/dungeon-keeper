@@ -100,6 +100,13 @@ from bot_modules.economy.pin_views import (
 from bot_modules.economy.pin_views import (
     post_review_card as post_pin_review_card,
 )
+from bot_modules.economy.theme_views import (
+    ThemeApproveButton,
+    ThemeDenyButton,
+)
+from bot_modules.economy.theme_views import (
+    post_review_card as post_theme_review_card,
+)
 from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
@@ -116,6 +123,14 @@ from bot_modules.services.economy_pin_service import (
     MIN_PIN_LEN,
     pin_enabled,
     submit_pin,
+)
+from bot_modules.services.economy_theme_service import (
+    MAX_BLURB_LEN,
+    MAX_TITLE_LEN as MAX_THEME_TITLE_LEN,
+    MIN_BLURB_LEN,
+    MIN_TITLE_LEN as MIN_THEME_TITLE_LEN,
+    submit_theme,
+    theme_enabled,
 )
 from bot_modules.services.economy_qotd_sponsor_service import (
     attach_qotd,
@@ -633,6 +648,33 @@ class _PinSubmitModal(discord.ui.Modal, title="Pin a Message"):
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         await self.cog.do_pin_submit(interaction, str(self.text.value))
+
+
+class _ThemeSubmitModal(discord.ui.Modal, title="Buy a Themed Day"):
+    """A theme name plus what people should do with it; a mod reviews both."""
+
+    theme_title: discord.ui.TextInput = discord.ui.TextInput(
+        label="Theme name",
+        min_length=MIN_THEME_TITLE_LEN,
+        max_length=MAX_THEME_TITLE_LEN,
+        placeholder="e.g. Cursed Cooking",
+    )
+    blurb: discord.ui.TextInput = discord.ui.TextInput(
+        label="What should people post?",
+        style=discord.TextStyle.paragraph,
+        min_length=MIN_BLURB_LEN,
+        max_length=MAX_BLURB_LEN,
+        placeholder="A line or two — a bare name doesn't tell anyone what to do.",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_theme_submit(
+            interaction, str(self.theme_title.value), str(self.blurb.value)
+        )
 
 
 class _BountyPostModal(discord.ui.Modal, title="Post a Bounty"):
@@ -2516,6 +2558,78 @@ class EconomyCog(commands.Cog):
             f"📨 Sent your message to the mods for review — {outcome.price} "
             f"{unit} held. If it's turned down you'll get a full refund; if it's "
             "approved it's pinned for 24 hours.",
+            ephemeral=True,
+        )
+
+    # ── flash themes ─────────────────────────────────────────────────────
+
+    @bank.command(
+        name="theme",
+        description="Pay to set the theme for a day — a mod approves it first.",
+    )
+    async def bank_theme(self, interaction: discord.Interaction) -> None:
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
+            return
+        if not theme_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Buying a themed day isn't enabled here.", ephemeral=True
+            )
+            return
+        # A modal must be the FIRST response to the interaction (can't defer
+        # first), so the enable check above runs before we open it.
+        await interaction.response.send_modal(_ThemeSubmitModal(self))
+
+    async def do_theme_submit(
+        self, interaction: discord.Interaction, title: str, blurb: str
+    ) -> None:
+        """Escrow the price, queue the theme, and post the mod-approval card."""
+        assert interaction.guild is not None
+        guild = interaction.guild
+        member = interaction.user
+        assert isinstance(member, discord.Member)
+
+        settings = await self._settings_or_refuse(interaction, guild.id)
+        if settings is None:
+            return
+        if not theme_enabled(settings):
+            await interaction.response.send_message(
+                "❌ Buying a themed day isn't enabled here.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        def _submit():
+            with self.bot.ctx.open_db() as conn:
+                return submit_theme(conn, settings, guild.id, member.id, title, blurb)
+
+        try:
+            outcome = await asyncio.to_thread(_submit)
+        except ValueError as exc:
+            await interaction.followup.send(str(exc), ephemeral=True)
+            return
+
+        # Money's taken and the row exists; a card failure must never surface
+        # as an error to the member (it's still resolvable), so it's
+        # best-effort.
+        accent = await safe_resolve_accent(
+            self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
+        )
+        await post_theme_review_card(
+            self.bot, self.bot.ctx, guild, settings, accent,
+            outcome.submission_id, member,
+        )
+        unit = _unit(settings, outcome.price)
+        await interaction.followup.send(
+            f"📨 Sent your theme to the mods for review — {outcome.price} {unit} "
+            "held. If it's turned down you'll get a full refund; if it's "
+            "approved it runs the next time the channel is free.",
             ephemeral=True,
         )
 
@@ -4993,6 +5107,8 @@ class EconomyCog(commands.Cog):
             SponsorDenyButton,
             PinApproveButton,
             PinDenyButton,
+            ThemeApproveButton,
+            ThemeDenyButton,
             BountyChipInButton,
             BountyAwardButton,
             BountyCancelButton,

@@ -580,6 +580,7 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
         BountyHubPostButton,
     )
     from bot_modules.economy.pin_views import PinApproveButton, PinDenyButton
+    from bot_modules.economy.theme_views import ThemeApproveButton, ThemeDenyButton
     from bot_modules.economy.quest_views import QuestApproveButton, QuestDenyButton
     from bot_modules.economy.auction_views import AuctionBidButton
     from bot_modules.economy.sponsor_views import (
@@ -602,6 +603,8 @@ async def test_cog_load_registers_persistent_buttons(ctx, db):
             SponsorDenyButton,
             PinApproveButton,
             PinDenyButton,
+            ThemeApproveButton,
+            ThemeDenyButton,
             BountyChipInButton,
             BountyAwardButton,
             BountyCancelButton,

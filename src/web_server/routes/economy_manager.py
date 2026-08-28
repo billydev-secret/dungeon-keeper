@@ -31,6 +31,7 @@ from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_rentals_service as rentals_svc
+from bot_modules.services import economy_theme_service as theme_svc
 from bot_modules.core.db_utils import open_db_immediate
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -977,6 +978,233 @@ async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool
         _log.warning("qotd sponsor DM failed", exc_info=True)
 
     return card_updated
+
+
+def _theme_dict(row) -> dict:
+    return {
+        "id": int(row["id"]),
+        "user_id": str(row["user_id"]),
+        "title": row["title"],
+        "blurb": row["blurb"],
+        "state": row["state"],
+        "price": int(row["price"]),
+        "deny_reason": row["deny_reason"],
+        "created_at": row["created_at"],
+        "went_live_at": row["went_live_at"],
+        "expires_at": row["expires_at"],
+        "resolved_at": row["resolved_at"],
+        "resolver_id": str(row["resolver_id"]) if row["resolver_id"] else None,
+    }
+
+
+@router.get("/economy/theme-submissions")
+async def list_theme_submissions(
+    request: Request,
+    state: str | None = None,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return [
+                _theme_dict(row)
+                for row in theme_svc.list_submissions(conn, guild_id, state)
+            ]
+
+    return {"submissions": await run_query(_q)}
+
+
+async def _resolve_theme_and_notify(
+    request: Request,
+    submission_id: int,
+    *,
+    action: str,
+    resolver_id: int,
+    reason: str = "",
+) -> dict:
+    """Approve / deny / withdraw / take down one theme, then update card + DM.
+
+    Same three phases as the sponsor helper: read on a worker thread, the
+    resolving write on another, then Discord side effects that never fail the
+    request. ``take_down`` additionally unpins the live announcement, which is
+    the one action here with an effect outside the database.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+
+    def _read():
+        with ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT * FROM econ_theme_submissions WHERE id = ? AND guild_id = ?",
+                (submission_id, guild_id),
+            ).fetchone()
+            return row, load_econ_settings(conn, guild_id)
+
+    row, settings = await run_query(_read)
+    if row is None:
+        raise HTTPException(404, "submission not found")
+
+    def _resolve():
+        with ctx.open_db() as conn:
+            try:
+                if action == "approve":
+                    return theme_svc.approve(
+                        conn, submission_id, resolver_id=resolver_id
+                    )
+                if action == "withdraw":
+                    return theme_svc.withdraw_approved(
+                        conn, submission_id, resolver_id=resolver_id, reason=reason
+                    )
+                if action == "take_down":
+                    return theme_svc.take_down(
+                        conn, submission_id, resolver_id=resolver_id
+                    )
+                return theme_svc.deny(
+                    conn, submission_id, resolver_id=resolver_id, deny_reason=reason
+                )
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+
+    fresh = await run_query(_resolve)
+
+    if action == "take_down" and bot is not None and bot.is_ready():
+        # The only action with an effect outside the DB: the announcement is
+        # still pinned, and the expiry sweep will never see this row again.
+        from bot_modules.economy.theme_views import unpin_and_delete
+
+        try:
+            await unpin_and_delete(
+                bot, int(row["theme_channel_id"]), int(row["theme_message_id"])
+            )
+        except Exception:  # noqa: BLE001 — cleanup must never fail the request
+            _log.warning("flash theme take-down unpin failed", exc_info=True)
+
+    card_updated = False
+    if bot is not None and bot.is_ready():
+        card_updated = await _update_theme_card_and_dm(
+            bot, ctx, guild_id, settings, fresh
+        )
+    return {"ok": True, "state": str(fresh["state"]), "card_updated": card_updated}
+
+
+async def _update_theme_card_and_dm(bot, ctx, guild_id, settings, row) -> bool:
+    """Re-render the bank-channel card, then DM — same copy as the buttons.
+
+    The embed and the DM text both come from ``theme_views``, so a theme
+    resolved here is indistinguishable from one resolved in Discord.
+    """
+    import discord
+
+    from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+    from bot_modules.economy.theme_views import (
+        render_theme_review_embed,
+        theme_resolution_dm_text,
+    )
+
+    guild = bot.get_guild(int(guild_id))
+    accent = (
+        await safe_resolve_accent(
+            ctx, guild, log_label="economy manager", default=DEFAULT_ACCENT_COLOR
+        )
+        if guild is not None
+        else discord.Color.default()
+    )
+
+    card_updated = False
+    channel_id, message_id = row["card_channel_id"], row["card_message_id"]
+    if channel_id and message_id:
+        try:
+            channel = bot.get_channel(int(channel_id))
+            if isinstance(channel, discord.abc.Messageable):
+                message = await channel.fetch_message(int(message_id))
+                await message.edit(
+                    embed=render_theme_review_embed(
+                        accent,
+                        settings,
+                        sponsor_mention=f"<@{int(row['user_id'])}>",
+                        title=str(row["title"]),
+                        blurb=str(row["blurb"]),
+                        price=int(row["price"]),
+                        state=str(row["state"]),
+                        resolver_id=(
+                            int(row["resolver_id"]) if row["resolver_id"] else None
+                        ),
+                        deny_reason=str(row["deny_reason"] or ""),
+                    ),
+                    view=None,
+                )
+                card_updated = True
+        except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+            _log.warning("flash theme card edit failed", exc_info=True)
+
+    if int(row["user_id"]):  # 0 = detached by an erasure; nobody left to tell
+        try:
+            await notify_member(
+                bot, ctx.db_path, guild_id, int(row["user_id"]),
+                content=theme_resolution_dm_text(settings, row),
+            )
+        except Exception:  # noqa: BLE001 — notification must never fail the request
+            _log.warning("flash theme DM failed", exc_info=True)
+    return card_updated
+
+
+@router.post("/economy/theme-submissions/{submission_id}/approve")
+async def approve_theme_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Accept a theme into the queue. It runs when the channel is next free."""
+    return await _resolve_theme_and_notify(
+        request, submission_id, action="approve", resolver_id=user.user_id
+    )
+
+
+@router.post("/economy/theme-submissions/{submission_id}/deny")
+async def deny_theme_submission(
+    request: Request,
+    submission_id: int,
+    body: DenyBody,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    return await _resolve_theme_and_notify(
+        request, submission_id, action="deny",
+        resolver_id=user.user_id, reason=body.reason,
+    )
+
+
+@router.post("/economy/theme-submissions/{submission_id}/withdraw")
+async def withdraw_theme_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+    body: WithdrawBody | None = None,
+):
+    """Pull a queued theme back out before it ever ran. Refunds."""
+    return await _resolve_theme_and_notify(
+        request, submission_id, action="withdraw",
+        resolver_id=user.user_id, reason=body.reason if body else "",
+    )
+
+
+@router.post("/economy/theme-submissions/{submission_id}/take-down")
+async def take_down_theme_submission(
+    request: Request,
+    submission_id: int,
+    user: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """End a RUNNING theme early and unpin its announcement. No refund.
+
+    Deliberately not a refund path: the theme was announced and ran, so the
+    member got at least part of what they paid for. Withdrawing one that never
+    ran is the refunding action.
+    """
+    return await _resolve_theme_and_notify(
+        request, submission_id, action="take_down", resolver_id=user.user_id
+    )
 
 
 @router.post("/economy/qotd-submissions/{submission_id}/approve")

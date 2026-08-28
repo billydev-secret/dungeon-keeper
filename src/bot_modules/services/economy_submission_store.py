@@ -182,8 +182,14 @@ def charge_and_insert(
     debit with it. ``content`` is both the row's content columns and the
     debit's ledger meta, which is why a submission's text is recoverable from
     the ledger alone.
+
+    A price below 1 skips the ledger entirely and always queues the row — the
+    mirror of :func:`refund_once`'s no-op, and for the same reason: free
+    submissions are a real configuration (a product whose off switch is a
+    toggle rather than a zero price), ``apply_debit`` rejects amounts below 1,
+    and debiting nothing would put a meaningless row in the ledger.
     """
-    if not apply_debit(
+    if price >= 1 and not apply_debit(
         conn, guild_id, user_id, price, product.spend_kind, meta=dict(content)
     ):
         return None

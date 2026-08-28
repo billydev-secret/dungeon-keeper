@@ -105,6 +105,7 @@ from bot_modules.services import economy_shop_items_service as shop_items_svc
 from bot_modules.services import economy_demurrage_service as demurrage_svc
 from bot_modules.services import economy_bounty_service as bounty_svc
 from bot_modules.services import economy_pin_service as pin_svc
+from bot_modules.services import economy_theme_service as theme_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services import event_echo_service as echo_svc
 from bot_modules.services.economy_qotd_sponsor_service import (
@@ -1065,6 +1066,75 @@ def run_pin_expiry(
 
 
 @dataclass(frozen=True)
+class ExpiredThemeNotice:
+    """A pending theme that expired unreviewed, for the refund DM."""
+
+    guild_id: int
+    user_id: int
+    title: str
+    refund: int
+    unit: str
+
+
+@dataclass(frozen=True)
+class ThemeSweep:
+    """What one guild's theme tick produced, for the caller's post-commit work."""
+
+    refunds: list[ExpiredThemeNotice]
+    unpins: list[tuple[int, int]]
+    #: The queued theme to announce, when the channel is free. None otherwise —
+    #: an empty queue posts nothing, because a day without a theme is just a
+    #: normal day.
+    promote: sqlite3.Row | None
+    #: Carried out of the sweep's own transaction so the post-commit announce
+    #: doesn't re-read config it already has.
+    settings: EconSettings | None = None
+
+
+def run_theme_expiry(
+    conn: sqlite3.Connection, guild_id: int, now_ts: float
+) -> ThemeSweep:
+    """Retire themes past their window, refund unreviewed ones, pick the next.
+
+    Three things in one transaction because they are one decision: a theme
+    that just ended is what frees the channel for the next in the queue, so
+    reading the queue after retiring is what lets a handover happen inside a
+    single hourly tick rather than idling the channel for an hour.
+
+    A theme that RAN is not refunded — it got its day. Only unreviewed pending
+    ones are. The promotion is returned rather than performed: posting is
+    Discord I/O and belongs to the caller, and leaving the row ``approved``
+    until the post lands means a failed post simply retries next tick with
+    nobody charged for a day that never ran.
+    """
+    settings = load_econ_settings(conn, guild_id)
+    if not settings.enabled or not theme_svc.theme_enabled(settings):
+        return ThemeSweep(refunds=[], unpins=[], promote=None)
+    unpins = [
+        (int(row["theme_channel_id"]), int(row["theme_message_id"]))
+        for row in theme_svc.expire_live_themes(conn, guild_id, now=now_ts)
+    ]
+    refunds = [
+        ExpiredThemeNotice(
+            guild_id=guild_id,
+            user_id=int(row["user_id"]),
+            title=str(row["title"]),
+            refund=int(row["price"]),
+            unit=settings.currency_plural or "coins",
+        )
+        for row in theme_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
+    ]
+    promote = (
+        theme_svc.next_approved(conn, guild_id)
+        if theme_svc.live_theme(conn, guild_id) is None
+        else None
+    )
+    return ThemeSweep(
+        refunds=refunds, unpins=unpins, promote=promote, settings=settings
+    )
+
+
+@dataclass(frozen=True)
 class ExpiredBountyNotice:
     """An expired bounty for the post-commit card refresh + contributor DMs."""
 
@@ -1912,6 +1982,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         # guild's notices.
         sponsor_notices, emoji_notices = [], []
         pin_sweep = PinSweep(refunds=[], unpins=[])
+        theme_sweep = ThemeSweep(refunds=[], unpins=[], promote=None)
         bounty_notices: list[ExpiredBountyNotice] = []
         expired_orders: list[int] = []
         def _expiry_sweeps(gid: int = guild.id):
@@ -1920,6 +1991,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                     run_sponsor_expiry(conn, gid, now_ts),
                     run_emoji_expiry(conn, gid, now_ts),
                     run_pin_expiry(conn, gid, now_ts),
+                    run_theme_expiry(conn, gid, now_ts),
                     run_bounty_expiry(conn, gid, now_ts),
                     run_shop_order_expiry(conn, gid, now_ts),
                 )
@@ -1929,6 +2001,7 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 sponsor_notices,
                 emoji_notices,
                 pin_sweep,
+                theme_sweep,
                 bounty_notices,
                 expired_orders,
             ) = await asyncio.to_thread(_expiry_sweeps)
@@ -2016,6 +2089,71 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                     log.exception(
                         "Economy loop: failed to unpin expired pin %s.", message_id
                     )
+        # Flash Themes: take down the announcements whose window ran out (the
+        # rows are already retired), DM anyone whose pending theme expired
+        # unreviewed and was refunded, then — only if the channel is now free —
+        # announce the next one in the queue. Order matters: the take-down is
+        # what frees the channel, so a theme can hand over to the next inside
+        # one tick instead of leaving the channel bare for an hour.
+        if theme_sweep.unpins:
+            from bot_modules.economy.theme_views import (
+                unpin_and_delete as theme_unpin_and_delete,
+            )
+
+            for channel_id, message_id in theme_sweep.unpins:
+                try:
+                    await theme_unpin_and_delete(bot, channel_id, message_id)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.exception(
+                        "Economy loop: failed to take down expired theme %s.",
+                        message_id,
+                    )
+        for notice in theme_sweep.refunds:
+            try:
+                await notify_member(
+                    bot,
+                    db_path,
+                    notice.guild_id,
+                    notice.user_id,
+                    content=(
+                        f"No mod got to your themed day in time, so you've had "
+                        f"your {notice.refund} {notice.unit} back.\n"
+                        f"> {notice.title}"
+                    ),
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to DM expired theme buyer %s.",
+                    notice.user_id,
+                )
+        if theme_sweep.promote is not None and theme_sweep.settings is not None:
+            from bot_modules.core.branding import (
+                DEFAULT_ACCENT_COLOR,
+                safe_resolve_accent,
+            )
+            from bot_modules.economy.theme_views import announce_theme
+
+            try:
+                accent = await safe_resolve_accent(
+                    db_path, guild, log_label="economy",
+                    default=DEFAULT_ACCENT_COLOR,
+                )
+                await announce_theme(
+                    bot, db_path, guild, theme_sweep.settings, accent,
+                    theme_sweep.promote,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception(
+                    "Economy loop: failed to announce theme %s.",
+                    theme_sweep.promote["id"],
+                )
+
         for notice in pin_sweep.refunds:
             try:
                 await notify_member(
