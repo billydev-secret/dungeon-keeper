@@ -228,6 +228,13 @@ Flagging these rather than writing code, per the working agreement:
    admin-created and has no dial at all.
 3. **The casino paytables are hardcoded** (`casino_logic.py`). Correct as-is, so
    this is not urgent — noted so nobody looks for a dashboard control.
+4. **No `casino_play` or `auction_bid` quest trigger kind exists** (§9). Two live
+   quests are configured against kinds that are in neither `KIND_LABELS` nor any
+   prod activity row, so they can never be cleared. Deactivating them is the
+   dashboard fix. The *better* fix is code: a casino-play trigger would let a
+   daily quest push members toward the one activity that already removes ~8,929
+   coins a week, and a quest that drives a sink is the rarest useful kind. Small
+   — one emitter at the existing stake path, plus the kind in `KIND_LABELS`.
 
 None of these are needed for the proposal above. (1) is the one worth building
 if a round 4 looks likely.
@@ -356,3 +363,132 @@ arithmetic cannot: **are these quests cleared for the coins, or for the habit?**
 Checkpoint at **10 days**, watching `clears_per_user` per week (currently 3.3–4.5)
 alongside the coin total — the ratio is what separates the three cases, and the
 raw coin figure alone cannot.
+
+---
+
+## 9. Stage 0b — rebalance the board toward what isn't done (Billy, 2026-08-28)
+
+> "I think I want to push users into ones that aren't done, we should increase
+> the payout" / "Remove the common ones or make them pay lite"
+
+This supersedes §8's flat trim. Same lane, better shape: **hold the quest budget
+roughly flat and move it from the trivial quests to the effortful ones**, so the
+board teaches what the server values instead of paying for noise.
+
+### First: two quests are impossible, not unpopular
+
+| id | Quest | Reward | Clears 28d | `trigger_kind` |
+|---:|---|---:|---:|---|
+| 89 | Take a Seat | 12 | **0** | `casino_play` |
+| 131 | At the Block | 12 | **0** | `auction_bid` |
+
+Neither kind exists. The vocabulary is 54 kinds (`KIND_LABELS`,
+`economy-sources-shared.js`); prod has fired 56 distinct kinds all-time; **neither
+`casino_play` nor `auction_bid` appears in either list**, and neither string
+occurs anywhere in `src/`. These two quests can never be cleared, and they sit
+in the 27-quest daily pool consuming board draws — a member who is dealt one
+gets a slot they cannot complete.
+
+**Deactivate both.** Do not raise their payout: they are not under-done, they are
+unreachable. (Worth building rather than deleting — see §10.)
+
+### Second: three "under-done" quests are one-time actions
+
+| id | Quest | Reward | Clears 28d |
+|---:|---|---:|---:|
+| 26 | Set Your Bio | 50 | 17 |
+| 39 | Set Your Birthday | 25 | 4 |
+| 56 | Pick Your Roles | 25 | 4 |
+
+You can only do each of these once, ever. Their clear count is low because the
+eligible pool shrinks every day, not because the reward is too small — raising it
+buys nothing but a bigger payment to the dwindling set who haven't done it yet.
+`Set Your Bio` at 50 is already the richest daily on the board. **Leave all three.**
+They are onboarding quests wearing a daily cadence, which is the real oddity.
+
+### Do not remove all the common ones — they are the on-ramp
+
+Measured before deciding:
+
+- **74%** of single-clear member-days (450 of 609) are one of the five common quests.
+- **29 of 121 daily questers (24%)** have cleared *nothing but* common quests in 28 days.
+
+Stripping all five would leave a quarter of your questers with no quest they
+currently touch. So: **remove the two that are redundant with each other, keep one
+cheap on-ramp, pay-lite the rest.**
+
+| id | Quest | Now | **Action** | Clears 28d |
+|---:|---|---:|---|---:|
+| 1 | Send Messages | 10 | **deactivate** (redundant with 2) | 213 |
+| 2 | Reply to Messages | 12 | **deactivate** (redundant with 1) | 188 |
+| 3 | Give Reactions | 12 | **5** — kept as the on-ramp | 215 |
+| 16 | Post an Image | 15 | **8** | 180 |
+| 64 | React to Different Members | 12 | **7** | 98 |
+
+Frees **7,641/28d = 1,910/wk** to spend on the raises.
+
+### The raises, anchored to effort
+
+| id | Quest | Now | **New** | Clears 28d |
+|---:|---|---:|---:|---:|
+| 78 | Catch a Cat | 10 | **12** | 28 |
+| 65 | Post in Different Channels | 12 | **15** | 52 |
+| 48 | Make a Guess | 12 | **18** | 38 |
+| 51 | Answer a Greeting | 12 | **18** | 39 |
+| 49 | Send a Whisper | 12 | **20** | 38 |
+| 29 | Queue a Song | 12 | **20** | 1 |
+| 5 | Answer the QOTD | 15 | **22** | 57 |
+| 31 | Answer a Chat Revive | 12 | **22** | 35 |
+| 35 | Guess the Whisperer | 15 | **22** | 15 |
+| 50 | Guess the Whisperer | 15 | **22** | 19 |
+| 47 | Submit a Guess Who Round | 15 | **25** | 18 |
+| 36 | Win a Guess Who Round | 15 | **25** | 7 |
+| 30 | Post a Voice Message | 15 | **25** | 16 |
+| 4 | Join Voice Chat | 15 | **28** | 37 |
+| 34 | Join a Game Session | 15 | **28** | 15 |
+| 57 | Make a Shop Purchase | 25 | **35** | 14 |
+| 33 | Host a Voice Room | 18 | **40** | 2 |
+
+Average reward on the raised set goes **13.6 → 21.1**. The spread is the point:
+a cleared reaction is worth 5, hosting a voice room is worth 40, and the board
+now says so.
+
+**Quest 57 (Make a Shop Purchase) is the standout.** It is the only quest that
+drives a *sink* — it pays 35 but induces a purchase of 40–1,200. Every extra
+clear is net-negative on the float. If any single raise deserves to go further,
+it is this one.
+
+### The honest arithmetic: steering costs money
+
+| Uptake on the raised set | Clears/28d | Net effect |
+|---|---:|---:|
+| 1.00× (no behaviour change) | 431 | **−1,100/wk** |
+| **1.48× — break-even** | 638 | **0** |
+| 2.00× | 862 | **+1,177/wk** |
+| 2.50× | 1,078 | **+2,315/wk** |
+
+**If this works as intended, it adds mint.** Below a 48% lift in clears on the
+raised set it is deflationary; above it, inflationary. There is no version of
+"raise payouts to drive uptake" that also flattens the float — I checked: holding
+the lane neutral at 2× uptake requires an average reward of 15.7 against today's
+13.6, i.e. essentially no raise at all.
+
+So this is an **engagement-steering change, not a flattening one.** It belongs
+*alongside* §4's package, not instead of it. The §4 levers (demurrage, login,
+drops, cat-catch, cah_win_max) are untouched by this and still carry the
+flattening; treat §9 as budget-neutral and judge it on behaviour, not coins.
+
+### What to watch
+
+Per-quest clears on the 17 raised quests, at 10 days:
+
+- **Voice and game quests (4, 30, 33, 34) move** → the steer works; this is the
+  result worth having, and it is worth the mint.
+- **Nothing moves** → these quests are gated by opportunity, not reward (you
+  cannot "host a voice room" alone), and the coins were never the obstacle.
+  Revert the raises rather than doubling them.
+- **Total daily-quest clears fall** → deactivating 1 and 2 cut deeper than the
+  on-ramp could absorb. Reactivate quest 1 at 5 and re-measure.
+
+Watch the **29 common-only questers** specifically: if their clear count goes to
+zero, the on-ramp broke and quest 3 at 5 is too thin.
