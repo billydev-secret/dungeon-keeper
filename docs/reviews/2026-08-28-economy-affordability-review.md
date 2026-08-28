@@ -262,9 +262,8 @@ if a round 4 looks likely.
    catalog, or drift? It is the one price far off-curve, but it is also ~31% of
    the rental sink from three members. Leaving it is defensible; cutting it
    needs the sink made up elsewhere.
-2. **`casino_jackpot_cut_pct` 5 → 2** trades a fun, memorable, lumpy 18k
-   windfall for ~750/wk of steady burn. Worth it, or is the jackpot moment part
-   of what makes the casino work?
+2. ~~`casino_jackpot_cut_pct`~~ — **decided 2026-08-28: 3%** (+580/wk). See §12.
+   Not yet applied on the dashboard.
 3. **Event quests (3,449/wk, no dial)** — should the next editorial pass over
    `econ_quests` rows bring event/community rewards down, or is that lane doing
    engagement work worth its cost?
