@@ -40,6 +40,14 @@ _MAX_ITEM_ROWS = 8
 #: "N left" appears only when N is small enough to be a reason to hurry.
 _LOW_STOCK = 5
 
+#: Items per page of the dedicated storefront. Discord's select would hold 25,
+#: but 25 monospace rows is a wall on a phone and a 25-deep scroll in the
+#: picker — ten reads as a shelf, and a pair of arrows is cheaper than a
+#: scroll. It is also why the store no longer has a ceiling: the old picker
+#: showed the first 25 items and said so, which is a curation problem the
+#: guild never asked for.
+STORE_PAGE_SIZE = 10
+
 def shop_row_price(
     settings: EconSettings,
     perk: str,
@@ -88,38 +96,115 @@ def _item_note(item: ItemView, owned: bool) -> str:
     return ""
 
 
+def _item_rows(
+    settings: EconSettings,
+    items: list[ItemView],
+    owned_item_ids: set[int] | frozenset[int],
+) -> list[str]:
+    """One aligned cell per item, sized to exactly the items handed in.
+
+    Same two-cell shape as the perk table, so a store section and a perk tier
+    read as one storefront rather than two lists that happen to share an embed.
+    Width is measured over these rows only — the perk table sizes itself
+    separately, and forcing one shared width would let a long item name push
+    every perk row wide. It is also why the page, not the whole store, is what
+    gets passed in: padding page 1 to the width of an item on page 3 would
+    leave a gutter with nothing in it.
+    """
+    label_width = max(len(i.name) for i in items)
+    blurb_width = max(len(i.blurb) for i in items) if any(i.blurb for i in items) else 0
+
+    rows = []
+    for item in items:
+        cell = _pad(item.name, label_width)
+        if blurb_width:
+            cell += "  " + _pad(item.blurb, blurb_width)
+        rent = "/wk" if item.is_rental else ""
+        rows.append(
+            f"`{cell}` {settings.currency_emoji} **{item.price:,}**{rent}"
+            f"{_item_note(item, item.item_id in owned_item_ids)}"
+        )
+    return rows
+
+
 def _items_block(
     settings: EconSettings,
     items: list[ItemView],
     owned_item_ids: set[int] | frozenset[int],
 ) -> str:
-    """The Server Store section: one aligned cell per admin-defined item.
+    """The Server Store teaser inside the combined perk shop.
 
-    Same two-cell shape as the perk table above, so the two sections read as
-    one storefront rather than two lists that happen to share an embed. Width
-    is measured over these rows only — the perk table sizes itself separately,
-    and forcing one shared width would let a long item name push every perk
-    row wide.
+    A preview, not the store: the shop embed already carries the perk table,
+    so this shows the first few rows and hands off to the storefront proper.
     """
     shown = items[:_MAX_ITEM_ROWS]
-    label_width = max(len(i.name) for i in shown)
-    blurb_width = max(len(i.blurb) for i in shown) if any(i.blurb for i in shown) else 0
-
-    lines = []
-    for item in shown:
-        cell = _pad(item.name, label_width)
-        if blurb_width:
-            cell += "  " + _pad(item.blurb, blurb_width)
-        rent = "/wk" if item.is_rental else ""
-        lines.append(
-            f"`{cell}` {settings.currency_emoji} **{item.price:,}**{rent}"
-            f"{_item_note(item, item.item_id in owned_item_ids)}"
-        )
+    lines = _item_rows(settings, shown, owned_item_ids)
     hidden = len(items) - len(shown)
     if hidden:
-        lines.append(f"…and **{hidden}** more — tap 🎁 Store to see them all.")
-    lines.append("\nTap **🎁 Store** to buy.")
+        lines.append(f"…and **{hidden}** more.")
+    lines.append("\nTap **🎁 Store** to browse and buy.")
     return "\n".join(lines)
+
+
+def store_page_count(items: list[ItemView]) -> int:
+    """Pages the storefront needs. Always at least one, so page 1/1 is valid."""
+    return max(1, -(-len(items) // STORE_PAGE_SIZE))
+
+
+def store_page(items: list[ItemView], page: int) -> list[ItemView]:
+    """The slice shown on ``page`` (0-based), clamped into range.
+
+    Clamped rather than trusted: an admin can delete items while a member has
+    the storefront open, and page 3 of a store that just shrank to one page
+    must show that page rather than an empty picker.
+    """
+    page = max(0, min(page, store_page_count(items) - 1))
+    return items[page * STORE_PAGE_SIZE : (page + 1) * STORE_PAGE_SIZE]
+
+
+def build_store_embed(
+    settings: EconSettings,
+    items: list[ItemView],
+    accent: discord.Color | None,
+    *,
+    owned_item_ids: set[int] | frozenset[int] = frozenset(),
+    page: int = 0,
+    balance: int | None = None,
+) -> discord.Embed:
+    """The Server Store on its own, one page at a time.
+
+    Split out from the perk shop's teaser section because a stocked store
+    outgrows a preview: the combined embed can spare eight rows, and a guild
+    with twenty items was showing less than half of what it sells to anyone
+    who did not click through. The rows live in the description rather than a
+    field — one list needs no heading, and the description's cap is four times
+    a field's, so a page of ten long names cannot truncate.
+
+    ``page`` is 0-based and clamped by ``store_page``; the footer counts from
+    one, because that is how members count pages.
+    """
+    shown = store_page(items, page)
+    pages = store_page_count(items)
+    page = max(0, min(page, pages - 1))
+
+    header = "Everything this server sells, beyond the perk shop."
+    if balance is not None:
+        header += f" You have {settings.currency_emoji} **{balance:,}**."
+    body = "\n".join(_item_rows(settings, shown, owned_item_ids)) if shown else (
+        "_Nothing on the shelves yet._"
+    )
+    embed = discord.Embed(
+        title="🎁 Server Store",
+        description=f"{header}\n\u200b\n{body}",
+        color=accent,
+    )
+    if settings.currency_icon_url:
+        embed.set_thumbnail(url=settings.currency_icon_url)
+    footer = "Pick one below to buy it."
+    if pages > 1:
+        footer = f"Page {page + 1} of {pages} \u00b7 {footer}"
+    embed.set_footer(text=footer)
+    return embed
 
 
 def build_shop_embed(
@@ -252,6 +337,16 @@ def build_shop_embed(
             f"{settings.currency_emoji} **{price_str}**{note}"
         )
 
+    # The store leads. What a guild stocks itself is the part a member came
+    # for and the part that changes; the perk ladder below is the same six
+    # rows in every guild, and it was pushing the server's own goods to the
+    # fourth field of five.
+    if items:
+        embed.add_field(
+            name="Server Store",
+            value=_items_block(settings, items, owned_item_ids),
+            inline=False,
+        )
     for tier_name, perks in tiers:
         if not perks:
             continue
@@ -291,12 +386,6 @@ def build_shop_embed(
                 "roll; the winner's next weekly perk payment is free "
                 "(and they're announced by name)."
             ),
-            inline=False,
-        )
-    if items:
-        embed.add_field(
-            name="Server Store",
-            value=_items_block(settings, items, owned_item_ids),
             inline=False,
         )
     # Gifting needs something to gift: with every perk switched off, the only

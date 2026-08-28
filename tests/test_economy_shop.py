@@ -363,3 +363,124 @@ def test_switching_everything_off_still_shows_the_server_store(db):
     item = ItemView(item_id=1, name="Tuckshop Voucher", blurb="a treat", price=25)
     embed = build_shop_embed(_settings(db), set(), None, items=[item])
     assert "Server Store" in [f.name for f in embed.fields]
+
+
+# ── the Server Store: leading the shop, and its own paged storefront ────────
+
+
+def _items(n: int, **kw) -> list:
+    from bot_modules.economy.shop_items import ItemView
+
+    return [
+        ItemView(item_id=i, name=f"Item {i:02d}", blurb="a thing", price=100 + i, **kw)
+        for i in range(1, n + 1)
+    ]
+
+
+def test_the_server_store_leads_the_shop_embed(db):
+    """Billy's ask: the server's own goods stop arriving fourth of five.
+
+    The perk ladder is the same six rows in every guild; what the guild stocks
+    itself is the part that changes and the part members come for.
+    """
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, items=_items(2))
+    assert [f.name for f in embed.fields][0] == "Server Store"
+
+
+def test_the_store_section_stays_a_preview(db):
+    """It is a teaser inside the combined menu, not the store.
+
+    Eight rows and a count of the rest — the storefront is where the whole
+    thing is browsable, and duplicating it here would push the perk table off
+    a phone.
+    """
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, items=_items(20))
+    block = next(f for f in embed.fields if f.name == "Server Store").value
+    assert "Item 08" in block
+    assert "Item 09" not in block
+    assert "…and **12** more." in block
+
+
+@pytest.mark.parametrize(
+    ("count", "pages"),
+    [(0, 1), (1, 1), (10, 1), (11, 2), (20, 2), (21, 3)],
+)
+def test_store_page_count(count, pages):
+    """One page minimum, so an empty store still renders as page 1 of 1."""
+    from bot_modules.economy.shop import store_page_count
+
+    assert store_page_count(_items(count)) == pages
+
+
+def test_store_page_clamps_out_of_range():
+    """An admin can delete items while a member sits on page 3.
+
+    Clamping shows them the last page that exists; trusting the number would
+    hand them an empty picker.
+    """
+    from bot_modules.economy.shop import store_page
+
+    items = _items(12)
+    assert [i.item_id for i in store_page(items, 0)] == list(range(1, 11))
+    assert [i.item_id for i in store_page(items, 1)] == [11, 12]
+    assert [i.item_id for i in store_page(items, 9)] == [11, 12]
+    assert [i.item_id for i in store_page(items, -3)] == list(range(1, 11))
+
+
+def test_store_embed_pages_a_stocked_store(db):
+    """The whole point of the rework: twenty items are all reachable.
+
+    The old picker cut at 25 and the old preview at 8, so a guild with a real
+    store showed less than half of it to anyone who did not click through.
+    """
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    settings = _settings(db)
+    items = _items(20)
+
+    first = build_store_embed(settings, items, None, page=0)
+    assert first.title == "🎁 Server Store"
+    assert "Item 01" in first.description and "Item 10" in first.description
+    assert "Item 11" not in first.description
+    assert first.footer.text is not None and first.footer.text.startswith("Page 1 of 2")
+
+    second = build_store_embed(settings, items, None, page=1)
+    assert "Item 11" in second.description and "Item 20" in second.description
+    assert "Item 01" not in second.description
+    assert second.footer.text is not None and second.footer.text.startswith(
+        "Page 2 of 2"
+    )
+
+
+def test_store_embed_hides_the_page_counter_for_one_page(db):
+    """A single-page store should not advertise navigation it doesn't have."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    embed = build_store_embed(_settings(db), _items(3), None)
+    assert embed.footer.text == "Pick one below to buy it."
+
+
+def test_store_embed_shows_the_wallet_and_marks_what_you_hold(db):
+    """Same header contract as the perk shop: your balance travels with you."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    embed = build_store_embed(
+        _settings(db), _items(3), None, owned_item_ids={2}, balance=1234
+    )
+    assert "1,234" in embed.description
+    lines = [ln for ln in embed.description.split("\n") if "Item 02" in ln]
+    assert lines and "✅" in lines[0]
+
+
+def test_store_embed_survives_an_emptied_store(db):
+    """`max()` over nothing raises, and the last item can be withdrawn."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    embed = build_store_embed(_settings(db), [], None)
+    assert "Nothing on the shelves yet" in embed.description

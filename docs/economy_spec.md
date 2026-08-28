@@ -1484,7 +1484,16 @@ open the catalogue to admins — see the row below and
 `docs/plans/economy-shop-items.md` — **fully shipped 2026-08-26**: the
 Server Store section and 🎁 Store picker in `/bank shop`, the item editor and
 order queue on the Approvals page, and the mod todo board as the fulfilment
-queue. Private rooms stay **Stage 6**
+queue. **Shortened 2026-08-28** — the store was two clicks from the channel
+panel (Open Shop → 🎁 Store) and buried fourth of five embed fields, with a
+picker that cut at Discord's 25-option ceiling. It now leads the shop embed
+and the shop view's button row, gets its own **`/bank store`** command and a
+second panel button (**🎁 Server Store**, `econ_shop_store`, rendered only
+where the guild has stock), and opens as a **paged storefront of its own**
+(`build_store_embed`, `STORE_PAGE_SIZE = 10`, wrapping ◀️/▶️ arrows that
+re-read on every turn) — so the item count no longer has a ceiling. All three
+routes call `open_store`: still one shop, with shorter paths into a section
+of it. Private rooms stay **Stage 6**
 and the spotlight slot stays **v2** — both still design-only below.
 
 Weekly rentals bill on personal anniversary tick. Defaults below; every price per-guild
@@ -1728,7 +1737,9 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   plus `/qotd post` [mod]
   and rooms-stage `/room …` — keeps the bot's top-level command budget flat. Command
   names are global; all *strings* inside are currency-branded.
-  - **`/bank pay @member amount`** — transfer (§5); **`/bank shop`** — one ephemeral
+  - **`/bank pay @member amount`** — transfer (§5); **`/bank store`** — the
+    guild's own items as a paged storefront, the same view `/bank shop`'s
+    🎁 Store button opens; **`/bank shop`** — one ephemeral
     panel that both browses and configures. The listing is an aligned code-cell
     table in the quest-board's house style (one `label  blurb` cell, then the
     price — blurbs kept short enough that a row fits a phone-width line), grouped
@@ -1798,10 +1809,16 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   perk-shop listing as a persistent panel: the same embed `/bank shop` shows
   minus the per-member bits (no ✅ rented marks — the panel is member-agnostic;
   prices templated from `EconSettings`, feature-gated rows annotated) with a
-  **single 🛍️ Open Shop button** (`ShopPanelView`, static custom_id
+  a **🛍️ Open Shop button** (`ShopPanelView`, static custom_id
   `econ_shop_open`, re-registered in `cog_load` — the static-custom_id view
-  pattern the economy panel's own buttons use).
-  Clicking it serves the clicker's exact `/bank shop` ephemeral menu
+  pattern the economy panel's own buttons use), joined 2026-08-28 by a second
+  **🎁 Server Store** button (`econ_shop_store`) that opens the storefront
+  directly. The panel embed now lists the store too (read with no `user_id`,
+  so nothing is ticked as owned), and `ShopPanelView(with_store=...)` leaves
+  the button off a panel in a guild that has stocked nothing — `cog_load`
+  always registers the full view, so a panel posted while stock existed keeps
+  routing after the last item is withdrawn.
+  Clicking Open Shop serves the clicker's exact `/bank shop` ephemeral menu
   (`open_personal_shop`, shared with the slash command), so the panel and
   the personal menu are one code path — rent, customise, and Cancel & Refund
   all exist on both surfaces by construction, and everything is re-read at
