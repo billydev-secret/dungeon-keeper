@@ -289,6 +289,21 @@ remaining trims; login `return_to` fix (dashboard-wide, separate commit).
 
 ## 8. Decisions needed from Billy
 
+> **RESOLVED 2026-08-28** — Billy answered question-by-question:
+> **1** Partners: CUT (migration approved). **2** Nav ungate: Overview visible
+> to everyone, rest stays opt-in-gated. **3** Framing: two tiers + goal nudge
+> (done-embed + ~24h follow-up DM; no forced wizard step). **4** Admin-on-
+> behalf: correct the manual. **5** Provisioning: build the Activate card now.
+> **6** Public commitment: ask it in the wizard; day counts on the pinned list
+> are blessed (spec non-goal to be amended); no DM campaign to the two
+> streak-holders. **7** Billy resumes his own pause as the live enforcement
+> drill. **8** Setup re-run is settings editing — fix D8. **9** Payouts:
+> yes, in the relaunch (Stage 1), require-an-active-goal rule confirmed,
+> per-guild dials defaulting off (~25/clean week, ~50–150 per milestone).
+> Undecided minor item: `slow_mode_rate_seconds` — proceeding with the
+> recommended hard-code-and-delete unless Billy objects.
+> Build plan: `docs/plans/wellness-relaunch.md`.
+
 1. **Partners: CUT (DROP-TABLE migration, your approval required) or SHELVE
    (hide + disable endpoint)?** Recommendation: cut; the table is empty and the
    feature's promises were never built.
