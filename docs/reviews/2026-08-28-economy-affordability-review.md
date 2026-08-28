@@ -152,8 +152,8 @@ today's measured numbers, not a new invention.
 
 | # | Dial | Now | Proposed | Measured base | Est. Δ/wk |
 |---|---|---:|---:|---:|---:|
-| 1 | `econ_quest_board_daily` | 5 | **3** | 4,432/wk | −1,773 |
-| 2 | `econ_quest_board_weekly` | 3 | **2** | 2,366/wk | −789 |
+| 1 | `econ_quest_board_daily` | 5 | **3** | 4,432/wk | −300 ⚠ |
+| 2 | `econ_quest_board_weekly` | 3 | **2** | 2,366/wk | −150 ⚠ |
 | 3 | catcatch tiers (6 dials) | 1/3/11/35/102/300 | **0/1/5/18/60/180** | 5,860/wk | −2,640 |
 | 4 | `econ_cat_catch_daily_cap` | 150 | **75** | (on top of #3) | −600 |
 | 5 | `econ_login_text_base` | 5 | **3** | } 6,828/wk | } −2,700 |
@@ -171,10 +171,20 @@ today's measured numbers, not a new invention.
 | 11 | `econ_wager_rake_pct` | 10 | **15** | } | } +300 sink |
 | 11 | `econ_bounty_rake_pct` | 10 | **15** | } | } |
 | | **Sink subtotal** | | | | **+5,150** |
-| | **TOTAL** | | | | **≈ 17,092/wk** |
+| | **TOTAL** | | | | **≈ 15,180/wk** |
 
-**Expected landing: +24,058/wk → ≈ +6,966/wk**, i.e. float growth from **+12.3%
-to ≈ +3.6% per week**. That is 71% of the gap, deliberately not 100% — see below.
+> ⚠ **Corrected 2026-08-28 (same day).** Lines 1–2 originally read −1,773 and
+> −789, pro-rated from board slots. That was wrong: members are **not
+> board-limited**. Of 909 member-days with any daily-quest claim, **67% are a
+> single clear** and only **3% clear all five** — so shrinking the board removes
+> options almost nobody was using. This is the same dial-arithmetic error round
+> 2's postmortem caught on `reward_game_win`, made again. The board dials stay in
+> the package (they cap the ceiling and cost nothing) but are now credited at
+> roughly a sixth of the original estimate. **Per-quest reward is the real lever
+> on this lane — see §8.**
+
+**Expected landing: +24,058/wk → ≈ +8,878/wk**, i.e. float growth from **+12.3%
+to ≈ +4.6% per week**. That is 63% of the gap, deliberately not 100% — see below.
 
 ### Why not flatten it in one move
 
@@ -251,3 +261,98 @@ if a round 4 looks likely.
 3. **Event quests (3,449/wk, no dial)** — should the next editorial pass over
    `econ_quests` rows bring event/community rewards down, or is that lane doing
    engagement work worth its cost?
+
+---
+
+## 8. Stage 0 — trim the quests everyone clears (Billy, 2026-08-28)
+
+> "Let's make some of the quests smaller, the ones everyone gets done and see
+> what happens."
+
+Read as **reward size, not task size**. Applied via the dashboard
+(**Economy → Quests**), which edits `reward` directly — no SQL, no restart.
+
+### Why this is the right lever on the quest lane
+
+Members are not board-limited, so the *board size* dial barely bites (§4 ⚠).
+What they do instead is clear the **one or two cheapest quests and stop**:
+
+| Daily-quest clears in one member-day | Member-days | Share |
+|---:|---:|---:|
+| 1 | 609 | 67% |
+| 2 | 206 | 23% |
+| 3 | 64 | 7% |
+| 4 | 19 | 2% |
+| 5 (full board) | 11 | **1%** |
+
+`econ_board_overrides` confirms the behaviour from the other side: it is the
+reroll log, and members reroll *out of* "Set Your Bio" / "Guess the Whisperer" /
+"Post a Voice Message" and almost always *into* quest 1 (Send Messages) or 2
+(Reply to Messages). The easy quests are actively sought.
+
+So cutting the reward on the easy quests hits the coins directly, with little
+room to substitute — most members were never clearing a second quest anyway.
+
+### The "everyone clears it" set
+
+Ranked by distinct members clearing it over 28 days (~165 earners, ~82 daily
+active). These five dailies are **60% of all daily-quest coins**:
+
+| id | Quest | Reward | Clears | Members | Clears/board-day | Coins 28d |
+|---:|---|---:|---:|---:|---:|---:|
+| 3 | Give Reactions | 12 | 213 | 83 | 7.6 | 2,556 |
+| 1 | Send Messages | 10 | 209 | 83 | 7.2 | 2,090 |
+| 2 | Reply to Messages | 12 | 188 | 82 | 6.5 | 2,256 |
+| 16 | Post an Image | 15 | 179 | 84 | 6.4 | 2,685 |
+| 64 | React to Different Members | 12 | 95 | 50 | 3.7 | 1,140 |
+
+Their weekly counterparts — the same trivial actions on a week's cadence — are
+**48% of all weekly-quest coins**.
+
+### Proposed rewards
+
+| id | Quest | Now | **New** | Clears 28d | Δ coins/wk |
+|---:|---|---:|---:|---:|---:|
+| 1 | Send Messages (daily) | 10 | **5** | 209 | −261 |
+| 2 | Reply to Messages (daily) | 12 | **6** | 188 | −282 |
+| 3 | Give Reactions (daily) | 12 | **6** | 213 | −320 |
+| 16 | Post an Image (daily) | 15 | **8** | 179 | −313 |
+| 64 | React to Different Members (daily) | 12 | **7** | 95 | −119 |
+| 6 | Send Messages (weekly) | 40 | **25** | 21 | −79 |
+| 7 | Reply to Messages (weekly) | 40 | **25** | 19 | −71 |
+| 8 | Give Reactions (weekly) | 30 | **20** | 24 | −60 |
+| 66 | Reply to Different Members (weekly) | 45 | **30** | 16 | −60 |
+| 67 | Get Replies from Different Members (weekly) | 40 | **25** | 20 | −75 |
+| 68 | Be Active on Different Days (weekly) | 50 | **35** | 14 | −53 |
+| | **Total** | | | | **−1,693/wk** |
+
+**Expected effect: +24,058 → +22,365/wk, i.e. +12.3% → +11.5% weekly float
+growth.** Set expectations accordingly — this is **7% of the gap**, not a fix.
+Its value is as an experiment, not a retune.
+
+### Two things to know before applying
+
+1. **The panel will show an advisory on the five dailies.** `REWARD_BANDS` in
+   `economy-quests.js` is a hardcoded `daily: [10, 20]`, so anything under 10
+   reads "Outside the suggested daily band (10–20). Saves fine." It saves. The
+   band is a fixed constant that predates the current economy — at a median
+   weekly income of **80**, a daily band of 10–20 means one trivial clear is
+   worth 12–25% of a member's whole week. The band is stale, not the new values.
+2. **Weeklies stay inside their band** (25–75), so no advisory there.
+
+### What "see what happens" should look for
+
+The point of doing this first, alone, is that it answers a question the dial
+arithmetic cannot: **are these quests cleared for the coins, or for the habit?**
+
+- **Clears hold steady, coins fall ~1,700/wk** → habit-driven. Reward cuts work
+  on this lane and can go further (the other 22 dailies average 16 and are
+  untouched).
+- **Clears fall with the reward** → coin-driven. Stop cutting rewards here; the
+  lane is doing engagement work and the float has to be fixed elsewhere.
+- **Clears shift to other quests, coins flat** → substitution after all. Then the
+  board dials matter more than this section assumes, and §4 ⚠ needs revisiting.
+
+Checkpoint at **10 days**, watching `clears_per_user` per week (currently 3.3–4.5)
+alongside the coin total — the ratio is what separates the three cases, and the
+raw coin figure alone cannot.
