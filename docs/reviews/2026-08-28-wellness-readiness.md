@@ -23,10 +23,12 @@ whose delivery to real members has never been confirmed.
 
 ### The adoption story in one paragraph
 
-Wellness is ~6,635 source lines serving 3 all-time enrollees, one of whom is
-paused until the year 2125 (the deleted `/wellness pause` command's deliberate
-"indefinite" encoding — commit `148a67d0`, not a bug) and owns the only cap and
-only blackout ever created. The two active members joined in late July, have
+Wellness is ~6,635 source lines serving 3 all-time enrollees — and the first
+is Billy himself (user 1384…068, confirmed via the todo board): an 04-12 test
+enrolment that owns the only cap and only blackout ever created, got nudged
+04-13 (his "I've been enforced upon"), and is paused until the year 2125 (the
+deleted `/wellness pause` command's deliberate "indefinite" encoding — commit
+`148a67d0`, not a bug). Real member adoption is therefore **2**, not 3. The two active members joined in late July, have
 **zero caps and zero blackouts to this day**, and panel telemetry since 07-28
 shows the Caps, Blackouts, Partners, and History panels have **never been
 opened**. Discovery is pull-only (/help, /info, the manual), the dashboard nav
@@ -62,8 +64,14 @@ part that works — but with nothing to violate, compliance is vacuously 100%.
 
 - **Cap/blackout enforcement** — `wellness_cap_counters`, `wellness_cap_overages`,
   `wellness_blackout_overages`, `wellness_blackout_active`, `wellness_slow_mode`:
-  0 rows, all-time. The only cap and blackout belong to the 2125-paused user,
-  whom every enforcement leg explicitly skips. Nobody unpaused has ever had one.
+  0 rows today, but *not* zero executions ever: Billy's `last_nudge_at =
+  2026-04-13 23:35` proves the ladder fired end-to-end once, on his own test
+  cap, before he paused — and the 14-day GC swept every other trace (the trim
+  lane flagged exactly this ambiguity; Billy's own recollection settles it).
+  What remains true: enforcement has not run for anyone since April, the one
+  execution predates the July refactors (Cooldown retirement, honesty pass),
+  and no *member* has ever been enforced upon — the only cap and blackout
+  belong to the paused Billy, whom every enforcement leg skips.
 - **Partners** — 0 partnerships ever; and an accepted partnership *does nothing*
   (no code reads `wellness_partners` except the dashboard list; the promised
   "see each other's streaks / send nudges" was never built).
@@ -194,6 +202,60 @@ extrapolated. The structural win is the point: afterwards every remaining
 surface is one a member actually uses or receives, and no copy promises
 anything unbuilt.
 
+## 6b. Goal payouts (Billy's 08-28 ask)
+
+Billy asked for coin payouts for hitting wellness goals. Verdict: **good fit,
+and it completes the funnel fix** — the review's central finding is that
+nothing happens after opt-in; "set a goal, keep it, get paid" is the missing
+loop, and it makes the §8 Q3 starter-goal nudge self-motivating instead of
+naggy. But three hazards shape the design:
+
+1. **The vacuous-streak problem, weaponized.** Today both active members'
+   streaks are 100% clean because they have nothing to violate. Paying for
+   clean days as-is would pay members for opting in and doing nothing — a pure
+   faucet with no behavior attached, and trivially farmable (opt in, set no
+   cap, collect). **Payouts must require an active goal**: at least one
+   enabled cap or blackout in force for the whole qualifying period, plus a
+   floor of counted activity in the week (so an absent member isn't "keeping"
+   anything). This is the recommended resolution of Q3's framing fork:
+   zero-config stays the free tier (streaks, weekly check-in); goals + payouts
+   are the earning tier.
+2. **Faucet sizing.** The 07-30 economy retune flattened a +5,221/day float —
+   any new faucet needs a stated worst case. Flat, small, capped amounts:
+   one clean-week payout per member per ISO week, one milestone payout per
+   badge tier per streak run. At ~25/week + occasional milestones, even 20
+   enrolled members add <100 coins/day — noise against the retuned float, but
+   the amounts must be **per-guild dials, default 0/off** (the second guild
+   runs an ~8x-denominated economy someone else operates; never hardcode).
+3. **Privacy.** Milestone payouts must NOT ride the public-commitment gate the
+   celebrations use (a private member's payout should still pay) — but nothing
+   about a payout may surface publicly for a non-committed member: the payout
+   lands in the ledger with a discreet reason string and is announced only in
+   the member's own weekly report DM / milestone DM, never a public receipt.
+
+**Sketch** (deliberately small):
+- Clean-week payout: computed inside the existing weekly-report pass
+  (`wellness_scheduler` already holds the compliance summary); qualifying =
+  ≥1 enabled cap/blackout for all 7 tracked days + compliance 100% + activity
+  floor. Paid via the economy award path; noted in the report DM ("+25 for a
+  clean week").
+- Milestone payout: on badge crossing (the `current_badge` vs
+  `celebrated_badge` machinery already detects this) — add a parallel
+  `paid_badge` marker so paying is decoupled from public celebration.
+- Idempotency without a new table: record the clean-week payout on the
+  existing `wellness_weekly_reports` row (PK guild/user/year/week) and the
+  milestone marker on `wellness_streaks` — two columns, one migration, no new
+  `data_register.md` table row (just amend the existing wellness entry).
+- Admin: two amount dials + an on/off on the wellness admin panel (config
+  columns on `wellness_config`), default off.
+- Obligations: manual §15 + privacy notice line, logic-layer tests (qualifying
+  matrix: no-goal week, partial-week goal, paused member, activity floor,
+  re-run idempotency), spec update.
+
+Estimated size: a small feature, not a rewrite — scheduler hook + service
+functions + migration + two dials + copy + tests. Belongs in **Stage 1** if
+Billy wants payouts in the relaunch pitch (it strengthens it), Stage 2 if not.
+
 ## 7. Proposed sequencing (pending Billy's calls in §8)
 
 **Stage 0 — ground truth (no code).** Ask the two active members whether the
@@ -212,9 +274,11 @@ decides whether the pinned list can ever serve discovery).
 4. Post-opt-in follow-through: starter-cap/blackout nudge (see decision Q3) and
    a done-embed that sets expectations for week one.
 5. D2: surface or remove the economy-role dependency on the daily DM.
-6. One live enforcement drill: throwaway cap on a test account, trip it,
-   observe nudge → breather → slow-mode, delete. The only pipeline with zero
-   prod executions ever.
+6. One live enforcement drill on the *current* code (the only prod execution,
+   April on Billy, predates the July enforcement refactors). Cheapest form:
+   Billy resumes his own 2125 pause — his existing 37/day cap and Sleep Time
+   blackout come back to life immediately, making him the drill. (Heads-up:
+   resuming means those *will* start firing on him again.)
 7. D1 provisioning ("Activate Wellness" card: role picker/auto-create +
    channel picker) — or, if deferred, at minimum the D11 copy fix.
 
@@ -242,11 +306,17 @@ remaining trims; login `return_to` fix (dashboard-wide, separate commit).
    (re-lights the pinned list and their pending 🔥 celebrations)? And keep the
    list's day counts (a self-flagged deviation from the spec's badges-only
    non-goal)?
-7. **The 2125-paused member**: leave as-is (skipped everywhere, harmless) or
-   resume/opt-out with their consent? They're also why "3 members" overstates
+7. ~~The 2125-paused member~~ **Resolved: it's Billy himself** (test enrolment,
+   nudged 04-13, paused with the old command). Remaining call is his alone:
+   resume (and become the Stage-1 enforcement drill), opt out (cleans the
+   adoption stat), or leave as-is. Either way "3 members" overstates real
    adoption by one.
 8. **`/wellness setup` re-run semantics**: pure settings editing (D8 is a bug,
    fix it) or a re-affirmation ritual (denominator reset is a feature)?
+9. **Goal payouts (§6b)**: confirm the require-an-active-goal rule (it's the
+   anti-farm guard *and* the Q3 resolution); pick amounts (suggested order of
+   magnitude: ~25/clean week, ~50–150 per milestone tier, per-guild dials,
+   second guild default 0); and Stage 1 (in the relaunch pitch) or Stage 2?
 
 ## Appendix — deliberately not done
 
