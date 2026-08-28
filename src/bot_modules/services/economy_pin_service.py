@@ -34,10 +34,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bot_modules.services.economy_service import (
-    apply_debit,
     get_balance,
 )
-from bot_modules.services.economy_submission_store import list_rows, refund_once
+from bot_modules.services import economy_submission_store as store
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -53,6 +52,15 @@ PIN_LIFETIME_SECONDS = 24 * 3600
 _OPEN_STATES = ("pending", "live")
 SPEND_KIND = "pin_sponsor"
 REFUND_KIND = "pin_sponsor_refund"
+
+#: What the shared paid-submission mechanics need. The one-live-per-guild
+#: supersede and the 24h clock are this product's own and stay below.
+PRODUCT = store.SubmissionProduct(
+    table="econ_pin_submissions",
+    spend_kind=SPEND_KIND,
+    refund_kind=REFUND_KIND,
+    open_states=_OPEN_STATES,
+)
 
 
 @dataclass(frozen=True)
@@ -82,12 +90,7 @@ def open_submission(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
     """The member's in-flight submission (pending or live), if any."""
-    placeholders = ", ".join("?" for _ in _OPEN_STATES)
-    return conn.execute(
-        "SELECT * FROM econ_pin_submissions "
-        f"WHERE guild_id = ? AND user_id = ? AND state IN ({placeholders})",
-        (guild_id, user_id, *_OPEN_STATES),
-    ).fetchone()
+    return store.open_submission(conn, PRODUCT, guild_id, user_id)
 
 
 def submit_pin(
@@ -118,32 +121,19 @@ def submit_pin(
 
     price = pin_price(settings)
     unit = settings.currency_plural or "coins"
-    if not apply_debit(
-        conn, guild_id, user_id, price, SPEND_KIND, meta={"message": text}
-    ):
+    submission_id = store.charge_and_insert(
+        conn, PRODUCT, guild_id, user_id, price, {"message": text}
+    )
+    if submission_id is None:
         have = get_balance(conn, guild_id, user_id)
         raise ValueError(f"Pinning a message costs {price} {unit} — you have {have}.")
-    now = time.time()
-    cur = conn.execute(
-        "INSERT INTO econ_pin_submissions "
-        "(guild_id, user_id, message, state, price, created_at) "
-        "VALUES (?, ?, ?, 'pending', ?, ?)",
-        (guild_id, user_id, text, price, now),
-    )
-    # shop_purchase quest trigger (one-time setup kind); deferred import — the
-    # quests service imports the wider economy machinery.
-    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
-        fire_trigger_inline,
-    )
-
-    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
-    return PinOutcome(submission_id=int(cur.lastrowid or 0), price=price)
+    return PinOutcome(submission_id=submission_id, price=price)
 
 
 def _refund(conn: sqlite3.Connection, row: sqlite3.Row, reason: str) -> int:
     """Give the money back exactly once. Returns the amount actually refunded."""
-    return refund_once(
-        conn, "econ_pin_submissions", row, reason, refund_kind=REFUND_KIND
+    return store.refund_once(
+        conn, PRODUCT.table, row, reason, refund_kind=PRODUCT.refund_kind
     )
 
 
@@ -158,26 +148,20 @@ def deny(
 
     Only ``pending`` declines here — a live pin is pulled with :func:`take_down`.
     """
-    row = conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
+    row = store.get(conn, PRODUCT, submission_id)
     if row is None:
         raise ValueError("That submission no longer exists.")
     if str(row["state"]) != "pending":
         raise ValueError(f"That submission is already {row['state']}.")
 
-    cur = conn.execute(
-        "UPDATE econ_pin_submissions SET state = 'denied', resolver_id = ?, "
-        "resolved_at = ?, deny_reason = ? WHERE id = ? AND state = 'pending'",
-        (resolver_id, time.time(), deny_reason[:500], submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="pending", to_state="denied",
+        resolver_id=resolver_id, deny_reason=deny_reason,
+        refund_reason="denied",
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError("That submission was just resolved by someone else.")
-    _refund(conn, row, "denied")
-    fresh = conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    assert fresh is not None
     return fresh
 
 
@@ -227,22 +211,19 @@ def go_live(
             (now, int(prior["id"])),
         )
 
-    cur = conn.execute(
-        "UPDATE econ_pin_submissions SET state = 'live', resolver_id = ?, "
-        "resolved_at = ?, went_live_at = ?, expires_at = ?, "
-        "pin_channel_id = ?, pin_message_id = ? "
-        "WHERE id = ? AND state = 'pending'",
-        (
-            resolver_id, now, now, now + PIN_LIFETIME_SECONDS,
-            pin_channel_id, pin_message_id, submission_id,
-        ),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="pending", to_state="live",
+        resolver_id=resolver_id, now=now,
+        extra={
+            "went_live_at": now,
+            "expires_at": now + PIN_LIFETIME_SECONDS,
+            "pin_channel_id": pin_channel_id,
+            "pin_message_id": pin_message_id,
+        },
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError("That submission was just resolved by someone else.")
-    fresh = conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    assert fresh is not None
     return GoLiveResult(live=fresh, superseded=prior)
 
 
@@ -254,17 +235,12 @@ def take_down(
     Returns the row (carrying the pin's channel/message ids) so the caller can
     unpin the Discord message.
     """
-    cur = conn.execute(
-        "UPDATE econ_pin_submissions SET state = 'expired', resolver_id = ?, "
-        "resolved_at = ? WHERE id = ? AND state = 'live'",
-        (resolver_id, time.time(), submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="live", to_state="expired", resolver_id=resolver_id,
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError("That pin isn't up any more.")
-    fresh = conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    assert fresh is not None
     return fresh
 
 
@@ -284,14 +260,11 @@ def expire_live_pins(
     ).fetchall()
     out: list[sqlite3.Row] = []
     for row in due:
-        cur = conn.execute(
-            "UPDATE econ_pin_submissions SET state = 'expired', resolved_at = ? "
-            "WHERE id = ? AND state = 'live'",
-            (now, int(row["id"])),
-        )
-        if (cur.rowcount or 0) == 0:
-            continue
-        out.append(row)
+        if store.move_state(
+            conn, PRODUCT, int(row["id"]),
+            from_state="live", to_state="expired", now=now,
+        ) is not None:
+            out.append(row)
     return out
 
 
@@ -303,27 +276,9 @@ def expire_stale_pending(
     Only ``pending`` expires (a live pin is time-boxed by :func:`expire_live_pins`).
     ``pin_expire_days`` of 0 disables the sweep, keeping a slow queue alive.
     """
-    days = max(0, int(settings.pin_expire_days))
-    if days <= 0:
-        return []
-    cutoff = now - days * 86400.0
-    stale = conn.execute(
-        "SELECT * FROM econ_pin_submissions "
-        "WHERE guild_id = ? AND state = 'pending' AND created_at < ?",
-        (guild_id, cutoff),
-    ).fetchall()
-    out: list[sqlite3.Row] = []
-    for row in stale:
-        cur = conn.execute(
-            "UPDATE econ_pin_submissions SET state = 'expired', resolved_at = ? "
-            "WHERE id = ? AND state = 'pending'",
-            (now, int(row["id"])),
-        )
-        if (cur.rowcount or 0) == 0:
-            continue
-        _refund(conn, row, "expired")
-        out.append(row)
-    return out
+    return store.expire_stale_pending(
+        conn, PRODUCT, guild_id, days=max(0, int(settings.pin_expire_days)), now=now,
+    )
 
 
 def refund_failed_golive(conn: sqlite3.Connection, row: sqlite3.Row) -> None:
@@ -347,23 +302,17 @@ def list_submissions(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:
     """Submissions for a dashboard queue, oldest first (or newest when unfiltered)."""
-    return list_rows(conn, "econ_pin_submissions", guild_id, state, limit)
+    return store.list_for(conn, PRODUCT, guild_id, state, limit)
 
 
 def get_submission(
     conn: sqlite3.Connection, submission_id: int
 ) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM econ_pin_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
+    return store.get(conn, PRODUCT, submission_id)
 
 
 def set_submission_card(
     conn: sqlite3.Connection, submission_id: int, channel_id: int, message_id: int
 ) -> None:
     """Record where the approval card lives so it can be edited on resolution."""
-    conn.execute(
-        "UPDATE econ_pin_submissions SET card_channel_id = ?, card_message_id = ? "
-        "WHERE id = ?",
-        (channel_id, message_id, submission_id),
-    )
+    store.set_card(conn, PRODUCT, submission_id, channel_id, message_id)
