@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from bot_modules.core.branding import SECTION_SPACER
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.role_grant_audit_service import (
     GrantAuditSnapshot,
@@ -431,8 +432,12 @@ def test_embed_has_three_buckets_with_counts():
     )
     embed = build_grant_audit_embed("NSFW", snap, now_ts=1000.0)
     assert embed.title == "📋 Grant audit — NSFW"
-    # Blank author line above the title for breathing room from the top edge.
-    assert embed.author.name == "​"
+    # No author line: the space belongs above each section heading, not above
+    # the title. Every field but the last carries the section spacer instead.
+    assert embed.author.name is None
+    assert [str(f.value).endswith(SECTION_SPACER) for f in embed.fields] == [
+        True, True, False,
+    ]
     names = [f.name for f in embed.fields]
     assert names[0] == "🕐 Waiting for first grant (1)"
     assert names[1] == "↩️ Stripped but came back (1)"
@@ -444,8 +449,8 @@ def test_embed_has_three_buckets_with_counts():
 
 def test_embed_empty_buckets_show_all_clear():
     embed = build_grant_audit_embed("NSFW", _snapshot(), now_ts=1000.0)
-    assert embed.fields[0].value == "Nobody — all clear."
-    assert embed.fields[1].value == "Nobody — all clear."
+    assert embed.fields[0].value == "Nobody — all clear." + SECTION_SPACER
+    assert embed.fields[1].value == "Nobody — all clear." + SECTION_SPACER
     assert "30d inactivity prune" in str(embed.fields[2].value)
 
 

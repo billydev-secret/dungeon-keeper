@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Protocol
 
 import discord
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.embeds import rel_ts
 
 log = logging.getLogger("dungeonkeeper.grant_audit")
@@ -516,10 +517,6 @@ def build_grant_audit_embed(
         ),
         color=color,
     )
-    # A blank author line gives the title a little breathing room from the top
-    # edge of the embed (a bare title otherwise sits flush against it).
-    embed.set_author(name="​")
-
     waiting_lines = [
         f"**{r['display_name']}** — level {r['level']}"
         for r in snap.waiting[:_CARD_WAITING_CAP]
@@ -567,6 +564,11 @@ def build_grant_audit_embed(
         or f"Nobody stripped by the {snap.inactivity_days}d inactivity prune.",
         inline=False,
     )
+
+    # Space above each heading rather than above the title: the blank author
+    # line this card used to carry pushed the whole card down while the three
+    # section headings still hugged the value above them.
+    apply_section_spacing(embed)
 
     embed.set_footer(
         text=(
