@@ -528,3 +528,83 @@ def test_attach_card_to_latest_is_a_no_op_without_an_auction(db):
     with open_db(db) as conn:
         attach_card_to_latest(conn, GUILD, CH, 9999)  # must not raise
         assert card_ids(conn, GUILD) == (0, 0)
+
+
+# ── auction_bid quest trigger ──────────────────────────────────────────
+#
+# Quest 131 "At the Block" shipped in prod against an auction_bid trigger
+# kind that never existed, so it sat in the daily pool unclearable
+# (2026-08-28 economy review §9/§10).
+
+
+def _quest(conn, *, target_count=1):
+    from bot_modules.services.economy_quests_service import (
+        create_quest,
+        set_quest_active,
+    )
+    from bot_modules.services.economy_service import save_econ_settings
+
+    save_econ_settings(conn, GUILD, {"enabled": True})
+    qid = create_quest(
+        conn, GUILD, title="At the Block", description="", qtype="daily",
+        reward=12, signoff=0, criteria="", starts_at=None, ends_at=None,
+        rotate_tag="", community_target=None, created_by=None,
+        trigger_kind="auction_bid", target_count=target_count,
+    )
+    set_quest_active(conn, GUILD, qid, True)
+    return qid
+
+
+def _marks(conn, quest_id, user_id):
+    return [
+        r["occurrence"]
+        for r in conn.execute(
+            "SELECT occurrence FROM econ_quest_progress_marks "
+            "WHERE quest_id = ? AND user_id = ?",
+            (quest_id, user_id),
+        )
+    ]
+
+
+def test_auction_bid_fires_once_per_landed_bid(db):
+    with open_db(db) as conn:
+        qid = _quest(conn, target_count=2)
+        auction_id = _open(conn)
+        _fund(conn, A, 500)
+        _fund(conn, B, 500)
+        place_bid(conn, SETTINGS, GUILD, auction_id, A, 10, now=NOW)
+        place_bid(conn, SETTINGS, GUILD, auction_id, B, 20, now=NOW)
+        place_bid(conn, SETTINGS, GUILD, auction_id, A, 30, now=NOW)
+        # A bid twice, B once — each a distinct bid row, so each counts.
+        assert len(_marks(conn, qid, A)) == 2
+        assert len(set(_marks(conn, qid, A))) == 2
+        assert len(_marks(conn, qid, B)) == 1
+
+
+def test_being_outbid_does_not_undo_the_payout(db):
+    # The stake is escrowed and comes back when you're outbid; the quest asks
+    # for the bid, not the win, so losing the lot must not claw the reward
+    # back. A one-shot daily auto-claims on the first occurrence, so the
+    # assertion is the payout itself rather than a progress mark.
+    with open_db(db) as conn:
+        _quest(conn)
+        auction_id = _open(conn)
+        _fund(conn, A, 500)
+        _fund(conn, B, 500)
+        place_bid(conn, SETTINGS, GUILD, auction_id, A, 10, now=NOW)
+        assert ("quest", 12) in _ledger(conn, A)
+        place_bid(conn, SETTINGS, GUILD, auction_id, B, 20, now=NOW)
+        ledger = _ledger(conn, A)
+        assert ("auction_refund", 10) in ledger
+        assert ledger.count(("quest", 12)) == 1
+
+
+def test_a_rejected_bid_earns_nothing(db):
+    with open_db(db) as conn:
+        qid = _quest(conn)
+        auction_id = _open(conn)
+        _fund(conn, A, 5)
+        with pytest.raises(ValueError):
+            place_bid(conn, SETTINGS, GUILD, auction_id, A, 10, now=NOW)
+        assert _marks(conn, qid, A) == []
+        assert ("quest", 12) not in _ledger(conn, A)

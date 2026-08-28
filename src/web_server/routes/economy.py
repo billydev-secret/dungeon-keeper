@@ -90,6 +90,10 @@ class EconomyConfigUpdate(BaseModel):
     wallet_name: str | None = Field(default=None, max_length=32)
     transfers_enabled: bool | None = None
     booster_multiplier: float | None = Field(default=None, ge=1.0)
+    # One rate over every earned faucet; 100 = ship rate. Capped at 500
+    # rather than left open — a fat-fingered 10000 would mint a year of
+    # income in an afternoon, and no legitimate retune needs 5x.
+    faucet_scale_pct: int | None = Field(default=None, ge=0, le=500)
     xp_per_coin: float | None = Field(default=None, ge=0)
     # 0 = no ceiling on a member's daily XP conversion; see EconSettings.
     conversion_daily_cap: int | None = Field(default=None, ge=0)

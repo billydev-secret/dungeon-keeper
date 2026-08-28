@@ -432,6 +432,7 @@ async def list_income_sources(
                 # admins edit them in place on this page via the admin-gated
                 # PUT /economy/config (partial update).
                 "faucets": {
+                    "faucet_scale_pct": settings.faucet_scale_pct,
                     "login_text_base": settings.login_text_base,
                     "login_voice_base": settings.login_voice_base,
                     "streak_bonus_cap": settings.streak_bonus_cap,

@@ -774,6 +774,26 @@ guilds without trigger quests to a dict lookup. Community quests never trigger
 (not member-claimable).
 
 ### 4.5 Game-Trigger Quests (`trigger_kind`)
+### Faucet scale (`econ_faucet_scale_pct`, added 2026-08-28)
+
+One rate over **every earned faucet**, as a percentage (100 = ship rate),
+applied in `apply_credit` after any booster multiplier. It exists because a
+retune previously meant editing ~14 dials, which is how the 2026-07-30 retune
+went stale: per-earner minting fell 41% while headcount rose 59%, so the float
+kept climbing and nobody had one number to turn
+(`reviews/2026-08-28-economy-affordability-review.md` §1).
+
+What it must never touch is `economy.kinds.UNSCALED_CREDIT_KINDS` — everything
+in `NON_FAUCET_KINDS` (money moving sideways: transfers, casino/wager payouts
+and refunds, escrow returns), plus `grant` and the refunds. Shaving a casino
+payout or an incoming transfer would take the member's own coins; an admin
+typing 500 means 500. The list is **derived** from `ESCROW_PAIRS`, so a new
+escrow pair is covered the day it is added.
+
+It is a *rate*, not an off-switch: a faucet that would round to nothing still
+pays 1, and each faucet keeps its own zero/enable dial. Dashboard control is
+the first row of **Income Sources**; the route caps it at 500.
+
 A quest may carry a **trigger kind** — a custom-coded module hook that completes
 it automatically (`quests.TRIGGER_KINDS`; mutually exclusive with trigger words).
 The kind decides *what* completes the quest; the qtype decides *how often it can

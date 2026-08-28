@@ -215,8 +215,8 @@ the daily habit loop and the line members feel most.
 
 Flagging these rather than writing code, per the working agreement:
 
-1. **There is no global faucet multiplier.** `booster_multiplier` (1.5) is a
-   booster-only bonus, not an economy-wide rate. Retuning the faucet therefore
+1. ~~There is no global faucet multiplier~~ — **built, see item 6.**
+   `booster_multiplier` (1.5) is a booster-only bonus, not an economy-wide rate. Retuning the faucet therefore
    means touching ~14 individual dials every time the member base moves — which
    is precisely why the 07-30 retune silently went stale. A single
    `econ_faucet_scale_pct` applied at mint time would make future retunes one
@@ -231,10 +231,15 @@ Flagging these rather than writing code, per the working agreement:
 4. ~~No `casino_play` trigger kind exists~~ — **built 2026-08-28.** `take_stake`
    now fires `casino_play` on a charged bet, keyed to the stake's ledger row.
    Quest 89 "Take a Seat" works; see §11 for how to price it.
-5. **No `auction_bid` trigger kind exists.** Quest 131 "At the Block" is still
-   unclearable. Not built — auctions see far less traffic than the casino and
-   the quest drives no sink, so **deactivate quest 131** unless you want the
-   trigger too (same shape of change, ~20 lines).
+5. ~~No `auction_bid` trigger kind exists~~ — **built 2026-08-28** on Billy's
+   "do all of them". `place_bid` fires it after the bid row lands, keyed to
+   that row. Quest 131 "At the Block" now works. The economic caveat stands —
+   it is a faucet with no sink behind it, unlike the casino quest — so the
+   quest is left **deactivated** and turning it on is a separate choice.
+6. ~~No global faucet multiplier~~ — **built 2026-08-28**: `econ_faucet_scale_pct`,
+   one rate over every earned faucet, first row of Income Sources. Ships at 100
+   (exact no-op). This is the dial that makes a future retune one number instead
+   of fourteen, and item 1 above is why it was worth building.
 
 None of these are needed for the proposal above. (1) is the one worth building
 if a round 4 looks likely.
@@ -258,10 +263,13 @@ if a round 4 looks likely.
 
 ## 7. Open questions
 
-1. **`price_role_icon` 1,200** — deliberate BYO premium above the 50–400
-   catalog, or drift? It is the one price far off-curve, but it is also ~31% of
-   the rental sink from three members. Leaving it is defensible; cutting it
-   needs the sink made up elsewhere.
+1. ~~`price_role_icon` 1,200~~ — **decided 2026-08-28: 1,000.** Billy's call:
+   "a little high; 2x the next top tier seems ok". The next tier down is
+   `role_holographic` at 500, so 1,000 is exactly 2×, against 2.4× today. It
+   stays the most expensive perk and keeps its place above the 50–400 icon
+   catalog, so the BYO premium survives — it just stops being off-curve.
+   Costs ~600/wk of the rental sink (3 renters × 200), which the §4 package
+   more than covers. **Not yet applied** — Pricing → Role icon → `1000`.
 2. ~~`casino_jackpot_cut_pct`~~ — **decided 2026-08-28: 3%** (+580/wk). See §12.
    Not yet applied on the dashboard.
 3. **Event quests (3,449/wk, no dial)** — should the next editorial pass over

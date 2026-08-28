@@ -449,6 +449,19 @@ def place_bid(
         "VALUES (?, ?, ?, ?, 'escrowed', ?)",
         (auction_id, guild_id, user_id, amount, now),
     )
+    # Quest hook, after the bid row lands — a bid rejected as too low or lost
+    # to the claim race above never reaches here, so only a real bid counts.
+    # Occurrence is the bid row's id, making each bid one countable event.
+    # The stake is escrowed and returns if the member is outbid; the quest
+    # asks for the bid, not the win.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    bid_row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    fire_trigger_inline(
+        conn, guild_id, "auction_bid", user_id, occurrence=str(int(bid_row_id)),
+    )
     return BidResult(
         auction_id=auction_id,
         amount=amount,
