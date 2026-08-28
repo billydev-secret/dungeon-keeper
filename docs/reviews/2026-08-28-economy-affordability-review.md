@@ -228,13 +228,13 @@ Flagging these rather than writing code, per the working agreement:
    admin-created and has no dial at all.
 3. **The casino paytables are hardcoded** (`casino_logic.py`). Correct as-is, so
    this is not urgent — noted so nobody looks for a dashboard control.
-4. **No `casino_play` or `auction_bid` quest trigger kind exists** (§9). Two live
-   quests are configured against kinds that are in neither `KIND_LABELS` nor any
-   prod activity row, so they can never be cleared. Deactivating them is the
-   dashboard fix. The *better* fix is code: a casino-play trigger would let a
-   daily quest push members toward the one activity that already removes ~8,929
-   coins a week, and a quest that drives a sink is the rarest useful kind. Small
-   — one emitter at the existing stake path, plus the kind in `KIND_LABELS`.
+4. ~~No `casino_play` trigger kind exists~~ — **built 2026-08-28.** `take_stake`
+   now fires `casino_play` on a charged bet, keyed to the stake's ledger row.
+   Quest 89 "Take a Seat" works; see §11 for how to price it.
+5. **No `auction_bid` trigger kind exists.** Quest 131 "At the Block" is still
+   unclearable. Not built — auctions see far less traffic than the casino and
+   the quest drives no sink, so **deactivate quest 131** unless you want the
+   trigger too (same shape of change, ~20 lines).
 
 None of these are needed for the proposal above. (1) is the one worth building
 if a round 4 looks likely.
@@ -492,3 +492,42 @@ Per-quest clears on the 17 raised quests, at 10 days:
 
 Watch the **29 common-only questers** specifically: if their clear count goes to
 zero, the on-ramp broke and quest 3 at 5 is too thin.
+
+
+---
+
+## 11. Pricing quest 89 "Take a Seat" (now that it works)
+
+The trigger shipped 2026-08-28. Before activating the quest, know what it costs:
+**at its current settings it is a faucet, not a sink.**
+
+Prod today: `casino_min_bet` **5**, average stake **~36**, casino hold **6.7%**.
+Quest 89 is `target_count` **3**, reward **12**.
+
+| Member plays | Handle | Hold to the house | Quest pays | **Net float** |
+|---|---:|---:|---:|---:|
+| 3 × min bet (5) | 15 | 1 | 12 | **+11** |
+| 3 × average (36) | 108 | 7 | 12 | **+5** |
+| 3 × 60 | 180 | 12 | 12 | **0** |
+| 10 × average | 360 | 24 | 12 | **−12** |
+
+**Break-even is ~180 coins of handle** — five average bets, or three of 60. A
+member who clears it with three minimum bets is paid 12 for putting ~1 coin at
+real risk, and at 82 daily-active members that farms to as much as 7,000/wk if
+everyone takes it.
+
+The quest only pays for itself if it pulls people into *real* sessions rather
+than three token spins. Three ways to make that likely, in order of preference:
+
+1. **Raise `target_count` to 5** and leave the reward at 12 — the cheapest fix,
+   and it moves break-even to within reach of ordinary play.
+2. **Cut the reward to 8.** Break-even falls to ~120 handle.
+3. **Raise `casino_min_bet`** above 5 — a real fix for farming generally, but it
+   is a casino-wide change that also hits members who like small stakes, so it
+   should be judged on its own merits, not as a quest patch.
+
+There is no stake-size floor in the quest system — a trigger cannot say "a bet
+of at least N" — so this has to be handled with `target_count` and reward, or
+not at all. **Recommendation: `target_count` 5, reward 12, and watch the casino
+handle rather than the clear count** — handle going up is the outcome worth
+having, because the hold is what closes the float gap.

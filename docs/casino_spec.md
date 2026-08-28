@@ -195,6 +195,14 @@ All movement goes through `services/casino_service.py`:
   Kind `casino_stake`, meta `{"game": ...}`. A blackjack double-down skips
   the min/max re-check (`enforce_bet_limits=False`) but never the cap or
   balance.
+- `take_stake` fires the **`casino_play` quest trigger** on success only, so a
+  bet refused by any guard earns nothing. The occurrence key is the stake's own
+  `econ_ledger` row id, which makes every charged bet one countable event and a
+  blackjack double-down its own (it is a second wager). Fired through
+  `fire_trigger_inline`, whose never-raises contract keeps a quest failure from
+  dirtying the stake transaction. Added 2026-08-28: prod carried a `Take a Seat`
+  daily quest against this kind before the kind existed, so it could never be
+  cleared while occupying a daily board slot.
 - `pay_out` / `refund` — credits (`casino_payout` / `casino_refund`),
   **always `booster=False`**: a house payout must never mint through the
   booster multiplier.
