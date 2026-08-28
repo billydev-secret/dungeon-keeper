@@ -167,7 +167,7 @@ today's measured numbers, not a new invention.
 | | **Faucet subtotal** | | | | **−11,942** |
 | 9 | `econ_demurrage_rate_pct` | 8 | **12** | } 7,542/wk sink | } +4,100 sink |
 | 9 | `econ_demurrage_threshold` | 400 | **350** | } | } |
-| 10 | `casino_jackpot_cut_pct` | 5 | **2** | ~1,260/wk escrowed | +750 sink |
+| 10 | `casino_jackpot_cut_pct` | 5 | **2** | 1,264/wk escrowed | +776 sink |
 | 11 | `econ_wager_rake_pct` | 10 | **15** | } | } +300 sink |
 | 11 | `econ_bounty_rake_pct` | 10 | **15** | } | } |
 | | **Sink subtotal** | | | | **+5,150** |
@@ -531,3 +531,60 @@ of at least N" — so this has to be handled with `target_count` and reward, or
 not at all. **Recommendation: `target_count` 5, reward 12, and watch the casino
 handle rather than the clear count** — handle going up is the outcome worth
 having, because the hold is what closes the float gap.
+
+
+---
+
+## 12. Sizing the jackpot cut (Billy, 2026-08-28)
+
+> "Can we put a smaller share to the jackpot too?"
+
+Yes — it is a dashboard dial: **Casino → "Share of Each Losing Bet"**
+(`jackpot_cut_pct`, 0–100). No code needed. But the mechanic is not what the
+percentage suggests, so the numbers are worth having first.
+
+### The cut has a floor, and the floor does the work
+
+`feed_jackpot` skims `lost_amount * pct // 100` from a **fully-lost stake only** —
+not from every bet, and not from the house hold. That is **integer floor
+division**, so any lost stake below `100/pct` contributes exactly nothing:
+
+| Cut | A lost stake must be ≥ | Share of real stakes that qualify | To the pot | **Stays burned** |
+|---:|---:|---:|---:|---:|
+| **5%** (now) | 20 | 49% | 1,264/wk | — |
+| 4% | 25 | 42% | 1,028/wk | **+236/wk** |
+| 3% | 34 | 34% | 684/wk | **+580/wk** |
+| **2%** | 50 | 33% | 488/wk | **+776/wk** |
+| 1% | 100 | 22% | 188/wk | **+1,076/wk** |
+
+Modelled over the real 28-day stake distribution (9,205 stakes, 466,814 handle,
+average 50.7), anchored to the observed pot growth since the 08-22 win
+(seed 100 → 1,183 in six days ≈ 1,264/wk at the current 5%).
+
+Two things fall out that the percentage alone hides:
+
+1. **Half the casino already feeds the jackpot nothing.** At 5%, 51% of stakes
+   are under the 20-coin floor. Dropping to 2% raises the floor to 50 and only
+   a third of bets can contribute — the pot becomes a big-bettors' pool, funded
+   by a shrinking minority and won by anyone. That may be fine, or even fair;
+   it should just be a choice rather than a surprise.
+2. **Cutting the share is a real sink, not a deferral.** Over a full cycle the
+   jackpot is net-neutral — the coins were burned at the stake and re-minted at
+   the win — so every coin *not* skimmed is a coin that stays permanently burned.
+   The +776/wk at 2% is genuine.
+
+### The cost
+
+The pot grows **2.6× slower** at 2%. Today's cadence produced an 18,228 win; at
+2% the same interval yields roughly 7,000. That is the trade: a steadier sink for
+a smaller headline moment, and the 18k hit was memorable enough that members
+noticed it.
+
+**Recommendation: 3%.** It banks +580/wk — three quarters of what 2% gets — while
+the pot still grows fast enough to stay an event, and the floor rises only to 34
+rather than 50. Go to **2%** if the float matters more than the moment; the §4
+package assumes 2% and would lose 196/wk at 3%.
+
+Either way this also removes the measurement problem the jackpot has been
+causing: a single lumpy re-mint is what made the casino read as a 0.2% sink in
+§2 and what distorts any short window it lands in.
