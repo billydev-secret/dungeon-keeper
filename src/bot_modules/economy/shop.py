@@ -132,18 +132,63 @@ def _items_block(
     items: list[ItemView],
     owned_item_ids: set[int] | frozenset[int],
 ) -> str:
-    """The Server Store teaser inside the combined perk shop.
+    """The Server Store teaser on the channel panel.
 
-    A preview, not the store: the shop embed already carries the perk table,
-    so this shows the first few rows and hands off to the storefront proper.
+    The panel is a poster, not a menu: it is one static message that cannot
+    page, so it advertises the first few rows and sends people to the shop,
+    where the store has pages of its own. The ephemeral shop passes no
+    ``items`` at all — its store pages *are* the store, and a preview there
+    would be the same list twice in one book.
     """
     shown = items[:_MAX_ITEM_ROWS]
     lines = _item_rows(settings, shown, owned_item_ids)
     hidden = len(items) - len(shown)
     if hidden:
         lines.append(f"…and **{hidden}** more.")
-    lines.append("\nTap **🎁 Store** to browse and buy.")
+    lines.append("\nTap **Open Shop** to browse and buy.")
     return "\n".join(lines)
+
+
+#: The two kinds of page the shop is made of. The store's pages come first —
+#: what a guild stocks itself is what it wants seen — and the perks are always
+#: the last one, so a guild selling nothing has a one-page shop with no
+#: navigation at all and reads exactly as it did before any of this.
+PAGE_STORE = "store"
+PAGE_PERKS = "perks"
+
+#: What each page is called in the footer, so a member always knows where the
+#: arrows have put them.
+PAGE_TITLES = {PAGE_STORE: "Server Store", PAGE_PERKS: "Perks"}
+
+
+def shop_pages(items: list[ItemView] | None) -> list[tuple[str, int]]:
+    """The shop's pages in order, as ``(kind, index within that kind)``.
+
+    One flat book rather than sections behind a switcher: ◀️/▶️ is the only
+    navigation concept in the whole shop, and it walks the store into the perk
+    ladder without a second control to learn. The cost is real and deliberate —
+    in a guild with twenty items the perks are two taps in — so the perk page
+    carries the shield, the raffle and the refunds rather than splitting them
+    into a third page nobody would walk to.
+    """
+    pages: list[tuple[str, int]] = []
+    if items:
+        pages += [(PAGE_STORE, i) for i in range(store_page_count(items))]
+    pages.append((PAGE_PERKS, 0))
+    return pages
+
+
+def page_note(pages: list[tuple[str, int]], page: int) -> str:
+    """The "Page 2 of 3 · Server Store · " prefix, or "" for a one-page shop.
+
+    Numbered over the whole book, not within a section: the arrows cross the
+    store/perk seam, so a counter that restarted at it would read as the shop
+    losing its place.
+    """
+    if len(pages) < 2:
+        return ""
+    kind, _ = pages[page]
+    return f"Page {page + 1} of {len(pages)} · {PAGE_TITLES[kind]} · "
 
 
 def store_page_count(items: list[ItemView]) -> int:
@@ -170,6 +215,7 @@ def build_store_embed(
     owned_item_ids: set[int] | frozenset[int] = frozenset(),
     page: int = 0,
     balance: int | None = None,
+    note: str = "",
 ) -> discord.Embed:
     """The Server Store on its own, one page at a time.
 
@@ -180,12 +226,12 @@ def build_store_embed(
     field — one list needs no heading, and the description's cap is four times
     a field's, so a page of ten long names cannot truncate.
 
-    ``page`` is 0-based and clamped by ``store_page``; the footer counts from
-    one, because that is how members count pages.
+    ``page`` is 0-based and clamped by ``store_page``. It does **not** number
+    the footer: the shop is one flat book whose arrows cross into the perk
+    ladder, so the counter is computed over every page by ``page_note`` and
+    handed in as ``note`` — a store-local count would restart at the seam.
     """
     shown = store_page(items, page)
-    pages = store_page_count(items)
-    page = max(0, min(page, pages - 1))
 
     header = "Everything this server sells, beyond the perk shop."
     if balance is not None:
@@ -200,10 +246,7 @@ def build_store_embed(
     )
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
-    footer = "Pick one below to buy it."
-    if pages > 1:
-        footer = f"Page {page + 1} of {pages} \u00b7 {footer}"
-    embed.set_footer(text=footer)
+    embed.set_footer(text=f"{note}Pick one below to buy it.")
     return embed
 
 
@@ -221,6 +264,7 @@ def build_shop_embed(
     shields_held: int = 0,
     items: list[ItemView] | None = None,
     owned_item_ids: set[int] | frozenset[int] = frozenset(),
+    note: str = "",
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
@@ -250,14 +294,21 @@ def build_shop_embed(
     """
     # The balance lives in the description, not the footer: footers render
     # plain text, so a custom currency emoji would show as raw <:name:id>.
-    header = "Weekly rentals · cancel any time"
+    # "Weekly rentals" was safe while the perk ladder came first. It is a lie
+    # standing over a Server Store of mostly one-off items, so the claim is
+    # made by the section that can keep it rather than by the whole embed.
+    header = (
+        "The server store, plus weekly perk rentals"
+        if items
+        else "Weekly rentals · cancel any time"
+    )
     if balance is not None:
         header += f" · you have {settings.currency_emoji} **{balance:,}**"
     description = (
         header
         + "\n"
         + (
-            "Tap **Open Shop** for your personal menu — rent, customize, "
+            "Tap **Open Shop** for your personal menu — buy, rent, customize "
             "and refund, all private to you."
             if panel
             else "Green buttons customize what you've already rented."
@@ -402,8 +453,9 @@ def build_shop_embed(
 
     embed.set_footer(
         text=(
-            "Prices are per week, billed every 7 days. A short grace period "
-            "covers a missed renewal."
+            # Likewise: with a store above, "prices" is no longer only perks.
+            f"{note}{'Perk prices' if items else 'Prices'} are per week, "
+            "billed every 7 days. A short grace period covers a missed renewal."
         )
     )
     return embed

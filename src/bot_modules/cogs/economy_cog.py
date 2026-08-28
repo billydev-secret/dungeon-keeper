@@ -51,10 +51,12 @@ from bot_modules.economy.perks import (
     perks_on_sale,
 )
 from bot_modules.economy.shop import (
+    PAGE_STORE,
     build_shop_embed,
     build_store_embed,
+    page_note,
+    shop_pages,
     store_page,
-    store_page_count,
 )
 from bot_modules.economy.shop_items import ItemView, Refusal, refusal_text
 from bot_modules.services import economy_shop_items_service as shop_items_svc
@@ -1019,13 +1021,51 @@ class _StoreSelect(discord.ui.Select):
         await self.cog.do_buy_item(interaction, self.settings, self.guild, item)
 
 
+def _make_turn(cog: EconomyCog, target: int):
+    """A page-turn callback bound to one destination.
+
+    A factory rather than a closure in the loop below: both arrows are built
+    in the same iteration, and a late-bound ``target`` would send them to the
+    same page.
+    """
+
+    async def _cb(interaction: discord.Interaction) -> None:
+        await cog.turn_shop_page(interaction, target)
+
+    return _cb
+
+
+def _add_page_arrows(
+    view: discord.ui.View, cog: EconomyCog, page: int, pages: int
+) -> None:
+    """The shop's only navigation: one pair of arrows over the whole book.
+
+    Shared by both page kinds, so the store and the perk ladder cannot drift
+    into two different ways of turning a page. They **wrap** rather than
+    disabling at the ends — a greyed-out arrow reads as broken more often than
+    it reads as "you are at the start", and wrapping makes a two-page shop one
+    tap either way. A single-page shop (a guild selling nothing of its own)
+    gets no arrows at all and looks exactly as it always did.
+    """
+    if pages < 2:
+        return
+    for label, step in (("◀️ Back", -1), ("Next ▶️", 1)):
+        button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+        button.callback = _make_turn(cog, (page + step) % pages)
+        view.add_item(button)
+
+
 class _StoreView(_MemberScopedView):
-    """The storefront: one page of items as a picker, with arrows either side.
+    """One store page of the shop: a picker of ten items, and the arrows.
 
     Scoped to the member who opened it, like every other shop picker. The page
     lives on the view rather than in a custom_id because the whole thing is
     ephemeral and dies with its timeout — nothing here outlives a restart, so
     there is no persistent id to encode state into.
+
+    ``store_index`` is which store page this is; ``page``/``pages`` are its
+    coordinates in the whole shop, because the arrows walk out of the store
+    and into the perk ladder rather than looping inside the store.
     """
 
     def __init__(
@@ -1036,7 +1076,10 @@ class _StoreView(_MemberScopedView):
         user_id: int,
         items: list[ItemView],
         owned_item_ids: set[int],
+        store_index: int = 0,
+        *,
         page: int = 0,
+        pages: int = 1,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1044,34 +1087,15 @@ class _StoreView(_MemberScopedView):
         self.guild = guild
         self.items = items
         self.owned_item_ids = owned_item_ids
-        self.pages = store_page_count(items)
-        self.page = max(0, min(page, self.pages - 1))
+        self.store_index = store_index
         self.add_item(
             _StoreSelect(
                 cog, settings, guild,
-                store_page(items, self.page),
+                store_page(items, store_index),
                 owned_item_ids,
             )
         )
-        if self.pages > 1:
-            # Wrap rather than disable at the ends: a two-page store is one
-            # tap either way, and a disabled arrow on page 1 reads as broken
-            # more often than it reads as "you are at the start".
-            self.add_item(self._arrow("\u25c0\ufe0f Back", -1))
-            self.add_item(self._arrow("Next \u25b6\ufe0f", 1))
-
-    def _arrow(self, label: str, step: int) -> discord.ui.Button:
-        button = discord.ui.Button(
-            label=label, style=discord.ButtonStyle.secondary
-        )
-
-        async def _cb(interaction: discord.Interaction) -> None:
-            await self.cog.turn_store_page(
-                interaction, self.settings, self.guild, (self.page + step) % self.pages
-            )
-
-        button.callback = _cb
-        return button
+        _add_page_arrows(self, cog, page, pages)
 
 
 class _StoreNoteModal(discord.ui.Modal):
@@ -1247,7 +1271,8 @@ class _ShopView(_MemberScopedView):
         shields_held: int = 0,
         refundable: list[dict] | None = None,
         shield_price: int = 0,
-        items: list[ItemView] | None = None,
+        page: int = 0,
+        pages: int = 1,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1255,20 +1280,6 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
-        self.items = items or []
-        if self.items:
-            # First, not last: the perk ladder is the same six rows in every
-            # guild, and the server's own goods were arriving after it. This is
-            # still one picker rather than a button per item — a guild can
-            # define far more items than a view has slots, and the storefront
-            # behind it pages, so the count no longer has a ceiling.
-            button = discord.ui.Button(
-                label="🎁 Store",
-                style=discord.ButtonStyle.primary,
-                custom_id="econ_shop_items",
-            )
-            button.callback = self._make_store_callback()
-            self.add_item(button)
         for perk in SELF_PERKS:
             if not perk_on_sale(settings, perk) and perk not in owned:
                 # Switched off on the Shop & Perks page: no row in the embed,
@@ -1400,6 +1411,9 @@ class _ShopView(_MemberScopedView):
             )
             button.callback = self._make_refund_callback()
             self.add_item(button)
+        # Last, after every perk control: the arrows are how you leave this
+        # page, not something you act on while you are here.
+        _add_page_arrows(self, cog, page, pages)
 
     def _make_rent_callback(self, perk: str):
         async def _cb(interaction: discord.Interaction) -> None:
@@ -1439,11 +1453,6 @@ class _ShopView(_MemberScopedView):
 
         return _cb
 
-    def _make_store_callback(self):
-        async def _cb(interaction: discord.Interaction) -> None:
-            await self.cog.open_store(interaction, self.settings, self.guild)
-
-        return _cb
 
     def _make_refund_callback(self):
         async def _cb(interaction: discord.Interaction) -> None:
@@ -1585,54 +1594,23 @@ async def _open_shop_from_panel(interaction: discord.Interaction) -> None:
     await cog.open_personal_shop(interaction)
 
 
-async def _open_store_from_panel(interaction: discord.Interaction) -> None:
-    """Route a panel Server Store click to the clicker's storefront.
-
-    Same shape as ``_open_shop_from_panel``: the cog and the settings are
-    resolved at click time, because the panel outlives reloads and nothing
-    rendered at post time can be trusted at click time.
-    """
-    if interaction.guild is None:
-        await interaction.response.send_message(
-            "❌ The store only works in a server.", ephemeral=True
-        )
-        return
-    bot = cast("Bot", interaction.client)
-    cog = cast("EconomyCog | None", bot.get_cog("EconomyCog"))
-    if cog is None:  # cog unloaded mid-flight; the panel button outlives it
-        await interaction.response.send_message(
-            "❌ The store isn't available right now.", ephemeral=True
-        )
-        return
-    await cog.open_personal_store(interaction)
-
-
 class ShopPanelView(discord.ui.View):
-    """The channel shop panel's persistent buttons.
+    """The channel shop panel's single persistent Open Shop button.
 
     Carries no per-message state, so it's a static-custom_id view (like the
     economy panel's own buttons) re-registered in ``cog_load`` rather than a
-    DynamicItem. Open Shop serves the clicker's exact `/bank shop` menu as an
+    DynamicItem. The button serves the clicker's exact `/bank shop` menu as an
     ephemeral reply — one shop menu, so the panel can't drift from it.
 
-    Server Store is a *shortcut into* that menu, not a second shop: it opens
-    the same storefront the menu's own Store button does, one click from the
-    channel instead of two. ``with_store`` leaves it off a panel in a guild
-    that has stocked nothing, where it would open on an empty shelf; the
-    registration in ``cog_load`` always builds it, so a panel posted while the
-    store had items keeps routing after the last one is withdrawn.
+    One button, deliberately: a second **Server Store** button was built here
+    and taken back out, because the shop the button opens now *starts* on the
+    store. Adding a control to shorten a path the control itself made longer is
+    how a panel grows a button row; making the shop's first page the store
+    costs nothing and leaves the panel as a launcher, full stop.
     """
 
-    def __init__(self, *, with_store: bool = True) -> None:
+    def __init__(self) -> None:
         super().__init__(timeout=None)
-        if with_store:
-            button = discord.ui.Button(
-                label="🎁 Server Store",
-                style=discord.ButtonStyle.secondary,
-                custom_id="econ_shop_store",
-            )
-            button.callback = self._store
-            self.add_item(button)
 
     @discord.ui.button(
         label="🛍️ Open Shop",
@@ -1643,9 +1621,6 @@ class ShopPanelView(discord.ui.View):
         self, interaction: discord.Interaction, _button: discord.ui.Button
     ) -> None:
         await _open_shop_from_panel(interaction)
-
-    async def _store(self, interaction: discord.Interaction) -> None:
-        await _open_store_from_panel(interaction)
 
 
 class ShopRentButton(
@@ -2232,27 +2207,48 @@ class EconomyCog(commands.Cog):
     async def bank_store(self, interaction: discord.Interaction) -> None:
         await self.open_personal_store(interaction)
 
+    async def open_personal_shop(
+        self, interaction: discord.Interaction, page: int = 0
+    ) -> None:
+        """Serve the member's shop, ephemeral to them, at ``page``.
+
+        The one real shop: `/bank shop`, `/bank store` and the channel panel's
+        Open Shop button all land here, so every shop feature (the server's own
+        items, rent, customise, refunds) exists on every surface by
+        construction. It is one flat book of pages — the guild's store first,
+        the perk ladder last — walked with a single pair of arrows.
+        """
+        await self._render_shop(interaction, page, edit=False)
+
     async def open_personal_store(self, interaction: discord.Interaction) -> None:
-        """Serve the guild's storefront straight, skipping the perk menu.
+        """`/bank store` — the same shop, opened on its store page.
 
-        The store is still one section of the one real shop — `/bank shop`
-        lists it and its Store button opens this exact view — so this adds a
-        shorter path, not a second shop that could drift. It is the same
-        reasoning as the panel's Server Store button.
+        Page 0 *is* the store wherever the guild has stocked anything, so this
+        is the shop with a shorter name rather than a second view that could
+        drift. Where nothing is stocked it refuses by name instead of quietly
+        serving the perk ladder, which would read as the command being wrong.
         """
-        assert interaction.guild is not None
-        settings = await self._settings_or_refuse(interaction, interaction.guild.id)
-        if settings is None:
-            return
-        await self.open_store(interaction, settings, interaction.guild)
+        await self._render_shop(interaction, 0, edit=False, require_store=True)
 
-    async def open_personal_shop(self, interaction: discord.Interaction) -> None:
-        """Serve the member's personal shop menu, ephemeral to them.
+    async def turn_shop_page(
+        self, interaction: discord.Interaction, page: int
+    ) -> None:
+        """Re-render the open shop on another page.
 
-        The one real shop: `/bank shop` and the channel panel's Open Shop
-        button both land here, so every shop feature (rent, customise,
-        refunds) exists on both surfaces by construction.
+        Re-reads rather than paging a snapshot: an arrow tap can land minutes
+        after the shop was opened, and showing a sold-out item as buyable is a
+        refusal the member only discovers by trying to pay for it.
         """
+        await self._render_shop(interaction, page, edit=True)
+
+    async def _render_shop(
+        self,
+        interaction: discord.Interaction,
+        page: int,
+        *,
+        edit: bool,
+        require_store: bool = False,
+    ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
         user_id = interaction.user.id
@@ -2263,36 +2259,61 @@ class EconomyCog(commands.Cog):
         settings = shop.settings
         if await self._refuse_disabled(interaction, settings):
             return
+        if require_store and not shop.items:
+            await interaction.response.send_message(
+                "❌ This server hasn't put anything in the store yet.",
+                ephemeral=True,
+            )
+            return
 
-        gated = await self._gated_perks(guild.id)
-
+        pages = shop_pages(shop.items)
+        # Clamped, not trusted: an admin can withdraw the last item while a
+        # member sits on a store page, and the book shrinks under them.
+        page = max(0, min(page, len(pages) - 1))
+        kind, index = pages[page]
+        note = page_note(pages, page)
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
-        embed = build_shop_embed(
-            settings,
-            gated,
-            accent,
-            owned=shop.owned,
-            comped=shop.comped,
-            icon_catalog=shop.icon_range,
-            color_catalog=shop.color_range,
-            balance=shop.balance,
-            shields_held=shop.shields_held,
-            items=shop.items,
-            owned_item_ids=shop.owned_item_ids,
-        )
-        view = _ShopView(
-            self, settings, guild, user_id, gated, shop.owned,
-            shop.icon_range is not None,
-            # A renter keeps their button even if the palette emptied out
-            # under them — otherwise the only route to the perk they are
-            # still paying for is the generic refund picker.
-            has_palette=(
-                shop.color_range is not None or "role_preset" in shop.owned
-            ),
-            shields_held=shop.shields_held, refundable=shop.refundable,
-            shield_price=shop.shield_price, items=shop.items,
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+        if kind == PAGE_STORE:
+            embed = build_store_embed(
+                settings, shop.items, accent,
+                owned_item_ids=shop.owned_item_ids,
+                page=index, balance=shop.balance, note=note,
+            )
+            view: discord.ui.View = _StoreView(
+                self, settings, guild, user_id, shop.items, shop.owned_item_ids,
+                index, page=page, pages=len(pages),
+            )
+        else:
+            gated = await self._gated_perks(guild.id)
+            # No ``items``: the store has its own pages now, so repeating an
+            # eight-row preview here would be the same list twice in one book.
+            embed = build_shop_embed(
+                settings, gated, accent,
+                owned=shop.owned, comped=shop.comped,
+                icon_catalog=shop.icon_range, color_catalog=shop.color_range,
+                balance=shop.balance, shields_held=shop.shields_held, note=note,
+            )
+            view = _ShopView(
+                self, settings, guild, user_id, gated, shop.owned,
+                shop.icon_range is not None,
+                # A renter keeps their button even if the palette emptied out
+                # under them — otherwise the only route to the perk they are
+                # still paying for is the generic refund picker.
+                has_palette=(
+                    shop.color_range is not None or "role_preset" in shop.owned
+                ),
+                shields_held=shop.shields_held, refundable=shop.refundable,
+                shield_price=shop.shield_price, page=page, pages=len(pages),
+            )
+
+        if edit:
+            await interaction.response.edit_message(embed=embed, view=view)
+        else:
+            await interaction.response.send_message(
+                embed=embed, view=view, ephemeral=True
+            )
+
 
     async def do_buy_shield(
         self,
@@ -3275,90 +3296,6 @@ class EconomyCog(commands.Cog):
             attachments=_palette_files(built),
             view=view,
         )
-
-    def _store_context(
-        self, guild_id: int, user_id: int
-    ) -> tuple[list[ItemView], set[int], int]:
-        """The storefront's whole read: what is on sale, what they hold, wallet.
-
-        One connection for all three — the storefront re-renders on every page
-        turn, so three thread hops per arrow tap would be three PRAGMAs for a
-        list the member is only scrolling.
-        """
-        with self.bot.ctx.open_db() as conn:
-            items = shop_items_svc.shop_items_for(
-                conn, guild_id, now=time.time(), user_id=user_id
-            )
-            owned = {
-                i.item_id
-                for i in items
-                if shop_items_svc.owned_count(conn, guild_id, user_id, i.item_id)
-            }
-            balance = get_balance(conn, guild_id, user_id)
-        return items, owned, balance
-
-    async def open_store(
-        self,
-        interaction: discord.Interaction,
-        settings: EconSettings,
-        guild: discord.Guild,
-        page: int = 0,
-    ) -> None:
-        """Show the guild's custom items as a paged storefront of their own."""
-        await self._render_store(interaction, settings, guild, page, edit=False)
-
-    async def turn_store_page(
-        self,
-        interaction: discord.Interaction,
-        settings: EconSettings,
-        guild: discord.Guild,
-        page: int,
-    ) -> None:
-        """Re-render the open storefront on another page.
-
-        Re-reads rather than paging a snapshot: an arrow tap can land minutes
-        after the store was opened, and showing a sold-out item as buyable is
-        a refusal the member only discovers by trying to pay for it.
-        """
-        await self._render_store(interaction, settings, guild, page, edit=True)
-
-    async def _render_store(
-        self,
-        interaction: discord.Interaction,
-        settings: EconSettings,
-        guild: discord.Guild,
-        page: int,
-        *,
-        edit: bool,
-    ) -> None:
-        user_id = interaction.user.id
-        items, owned, balance = await asyncio.to_thread(
-            self._store_context, guild.id, user_id
-        )
-        if not items:
-            # Reachable on a page turn too: the last item can be withdrawn
-            # while a member has the storefront sitting open.
-            text = "❌ This server hasn't put anything in the store yet."
-            if edit:
-                await interaction.response.edit_message(
-                    content=text, embed=None, view=None
-                )
-            else:
-                await interaction.response.send_message(text, ephemeral=True)
-            return
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
-        embed = build_store_embed(
-            settings, items, accent,
-            owned_item_ids=owned, page=page, balance=balance,
-        )
-        view = _StoreView(self, settings, guild, user_id, items, owned, page)
-        if edit:
-            await interaction.response.edit_message(embed=embed, view=view)
-        else:
-            await interaction.response.send_message(
-                embed=embed, view=view, ephemeral=True
-            )
-
 
     async def do_buy_item(
         self,
@@ -5167,10 +5104,7 @@ class EconomyCog(commands.Cog):
             embed=await self._build_shop_panel_embed(
                 guild, settings, icon_range, color_range, items
             ),
-            # No stock, no button: a Server Store shortcut onto an empty shelf
-            # is a worse panel than no shortcut. The sticky repost re-reads, so
-            # the button appears on its own once the first item is defined.
-            view=ShopPanelView(with_store=bool(items)),
+            view=ShopPanelView(),
         )
 
     # ── the auction card's sticky callbacks ──────────────────────────────
