@@ -164,14 +164,14 @@ today's measured numbers, not a new invention.
 | 7 | `econ_reward_cah_win_max` | 15 | **10** | 3,514/wk | −1,000 |
 | 8 | `econ_milestone_per_100` | 100 | **50** | } 1,320/wk | } −520 |
 | 8 | `econ_milestone_day100` | 365 | **200** | } | } |
-| | **Faucet subtotal** | | | | **−11,942** |
+| | **Faucet subtotal** | | | | **−9,830** |
 | 9 | `econ_demurrage_rate_pct` | 8 | **12** | } 7,542/wk sink | } +4,100 sink |
 | 9 | `econ_demurrage_threshold` | 400 | **350** | } | } |
-| 10 | `casino_jackpot_cut_pct` | 5 | **2** | 1,264/wk escrowed | +776 sink |
+| 10 | `casino_jackpot_cut_pct` | 5 | **3** ✔ | 1,264/wk escrowed | +580 sink |
 | 11 | `econ_wager_rake_pct` | 10 | **15** | } | } +300 sink |
 | 11 | `econ_bounty_rake_pct` | 10 | **15** | } | } |
-| | **Sink subtotal** | | | | **+5,150** |
-| | **TOTAL** | | | | **≈ 15,180/wk** |
+| | **Sink subtotal** | | | | **+4,980** |
+| | **TOTAL** | | | | **≈ 14,810/wk** |
 
 > ⚠ **Corrected 2026-08-28 (same day).** Lines 1–2 originally read −1,773 and
 > −789, pro-rated from board slots. That was wrong: members are **not
@@ -183,8 +183,8 @@ today's measured numbers, not a new invention.
 > roughly a sixth of the original estimate. **Per-quest reward is the real lever
 > on this lane — see §8.**
 
-**Expected landing: +24,058/wk → ≈ +8,878/wk**, i.e. float growth from **+12.3%
-to ≈ +4.6% per week**. That is 63% of the gap, deliberately not 100% — see below.
+**Expected landing: +24,058/wk → ≈ +9,248/wk**, i.e. float growth from **+12.3%
+to ≈ +4.7% per week**. That is 62% of the gap, deliberately not 100% — see below.
 
 ### Why not flatten it in one move
 
@@ -582,8 +582,12 @@ noticed it.
 
 **Recommendation: 3%.** It banks +580/wk — three quarters of what 2% gets — while
 the pot still grows fast enough to stay an event, and the floor rises only to 34
-rather than 50. Go to **2%** if the float matters more than the moment; the §4
-package assumes 2% and would lose 196/wk at 3%.
+rather than 50.
+
+> **Decided 2026-08-28: 3%.** Billy took the recommendation. The §4 package was
+> costed at 2% and is now restated at 3% (line 10: +580, not +776), which is
+> where its −196/wk difference went. **Still to apply on the dashboard** —
+> Casino → "Share of Each Losing Bet" → `3`.
 
 Either way this also removes the measurement problem the jackpot has been
 causing: a single lumpy re-mint is what made the casino read as a 0.2% sink in
