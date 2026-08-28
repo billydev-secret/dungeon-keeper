@@ -7,6 +7,8 @@ export const KIND_LABELS = {
   game_host: "🎪 Host a party game that someone joins",
   duel: "⚔️ Finish a duel / PvP challenge",
   risky_roll: "🎰 Take a Risky Roll dare",
+  casino_play: "🃏 Place a bet at the casino",
+  auction_bid: "🔨 Place a bid in an auction",
   guess: "🕵️ Play a Guess Who round",
   voice_session: "🎙️ Be active in voice chat",
   qotd_reply: "📣 Answer the Question of the Day",

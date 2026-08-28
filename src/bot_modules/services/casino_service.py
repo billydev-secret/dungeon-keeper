@@ -340,6 +340,24 @@ def take_stake(
             )
         have = get_balance(conn, guild_id, user_id)
         return f"You need {amount} {unit} for that bet — you have {have}."
+    # Quest hook: only a stake that was actually charged counts, so the fire
+    # sits after apply_debit rather than beside the guards. The occurrence is
+    # the stake's own ledger row id — apply_debit's last statement is that
+    # INSERT — which makes every charged bet a distinct countable event and a
+    # retried or rejected one no event at all. A blackjack double-down is a
+    # second wager and counts as one; that is the same money-at-risk the quest
+    # is asking for. Deferred import and never-raises semantics keep a quest
+    # failure from dirtying the caller's stake transaction.
+    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
+        fire_trigger_inline,
+    )
+
+    stake_row_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    fire_trigger_inline(
+        conn, guild_id, "casino_play", user_id,
+        occurrence=str(int(stake_row_id)),
+        channel_ids=(settings.channel_id,) if settings.channel_id else None,
+    )
     return None
 
 

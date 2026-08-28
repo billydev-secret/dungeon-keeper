@@ -10,6 +10,7 @@ import { KIND_LABELS } from "./economy-sources-shared.js";
 // Order matters — rendered top to bottom. xp_per_coin is the one float knob.
 // Each entry: [key, label, max].
 const FAUCET_FIELDS = [
+  ["faucet_scale_pct", "⚙️ ALL earned income — % of the rates below (100 = normal)", 500],
   ["login_text_base", "First message of the day", 1000000],
   ["login_voice_base", "First voice call of the day", 1000000],
   ["streak_bonus_cap", "Most a daily streak can add", 1000000],

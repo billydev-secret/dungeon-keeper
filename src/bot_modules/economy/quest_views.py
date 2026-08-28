@@ -95,6 +95,8 @@ QUEST_STATE_LABEL = {
     "party_game": "🎲 Completes automatically when you finish a party game",
     "duel": "⚔️ Completes automatically when you finish a 1v1 duel",
     "risky_roll": "🎰 Completes automatically when you take a Risky Roll dare",
+    "casino_play": "🃏 Completes automatically when you place a casino bet",
+    "auction_bid": "🔨 Completes automatically when you bid in an auction",
     "guess": "🕵️ Completes automatically when you play a Guess Who round",
     "voice_session": "🎙️ Completes automatically when you're active in voice chat",
     "qotd_reply": "📣 Completes automatically when you answer the Question of the Day",

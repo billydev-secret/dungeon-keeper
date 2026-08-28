@@ -16,6 +16,7 @@ from dataclasses import dataclass, fields
 from typing import TYPE_CHECKING
 
 from bot_modules.economy import live_signal, logic
+from bot_modules.economy.kinds import UNSCALED_CREDIT_KINDS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -77,6 +78,17 @@ class EconSettings:
     wallet_name: str = "Wallet"
     transfers_enabled: bool = True
     booster_multiplier: float = 1.5
+    # One dial over every earned faucet, as a percentage (100 = ship rate).
+    # Retuning the economy used to mean editing ~14 separate dials, which is
+    # why the 2026-07-30 retune quietly went stale when the member base grew:
+    # per-earner minting fell 41% while headcount rose 59%, so the float kept
+    # climbing (docs/reviews/2026-08-28-economy-affordability-review.md §1).
+    # This scales all of them at once, so a retune is one number and one
+    # checkpoint. Applies to earned income only — see UNSCALED_CREDIT_KINDS
+    # for what it must never touch. It is a *rate*, not an off-switch: a
+    # faucet that would round to nothing still pays 1, and each faucet keeps
+    # its own zero/enable dial for turning it off outright.
+    faucet_scale_pct: int = 100
     # XP → coin conversion rate (XP per coin). Ships at 0 = the faucet is OFF:
     # earning XP no longer mints currency. An admin re-enables it by setting a
     # positive rate on the Income Sources panel; the day-roll driver skips the
@@ -505,16 +517,37 @@ def apply_credit(
     meta: dict | None = None,
     booster: bool = False,
     multiplier: float = 1.5,
+    scale_pct: int | None = None,
 ) -> int:
     """Credit a wallet and record the ledger row as one atomic unit.
 
     Returns the credited amount: ``ceil(amount * multiplier)`` when ``booster``
-    is set, else ``amount``. Raises ValueError for ``amount < 1``. Rides the
-    passed connection — the caller's transaction is the commit boundary.
+    is set, else ``amount``, then scaled by the guild's ``faucet_scale_pct``
+    unless ``kind`` is in ``UNSCALED_CREDIT_KINDS`` (money moving sideways, an
+    admin grant, or a refund — none of which are the guild's to shave). Raises
+    ValueError for ``amount < 1``. Rides the passed connection — the caller's
+    transaction is the commit boundary.
+
+    ``scale_pct`` lets a loop crediting many members pass one preloaded read
+    instead of reloading settings per credit, the same way ``feed_jackpot``
+    takes ``settings``.
     """
     if amount < 1:
         raise ValueError("credit amount must be >= 1")
     credited = math.ceil(amount * multiplier) if booster else amount
+    if kind not in UNSCALED_CREDIT_KINDS:
+        # Loaded lazily and only for scalable kinds, so the highest-volume
+        # credit there is — a casino payout — costs nothing extra. The
+        # scale rides *after* the booster: the booster is a member's perk,
+        # this is the guild's economy-wide rate, and the rate applies to
+        # what the perk produced.
+        pct = (
+            load_econ_settings(conn, guild_id).faucet_scale_pct
+            if scale_pct is None
+            else scale_pct
+        )
+        if pct != 100:
+            credited = max(1, credited * max(0, pct) // 100)
     now = time.time()
     conn.execute(
         """

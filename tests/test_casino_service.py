@@ -2462,3 +2462,85 @@ def test_mines_plays_land_on_the_floor_ticker(db):
             (GUILD,),
         ).fetchall()
         assert [(r["game"], r["stake"], r["payout"]) for r in rows] == [("mines", 20, 0)]
+
+
+# ── casino_play quest trigger ──────────────────────────────────────────
+#
+# Quest 89 "Take a Seat" shipped in prod against a `casino_play` trigger kind
+# that never existed in the vocabulary, so it could never be cleared while
+# sitting in the daily pool consuming board draws (2026-08-28 economy review
+# §9). These pin the kind's contract: it fires on money actually at risk, and
+# only then.
+
+
+def _casino_quest(conn, *, target_count=1, reward=10):
+    from bot_modules.services.economy_quests_service import (
+        create_quest,
+        set_quest_active,
+    )
+
+    qid = create_quest(
+        conn, GUILD,
+        title="Take a Seat", description="", qtype="daily", reward=reward,
+        signoff=0, criteria="", starts_at=None, ends_at=None, rotate_tag="",
+        community_target=None, created_by=None, trigger_kind="casino_play",
+        target_count=target_count,
+    )
+    set_quest_active(conn, GUILD, qid, True)
+    return qid
+
+
+def _marks(conn, quest_id, user_id):
+    return [
+        r["occurrence"]
+        for r in conn.execute(
+            "SELECT occurrence FROM econ_quest_progress_marks "
+            "WHERE quest_id = ? AND user_id = ?",
+            (quest_id, user_id),
+        )
+    ]
+
+
+def test_casino_play_fires_once_per_charged_stake(db):
+    with open_db(db) as conn:
+        qid = _casino_quest(conn, target_count=3)
+        _fund(conn, A, 500)
+        for _ in range(3):
+            assert svc.take_stake(conn, GUILD, A, 10, "slots", now=NOW) is None
+        marks = _marks(conn, qid, A)
+        # Three distinct bets -> three countable occurrences, even though they
+        # share a game, an amount and a timestamp: the key is the ledger row.
+        assert len(marks) == 3, marks
+        assert len(set(marks)) == 3, marks
+
+
+@pytest.mark.parametrize(
+    ("setup", "amount", "game"),
+    [
+        pytest.param(lambda c: None, 10_000, "slots", id="insufficient-funds"),
+        pytest.param(
+            lambda c: svc.save_casino_settings(c, GUILD, {"slots_enabled": False}),
+            10, "slots", id="table-closed",
+        ),
+        pytest.param(
+            lambda c: svc.save_casino_settings(c, GUILD, {"min_bet": 50}),
+            10, "slots", id="under-min-bet",
+        ),
+    ],
+)
+def test_casino_play_does_not_fire_when_the_stake_is_refused(db, setup, amount, game):
+    with open_db(db) as conn:
+        qid = _casino_quest(conn)
+        _fund(conn, A, 100)
+        setup(conn)
+        assert svc.take_stake(conn, GUILD, A, amount, game, now=NOW) is not None
+        # A bet that was never charged is not money at risk, so it earns nothing.
+        assert _marks(conn, qid, A) == []
+
+
+def test_casino_play_is_a_known_trigger_kind():
+    from bot_modules.economy.quests import TRIGGER_KIND_INFO, TRIGGER_KINDS
+
+    # The defect this fixes: the quest row existed, the kind did not.
+    assert "casino_play" in TRIGGER_KINDS
+    assert "casino_play" in TRIGGER_KIND_INFO
