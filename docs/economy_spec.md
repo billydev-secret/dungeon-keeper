@@ -1297,6 +1297,36 @@ stored verbatim under a `memo` key on both ledger rows and surfaced (escaped at
 render time) in the wallet ledger, the dashboard bank-manager ledger, and the
 public register feed's consolidated `A → B` transfer entry.
 
+**Public receipts.** A `public:` option (per payment, default off — this is member
+self-service, not a server dial) posts the receipt in the invoking channel instead
+of keeping it ephemeral. Three constraints shape it:
+
+* The public receipt **never carries the sender's balance**. The ephemeral receipt
+  footers `Your balance: N`; the public variant drops the footer and the sender gets
+  the balance in a short private ack instead. `build_payment_receipt`
+  (`economy/transfers.py`) withholds it even when handed one.
+* The public receipt is always a **followup**, on both paths. An ephemeral message
+  cannot be promoted to a public one, so the over-100 confirm — which resolves by
+  editing its own ephemeral message — has to send the receipt separately; the direct
+  path does the same so one payment looks identical either side of the threshold.
+  Discord attributes neither, so the public embed names sender *and* recipient
+  (mentions rendered with `AllowedMentions.none()` — the recipient is already
+  notified once by `notify_member` and doesn't need a second ping). The confirm
+  embed says the receipt will be posted, so nobody confirms blind.
+* **Refusals are never public.** `_reply` / `_reply_embed` stay ephemeral-only and
+  the option is threaded through the success path alone, so "you don't have enough"
+  — which reads the sender's balance back — cannot reach a channel.
+
+The memo **does** publish (Billy's call, 2026-08-27); the option's description says so.
+
+`public:` consults the no-contact list (`is_no_contact_conn`, read on the transfer's
+existing connection and only when the option is set). A blocked pair's payment still
+goes through and the sender gets the **ordinary ephemeral receipt** with no
+explanation — as does a channel the bot can't post in. Folding those two cases into
+one silent path is deliberate: any message explaining the downgrade would let a
+sender probe for a no-contact rule with a 1-coin payment. `/bank pay` itself remains
+ungated — the private path's DM predates this and is tracked separately.
+
 ### 5.1 Reaction tips (migration 143)
 
 Tapping an emoji the bot placed on an image post pays the poster from the

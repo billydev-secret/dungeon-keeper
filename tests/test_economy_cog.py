@@ -797,6 +797,147 @@ async def test_pay_confirm_button_executes_transfer(ctx, db):
     confirm_inter.response.edit_message.assert_awaited_once()
 
 
+# ── /bank pay public: ────────────────────────────────────────────────────────
+#
+# Rendering is tested in test_economy_transfers.py. What's tested here is the
+# wiring the builder can't see: that the public receipt is actually *sent*, on
+# both sides of the confirm threshold, and withheld on a no-contact pair.
+
+
+def _postable(interaction) -> MagicMock:
+    """Give a fake interaction a channel the bot may speak in."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 4242
+    channel.permissions_for.return_value = MagicMock(
+        send_messages=True, embed_links=True
+    )
+    interaction.channel = channel
+    interaction.guild.me = MagicMock()
+    return channel
+
+
+async def _pay_public(cog, interaction, member, amount, memo=None) -> None:
+    await cog.bank_pay.callback(cog, interaction, member, amount, memo, True)
+
+
+@pytest.mark.asyncio
+async def test_public_pay_under_the_threshold_posts_and_withholds_balance(ctx, db):
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+    _postable(interaction)
+
+    with _patch_projection():
+        await _pay_public(cog, interaction, _member(member_id=900, name="Bob"), 40)
+
+    # The sender's own reply stays ephemeral and carries the balance...
+    ack = interaction.response.send_message.await_args
+    assert ack.kwargs["ephemeral"] is True
+    assert "460" in ack.args[0]
+
+    # ...and the balance is exactly what the channel does not get.
+    posted = interaction.followup.send.await_args.kwargs["embed"]
+    assert posted.footer.text is None
+    assert "460" not in str(posted.to_dict())
+    assert "<@500>" in posted.description and "<@900>" in posted.description
+
+
+@pytest.mark.asyncio
+async def test_public_pay_over_the_threshold_posts_after_confirming(ctx, db):
+    """The naive implementation does nothing here: an ephemeral confirm
+    message cannot be edited into a public one, so the receipt has to be a
+    separate send."""
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    sender = _member(member_id=500, name="Alice")
+    interaction = _interaction(sender)
+    _postable(interaction)
+
+    with _patch_projection():
+        await _pay_public(cog, interaction, _member(member_id=900, name="Bob"), 200)
+        confirm = interaction.response.send_message.await_args.kwargs["embed"]
+        assert "posted in this channel" in confirm.description
+
+        view = interaction.response.send_message.await_args.kwargs["view"]
+        confirm_inter = _interaction(sender)
+        _postable(confirm_inter)
+        await view.children[0].callback(confirm_inter)
+
+    # The ephemeral confirm resolves privately, with the balance...
+    confirm_inter.response.edit_message.assert_awaited_once()
+    assert "300" in confirm_inter.response.edit_message.await_args.kwargs["content"]
+    # ...and the receipt reaches the channel on its own.
+    posted = confirm_inter.followup.send.await_args.kwargs["embed"]
+    assert posted.footer.text is None
+    assert "<@500>" in posted.description and "<@900>" in posted.description
+
+
+@pytest.mark.asyncio
+async def test_public_pay_between_a_no_contact_pair_posts_nothing(ctx, db):
+    """The payment still goes through, and the sender gets the ordinary
+    private receipt — nothing distinguishes it from an unticked box."""
+    from bot_modules.services.no_contact_service import add_pair
+
+    _enable(db)
+    _credit(db, 500, 500)
+    add_pair(db, GUILD_ID, 500, 900, created_by=900)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+    _postable(interaction)
+
+    with _patch_projection():
+        await _pay_public(cog, interaction, _member(member_id=900, name="Bob"), 40)
+
+    interaction.followup.send.assert_not_awaited()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert kwargs["embed"].footer.text == "Your balance: 460"
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 900) == 40
+
+
+@pytest.mark.asyncio
+async def test_public_pay_falls_back_quietly_where_the_bot_cannot_post(ctx, db):
+    """Same silent downgrade as the no-contact case — that's what makes the
+    no-contact case unremarkable."""
+    _enable(db)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+    channel = _postable(interaction)
+    channel.permissions_for.return_value = MagicMock(
+        send_messages=False, embed_links=True
+    )
+
+    with _patch_projection():
+        await _pay_public(cog, interaction, _member(member_id=900, name="Bob"), 40)
+
+    interaction.followup.send.assert_not_awaited()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert kwargs["embed"].footer.text == "Your balance: 460"
+
+
+@pytest.mark.asyncio
+async def test_public_option_never_publishes_a_refusal(ctx, db):
+    """Announcing that someone is broke is a different feature."""
+    _enable(db)
+    _credit(db, 500, 10)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+    _postable(interaction)
+
+    with _patch_projection():
+        await _pay_public(cog, interaction, _member(member_id=900, name="Bob"), 40)
+
+    interaction.followup.send.assert_not_awaited()
+    args, kwargs = interaction.response.send_message.await_args
+    assert kwargs["ephemeral"] is True
+    assert "don't have enough" in args[0]
+
+
 @pytest.mark.asyncio
 async def test_pay_cancel_button_aborts(ctx, db):
     _enable(db)

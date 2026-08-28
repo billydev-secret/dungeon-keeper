@@ -34,6 +34,7 @@ from bot_modules.economy.view_helpers import (
     unit as _unit,
 )
 from bot_modules.economy.wallet import build_wallet_embed
+from bot_modules.economy.transfers import build_payment_receipt, receipt_is_public
 from bot_modules.economy.perks import (
     CUSTOMISE_LABELS as _CUSTOMISE_LABELS,
     FEATURE_GATED,
@@ -85,6 +86,7 @@ from bot_modules.economy.auction_views import (
     start_auction,
 )
 from bot_modules.services.feature_roles import QOTD_PING
+from bot_modules.services.no_contact_service import is_no_contact_conn
 from bot_modules.services.economy_auction_service import (
     attach_card_to_latest,
     card_ids,
@@ -382,6 +384,24 @@ def _clean_memo(memo: str | None) -> str | None:
     return cleaned[:_MAX_MEMO_LEN]
 
 
+def _can_post_publicly(interaction: discord.Interaction) -> bool:
+    """Whether the bot may post a public pay receipt where this was invoked.
+
+    Checked up front so the usual "no permission" case is decided before the
+    sender is told anything, rather than surfacing as a half-finished payment.
+    The followup is still wrapped in a try/except: thread permissions don't
+    resolve cleanly through ``permissions_for``, and a channel can change
+    under a slow interaction either way.
+    """
+    guild, channel = interaction.guild, interaction.channel
+    if guild is None or guild.me is None:
+        return False
+    if not isinstance(channel, (discord.abc.GuildChannel, discord.Thread)):
+        return False
+    perms = channel.permissions_for(guild.me)
+    return perms.send_messages and perms.embed_links
+
+
 class _MemberScopedView(discord.ui.View):
     """A view usable only by the member it was opened for.
 
@@ -421,6 +441,7 @@ class _PayConfirmView(_MemberScopedView):
         recipient: discord.Member,
         amount: int,
         memo: str | None = None,
+        public: bool = False,
     ) -> None:
         super().__init__(sender.id, timeout=60)
         self.cog = cog
@@ -430,6 +451,7 @@ class _PayConfirmView(_MemberScopedView):
         self.recipient = recipient
         self.amount = amount
         self.memo = memo
+        self.public = public
 
     @discord.ui.button(label="Confirm", style=discord.ButtonStyle.success)
     async def _confirm(
@@ -438,7 +460,7 @@ class _PayConfirmView(_MemberScopedView):
         self.stop()
         await self.cog.finalize_pay(
             interaction, self.settings, self.guild, self.sender, self.recipient,
-            self.amount, memo=self.memo, via_confirm=True,
+            self.amount, memo=self.memo, via_confirm=True, public=self.public,
         )
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
@@ -1887,6 +1909,10 @@ class EconomyCog(commands.Cog):
         member="Who to pay",
         amount="How much (whole number)",
         memo="Optional note — what's it for? (shown to them)",
+        public=(
+            "Post the receipt in this channel — your note is shown too "
+            "(your balance stays private)"
+        ),
     )
     async def bank_pay(
         self,
@@ -1894,6 +1920,7 @@ class EconomyCog(commands.Cog):
         member: discord.Member,
         amount: int,
         memo: app_commands.Range[str, None, _MAX_MEMO_LEN] | None = None,
+        public: bool = False,
     ) -> None:
         assert interaction.guild is not None
         guild = interaction.guild
@@ -1936,6 +1963,11 @@ class EconomyCog(commands.Cog):
             )
             if memo:
                 desc += f"\n\n*{discord.utils.escape_markdown(memo)}*"
+            if public:
+                # Say it before they press, not after: over the threshold the
+                # receipt is a separate public post, and the note above is
+                # part of what gets published.
+                desc += "\n\nThe receipt will be posted in this channel."
             confirm = discord.Embed(
                 title=f"{settings.currency_emoji} Confirm Payment",
                 description=desc,
@@ -1943,7 +1975,9 @@ class EconomyCog(commands.Cog):
             )
             if settings.currency_icon_url:
                 confirm.set_thumbnail(url=settings.currency_icon_url)
-            view = _PayConfirmView(self, settings, guild, sender, member, amount, memo)
+            view = _PayConfirmView(
+                self, settings, guild, sender, member, amount, memo, public
+            )
             await interaction.response.send_message(
                 embed=confirm, view=view, ephemeral=True
             )
@@ -1951,7 +1985,7 @@ class EconomyCog(commands.Cog):
 
         await self.finalize_pay(
             interaction, settings, guild, sender, member, amount,
-            memo=memo, via_confirm=False,
+            memo=memo, via_confirm=False, public=public,
         )
 
     async def finalize_pay(
@@ -1965,18 +1999,38 @@ class EconomyCog(commands.Cog):
         *,
         memo: str | None = None,
         via_confirm: bool,
+        public: bool = False,
     ) -> None:
-        """Execute the transfer and report — shared by the direct and confirm paths."""
+        """Execute the transfer and report — shared by the direct and confirm paths.
 
-        def _tx() -> int:
+        ``public`` is the sender's per-payment choice to post the receipt in
+        the channel. It only ever reaches the *success* reply: every refusal
+        below still goes out through ``_reply``, which is ephemeral-only, so
+        "you don't have enough" can never be announced to a room.
+
+        The public receipt is always a followup, on both paths. An ephemeral
+        message cannot be promoted to a public one, so the confirm path — which
+        resolves by editing its own ephemeral confirm in place — has to send
+        the receipt separately; making the direct path do the same keeps one
+        payment looking identical either side of the confirm threshold.
+        """
+
+        def _tx() -> tuple[int, bool]:
             with self.bot.ctx.open_db() as conn:
+                # Only asked when it can change the outcome, so an ordinary
+                # private payment still costs exactly the queries it used to.
+                blocked = (
+                    is_no_contact_conn(conn, guild.id, sender.id, recipient.id)
+                    if public
+                    else False
+                )
                 transfer_currency(
                     conn, guild.id, sender.id, recipient.id, amount, memo=memo
                 )
-                return get_balance(conn, guild.id, sender.id)
+                return get_balance(conn, guild.id, sender.id), blocked
 
         try:
-            new_balance = await asyncio.to_thread(_tx)
+            new_balance, blocked = await asyncio.to_thread(_tx)
         except ValueError as exc:
             if "insufficient" in str(exc):
                 bal = await asyncio.to_thread(self._balance, guild.id, sender.id)
@@ -1991,19 +2045,42 @@ class EconomyCog(commands.Cog):
 
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
         safe_memo = discord.utils.escape_markdown(memo) if memo else None
-        desc = (
-            f"{settings.currency_emoji} **{amount:,}** {_unit(settings, amount)} "
-            f"→ {recipient.mention}"
+        # Permissions are only worth resolving for a payment that asked to be
+        # published; the ordinary private receipt never touches the channel.
+        show_publicly = receipt_is_public(
+            public,
+            blocked=blocked,
+            can_post=public and _can_post_publicly(interaction),
         )
-        if safe_memo:
-            desc += f"\n\n*{safe_memo}*"
-        embed = discord.Embed(
-            title=f"{settings.currency_emoji} Payment Sent", description=desc, color=accent
+        embed = build_payment_receipt(
+            settings, accent, sender, recipient, amount,
+            memo=memo,
+            balance=None if show_publicly else new_balance,
+            public=show_publicly,
         )
-        if settings.currency_icon_url:
-            embed.set_thumbnail(url=settings.currency_icon_url)
-        embed.set_footer(text=f"Your balance: {new_balance:,}")
-        await self._reply_embed(interaction, embed, via_confirm=via_confirm)
+        if show_publicly:
+            # The private half of a public payment is the balance the public
+            # receipt deliberately omits — so the sender still sees it, and
+            # nobody else does.
+            await self._reply(
+                interaction,
+                f"{settings.currency_emoji} Sent. Your balance: {new_balance:,}.",
+                via_confirm=via_confirm,
+            )
+            try:
+                await interaction.followup.send(
+                    embed=embed, allowed_mentions=discord.AllowedMentions.none()
+                )
+            except discord.HTTPException:
+                # The money moved and the sender has their receipt; a failed
+                # post stays quiet for the same reason the no-contact downgrade
+                # does (see receipt_is_public).
+                log.warning(
+                    "pay receipt: couldn't post publicly in guild %s channel %s",
+                    guild.id, getattr(interaction.channel, "id", None),
+                )
+        else:
+            await self._reply_embed(interaction, embed, via_confirm=via_confirm)
 
         # notify_member sends `content` with no allowed_mentions, and its
         # fallback posts into the public bank channel — so a memo has to be
