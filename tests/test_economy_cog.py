@@ -4398,3 +4398,46 @@ async def test_a_page_turn_past_the_end_of_a_shrunken_shop_clamps(ctx, db):
 
     view = interaction.response.edit_message.await_args.kwargs["view"]
     assert isinstance(view, _ShopView)
+
+
+@pytest.mark.asyncio
+async def test_the_arrows_are_always_their_own_bottom_row(ctx, db):
+    """Navigation sits in the same place on every page, under everything else.
+
+    Asserted on the rendered component rows rather than on ``row=``, because
+    what matters is what Discord draws: left to auto-pack, the pair slotted in
+    beside Shield and Cancel & Refund, putting "Next" where a member is aiming
+    for a refund.
+    """
+    _enable(db)
+    for n in range(1, 21):
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+
+    def _rows(view):
+        return [
+            [c.get("label") for c in row["components"]]
+            for row in view.to_components()
+        ]
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        # A store page: the picker's row, then the arrows on their own.
+        store = _interaction(_member(member_id=500))
+        await _shop(cog, store)
+        assert _rows(_shop_view(store))[-1] == ["◀️ Back", "Next ▶️"]
+
+        # The perk page, where eight buttons would otherwise leave a gap the
+        # arrows fall into.
+        perks = _interaction(_member(member_id=500))
+        await cog.turn_shop_page(perks, 2)
+
+    view = perks.response.edit_message.await_args.kwargs["view"]
+    rows = _rows(view)
+    assert rows[-1] == ["◀️ Back", "Next ▶️"]
+    assert len(rows) > 1  # not sharing the perk buttons' row
+    assert not any(
+        "Back" in (label or "") for row in rows[:-1] for label in row
+    )

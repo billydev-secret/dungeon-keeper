@@ -1021,6 +1021,11 @@ class _StoreSelect(discord.ui.Select):
         await self.cog.do_buy_item(interaction, self.settings, self.guild, item)
 
 
+#: Discord's last component row. The arrows live here on every page, so the
+#: shop's navigation is always in the same place whatever else a page holds.
+_ARROW_ROW = 4
+
+
 def _make_turn(cog: EconomyCog, target: int):
     """A page-turn callback bound to one destination.
 
@@ -1046,11 +1051,20 @@ def _add_page_arrows(
     it reads as "you are at the start", and wrapping makes a two-page shop one
     tap either way. A single-page shop (a guild selling nothing of its own)
     gets no arrows at all and looks exactly as it always did.
+
+    Pinned to ``row=4`` so navigation is always its own bottom row rather than
+    whatever gap the auto-layout had left. Left to pack, the pair slotted in
+    beside Shield and Cancel & Refund on the perk page — three unrelated
+    controls sharing a row, with "Next" sitting where a member is aiming for a
+    refund. Discord drops empty rows, so row 4 renders directly under the last
+    row holding anything, on both page kinds.
     """
     if pages < 2:
         return
     for label, step in (("◀️ Back", -1), ("Next ▶️", 1)):
-        button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary)
+        button = discord.ui.Button(
+            label=label, style=discord.ButtonStyle.secondary, row=_ARROW_ROW
+        )
         button.callback = _make_turn(cog, (page + step) % pages)
         view.add_item(button)
 
