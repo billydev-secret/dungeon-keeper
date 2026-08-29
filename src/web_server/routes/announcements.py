@@ -26,6 +26,7 @@ from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.role_safety import role_block_reason
 from bot_modules.core.utils import get_bot_member
+from bot_modules.core.utils import jump_url as build_jump_url
 from bot_modules.services.announcements_service import (
     VALID_MENTION_KINDS,
     clone_announcement,
@@ -228,9 +229,8 @@ def _button_dict(row: sqlite3.Row) -> dict:
 def _ann_dict(row: sqlite3.Row, guild_id: int, buttons: list[sqlite3.Row]) -> dict:
     jump_url = None
     if row["sent_channel_id"] and row["sent_message_id"]:
-        jump_url = (
-            f"https://discord.com/channels/{guild_id}"
-            f"/{int(row['sent_channel_id'])}/{int(row['sent_message_id'])}"
+        jump_url = build_jump_url(
+            guild_id, int(row["sent_channel_id"]), int(row["sent_message_id"])
         )
     return {
         "id": int(row["id"]),

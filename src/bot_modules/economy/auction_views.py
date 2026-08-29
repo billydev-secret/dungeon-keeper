@@ -26,6 +26,7 @@ import discord
 
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.core.sticky import PanelContent
+from bot_modules.core.utils import jump_url
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
@@ -417,12 +418,19 @@ async def _handle_bid(
     title = await _refresh_card(bot, card, guild, auction_id, settings=settings)
     # Tell the member we just displaced that they're out — and refunded.
     if result.outbid_user_id is not None and result.outbid_user_id != member.id:
+        # The degraded form (style guide: Pointing at things) — a channel
+        # mention, not a permalink. The auction is still open, so its card is a
+        # live sticky that gets deleted and reposted as chat moves; an id
+        # captured now would be dead by the time they read this. The room is
+        # the stable pointer, and the card is sitting at the bottom of it.
+        where = f" It's in <#{card.channel.id}>." if card is not None else ""
         try:
             await notify_member(
                 bot, bot.ctx.db_path, guild.id, result.outbid_user_id,
                 content=(
                     f"You were outbid on **{title or 'an auction'}** "
-                    f"— your {result.outbid_amount:,} coins are back. Bid again to reclaim it!"
+                    f"— your {result.outbid_amount:,} coins are back. "
+                    f"Bid again to reclaim it!{where}"
                 ),
             )
         except Exception:
@@ -657,10 +665,14 @@ async def cancel_open_auction(interaction: discord.Interaction) -> None:
         await _freeze_card(bot, guild, auction_id, int(cancelled["channel_id"] or 0))
     refunded = cancelled["high_bidder_id"] if cancelled is not None else None
     if refunded is not None:
+        where = await _frozen_card_link(bot, guild.id, auction_id)
         try:
             await notify_member(
                 bot, bot.ctx.db_path, guild.id, int(refunded),
-                content="An auction you were leading was cancelled — your bid is back.",
+                content=(
+                    "An auction you were leading was cancelled — your bid is "
+                    f"back.{where}"
+                ),
             )
         except Exception:
             log.debug("econ auction: failed to DM refunded bidder", exc_info=True)
@@ -766,6 +778,32 @@ async def _freeze_card(
         pass
 
 
+async def _frozen_card_link(bot: Bot, guild_id: int, auction_id: int) -> str:
+    """A link line for the auction's card, for a DM sent AFTER the freeze.
+
+    Only safe once ``_freeze_card`` has run. While an auction is open its card
+    is a ``StickyPanel`` that gets deleted and reposted as chat moves, so any
+    id snapshotted mid-auction is dead within minutes — the freeze reposts one
+    last time, writes the new id, and then it never moves again. Hence the
+    re-read: the caller's snapshot is the id the freeze just deleted.
+    """
+    def _read() -> tuple[int, int]:
+        with bot.ctx.open_db() as conn:
+            row = get_auction(conn, auction_id)
+            if row is None:
+                return 0, 0
+            return int(row["channel_id"] or 0), int(row["message_id"] or 0)
+
+    try:
+        channel_id, message_id = await asyncio.to_thread(_read)
+    except Exception:
+        log.debug("econ auction: couldn't read the frozen card ids", exc_info=True)
+        return ""
+    if not channel_id or not message_id:
+        return ""
+    return f"\n{jump_url(guild_id, channel_id, message_id)}"
+
+
 async def _announce_settlement(
     bot: Bot, guild: discord.Guild, settled: SettledAuction
 ) -> None:
@@ -803,12 +841,14 @@ async def _announce_settlement(
         log.debug("econ auction: failed to post settlement", exc_info=True)
     await _freeze_card(bot, guild, settled.auction_id, settled.channel_id)
     if settled.winner_id is not None:
+        where = await _frozen_card_link(bot, guild.id, settled.auction_id)
         try:
             await notify_member(
                 bot, bot.ctx.db_path, guild.id, settled.winner_id,
                 content=(
                     f"🏆 You won the auction for **{settled.title}** at "
-                    f"{settled.winning_bid:,} coins! The host will sort out your prize."
+                    f"{settled.winning_bid:,} coins! The host will sort out "
+                    f"your prize.{where}"
                 ),
             )
         except Exception:

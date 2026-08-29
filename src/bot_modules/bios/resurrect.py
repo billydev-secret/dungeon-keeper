@@ -22,6 +22,7 @@ import discord
 
 from bot_modules.bios import db as bios_db
 from bot_modules.bios.config import BiosConfig
+from bot_modules.core.utils import jump_url
 from bot_modules.bios.embeds import build_bio_embed
 from bot_modules.bios.logic import (
     BioRenderPayload,
@@ -190,10 +191,7 @@ async def resolve_member_bio_link(
         return ""
 
     if stored.message_id != 0 and stored.channel_id != 0:
-        return (
-            f"https://discord.com/channels/{guild.id}/"
-            f"{stored.channel_id}/{stored.message_id}"
-        )
+        return jump_url(guild.id, stored.channel_id, stored.message_id)
 
     # Archived — resurrect.
     def _load_cfg() -> BiosConfig:

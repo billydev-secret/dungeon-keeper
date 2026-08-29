@@ -209,6 +209,12 @@ The gate enforces the floor: a **new** `logic.py` / `store.py` / `service.py` /
   you do want a ping, allow-list exactly the role or user intended.
   → `embed_style_guide.md` § Mentions, pings & user-supplied text
 
+- **Hold a message id? Link the message, not the channel.** A channel-only
+  link lands the reader at the bottom of the channel; build permalinks with
+  `core/utils.jump_url`, never a hand-rolled URL. Link the channel only when
+  the room itself is the subject.
+  → `embed_style_guide.md` § Pointing at things
+
 ## Dashboard-side code
 
 The shared widgets are **safe by default**, and the safety only holds if you

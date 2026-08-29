@@ -20,6 +20,7 @@ import sqlite3
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from bot_modules.core.utils import jump_url as build_jump_url
 from bot_modules.qa.cards import build_card_embed
 from bot_modules.services import qa_service
 from web_server.auth import AuthenticatedUser
@@ -70,9 +71,8 @@ def _verdict_dict(row: sqlite3.Row) -> dict:
 def _test_dict(row: sqlite3.Row, verdicts: list[sqlite3.Row], guild_id: int) -> dict:
     jump_url = None
     if row["channel_id"] and row["message_id"]:
-        jump_url = (
-            f"https://discord.com/channels/{guild_id}"
-            f"/{int(row['channel_id'])}/{int(row['message_id'])}"
+        jump_url = build_jump_url(
+            guild_id, int(row["channel_id"]), int(row["message_id"])
         )
     return {
         "id": int(row["id"]),

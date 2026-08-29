@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from bot_modules.core.utils import channel_url
 from bot_modules.services.voice_master_service import (
     ACCESS_LOCKED,
     ACCESS_NSFW,
@@ -1004,8 +1005,10 @@ def format_kick_result(
 
 
 def build_join_url(*, guild_id: int, channel_id: int) -> str:
-    """Build the deep-link URL Discord uses for jumping to a channel."""
-    return f"https://discord.com/channels/{guild_id}/{channel_id}"
+    """The deep link to a voice room. Channel-level on purpose: there is no
+    message to land on, only a room to join (style guide: Pointing at things).
+    """
+    return channel_url(guild_id, channel_id)
 
 
 def format_invite_dm(

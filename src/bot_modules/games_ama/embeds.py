@@ -244,19 +244,29 @@ def build_answered_embed(
 
 def build_asker_dm_embed(
     channel_mention: str,
+    *,
+    answer_url: str | None = None,
     color: "discord.Color | None" = None,
 ) -> discord.Embed:
     """Build the DM the asker receives when their question gets a reply.
 
     Keeps the channel-mention text consistent so the embed color and
     wording don't drift between branches.
+
+    ``answer_url`` is the permalink to the answered Q&A card — named so it
+    can't shadow ``jump_url``, the helper that builds these, should this module
+    ever import it. The mention names the room; the link lands on the answer
+    itself, without which the reader arrives at the bottom of a busy channel
+    and has to hunt for their own question. It stays optional because a caller
+    may not hold the card.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
+    description = f"🔔 Your anonymous question in **{channel_mention}** got a reply!"
+    if answer_url:
+        description += f"\n\n[Jump to the answer]({answer_url})"
     return discord.Embed(
-        description=(
-            f"🔔 Your anonymous question in **{channel_mention}** got a reply!"
-        ),
+        description=description,
         color=color,
     )
 

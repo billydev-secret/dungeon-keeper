@@ -41,6 +41,7 @@ from bot_modules.services.economy_service import (
     notify_member,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.core.utils import jump_url
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.view_helpers import (
     edit_review_card,
@@ -447,12 +448,31 @@ _refresh_card = partial(
 )
 
 
-def pin_resolution_dm_text(settings: EconSettings, row) -> str:
-    """The member-facing receipt for a resolved submission."""
+def pin_resolution_dm_text(settings: EconSettings, row, *, guild_id: int) -> str:
+    """The member-facing receipt for a resolved submission.
+
+    An approved pin has a live message by the time this runs, so the receipt
+    links it — "enjoy the spotlight" is a poor invitation if they then have to
+    go hunting for their own pin. A denial has no message to link: it never
+    got posted.
+
+    The link goes *before* the quoted text, never appended to it. Pin text is
+    validated for length alone and keeps its newlines, so a member whose pin
+    ends mid-code-fence would otherwise swallow the URL into a code block and
+    render it unclickable.
+    """
     unit = settings.currency_plural or "coins"
     if str(row["state"]) == "live":
+        channel_id = int(row["pin_channel_id"] or 0)
+        message_id = int(row["pin_message_id"] or 0)
+        where = (
+            f"\n{jump_url(guild_id, channel_id, message_id)}"
+            if channel_id and message_id
+            else ""
+        )
         return (
-            "📌 Your message is pinned for the next 24 hours — enjoy the spotlight!\n"
+            "📌 Your message is pinned for the next 24 hours — enjoy the "
+            f"spotlight!{where}\n"
             f"> {row['message']}"
         )
     reason = str(row["deny_reason"] or "")
@@ -467,7 +487,7 @@ async def _dm_sponsor(
     bot: Bot, ctx: AppContext, guild: discord.Guild, settings: EconSettings, row
 ) -> None:
     """Tell the member what happened. Best-effort; a closed DM is not an error."""
-    text = pin_resolution_dm_text(settings, row)
+    text = pin_resolution_dm_text(settings, row, guild_id=guild.id)
     try:
         await notify_member(bot, ctx.db_path, guild.id, int(row["user_id"]), content=text)
     except Exception:

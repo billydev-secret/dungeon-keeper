@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db_immediate
+from bot_modules.core.utils import jump_url
 from bot_modules.services.todo_recurring_service import (
     RecurringValidationError,
     create_recurring,
@@ -149,9 +150,8 @@ async def list_todos_endpoint(
     if guild is not None:
         board = result["board"]
         if board["posted"]:
-            board["jump_url"] = (
-                f"https://discord.com/channels/{guild_id}"
-                f"/{board['channel_id']}/{board['message_id']}"
+            board["jump_url"] = jump_url(
+                guild_id, int(board["channel_id"]), int(board["message_id"])
             )
     return result
 

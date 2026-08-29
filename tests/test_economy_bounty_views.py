@@ -223,3 +223,34 @@ def test_short_titles_are_left_alone():
         ACCENT, _settings(), GUILD, [_entry(title="Draw the mascot")], open_total=1
     )
     assert "Draw the mascot" in _field(embed, "Open bounties")
+
+
+# ── the award/cancel DMs link the card, and only the card ──────────────
+
+
+def test_award_and_cancel_buttons_live_only_on_the_card_view():
+    """The award/cancel DMs link ``interaction.message`` — that must be the card.
+
+    Both handlers take the message the button was clicked on and hand its
+    ``jump_url`` to the member they DM. That is only correct while those
+    buttons live on ``BountyBoardView``, which ``_refresh_card`` attaches to
+    the bounty's own card. The hub is a ``StickyPanel``: it is deleted and
+    reposted as chat moves, so routing either button through it would start
+    DMing members a permalink that is dead within minutes — the exact failure
+    ``_frozen_card_link`` exists to avoid on the auction side.
+    """
+    from bot_modules.economy.bounty_views import (
+        BountyAwardButton,
+        BountyBoardView,
+        BountyCancelButton,
+        BountyHubView,
+    )
+
+    card_items = {type(item) for item in BountyBoardView(1).children}
+    assert BountyAwardButton in card_items
+    assert BountyCancelButton in card_items
+
+    hub_items = {type(item) for item in BountyHubView().children}
+    assert BountyAwardButton not in hub_items
+    assert BountyCancelButton not in hub_items
+

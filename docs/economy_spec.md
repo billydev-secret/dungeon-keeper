@@ -241,7 +241,12 @@ to currency.
   pins past 24h (**no refund** — the day ran) and refunds `pending` ones no mod
   reached within `pin_expire_days` (default 3). Enabled only when
   `price_pin_of_day > 0` **and** `pin_channel_id` is set — a public sink, dark
-  by default. One submission in flight per member.
+  by default. One submission in flight per member. The resolution DM
+  (`pin_resolution_dm_text`) **links the pin** on the approved branch — the row
+  holds `pin_channel_id`/`pin_message_id` by the time it is sent, and "enjoy
+  the spotlight" is a poor invitation if the member has to hunt for their own
+  post. The declined branch carries no link: it never became a message. Nor
+  does the *expiry* refund — `unpin_and_delete` has already removed it.
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
   A sticky **hub panel** (`EconomyCog.bounty_panel`, `build_bounty_hub_panel`)
@@ -253,7 +258,16 @@ to currency.
   in from a bounty's own board card, and a mod Awards it (a `UserSelect` picks
   the winner) or Cancels it — persistent
   `BountyChipInButton`/`BountyAwardButton`/`BountyCancelButton`, plus
-  `BountyHubPostButton`/`BountyHubChipButton` on the hub. `post_bounty_panel`
+  `BountyHubPostButton`/`BountyHubChipButton` on the hub. All three member DMs
+  — awarded, cancelled-and-refunded, and the loop's expired-unawarded notice —
+  **link the bounty's card**. Unlike the auction's, a bounty card is an
+  ordinary message, so its permalink keeps working; the award and cancel
+  handlers can therefore link `interaction.message` directly, which is only
+  sound because Award/Cancel live solely on `BountyBoardView` (the card's own
+  view) and never on the sticky hub — a test in
+  `tests/test_economy_bounty_views.py` pins that. The expiry DM builds its link
+  from `notice.card_channel_id`/`card_message_id` and simply omits it when
+  those are 0 (a bounty whose card never posted). `post_bounty_panel`
   refuses any channel but the board. Where the hub landed is stored in its own
   pair (`bounty_panel_channel_id`/`_message_id`): an admin repointing
   `bounty_channel_id` doesn't touch them, so on a mismatch `_bounty_panel_ids`
@@ -346,6 +360,14 @@ to currency.
       confirmations are ephemeral, outbid notices are DMs). Turning it on would
       buy no behaviour — not court a flood; see the bounty hub's entry for why
       the flag was never the storm's cause.
+    - **DMs link the card only after the freeze.** The won-it and
+      bid-refunded DMs carry a jump link, built by `_frozen_card_link`, which
+      re-reads the row rather than trusting the caller's snapshot — the freeze
+      has just deleted the id the caller was holding. The **outbid** DM
+      deliberately carries no link at all: the auction is still open, so the
+      card is a live sticky that will be deleted and reposted as chat moves,
+      and a permalink captured at bid time would be dead before it was read.
+      (Style guide: Pointing at things.)
     - `_release_panel` drops the panel's TTL id cache at **both** ends of the
       lifecycle, and the start end is not optional. `on_message` reads ids
       through a 300s cache populated by *any* member message in the guild, and

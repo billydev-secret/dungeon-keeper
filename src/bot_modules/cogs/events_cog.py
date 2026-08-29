@@ -84,6 +84,7 @@ from bot_modules.core.utils import (
     format_guild_for_log,
     format_user_for_log,
     get_guild_channel_or_thread,
+    jump_url,
 )
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
 from bot_modules.economy import quest_digest
@@ -2070,9 +2071,8 @@ class EventsCog(commands.Cog):
         # not have archived it yet — listener order is undefined), the
         # snapshotted (channel_id, message_id) gives a working jump URL.
         if stored is not None and stored.message_id != 0 and stored.channel_id != 0:
-            member_bio_link = (
-                f"https://discord.com/channels/{member.guild.id}/"
-                f"{stored.channel_id}/{stored.message_id}"
+            member_bio_link = jump_url(
+                member.guild.id, stored.channel_id, stored.message_id
             )
         else:
             member_bio_link = ""
