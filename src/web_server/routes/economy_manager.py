@@ -1047,6 +1047,18 @@ async def _resolve_theme_and_notify(
     if row is None:
         raise HTTPException(404, "submission not found")
 
+    if action == "take_down" and (bot is None or not bot.is_ready()):
+        # Refuse rather than half-do it. Taking a theme down moves the row off
+        # `live`, and the expiry sweep only ever looks at live rows — so if the
+        # unpin below cannot run, the announcement stays pinned with nothing
+        # left that knows to remove it. Every other action here is
+        # database-only and is safe with the gateway down.
+        raise HTTPException(
+            503,
+            "The bot isn't connected right now, so the announcement can't be "
+            "taken down. Try again in a moment.",
+        )
+
     def _resolve():
         with ctx.open_db() as conn:
             try:
@@ -1070,11 +1082,13 @@ async def _resolve_theme_and_notify(
 
     fresh = await run_query(_resolve)
 
-    if action == "take_down" and bot is not None and bot.is_ready():
+    if action == "take_down":
         # The only action with an effect outside the DB: the announcement is
         # still pinned, and the expiry sweep will never see this row again.
+        # Readiness was checked before the row moved, above.
         from bot_modules.economy.theme_views import unpin_and_delete
 
+        assert bot is not None  # the guard above raised 503 otherwise
         try:
             await unpin_and_delete(
                 bot, int(row["theme_channel_id"]), int(row["theme_message_id"])

@@ -1108,7 +1108,7 @@ def run_theme_expiry(
     nobody charged for a day that never ran.
     """
     settings = load_econ_settings(conn, guild_id)
-    if not settings.enabled or not theme_svc.theme_enabled(settings):
+    if not settings.enabled:
         return ThemeSweep(refunds=[], unpins=[], promote=None)
     unpins = [
         (int(row["theme_channel_id"]), int(row["theme_message_id"]))
@@ -1124,9 +1124,17 @@ def run_theme_expiry(
         )
         for row in theme_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
     ]
+    # Only the PROMOTION is gated on the feature being on. Retiring and
+    # refunding are not: an admin who unchecks "Sell themed days" (or clears
+    # the channel) while a theme is live must not strand it — the row would
+    # sit in `live` forever, its announcement never unpinned, and because
+    # `live` counts as in-flight that buyer could never submit another theme.
+    # Pending requests would likewise stop expiring and never be refunded.
+    # run_pin_expiry gates only on settings.enabled for the same reason.
     promote = (
         theme_svc.next_approved(conn, guild_id)
-        if theme_svc.live_theme(conn, guild_id) is None
+        if theme_svc.theme_enabled(settings)
+        and theme_svc.live_theme(conn, guild_id) is None
         else None
     )
     return ThemeSweep(

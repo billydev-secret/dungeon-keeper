@@ -2066,3 +2066,54 @@ def test_a_free_themed_day_still_runs(db):
     with open_db(db) as conn:
         sweep = economy_loop.run_theme_expiry(conn, GUILD, time.time())
         assert sweep.promote is not None and sweep.promote["id"] == sid
+
+
+def test_switching_themes_off_still_takes_down_a_running_one(db):
+    """Unchecking "Sell themed days" while a theme is live must not strand it:
+    the row would sit in `live` forever with its announcement never unpinned,
+    and because `live` counts as in-flight that buyer could never buy again."""
+    from bot_modules.services.economy_theme_service import go_live
+
+    _theme_on(db)
+    now = time.time()
+    sid = _queue(db)
+    with open_db(db) as conn:
+        go_live(conn, sid, theme_channel_id=THEME_CH, theme_message_id=42,
+                window_seconds=86400, now=now - 2 * 86400)
+    _theme_on(db, flash_theme_enabled=False)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert sweep.unpins == [(THEME_CH, 42)]
+        assert sweep.promote is None  # but nothing new starts
+
+
+def test_switching_themes_off_still_refunds_unreviewed_requests(db):
+    _theme_on(db)
+    now = time.time()
+    sid = _theme(db, user_id=USER + 1)
+    with open_db(db) as conn:
+        conn.execute(
+            "UPDATE econ_theme_submissions SET created_at = ? WHERE id = ?",
+            (now - 10 * 86400, sid),
+        )
+    _theme_on(db, theme_channel_id=0)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert [n.user_id for n in sweep.refunds] == [USER + 1]
+        assert get_balance(conn, GUILD, USER + 1) == 500
+
+
+def test_a_disabled_economy_sweeps_nothing_at_all(db):
+    """The economy being off is different from themes being off: nothing runs."""
+    from bot_modules.services.economy_theme_service import go_live
+
+    _theme_on(db)
+    now = time.time()
+    sid = _queue(db)
+    with open_db(db) as conn:
+        go_live(conn, sid, theme_channel_id=THEME_CH, theme_message_id=42,
+                window_seconds=86400, now=now - 2 * 86400)
+    _theme_on(db, enabled=False)
+    with open_db(db) as conn:
+        sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+        assert sweep.unpins == [] and sweep.refunds == [] and sweep.promote is None

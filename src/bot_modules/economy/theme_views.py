@@ -74,10 +74,22 @@ def render_theme_review_embed(
     state: str,
     resolver_id: int | None = None,
     deny_reason: str | None = None,
+    refunded: bool = False,
 ) -> discord.Embed:
-    """The bank-channel approval card for a submission in the given state."""
+    """The bank-channel approval card for a submission in the given state.
+
+    ``expired`` is three different endings — a request nobody reviewed in time
+    (refunded), a theme that ran its whole window, and one a mod ended early
+    (neither refunded) — so the state alone cannot say whether money went back.
+    ``refunded`` carries that, read from the row's ``refunded_at``, which is the
+    only thing that actually knows. Rendering the refund line off the state
+    would tell a mod a themed day was refunded when it ran.
+    """
+    ended_unrefunded = state == "expired" and not refunded
     if state in ("approved", "live"):
         embed = discord.Embed(title="🎨 Theme Approved", color=discord.Color(COLOR_GREEN))
+    elif ended_unrefunded:
+        embed = discord.Embed(title="🎨 Theme Ended", color=accent)
     elif state in ("denied", "expired"):
         embed = discord.Embed(title="❌ Theme Declined", color=discord.Color(COLOR_RED))
     else:
@@ -106,7 +118,15 @@ def render_theme_review_embed(
         )
         if resolver_id:
             embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
-    if state in ("denied", "expired"):
+    if ended_unrefunded:
+        embed.add_field(
+            name="Done",
+            value="It had its day — no refund.",
+            inline=False,
+        )
+        if resolver_id:
+            embed.add_field(name="Ended by", value=f"<@{resolver_id}>", inline=True)
+    elif state in ("denied", "expired"):
         if resolver_id:
             embed.add_field(name="Declined by", value=f"<@{resolver_id}>", inline=True)
         if deny_reason:
@@ -378,6 +398,7 @@ def _card_embed(accent, settings: EconSettings, row):
         state=str(row["state"]),
         resolver_id=int(row["resolver_id"]) if row["resolver_id"] else None,
         deny_reason=str(row["deny_reason"] or ""),
+        refunded=row["refunded_at"] is not None,
     )
 
 
@@ -404,6 +425,15 @@ def theme_resolution_dm_text(settings: EconSettings, row) -> str:
         return (
             f"🎨 Your theme **{row['title']}** is live now, announced and pinned "
             f"for {_hours_text(settings)}. Enjoy the day!"
+        )
+    # Only `refunded_at` knows whether money actually went back: `expired` is
+    # reached by a request nobody reviewed (refunded) AND by a theme that ran
+    # or was ended early (not refunded). Branching on the state alone told a
+    # member their coins were returned when a mod ended their running theme.
+    if row["refunded_at"] is None:
+        return (
+            f"🎨 Your themed day **{row['title']}** has ended. Thanks for "
+            "setting the tone — no refund, you got your day."
         )
     reason = str(row["deny_reason"] or "")
     tail = f"\n**Why:** {reason}" if reason else ""
@@ -469,11 +499,25 @@ async def announce_theme(
     )
     try:
         posted = await channel.send(embed=embed)
-        await posted.pin(reason="Flash theme")
     except discord.HTTPException:
         log.warning(
-            "econ theme: couldn't post/pin in the theme channel for guild %d", guild.id
+            "econ theme: couldn't post in the theme channel for guild %d", guild.id
         )
+        return False
+    try:
+        await posted.pin(reason="Flash theme")
+    except discord.HTTPException:
+        # The card is already in the channel but could not be pinned (no Manage
+        # Messages, or the channel is at Discord's 50-pin limit). Take it back
+        # down: the row stays `approved`, so leaving it would post a fresh
+        # unpinned copy every hour for as long as the condition lasts.
+        log.warning(
+            "econ theme: couldn't pin in the theme channel for guild %d", guild.id
+        )
+        try:
+            await posted.delete()
+        except discord.HTTPException:
+            log.debug("econ theme: failed to clean up unpinned card", exc_info=True)
         return False
 
     def _golive():
