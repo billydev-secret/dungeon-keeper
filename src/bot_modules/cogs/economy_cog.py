@@ -40,6 +40,7 @@ from bot_modules.economy.perks import (
     FEATURE_GATED,
     GIFTABLE_PERKS,
     NO_CONFIG_PERKS,
+    PERK_BLURBS,
     PERK_EMOJI,
     PERK_LABELS,
     PERK_REFUSAL as _PERK_REFUSAL,
@@ -55,6 +56,7 @@ from bot_modules.economy.shop import (
     SECTION_GAMES,
     SECTION_SERVER,
     SECTION_SPECIALS,
+    build_panel_embed,
     build_shop_embed,
     build_store_embed,
     page_note,
@@ -1286,6 +1288,58 @@ class _RefundConfirmView(_MemberScopedView):
         )
 
 
+#: What each section's action picker invites you to do. Section-specific
+#: because "Pick one…" over a shield and a raffle ticket says nothing.
+_SECTION_PLACEHOLDER = {
+    SECTION_COSMETICS: "Rent or customize a perk…",
+    SECTION_SERVER: "Lease a server feature…",
+    SECTION_GAMES: "Buy a shield or raffle tickets…",
+}
+
+
+class _ActionSelect(discord.ui.Select):
+    """One section's products as a picker instead of a row of buttons.
+
+    Built from the very buttons it replaces, so the shop has one place that
+    decides what a section offers and what each entry does — the select is a
+    rendering choice made at the end, not a second copy of the rules.
+
+    Discord cannot grey out a single option, so a row the shop lists but
+    cannot sell right now (a gated perk, a held shield, an already-leased
+    voice room) keeps its place and explains itself when chosen. Dropping
+    those rows instead would make the picker disagree with the table directly
+    above it, which reads as the control being broken rather than the product
+    being unavailable.
+    """
+
+    def __init__(
+        self,
+        actions: list[tuple[discord.ui.Button, str, str]],
+        placeholder: str,
+    ) -> None:
+        self._entries = {str(b.custom_id): (b, reason) for b, _, reason in actions}
+        super().__init__(
+            placeholder=placeholder,
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=str(button.label)[:100],
+                    description=(desc or None) and desc[:100],
+                    value=str(button.custom_id),
+                )
+                for button, desc, _reason in actions
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        button, reason = self._entries[self.values[0]]
+        if reason:
+            await interaction.response.send_message(reason, ephemeral=True)
+            return
+        await button.callback(interaction)
+
+
 class _ShopView(_MemberScopedView):
     """The controls for one non-Specials section of the shop.
 
@@ -1324,6 +1378,11 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
+        # (button, one-line description, refusal-if-unavailable). Collected
+        # rather than added, because whether this section renders as a picker
+        # or as a single button is a decision that needs the whole list.
+        actions: list[tuple[discord.ui.Button, str, str]] = []
+        gate = "❌ This needs a server feature that isn't enabled here."
         for perk in SELF_PERKS if section == SECTION_COSMETICS else ():
             if not perk_on_sale(settings, perk) and perk not in owned:
                 # Switched off on the Shop & Perks page: no row in the embed,
@@ -1350,7 +1409,9 @@ class _ShopView(_MemberScopedView):
                     custom_id="econ_shop_colors",
                 )
                 button.callback = self._make_colors_callback()
-                self.add_item(button)
+                actions.append((
+                    button, PERK_BLURBS[perk], gate if perk in gated else "",
+                ))
                 continue
             if perk == "role_icon" and has_catalog:
                 # A curated catalog replaces the rent/customise buttons with a
@@ -1373,7 +1434,9 @@ class _ShopView(_MemberScopedView):
                     custom_id="econ_shop_icons",
                 )
                 button.callback = self._make_icons_callback()
-                self.add_item(button)
+                actions.append((
+                    button, PERK_BLURBS[perk], gate if perk in gated else "",
+                ))
                 continue
             if perk in owned and perk in NO_CONFIG_PERKS:
                 # Nothing to customise (a fixed preset) — show it as active,
@@ -1385,6 +1448,12 @@ class _ShopView(_MemberScopedView):
                     disabled=True,
                     custom_id=f"econ_shop_active:{perk}",
                 )
+                actions.append((
+                    button, PERK_BLURBS[perk],
+                    f"✅ **{PERK_LABELS[perk]}** is already active — there's "
+                    "nothing to set up.",
+                ))
+                continue
             elif perk in owned:
                 button = discord.ui.Button(
                     label=_CUSTOMISE_LABELS[perk],
@@ -1403,7 +1472,7 @@ class _ShopView(_MemberScopedView):
                     custom_id=f"econ_shop_rent:{perk}",
                 )
                 button.callback = self._make_rent_callback(perk)
-            self.add_item(button)
+            actions.append((button, PERK_BLURBS[perk], gate if perk in gated else ""))
         if section == SECTION_SERVER and (
             settings.shop_voice_style_enabled or "voice_style" in owned
         ):
@@ -1414,6 +1483,10 @@ class _ShopView(_MemberScopedView):
                     disabled=True,  # customization lives on the VM panel
                     custom_id="econ_shop_rent:voice_style",
                 )
+                held_voice = (
+                    "🎙️ You already lease this — rename and resize your voice "
+                    "channel from the room's own panel."
+                )
             else:
                 button = discord.ui.Button(
                     label="🎙️ Voice",
@@ -1421,7 +1494,8 @@ class _ShopView(_MemberScopedView):
                     custom_id="econ_shop_rent:voice_style",
                 )
                 button.callback = self._make_rent_callback("voice_style")
-            self.add_item(button)
+                held_voice = ""
+            actions.append((button, PERK_BLURBS["voice_style"], held_voice))
         if section == SECTION_GAMES and raffle_svc.raffle_enabled(settings):
             button = discord.ui.Button(
                 label="🎟️ Tickets",
@@ -1429,7 +1503,11 @@ class _ShopView(_MemberScopedView):
                 custom_id="econ_shop_raffle",
             )
             button.callback = self._make_raffle_callback()
-            self.add_item(button)
+            actions.append((
+                button,
+                f"up to {settings.raffle_max_tickets} a week, drawn at the roll",
+                "",
+            ))
         if section == SECTION_GAMES and settings.shop_streak_shield_enabled:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
@@ -1445,7 +1523,21 @@ class _ShopView(_MemberScopedView):
                 custom_id="econ_shop_shield",
             )
             button.callback = self._make_shield_callback()
-            self.add_item(button)
+            actions.append((
+                button, "saves a login streak from one missed day",
+                "🛡️ You're already holding one — it burns by itself when a "
+                "missed day would break your streak." if held else "",
+            ))
+        # A picker only earns its row when there is a choice to make: one
+        # product stays the button it was, since a one-option dropdown is two
+        # taps to do what one would.
+        if len(actions) > 1:
+            self.add_item(_ActionSelect(
+                actions, _SECTION_PLACEHOLDER.get(section, "Pick one…"),
+            ))
+        else:
+            for button, _desc, _reason in actions:
+                self.add_item(button)
         if self.refundable or self.shield_price > 0:
             # One entry point for everything cancellable, rather than a
             # second button per owned row — the picker underneath handles
@@ -5105,55 +5197,37 @@ class EconomyCog(commands.Cog):
         )
 
     async def _build_shop_panel_embed(
-        self,
-        guild: discord.Guild,
-        settings: EconSettings,
-        icon_range: tuple[int, int, int] | None,
-        color_range: tuple[int, int, int] | None = None,
-        items: list[ItemView] | None = None,
+        self, guild: discord.Guild, settings: EconSettings,
+        items: list[ItemView],
     ) -> discord.Embed:
-        """The channel shop panel's embed with current gating, catalog prices and
+        """The channel panel's embed: which sections this guild has, and the
         accent. Every route to the panel — ``/bank post-shop`` and the sticky
         repost alike — arrives through ``_build_shop_panel``, so the two can't
         render different panels.
 
-        ``icon_range``, ``color_range`` and ``items`` are read by the caller on
-        the connection it already holds; ``None`` means this guild has no icon
-        catalog / no colour palette. ``items`` is read with no ``user_id``: the
-        panel is member-agnostic, so the store lists but nothing is ticked as
-        owned. It is listed here at all so the panel's Server Store button
-        opens something the panel already showed.
+        No prices and no rows: the panel is a poster, and the listing one tap
+        away is both fuller and correct for the viewer. ``items`` is read with
+        no ``user_id`` because the panel is member-agnostic — it only decides
+        whether the Specials section is named at all.
         """
-        gated = await self._gated_perks(guild.id)
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
-        return build_shop_embed(
-            settings, gated, accent, panel=True, icon_catalog=icon_range,
-            color_catalog=color_range, items=items,
-        )
+        return build_panel_embed(settings, accent, items=items)
+
 
     async def _build_shop_panel(self, guild: discord.Guild) -> PanelContent:
-        def _read() -> tuple[
-            EconSettings,
-            tuple[int, int, int] | None,
-            tuple[int, int, int] | None,
-            list[ItemView],
-        ]:
-            # One connection for all four, like _build_economy_panel — this
-            # runs on every debounced sticky repost.
+        def _read() -> tuple[EconSettings, list[ItemView]]:
+            # One connection for both, like _build_economy_panel — this runs on
+            # every debounced sticky repost. The catalog price ranges went with
+            # the prices: a poster that names its sections needs neither.
             with self.bot.ctx.open_db() as conn:
-                settings = load_econ_settings(conn, guild.id)
                 return (
-                    settings,
-                    catalog_price_range(conn, guild.id),
-                    color_price_range(conn, guild.id, settings.price_role_preset),
+                    load_econ_settings(conn, guild.id),
                     shop_items_svc.shop_items_for(conn, guild.id, now=time.time()),
                 )
 
-        settings, icon_range, color_range, items = await asyncio.to_thread(_read)
+        settings, items = await asyncio.to_thread(_read)
         return PanelContent(
-            embed=await self._build_shop_panel_embed(
-                guild, settings, icon_range, color_range, items
-            ),
+            embed=await self._build_shop_panel_embed(guild, settings, items),
             view=ShopPanelView(),
         )
 

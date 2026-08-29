@@ -1511,9 +1511,29 @@ size, so there is no overflow shape. `page_note` numbers across the whole book;
 it does not repeat the section name, which the embed title and the caption both
 already carry.
 
-`build_shop_embed(section=...)` renders one section's fields; `section=None` is
-the channel panel, one poster carrying everything. `_ShopView(section=...)`
-carries only that section's controls — a page holding buttons for rows its
+`build_shop_embed(section=...)` renders one section's fields. The **channel
+panel is no longer one of them**: `build_panel_embed` (2026-08-29) names the
+guild's sections and prices nothing. It used to be the whole shop — every perk
+row with its price, the store's first eight items, the shield, the raffle —
+which was a wall of numbers in a busy channel, went stale against the shop it
+advertised, and duplicated a listing that is one tap away *and correct for the
+viewer* (their balance, their ✅ marks, their gated rows). It reads the same
+`shop_sections` the shop walks, so it cannot advertise a shelf the shop lacks,
+and the catalog price ranges left `_build_shop_panel` with it.
+
+Every heading gets a blank line above it via `apply_section_spacing`
+(`core/branding`, `docs/embed_style_guide.md §Section spacing`). The tiers used
+to append their own spacer, which left One-shot, Weekly Raffle, Specials and
+For a Friend hugging whatever was above them.
+
+`_ShopView(section=...)` carries only that section's controls, and renders them
+as a **single `_ActionSelect`** where the section has more than one product —
+scoped to the section, built from the very buttons it replaces, so there is one
+place deciding what a section offers. A lone product keeps its button, since a
+one-option dropdown is two taps to do what one would. Discord cannot grey out a
+single option, so an unavailable row (a gated perk, a held shield, an
+already-leased voice room) keeps its place and explains itself when chosen —
+dropping it would make the picker disagree with the table above it — a page holding buttons for rows its
 embed does not show is how a member taps 🛡️ Shield on the cosmetics page and
 then works out what they bought. **↩️ Cancel & Refund is the exception and
 rides every section**: it ends any rental, so filing it under one would hide it

@@ -575,3 +575,43 @@ def test_page_captions_name_each_page_by_its_section(db):
     assert page_captions(shop_pages(_settings(db), items=_items(7)), 7)[0] == (
         "🎁 Specials"
     )
+
+
+def test_every_heading_gets_a_blank_line_above_it(db):
+    """The hand-rolled spacer only ever reached the perk tiers.
+
+    So One-shot, Weekly Raffle, Specials and For a Friend sat flush against
+    whatever was above them, and the sections read as one run of text. This is
+    the house helper's job (docs/embed_style_guide.md §Section spacing): every
+    field but the last carries the trailing spacer, and the last must not — a
+    dangling gap above the footer is the bug the helper exists to avoid.
+    """
+    from bot_modules.core.branding import SECTION_SPACER
+
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True, items=_items(2))
+    assert len(embed.fields) > 2
+    for f in embed.fields[:-1]:
+        assert f.value.endswith(SECTION_SPACER), f.name
+    assert not embed.fields[-1].value.endswith(SECTION_SPACER)
+
+
+def test_the_panel_embed_prices_nothing(db):
+    """A poster names what is inside; the shop prices it, per viewer."""
+    from bot_modules.economy.shop import build_panel_embed
+
+    _enable(db, price_role_name=35, price_streak_shield=30)
+    embed = build_panel_embed(_settings(db), None, items=_items(3))
+    blob = embed.description + " ".join(f.value for f in embed.fields)
+    assert "35" not in blob and "30" not in blob
+    assert "🎁 Specials" in blob and "🎨 Role cosmetics" in blob
+
+
+def test_the_panel_only_names_shelves_the_shop_has(db):
+    """It reads the same `shop_sections` the shop walks, so it cannot lie."""
+    from bot_modules.economy.shop import build_panel_embed
+
+    _enable(db, shop_voice_style_enabled=False)
+    blob = " ".join(f.value for f in build_panel_embed(_settings(db), None).fields)
+    assert "🏠 Server features" not in blob
+    assert "🎁 Specials" not in blob  # nothing stocked

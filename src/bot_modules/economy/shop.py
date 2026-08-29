@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
 from bot_modules.economy.perks import (
     PERK_BLURBS,
     PERK_SHORT,
@@ -349,6 +350,51 @@ def build_store_embed(
     return embed
 
 
+def build_panel_embed(
+    settings: EconSettings,
+    accent: discord.Color | None,
+    *,
+    items: list[ItemView] | None = None,
+    owned_placeholder: bool = False,
+) -> discord.Embed:
+    """The channel panel: an invitation, not a catalogue.
+
+    It used to be the whole shop — every perk row with its price, the store's
+    first eight items, the shield, the raffle — which made a wall of numbers
+    nobody reads in a busy channel, went stale against the shop it advertises,
+    and duplicated a listing that is one tap away and *correct for the viewer*
+    (their balance, their ✅ marks, their gated rows). A poster names what is
+    inside and points at the door.
+
+    So it lists the guild's **sections** and nothing priced. The section list
+    is the same `shop_sections` the shop itself walks, so the panel can never
+    advertise a shelf the shop does not have.
+    """
+    sections = shop_sections(settings, items=items)
+    embed = discord.Embed(
+        title="🛍️ Perk Shop",
+        description=(
+            "Rent a personal-role perk, buy what the server sells, or cancel "
+            "something you're paying for.\n"
+            "Tap **Open Shop** — it's private to you, and shows your balance "
+            "and what you already have.\n​"
+        ),
+        color=accent,
+    )
+    if settings.currency_icon_url:
+        embed.set_thumbnail(url=settings.currency_icon_url)
+    if sections:
+        embed.add_field(
+            name="Inside",
+            value="\n".join(SECTION_CAPTIONS[s] for s in sections),
+            inline=False,
+        )
+    embed.set_footer(
+        text="Prices and what you already own are shown inside the shop."
+    )
+    return embed
+
+
 def build_shop_embed(
     settings: EconSettings,
     gated: set[str],
@@ -515,13 +561,13 @@ def build_shop_embed(
         )
         embed.add_field(
             name=tier_name,
-            value="\n".join(_line(p) for p in ordered) + "\n​",
+            value="\n".join(_line(p) for p in ordered),
             inline=False,
         )
     if _want(SECTION_SERVER) and section is not None and voice:
         embed.add_field(
             name="Voice",
-            value="\n".join(_line(p) for p in voice) + "\n​",
+            value="\n".join(_line(p) for p in voice),
             inline=False,
         )
     if _want(SECTION_GAMES) and settings.shop_streak_shield_enabled:
@@ -565,6 +611,11 @@ def build_shop_embed(
             inline=False,
         )
 
+    # Every heading gets a blank line above it. The tiers used to append their
+    # own spacer, which left One-shot, Weekly Raffle, Specials and For a Friend
+    # hugging whatever was above them; this is the house helper for it
+    # (docs/embed_style_guide.md §Section spacing).
+    apply_section_spacing(embed)
     if section == SECTION_GAMES:
         # Neither of these renews, so the weekly-billing footer would be a lie
         # standing under a shield and a raffle ticket.

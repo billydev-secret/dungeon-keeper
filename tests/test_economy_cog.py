@@ -996,6 +996,48 @@ async def _shop(cog, interaction) -> None:
     await cog.bank_shop.callback(cog, interaction)
 
 
+def _offers(view):
+    """What a section offers, whatever shape it rendered as.
+
+    Two or more products become one ``_ActionSelect``; a lone one stays a
+    button. Tests care about *what is on offer and whether it can be taken*,
+    not which of the two shapes carried it — so this flattens both to
+    ``{id: (label, refusal-or-"")}``.
+    """
+    from bot_modules.cogs.economy_cog import _ActionSelect
+
+    out = {}
+    for c in view.children:
+        if isinstance(c, _ActionSelect):
+            for value, (button, reason) in c._entries.items():
+                out[value] = (str(button.label), reason)
+        elif isinstance(c, discord.ui.Button) and getattr(c, "row", None) != 4:
+            out[str(c.custom_id)] = (str(c.label), "")
+    return out
+
+
+def _entry(view, action_id):
+    """The button behind one offer, whether it rendered as one or as an option."""
+    from bot_modules.cogs.economy_cog import _ActionSelect
+
+    for c in view.children:
+        if isinstance(c, _ActionSelect) and action_id in c._entries:
+            return c._entries[action_id][0]
+        if isinstance(c, discord.ui.Button) and str(c.custom_id) == action_id:
+            return c
+    raise AssertionError(f"{action_id} is not on offer here")
+
+
+def _unavailable(view):
+    """The ids this section lists but cannot sell right now.
+
+    Discord has no per-option disable, so an unavailable row keeps its place
+    and explains itself when chosen — dropping it would make the picker
+    disagree with the table above it.
+    """
+    return {k for k, (_label, reason) in _offers(view).items() if reason}
+
+
 def _ShopView(*args, **kwargs):
     from bot_modules.cogs.economy_cog import _ShopView as view_cls
 
@@ -1021,15 +1063,9 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     view = kwargs["view"]
     assert isinstance(view, _ShopView)
     # Gradient + holographic + icon buttons disabled; color + name enabled.
-    buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
-    disabled = {
-        # The nav arrows and the "you are here" caption carry auto-generated
-        # ids, so restrict this to the perk buttons it is actually about.
-        str(b.custom_id).split(":")[1]
-        for b in buttons
-        if b.disabled and str(b.custom_id).startswith("econ_shop_")
+    assert {i.split(":")[1] for i in _unavailable(view)} == {
+        "role_gradient", "role_holographic", "role_icon",
     }
-    assert disabled == {"role_gradient", "role_holographic", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
     assert "needs a server feature" in blob
 
@@ -1044,11 +1080,7 @@ async def test_shop_buttons_carry_no_price(ctx, db):
     await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
-    labels = [
-        str(b.label)
-        for b in kwargs["view"].children
-        if isinstance(b, discord.ui.Button)
-    ]
+    labels = [label for label, _ in _offers(kwargs["view"]).values()]
     assert not any("35" in label for label in labels)
     assert "✨ Name" in labels
 
@@ -1087,8 +1119,7 @@ async def test_shop_shows_customise_for_rented_perks(ctx, db):
     await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
-    buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
-    ids = {str(b.custom_id) for b in buttons}
+    ids = set(_offers(kwargs["view"]))
     assert "econ_shop_cfg:role_color" in ids
     assert "econ_shop_rent:role_color" not in ids
     # The other perks still offer Rent.
@@ -1111,11 +1142,10 @@ async def test_shop_rented_holographic_shows_active_not_customise(ctx, db):
     await _open_shop(cog, interaction)
 
     kwargs = interaction.response.send_message.await_args.kwargs
-    buttons = [b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)]
-    by_id = {str(b.custom_id): b for b in buttons}
+    by_id = _offers(kwargs["view"])
     # Shown as active + disabled — no customise modal, no rent button.
     assert "econ_shop_active:role_holographic" in by_id
-    assert by_id["econ_shop_active:role_holographic"].disabled is True
+    assert by_id["econ_shop_active:role_holographic"][1]  # refuses if chosen
     assert "econ_shop_cfg:role_holographic" not in by_id
     assert "econ_shop_rent:role_holographic" not in by_id
 
@@ -1130,10 +1160,7 @@ async def test_shop_customise_button_opens_modal(ctx, db):
     await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
-    button = next(
-        b for b in view.children
-        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_cfg:role_color"
-    )
+    button = _entry(view, "econ_shop_cfg:role_color")
     press = _interaction(_member(member_id=500))
     await button.callback(press)
 
@@ -1154,7 +1181,7 @@ async def test_shop_gift_recipient_gets_color_customise(ctx, db):
     await _open_shop(cog, interaction)
 
     view = interaction.response.send_message.await_args.kwargs["view"]
-    ids = {str(b.custom_id) for b in view.children if isinstance(b, discord.ui.Button)}
+    ids = set(_offers(view))
     # The entitlement is beneficiary-based, so the row customises, not rents.
     assert "econ_shop_cfg:role_color" in ids
     assert "econ_shop_rent:role_color" not in ids
@@ -1386,10 +1413,7 @@ async def test_panel_served_menu_rechecks_feature_gates(ctx, db):
     kwargs = interaction.response.send_message.await_args.kwargs
     blob = " ".join(f.value for f in kwargs["embed"].fields)
     assert "needs a server feature" in blob
-    buttons = [
-        b for b in kwargs["view"].children if isinstance(b, discord.ui.Button)
-    ]
-    disabled = {str(b.custom_id) for b in buttons if b.disabled}
+    disabled = _unavailable(kwargs["view"])
     assert "econ_shop_rent:role_gradient" in disabled
     assert _live_rentals(db) == []
 
@@ -4250,7 +4274,6 @@ async def test_a_guild_with_no_store_never_sees_a_specials_page(ctx, db):
     assert isinstance(view, _ShopView)
     # Opens on the first section it does have, not on a blank shelf.
     assert _shop_embed(interaction).title == "🎨 Role cosmetics"
-    assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
     assert "🎁 Specials" not in [label for label, _ in _nav(view)]
 
 
@@ -4563,11 +4586,7 @@ async def test_each_section_carries_only_its_own_controls(ctx, db):
             cog, _settings(db), _guild_roles(), 500, set(), set(),
             has_palette=True, shield_price=250, section=section,
         )
-        return {
-            b.custom_id for b in view.children
-            if isinstance(b, discord.ui.Button)
-            and str(b.custom_id).startswith("econ_shop_")
-        }
+        return {i for i in _offers(view) if i.startswith("econ_shop_")}
 
     cosmetics, server, games = map(
         _ids, (SECTION_COSMETICS, SECTION_SERVER, SECTION_GAMES)
@@ -4600,6 +4619,105 @@ async def test_cancel_and_refund_rides_every_section(ctx, db):
             cog, _settings(db), _guild_roles(), 500, set(), set(),
             has_palette=True, shield_price=250, section=section,
         )
-        assert "econ_shop_refund" in {
-            b.custom_id for b in view.children if isinstance(b, discord.ui.Button)
-        }, section
+        assert "econ_shop_refund" in _offers(view), section
+
+
+@pytest.mark.asyncio
+async def test_a_section_with_several_products_offers_a_picker(ctx, db):
+    """Billy's ask: one dropdown scoped to the section, not a row of buttons.
+
+    Cancel & Refund stays a button — it is not a product, and it is the one
+    destructive control here, so burying it in a list of things to buy is how
+    somebody cancels a rental they meant to keep.
+    """
+    from bot_modules.cogs.economy_cog import _ActionSelect
+
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+
+    view = _shop_view(interaction)
+    picker = next(c for c in view.children if isinstance(c, _ActionSelect))
+    assert picker.placeholder == "Rent or customize a perk…"
+    assert {o.value for o in picker.options} >= {
+        "econ_shop_rent:role_color", "econ_shop_rent:role_name",
+    }
+    # Every option says what the thing is, not just what it's called.
+    assert all(o.description for o in picker.options)
+
+
+@pytest.mark.asyncio
+async def test_a_lone_product_stays_a_button(ctx, db):
+    """A one-option dropdown is two taps to do what one would."""
+    from bot_modules.cogs.economy_cog import _ActionSelect
+    from bot_modules.economy.shop import SECTION_SERVER
+
+    _enable(db, shop_voice_style_enabled=True)
+    view = _ShopView(
+        cog=_make_cog(ctx), settings=_settings(db), guild=_guild_roles(),
+        user_id=500, gated=set(), owned=set(), section=SECTION_SERVER,
+    )
+    assert not [c for c in view.children if isinstance(c, _ActionSelect)]
+    assert "econ_shop_rent:voice_style" in _offers(view)
+
+
+@pytest.mark.asyncio
+async def test_an_unavailable_row_is_listed_and_explains_itself(ctx, db):
+    """Discord can't grey out one option, so the refusal happens on choosing.
+
+    Dropping the row instead would make the picker disagree with the table
+    right above it, which reads as the control being broken rather than the
+    product being unavailable.
+    """
+    from bot_modules.cogs.economy_cog import _ActionSelect
+
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    async def _gate(bot, guild_id, perk):
+        return perk != "role_gradient"
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(side_effect=_gate),
+    ):
+        await _shop(cog, interaction)
+
+    picker = next(
+        c for c in _shop_view(interaction).children if isinstance(c, _ActionSelect)
+    )
+    # Still listed — the table above still shows the row.
+    assert "econ_shop_rent:role_gradient" in {o.value for o in picker.options}
+
+    chose = _interaction(_member(member_id=500))
+    picker._values = ["econ_shop_rent:role_gradient"]
+    await picker.callback(chose)
+    assert "server feature" in chose.response.send_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_the_channel_panel_carries_no_prices(ctx, db):
+    """It is a poster, not a catalogue.
+
+    The listing one tap away is fuller *and* correct for the viewer — their
+    balance, their ✅ marks, their gated rows — so duplicating a priced table
+    here only gave it something to go stale against.
+    """
+    _enable(db, price_role_name=35, price_streak_shield=30)
+    cog = _make_cog(ctx)
+
+    content = await cog._build_shop_panel(_guild_roles())
+
+    embed = content.embed
+    blob = embed.description + " ".join(f.value for f in embed.fields)
+    assert "35" not in blob and "30" not in blob
+    # It names its shelves instead, from the same list the shop itself walks.
+    assert "🎨 Role cosmetics" in blob
+    assert [b.custom_id for b in content.view.children] == ["econ_shop_open"]
