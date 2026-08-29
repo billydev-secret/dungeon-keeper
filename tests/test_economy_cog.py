@@ -2966,20 +2966,15 @@ async def test_shop_view_shield_button_disabled_while_held(ctx, db):
         cog, _settings(db), _guild_roles(), 500, set(), set(),
         section=SECTION_GAMES,
     )
-    button = next(
-        b for b in view.children
-        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_shield"
-    )
-    assert button.disabled is False
+    # On offer and takeable.
+    assert not _offers(view)["econ_shop_shield"][1]
     held = _ShopView(
         cog, _settings(db), _guild_roles(), 500, set(), set(), shields_held=1,
         section=SECTION_GAMES,
     )
-    button = next(
-        b for b in held.children
-        if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_shield"
-    )
-    assert button.disabled is True
+    # Still listed — the table above still shows the row — but it says why it
+    # can't be bought again rather than silently doing nothing.
+    assert "already holding one" in _offers(held)["econ_shop_shield"][1]
 
 
 @pytest.mark.asyncio
@@ -4541,8 +4536,14 @@ async def test_a_section_with_several_products_offers_a_picker(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_a_lone_product_stays_a_button(ctx, db):
-    """A one-option dropdown is two taps to do what one would."""
+async def test_even_a_lone_product_gets_a_picker(ctx, db):
+    """Every section wears the same control, whatever its guild sells.
+
+    A one-option dropdown costs a tap over a button, but which sections hold a
+    single product changes with a dashboard toggle — so letting the shape
+    follow the count would move the furniture under a member for reasons they
+    cannot see.
+    """
     from bot_modules.cogs.economy_cog import _ActionSelect
     from bot_modules.economy.shop import SECTION_SERVER
 
@@ -4551,8 +4552,8 @@ async def test_a_lone_product_stays_a_button(ctx, db):
         cog=_make_cog(ctx), settings=_settings(db), guild=_guild_roles(),
         user_id=500, gated=set(), owned=set(), section=SECTION_SERVER,
     )
-    assert not [c for c in view.children if isinstance(c, _ActionSelect)]
-    assert "econ_shop_rent:voice_style" in _offers(view)
+    picker = next(c for c in view.children if isinstance(c, _ActionSelect))
+    assert [o.value for o in picker.options] == ["econ_shop_rent:voice_style"]
 
 
 @pytest.mark.asyncio

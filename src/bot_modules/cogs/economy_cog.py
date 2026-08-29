@@ -1582,16 +1582,15 @@ class _ShopView(_MemberScopedView):
                 "🛡️ You're already holding one — it burns by itself when a "
                 "missed day would break your streak." if held else "",
             ))
-        # A picker only earns its row when there is a choice to make: one
-        # product stays the button it was, since a one-option dropdown is two
-        # taps to do what one would.
-        if len(actions) > 1:
+        # Always a picker, even for a single product. A one-option dropdown is
+        # one more tap than a button, but a section that looks structurally
+        # different because of how much its guild happens to sell teaches a
+        # member the shop is inconsistent — and which sections hold one thing
+        # changes with a dashboard toggle, so the shape would move under them.
+        if actions:
             self.add_item(_ActionSelect(
                 actions, _SECTION_PLACEHOLDER.get(section, "Pick one…"),
             ))
-        else:
-            for button, _desc, _reason in actions:
-                self.add_item(button)
         if self.refundable or self.shield_price > 0:
             # One entry point for everything cancellable, rather than a
             # second button per owned row — the picker underneath handles
