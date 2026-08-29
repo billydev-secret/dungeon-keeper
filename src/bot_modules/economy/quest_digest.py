@@ -57,6 +57,13 @@ _FALLBACK_BLURB: dict[str, str] = {
 
 _MOVER_MEDALS = ["🥇", "🥈", "🥉"]
 
+# A finished quest's bullet and blurb. The tick is deliberately NOT reused for
+# "ready to claim" (that line reads 🎁): one glyph meaning both "you did it" and
+# "you still have to press a button" is the kind of ambiguity that makes a
+# member skip a payout they earned.
+_DONE_BULLET = "✅"
+_DONE_BLURB = "_Done — nice work._"
+
 # A trailing zero-width line (U+200B renders as an empty line Discord won't
 # strip as trailing whitespace) appended to every field but the last. Quests
 # inside a section are already separated by a blank line ("\n\n"); this widens
@@ -102,9 +109,27 @@ def _fallback_text(q: dict) -> str:
 
 
 def quest_block(q: dict) -> str:
-    """The multi-line block for one open quest: title, meter/status, blurb."""
-    lines = [f"🔹 **{q['title']}**"]
+    """The multi-line block for one quest: title, meter/status, blurb.
+
+    A quest the member has already finished (``state == "done"``) renders as a
+    ticked-off line with a full bar, so the live-updating login card reads as a
+    checklist filling up rather than a list emptying out. Its blurb is replaced
+    by ``_DONE_BLURB``: the description is an instruction to go do the thing,
+    and a channel link inviting you to earn a quest you already earned is
+    actively misleading.
+    """
     state = q.get("state")
+    if state == "done":
+        lines = [f"{_DONE_BULLET} **{q['title']}**"]
+        # Clamp to target: progress can overshoot (the fire path pays on the
+        # crossing, it doesn't stop counting), and a bar reading 12 / 10 looks
+        # like a bug rather than an achievement.
+        target = int(q.get("progress_target") or 0)
+        if target > 0:
+            lines.append(bar_meter(target, target))
+        lines.append(_DONE_BLURB)
+        return "\n".join(lines)
+    lines = [f"🔹 **{q['title']}**"]
     if state == "community":
         lines.append(bar_meter(int(q.get("current", 0)), int(q.get("target", 0))))
     elif q.get("progress_target"):
@@ -112,7 +137,7 @@ def quest_block(q: dict) -> str:
             bar_meter(int(q["progress_current"]), int(q["progress_target"]))
         )
     elif state == "claimable":
-        lines.append("✅ Ready to claim!")
+        lines.append("🎁 Ready to claim!")
     elif state == "pending":
         lines.append("⏳ Awaiting sign-off")
     blurb = _blurb(q)
@@ -156,19 +181,31 @@ def _pack(heading: str, blocks: list[str]) -> list[tuple[str, str]]:
 
 
 def digest_sections(
-    quests_out: list[dict], gains: list[dict] | None = None
+    quests_out: list[dict],
+    gains: list[dict] | None = None,
+    *,
+    include_done: bool = False,
 ) -> list[tuple[str, str]]:
     """Embed fields for the login digest, in order.
 
     A "biggest movers yesterday" field leads (when there are movers), then the
-    member's open quests grouped by cadence — every open quest, no cap.
-    Returns ``[]`` when there is nothing to show, so a quiet guild's DM doesn't
-    grow empty fields.
+    member's quests grouped by cadence — every one, no cap. Returns ``[]`` when
+    there is nothing to show, so a quiet guild's DM doesn't grow empty fields.
+
+    ``include_done`` keeps finished quests on the card as ticked-off lines. The
+    login digest passes it because that card is edited in place all day: with
+    quests dropping out as they complete, the members who did the most would
+    watch their card shrink to a bare streak line, which reads as "you had no
+    quests" rather than "you cleared them". Quests stay in board order either
+    way, so finishing one ticks it in place instead of making the list
+    reshuffle under the reader.
     """
     sections: list[tuple[str, str]] = []
     if gains:
         sections.append((MOVERS_HEADING, _movers_value(gains)))
-    open_quests = [q for q in quests_out if q.get("state") != "done"]
+    open_quests = [
+        q for q in quests_out if include_done or q.get("state") != "done"
+    ]
     by_type: dict[str, list[dict]] = {}
     for q in open_quests:
         by_type.setdefault(str(q.get("qtype") or ""), []).append(q)

@@ -95,6 +95,17 @@ function render(container, cfg, channels, roles, members) {
             send no recurring DMs.</div>
         </div>
         <div class="field">
+          <label style="display:flex; gap:6px; align-items:center;">
+            <input type="checkbox" name="login_card_live_updates"${cfg.login_card_live_updates ? " checked" : ""} />
+            Keep the daily streak DM up to date
+          </label>
+          <div class="field-hint">When checked, the morning streak DM refreshes itself
+            through the day so its quest bars stay current, and ticks quests off as
+            they're finished. It updates quietly — nobody is pinged again and no second
+            message is sent — and it stops once a member has cleared their quests.
+            Unchecked, the DM stays exactly as it was written that morning.</div>
+        </div>
+        <div class="field">
           <label>Community Weekly Host</label>
           <span data-picker="community_host_user_id"></span>
           <div class="field-hint">Community-weekly beat sheets (kickoff, tier
@@ -427,6 +438,7 @@ function render(container, cfg, channels, roles, members) {
     const payload = {
       enabled: form.querySelector("[name=enabled]").checked,
       transfers_enabled: form.querySelector("[name=transfers_enabled]").checked,
+      login_card_live_updates: form.querySelector("[name=login_card_live_updates]").checked,
       flash_theme_enabled: form.querySelector("[name=flash_theme_enabled]").checked,
       // All snowflakes go as strings: parseInt on a 19-digit id silently
       // rounds it (parseInt("1526051848518373608") === 1526051848518373600),

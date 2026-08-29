@@ -109,6 +109,7 @@ from bot_modules.services import economy_pin_service as pin_svc
 from bot_modules.services import economy_theme_service as theme_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
 from bot_modules.services import event_echo_service as echo_svc
+from bot_modules.services.login_card_service import refresh_guild_cards
 from bot_modules.services.economy_qotd_sponsor_service import (
     expire_stale_submissions,
 )
@@ -2328,6 +2329,20 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
         except Exception:
             log.exception(
                 "Economy loop: leaderboard refresh failed for guild %s.", guild.id
+            )
+
+        # Keep this morning's login digest DMs current. Silent in-place edits,
+        # skipped entirely where nothing the member can see has changed, and
+        # stopped once they've cleared their personal quests — so a quiet guild
+        # costs no requests at all. Last in the tick because it is the only
+        # pass here that nothing else depends on.
+        try:
+            await refresh_guild_cards(bot, db_path, guild.id, now_ts)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception(
+                "Economy loop: login card refresh failed for guild %s.", guild.id
             )
 
 

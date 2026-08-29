@@ -27,6 +27,7 @@ from bot_modules.services.economy_service import (
     get_notify_muted,
     load_econ_settings,
     member_is_booster,
+    deliver_econ_dm,
     notify_member,
     qotd_for_message,
     get_streak_shield_price,
@@ -1121,6 +1122,93 @@ async def test_notify_member_require_role_drops_all_when_no_role_configured(db):
     assert delivered is True
     member.send.assert_not_called()
     channel.send.assert_not_called()
+
+
+# ── deliver_econ_dm: the surface, not just a bool ─────────────────────
+#
+# notify_member answers "was this handled", which every caller but one wants.
+# The login digest edits its message in place all day, so it needs the Message
+# back AND proof the message is a DM: a muted member, a non-opted-in member and
+# a closed-DM member all count as handled with nothing sent, and the public
+# bank-channel fallback is a different embed that must never be edited as if it
+# were the private one.
+
+
+async def test_deliver_econ_dm_returns_the_sent_dm(db):
+    member = _fake_member()
+    sent = MagicMock(spec=discord.Message)
+    member.send.return_value = sent
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    result = await deliver_econ_dm(bot, db, GUILD, USER, content="hi")
+    assert result.surface == "dm"
+    assert result.message is sent
+    assert result.delivered is True
+
+
+@pytest.mark.parametrize(
+    "setup, kwargs",
+    [
+        pytest.param("muted", {}, id="muted-member"),
+        pytest.param("no_role", {"require_game_role": True}, id="not-opted-in"),
+        pytest.param(
+            "closed_dms", {"public_fallback": False}, id="closed-dms-no-fallback"
+        ),
+    ],
+)
+async def test_deliver_econ_dm_drops_carry_no_message(db, setup, kwargs):
+    """Every "handled, but nothing was sent" path must be distinguishable.
+
+    This is the trap: all three of these returned True from notify_member, so
+    an updater trusting the bool would chase a message that never existed.
+    """
+    member = _fake_member()
+    member.send.return_value = MagicMock(spec=discord.Message)
+    if setup == "muted":
+        with open_db(db) as conn:
+            set_notify_muted(conn, GUILD, USER, True)
+    elif setup == "no_role":
+        with open_db(db) as conn:
+            save_econ_settings(conn, GUILD, {"game_role_id": 777})
+    elif setup == "closed_dms":
+        member.send.side_effect = _forbidden()
+        with open_db(db) as conn:
+            save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    result = await deliver_econ_dm(bot, db, GUILD, USER, content="hi", **kwargs)
+    assert result.surface == "dropped"
+    assert result.message is None
+    # Still "handled" — the legacy bool is unchanged for all 20-odd callers.
+    assert result.delivered is True
+
+
+async def test_deliver_econ_dm_marks_the_public_fallback_as_bank(db):
+    """The bank-channel copy is public and deliberately a different embed.
+
+    Tagging it "bank" is what stops a caller storing it as if it were the
+    private DM and later editing the wellness section into a public channel.
+    """
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {"bank_channel_id": 777})
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    channel = MagicMock(spec=discord.TextChannel)
+    posted = MagicMock(spec=discord.Message)
+    channel.send.return_value = posted
+    bot = _fake_bot(guild=_fake_guild(member=member, channel=channel))
+    result = await deliver_econ_dm(bot, db, GUILD, USER, content="hi")
+    assert result.surface == "bank"
+    assert result.message is posted
+    assert result.delivered is True
+
+
+async def test_deliver_econ_dm_failure_is_not_delivered(db):
+    member = _fake_member()
+    member.send.side_effect = _forbidden()
+    bot = _fake_bot(guild=_fake_guild(member=member))
+    result = await deliver_econ_dm(bot, db, GUILD, USER, content="hi")
+    assert result.surface == "failed"
+    assert result.message is None
+    assert result.delivered is False
 
 
 # ── transfers ─────────────────────────────────────────────────────────

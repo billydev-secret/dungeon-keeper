@@ -94,6 +94,7 @@ class EconomyConfigUpdate(BaseModel):
     currency_icon_url: str | None = Field(default=None, max_length=512)
     wallet_name: str | None = Field(default=None, max_length=32)
     transfers_enabled: bool | None = None
+    login_card_live_updates: bool | None = None
     booster_multiplier: float | None = Field(default=None, ge=1.0)
     # One rate over every earned faucet; 100 = ship rate. Capped at 500
     # rather than left open — a fat-fingered 10000 would mint a year of
