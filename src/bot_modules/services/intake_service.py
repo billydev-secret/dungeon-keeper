@@ -20,12 +20,18 @@ and running ``/grant`` exactly as before, and the card watches:
   that mentions the newcomer — any channel. Unticked steps are stamped
   *skipped*, never blocking.
 
+A card also **completes itself the moment its last step ticks** (see
+:func:`autocomplete_if_finished`): a fully ticked checklist is a finished
+intake, and waiting for the code to be posted is what left every finished
+card sitting in the queue forever. The code still closes a *part*-done card,
+which is the only thing it is now needed for.
+
 "Mentions the newcomer" includes **replying** to one of their messages: the
 reply's target author is folded into the mention set at the cog boundary, so
 a canned reply works without hand-editing an @ into the text.
 
-Cards close only on completion, Dismiss, or the member leaving / being
-banned — never by timeout. A background loop nudges a stale card once.
+Cards close only on completion (the code, or the last step ticking),
+Dismiss, or the member leaving / being banned — never by timeout. A background loop nudges a stale card once.
 
 This module owns the durable ledger (``intake_cards`` +
 ``intake_card_steps``, migration 115), config parsing, and the pure gating
@@ -544,6 +550,61 @@ def complete_card(
     )
     resolve_card(conn, card_id, completed_by, at, RESOLUTION_COMPLETED)
     return card, skipped
+
+
+def finished_open_cards(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[sqlite3.Row]:
+    """Open cards whose every step is already ticked — done, still queued.
+
+    The backlog counterpart to :func:`autocomplete_if_finished`: cards that
+    finished before auto-completion existed (or while the bot was down) never
+    get a tick to close them, so the nudge loop sweeps them instead.
+    """
+    return conn.execute(
+        "SELECT * FROM intake_cards c WHERE c.guild_id = ? AND c.resolved_at IS NULL "
+        "AND EXISTS (SELECT 1 FROM intake_card_steps s WHERE s.card_id = c.id) "
+        "AND NOT EXISTS (SELECT 1 FROM intake_card_steps s "
+        "WHERE s.card_id = c.id AND s.done_at IS NULL) "
+        "ORDER BY c.created_at",
+        (guild_id,),
+    ).fetchall()
+
+
+def autocomplete_if_finished(
+    conn: sqlite3.Connection, card_id: int, *, actor_id: int = AUTO_ACTOR
+) -> tuple[sqlite3.Row, int] | None:
+    """Close a card the moment its last step ticks; ``None`` if it isn't done.
+
+    Ticking every step *is* finishing the intake, so the card closes itself
+    rather than waiting for someone to post the completion code — which is
+    what left every finished card sitting in the queue, and both
+    completion-keyed report panels permanently empty.
+
+    Closes at the **last step's own tick time**, not "now": for a live tick
+    those are the same instant, and for a card the sweep picks up later it
+    keeps time-to-complete honest instead of charging it the backlog's age.
+
+    The welcomer of record is ``actor_id`` when a person did the final tick,
+    otherwise the last human to tick anything on the card — an auto step
+    (``AUTO_ACTOR``) landing last must not credit the closure to nobody and
+    drop the card out of the per-welcomer counts. Returns the pre-close card
+    row plus that welcomer id (0 when no human ever ticked).
+    """
+    card = get_card(conn, card_id)
+    if card is None or card["resolved_at"] is not None:
+        return None
+    steps = steps_for(conn, card_id)
+    if not steps or any(s["done_at"] is None for s in steps):
+        return None
+    finished_at = max(float(s["done_at"]) for s in steps)
+    welcomer = actor_id if actor_id != AUTO_ACTOR else 0
+    if not welcomer:
+        humans = [s for s in steps if (s["done_by"] or 0) > 0]
+        if humans:
+            welcomer = int(max(humans, key=lambda s: float(s["done_at"]))["done_by"])
+    resolve_card(conn, card_id, welcomer, finished_at, RESOLUTION_COMPLETED)
+    return card, welcomer
 
 
 ACTION_GREET = "greet"

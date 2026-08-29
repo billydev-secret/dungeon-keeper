@@ -471,6 +471,151 @@ def test_complete_stamps_skips_and_records_poster(db_path):
         assert svc.count_progress(svc.steps_for(conn, cid)) == (1, 4)
 
 
+def _tick_all(conn, cid, *, at=200.0, actor=GREETER, skip=()):
+    """Tick every step on a card; returns the keys ticked."""
+    keys = []
+    for step in svc.steps_for(conn, cid):
+        key = str(step["step_key"])
+        if key in skip:
+            continue
+        svc.set_step_state(conn, cid, key, done=True, actor_id=actor, at=at)
+        keys.append(key)
+    return keys
+
+
+# ── auto-completion (a fully ticked checklist closes itself) ──────────
+
+
+def test_last_tick_closes_the_card(db_path):
+    """The bug: a card with every box ticked used to sit open forever.
+
+    Only a posted completion code closed a card, so finished intakes stayed
+    in the queue and the completion-keyed report panels never had a row.
+    """
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, cid, at=250.0, skip=("nsfw_role",))
+        # Still one box short — nothing closes.
+        assert svc.autocomplete_if_finished(conn, cid, actor_id=GREETER) is None
+        assert svc.get_card(conn, cid)["resolved_at"] is None
+
+        svc.set_step_state(
+            conn, cid, "nsfw_role", done=True, actor_id=GREETER, at=400.0
+        )
+        result = svc.autocomplete_if_finished(conn, cid, actor_id=GREETER)
+        assert result is not None
+        card, welcomer = result
+        assert card["id"] == cid
+        assert welcomer == GREETER
+        closed = svc.get_card(conn, cid)
+        assert closed["resolution"] == svc.RESOLUTION_COMPLETED
+        assert closed["resolved_by"] == GREETER
+        # Closed at the last tick, not "now" — time-to-complete stays honest.
+        assert closed["resolved_at"] == 400.0
+        # Nothing was stamped skipped: every step was genuinely done.
+        assert all(s["skipped"] == 0 for s in svc.steps_for(conn, cid))
+        assert svc.count_progress(svc.steps_for(conn, cid)) == (4, 4)
+
+
+def test_autocomplete_credits_last_human_when_an_auto_step_lands_last(db_path):
+    """An auto tick closing the card must not credit the closure to nobody."""
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, cid, at=200.0, actor=GREETER, skip=("nsfw_role",))
+        svc.set_step_state(
+            conn, cid, "nsfw_role", done=True, actor_id=svc.AUTO_ACTOR, at=300.0
+        )
+        result = svc.autocomplete_if_finished(conn, cid)
+        assert result is not None
+        assert result[1] == GREETER
+        assert svc.get_card(conn, cid)["resolved_by"] == GREETER
+
+
+def test_autocomplete_credits_nobody_when_no_human_ever_ticked(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, cid, at=200.0, actor=svc.AUTO_ACTOR)
+        result = svc.autocomplete_if_finished(conn, cid)
+        assert result is not None
+        assert result[1] == 0
+        assert svc.get_card(conn, cid)["resolved_by"] == 0
+
+
+def test_autocomplete_ignores_a_closed_or_missing_card(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, cid, at=200.0)
+        assert svc.autocomplete_if_finished(conn, cid, actor_id=GREETER) is not None
+        # Second pass is a no-op — a resolved card never re-resolves.
+        assert svc.autocomplete_if_finished(conn, cid, actor_id=NEWCOMER) is None
+        assert svc.get_card(conn, cid)["resolved_by"] == GREETER
+        assert svc.autocomplete_if_finished(conn, 99999, actor_id=GREETER) is None
+
+
+def test_autocomplete_never_closes_a_stepless_card(db_path):
+    """No steps means nothing was done — "all ticked" must not be vacuous.
+
+    An empty step config falls back to the defaults, so this state only
+    arises if a card's rows go missing; it must not read as finished.
+    """
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        conn.execute("DELETE FROM intake_card_steps WHERE card_id = ?", (cid,))
+        assert svc.steps_for(conn, cid) == []
+        assert svc.autocomplete_if_finished(conn, cid, actor_id=GREETER) is None
+        assert svc.get_card(conn, cid)["resolved_at"] is None
+        assert svc.finished_open_cards(conn, GUILD) == []
+
+
+def test_finished_open_cards_finds_only_the_done_ones(db_path):
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        done_id = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, done_id, at=200.0)
+        partial_id = svc.create_card(conn, GUILD, NEWCOMER + 1, 110.0)
+        _tick_all(conn, partial_id, at=200.0, skip=("nsfw_role",))
+        other_guild_id = svc.create_card(conn, GUILD + 1, NEWCOMER + 2, 120.0)
+        _tick_all(conn, other_guild_id, at=200.0)
+        already = svc.create_card(conn, GUILD, NEWCOMER + 3, 130.0)
+        _tick_all(conn, already, at=200.0)
+        svc.resolve_card(conn, already, GREETER, 250.0, svc.RESOLUTION_DISMISSED)
+
+        found = [int(c["id"]) for c in svc.finished_open_cards(conn, GUILD)]
+        assert found == [done_id]
+
+
+def test_swept_backlog_lands_in_the_report(db_path):
+    """The point of the sweep: the two completion-keyed panels get data."""
+    with open_db(db_path) as conn:
+        _use_custom_steps(conn)
+        cid = svc.create_card(conn, GUILD, NEWCOMER, 100.0)
+        _tick_all(conn, cid, at=400.0)
+        assert svc.report_outcomes(conn, GUILD, 0.0)["counts"] == {}
+        assert svc.report_welcomers(conn, GUILD, 0.0)[0]["completions"] == 0
+        assert svc.report_skipped_steps(conn, GUILD, 0.0) == []
+
+        for card in svc.finished_open_cards(conn, GUILD):
+            svc.autocomplete_if_finished(conn, int(card["id"]))
+
+        assert svc.report_open_cards(conn, GUILD) == []
+        outcomes = svc.report_outcomes(conn, GUILD, 0.0)
+        assert outcomes["counts"] == {svc.RESOLUTION_COMPLETED: 1}
+        # 100.0 created → 400.0 last tick; the sweep's own clock never counts.
+        assert outcomes["median_seconds"] == 300.0
+        assert svc.report_welcomers(conn, GUILD, 0.0)[0]["completions"] == 1
+        assert [s["skipped"] for s in svc.report_skipped_steps(conn, GUILD, 0.0)] == [
+            0,
+            0,
+            0,
+            0,
+        ]
+
+
 def test_complete_without_open_card(db_path):
     with open_db(db_path) as conn:
         assert svc.complete_card(conn, GUILD, NEWCOMER, GREETER, 300.0) is None

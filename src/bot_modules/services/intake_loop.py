@@ -8,6 +8,11 @@ whoever's around can pick the intake up. ``nudged_at`` is stamped whether or
 not the send lands, mirroring greeting watch — a permission failure must not
 wedge a card into re-nudging every tick (it's already logged).
 
+Each tick first sweeps **finished** cards — every step ticked, still open —
+and closes them (``intake_views.close_finished_cards``). The live tick paths
+already close a card the instant its last box is ticked, so this is the
+backstop for anything finished while the bot was down.
+
 A stale card is only worth a ping if the member is actually reachable, so
 each one is checked against the member's real state first
 (``intake_service.nudge_action``): someone who never accepted membership
@@ -119,6 +124,12 @@ async def _presence(guild: discord.Guild, user_id: int) -> str:
 async def run_tick(bot: Bot, db_path: Path, now: float) -> None:
     for guild in bot.guilds:
         try:
+            from bot_modules.services.intake_views import close_finished_cards
+
+            # Fully ticked cards close themselves on the tick that finishes
+            # them; this catches the ones that finished while the bot was
+            # down, and the backlog from before that existed.
+            await close_finished_cards(bot.ctx, guild)
             stale, greeter_role, hours = await asyncio.to_thread(
                 _stale_sync, db_path, guild.id, now
             )
