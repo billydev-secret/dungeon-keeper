@@ -363,3 +363,188 @@ def test_switching_everything_off_still_shows_the_server_store(db):
     item = ItemView(item_id=1, name="Tuckshop Voucher", blurb="a treat", price=25)
     embed = build_shop_embed(_settings(db), set(), None, items=[item])
     assert "Server Store" in [f.name for f in embed.fields]
+
+
+# ── the Server Store: its own pages of the shop, and the panel's teaser ─────
+
+
+def _items(n: int, **kw) -> list:
+    from bot_modules.economy.shop_items import ItemView
+
+    return [
+        ItemView(item_id=i, name=f"Item {i:02d}", blurb="a thing", price=100 + i, **kw)
+        for i in range(1, n + 1)
+    ]
+
+
+def test_the_store_section_is_a_teaser_on_the_panel(db):
+    """The panel is a poster, not a menu: one static message that cannot page.
+
+    So it advertises eight rows, counts the rest, and points at Open Shop —
+    the button that actually exists on it. The ephemeral shop passes no items
+    at all, because its store pages are the store.
+    """
+    _enable(db)
+    embed = build_shop_embed(_settings(db), set(), None, panel=True, items=_items(20))
+    block = next(f for f in embed.fields if f.name == "Server Store").value
+    assert "Item 08" in block
+    assert "Item 09" not in block
+    assert "…and **12** more." in block
+    assert "Tap **Open Shop** to browse and buy." in block
+
+
+def test_the_shop_is_a_flat_book_with_the_store_first(db):
+    """Billy's shape: one pair of arrows, store pages, then the perk ladder.
+
+    Flat rather than sections behind a switcher — ◀️/▶️ is the only navigation
+    in the whole shop. The cost is that a stocked guild's perks sit two taps
+    in; the perk page carries the shield, raffle and refunds precisely so
+    there is never a third page to walk to.
+    """
+    from bot_modules.economy.shop import PAGE_PERKS, PAGE_STORE, shop_pages
+
+    assert shop_pages(_items(20)) == [
+        (PAGE_STORE, 0), (PAGE_STORE, 1), (PAGE_PERKS, 0)
+    ]
+    assert shop_pages(_items(3)) == [(PAGE_STORE, 0), (PAGE_PERKS, 0)]
+    # The case that has to stay invisible: a guild selling nothing of its own
+    # gets the one-page shop it always had.
+    assert shop_pages([]) == [(PAGE_PERKS, 0)]
+    assert shop_pages(None) == [(PAGE_PERKS, 0)]
+
+
+def test_the_page_counter_runs_over_the_whole_book(db):
+    """It crosses the store/perk seam, so it must not restart at it.
+
+    A counter that reset would read as the shop losing its place halfway
+    through the arrows.
+    """
+    from bot_modules.economy.shop import page_note, shop_pages
+
+    pages = shop_pages(_items(20))
+    assert page_note(pages, 0) == "Page 1 of 3 · Server Store · "
+    assert page_note(pages, 1) == "Page 2 of 3 · Server Store · "
+    assert page_note(pages, 2) == "Page 3 of 3 · Perks · "
+    # One page is not a book: no counter, no arrows, nothing to explain.
+    assert page_note(shop_pages([]), 0) == ""
+
+
+def test_the_note_reaches_both_page_kinds(db):
+    """Both builders wear the same prefix, or the seam shows in the footer."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    settings = _settings(db)
+    store = build_store_embed(settings, _items(20), None, page=1, note="Page 2 of 3 · ")
+    assert store.footer.text == "Page 2 of 3 · Pick one below to buy it."
+    perks = build_shop_embed(settings, set(), None, note="Page 3 of 3 · ")
+    assert perks.footer.text.startswith("Page 3 of 3 · Prices are per week")
+
+
+@pytest.mark.parametrize(
+    ("count", "pages"),
+    [(0, 1), (1, 1), (10, 1), (11, 2), (20, 2), (21, 3)],
+)
+def test_store_page_count(count, pages):
+    """One page minimum, so an empty store still renders as page 1 of 1."""
+    from bot_modules.economy.shop import store_page_count
+
+    assert store_page_count(_items(count)) == pages
+
+
+def test_store_page_clamps_out_of_range():
+    """An admin can delete items while a member sits on page 3.
+
+    Clamping shows them the last page that exists; trusting the number would
+    hand them an empty picker.
+    """
+    from bot_modules.economy.shop import store_page
+
+    items = _items(12)
+    assert [i.item_id for i in store_page(items, 0)] == list(range(1, 11))
+    assert [i.item_id for i in store_page(items, 1)] == [11, 12]
+    assert [i.item_id for i in store_page(items, 9)] == [11, 12]
+    assert [i.item_id for i in store_page(items, -3)] == list(range(1, 11))
+
+
+def test_store_embed_pages_a_stocked_store(db):
+    """The whole point of the rework: twenty items are all reachable.
+
+    The old picker cut at 25 and the old preview at 8, so a guild with a real
+    store showed less than half of it to anyone who did not click through.
+    """
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    settings = _settings(db)
+    items = _items(20)
+
+    first = build_store_embed(settings, items, None, page=0)
+    assert first.title == "🎁 Server Store"
+    assert "Item 01" in first.description and "Item 10" in first.description
+    assert "Item 11" not in first.description
+
+    second = build_store_embed(settings, items, None, page=1)
+    assert "Item 11" in second.description and "Item 20" in second.description
+    assert "Item 01" not in second.description
+
+
+def test_store_embed_shows_the_wallet_and_marks_what_you_hold(db):
+    """Same header contract as the perk shop: your balance travels with you."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    embed = build_store_embed(
+        _settings(db), _items(3), None, owned_item_ids={2}, balance=1234
+    )
+    assert "1,234" in embed.description
+    lines = [ln for ln in embed.description.split("\n") if "Item 02" in ln]
+    assert lines and "✅" in lines[0]
+
+
+def test_store_embed_survives_an_emptied_store(db):
+    """`max()` over nothing raises, and the last item can be withdrawn."""
+    from bot_modules.economy.shop import build_store_embed
+
+    _enable(db)
+    embed = build_store_embed(_settings(db), [], None)
+    assert "Nothing on the shelves yet" in embed.description
+
+
+def test_the_header_stops_calling_everything_a_weekly_rental(db):
+    """The store leads now, and most store items are bought once.
+
+    "Weekly rentals" was safe as a caption over the perk ladder alone; standing
+    over a Server Store of one-offs it is simply wrong, so the claim narrows to
+    the perks that can keep it.
+    """
+    _enable(db)
+    perks_only = build_shop_embed(_settings(db), set(), None)
+    assert perks_only.description.startswith("Weekly rentals")
+    assert perks_only.footer.text.startswith("Prices are per week")
+
+    # The channel panel is the one surface still showing both in one embed —
+    # it is a poster, not a menu, so it cannot page.
+    panel = build_shop_embed(_settings(db), set(), None, panel=True, items=_items(2))
+    assert "Weekly rentals ·" not in panel.description
+    assert panel.footer.text.startswith("Perk prices are per week")
+
+
+def test_page_options_label_each_page_by_what_is_on_it(db):
+    """"Server Store" twice tells nobody which half they are picking.
+
+    So the store's labels carry their span, and the perk page names its
+    contents rather than saying "Perks" — a member should not have to open a
+    page to discover the refund button lives there.
+    """
+    from bot_modules.economy.shop import page_options
+
+    assert page_options(_items(20)) == [
+        ("🎁 Server Store · 1–10 of 20", "What this server sells itself"),
+        ("🎁 Server Store · 11–20 of 20", "What this server sells itself"),
+        ("✨ Perks & rentals", "Name, colour, icon, shield, gifting, refunds"),
+    ]
+    # A short final page reports its real span, not a rounded one.
+    assert page_options(_items(12))[1][0] == "🎁 Server Store · 11–12 of 12"
+    # One page is not a book: the caller renders no picker for a single entry.
+    assert len(page_options([])) == 1

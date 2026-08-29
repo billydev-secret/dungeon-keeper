@@ -4172,3 +4172,269 @@ async def test_buying_a_role_item_does_not_touch_the_todo_board(tmp_path):
     await cog.do_buy_item(interaction, settings, interaction.guild, item)
 
     todo_cog.refresh_board.assert_not_awaited()
+
+
+# ── the shop as one paged book ─────────────────────────────────────────────
+
+
+def _shop_view(interaction):
+    return interaction.response.send_message.await_args.kwargs["view"]
+
+
+def _shop_embed(interaction):
+    return interaction.response.send_message.await_args.kwargs["embed"]
+
+
+@pytest.mark.asyncio
+async def test_the_shop_opens_on_the_store_where_a_guild_stocks_one(ctx, db):
+    """Billy's ask, end to end: one panel button, store first, zero extra taps.
+
+    The panel button and /bank shop land on the same page — the store — so the
+    server's own goods are what a member sees on arrival rather than what they
+    click through to.
+    """
+    from bot_modules.cogs.economy_cog import _StoreView
+
+    _enable(db)
+    _store_item(db, name="Shoutout")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await _shop(cog, interaction)
+
+    assert _shop_embed(interaction).title == "🎁 Server Store"
+    assert isinstance(_shop_view(interaction), _StoreView)
+
+
+@pytest.mark.asyncio
+async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
+    """One page, no arrows, perks on arrival — TGM today.
+
+    The whole reorganisation has to be invisible where there is nothing to
+    reorganise, or it is a regression dressed as a feature.
+    """
+    from bot_modules.cogs.economy_cog import _ShopView
+
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+
+    view = _shop_view(interaction)
+    assert isinstance(view, _ShopView)
+    assert _shop_embed(interaction).title == "🛍️ Perk Shop"
+    # No second page, so no navigation at all — not a picker with one entry.
+    assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
+
+
+@pytest.mark.asyncio
+async def test_the_picker_jumps_straight_to_any_page(ctx, db):
+    """Two interactions to anywhere, however long the book gets.
+
+    Replaced ◀️/▶️, which were one tap to a neighbour but N taps to anywhere —
+    that put the perk ladder two taps behind a stocked store and would only
+    have got worse as a guild added items.
+    """
+    _enable(db)
+    for n in range(1, 21):
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+        embed = _shop_embed(interaction)
+        assert embed.footer.text.startswith("Page 1 of 3 · Server Store")
+
+        nav = _page_select(_shop_view(interaction))
+        assert [o.label for o in nav.options] == [
+            "🎁 Server Store · 1–10 of 20",
+            "🎁 Server Store · 11–20 of 20",
+            "✨ Perks & rentals",
+        ]
+        # The current page is the select's default, so it doubles as a
+        # "you are here" in the closed state.
+        assert [o.value for o in nav.options if o.default] == ["0"]
+
+        # Straight from the first store page to the perks — no walking.
+        jump = _interaction(_member(member_id=500))
+        nav._values = ["2"]
+        await nav.callback(jump)
+
+    landed = jump.response.edit_message.await_args.kwargs["embed"]
+    assert landed.title == "🛍️ Perk Shop"
+    assert landed.footer.text.startswith("Page 3 of 3 · Perks")
+    back = _page_select(jump.response.edit_message.await_args.kwargs["view"])
+    assert [o.value for o in back.options if o.default] == ["2"]
+
+
+def _page_select(view):
+    """The shop's navigation picker, whichever page kind is showing."""
+    from bot_modules.cogs.economy_cog import _PageSelect
+
+    return next(c for c in view.children if isinstance(c, _PageSelect))
+
+
+def _view_of(interaction):
+    """The view from whichever response the interaction actually used."""
+    send = interaction.response.send_message
+    if send.await_args is not None:
+        return send.await_args.kwargs["view"]
+    return interaction.response.edit_message.await_args.kwargs["view"]
+
+
+@pytest.mark.asyncio
+async def test_the_perk_page_does_not_repeat_the_store(ctx, db):
+    """The store has its own pages now — a preview here is the same list twice.
+
+    It also restores the plain "Weekly rentals" header, which is true again
+    once the page holds nothing but weekly perks.
+    """
+    _enable(db)
+    _store_item(db, name="Shoutout")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+        turn = _interaction(_member(member_id=500))
+        await cog.turn_shop_page(turn, 1)
+
+    embed = turn.response.edit_message.await_args.kwargs["embed"]
+    assert "Server Store" not in [f.name for f in embed.fields]
+    assert embed.description.startswith("Weekly rentals")
+
+
+@pytest.mark.asyncio
+async def test_the_panel_keeps_its_single_button(ctx, db):
+    """The second Server Store button was built and taken back out.
+
+    The shop it opens now starts on the store, so the shortcut had nothing
+    left to shorten — and a panel is a launcher, not a button row.
+    """
+    from bot_modules.cogs.economy_cog import ShopPanelView, _StoreView
+
+    _enable(db)
+    _store_item(db, name="Shoutout")
+    cog = _make_cog(ctx)
+
+    assert [b.custom_id for b in ShopPanelView().children] == ["econ_shop_open"]
+
+    interaction = _panel_button_interaction(ctx, cog)
+    await ShopPanelView()._open.callback(interaction)
+    assert isinstance(_shop_view(interaction), _StoreView)
+
+
+@pytest.mark.asyncio
+async def test_bank_store_is_the_shop_by_a_shorter_name(ctx, db):
+    """Same view, same page — a door, not a second shop."""
+    from bot_modules.cogs.economy_cog import _StoreView
+
+    _enable(db)
+    _store_item(db, name="Shoutout")
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.bank_store.callback(cog, interaction)
+
+    assert isinstance(_shop_view(interaction), _StoreView)
+    assert _shop_embed(interaction).title == "🎁 Server Store"
+
+
+@pytest.mark.asyncio
+async def test_bank_store_refuses_by_name_with_nothing_stocked(ctx, db):
+    """Serving the perk ladder here would read as the command being wrong."""
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.bank_store.callback(cog, interaction)
+
+    text = interaction.response.send_message.await_args.args[0]
+    assert "hasn't put anything in the store yet" in text
+
+
+@pytest.mark.asyncio
+async def test_bank_store_refuses_when_the_economy_is_off(ctx, db):
+    """Same gate as every other member-facing economy surface."""
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    await cog.bank_store.callback(cog, interaction)
+
+    assert "embed" not in interaction.response.send_message.await_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_a_page_turn_past_the_end_of_a_shrunken_shop_clamps(ctx, db):
+    """An admin can withdraw the last item while a member sits on page 2.
+
+    Trusting the number would hand them an empty store page; clamping lands
+    them on the perk ladder, which is the only page left.
+    """
+    from bot_modules.cogs.economy_cog import _ShopView
+
+    _enable(db)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await cog.turn_shop_page(interaction, 7)
+
+    view = interaction.response.edit_message.await_args.kwargs["view"]
+    assert isinstance(view, _ShopView)
+
+
+@pytest.mark.asyncio
+async def test_navigation_is_always_its_own_bottom_row(ctx, db):
+    """Navigation sits in the same place on every page, under everything else.
+
+    Asserted on the rendered component rows rather than on ``row=``, because
+    what matters is what Discord draws: left to auto-pack, the old arrows
+    slotted in beside Shield and Cancel & Refund, putting "Next" where a
+    member is aiming for a refund.
+    """
+    _enable(db)
+    for n in range(1, 21):
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+
+    def _rows(view):
+        return [
+            [c.get("label") or c.get("placeholder") for c in row["components"]]
+            for row in view.to_components()
+        ]
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        # A store page: the buy picker's row, then navigation on its own.
+        store = _interaction(_member(member_id=500))
+        await _shop(cog, store)
+        srows = _rows(_shop_view(store))
+        assert srows == [["Pick something to buy…"], ["Jump to a page…"]]
+
+        # The perk page, where eight buttons would otherwise leave a gap the
+        # navigation falls into.
+        perks = _interaction(_member(member_id=500))
+        await cog.turn_shop_page(perks, 2)
+
+    rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
+    assert rows[-1] == ["Jump to a page…"]          # alone on the last row
+    assert len(rows) > 1                            # and not the only row
+    assert all("Jump to a page…" not in r for r in rows[:-1])
