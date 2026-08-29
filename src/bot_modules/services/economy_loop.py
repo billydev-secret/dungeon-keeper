@@ -2022,12 +2022,20 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 "Economy loop: sponsor-expiry sweep failed for guild %s.", guild.id
             )
 
-        if expired_orders:
-            # Each expiry closed a todo as missed, so the mods' board is now
-            # showing work that no longer exists. Best effort — the refunds are
-            # already committed and a Discord hiccup must not fail the tick.
-            # ``bot`` is typed as the bare Client here; only a commands.Bot
-            # carries cogs, which the runtime one always is.
+        # The board is showing work that no longer exists: a shop order's
+        # expiry closes its todo as missed, and a paid request that timed out
+        # unreviewed has just been refunded off the approvals queue. Best
+        # effort — every refund above is already committed and a Discord
+        # hiccup must not fail the tick. ``bot`` is typed as the bare Client
+        # here; only a commands.Bot carries cogs, which the runtime one
+        # always is.
+        stale_board = (
+            len(expired_orders)
+            + len(sponsor_notices)
+            + len(pin_sweep.refunds)
+            + len(theme_sweep.refunds)
+        )
+        if stale_board:
             get_cog = getattr(bot, "get_cog", None)
             todo_cog = get_cog("TodoCog") if get_cog else None
             if todo_cog is not None:
@@ -2038,8 +2046,8 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                 except Exception:
                     log.warning(
                         "Economy loop: failed to repaint the todo board for %s "
-                        "after expiring %d shop order(s).",
-                        guild.id, len(expired_orders),
+                        "after %d expiry(ies).",
+                        guild.id, stale_board,
                     )
 
         for notice in sponsor_notices:

@@ -439,6 +439,111 @@ def signoff_signature(
     return (shown, len(shown) if total is None else total)
 
 
+# ── paid requests ───────────────────────────────────────────────────────────
+#
+# The economy sells three things a moderator has to say yes to before they
+# happen: a themed day, a sponsored question of the day, and a pin. Each used
+# to post its own Approve/Decline card into the economy's bank channel — which
+# in the main guild is "how-it-works", a member-facing explainer. A request
+# names the member and quotes what they wrote, so publishing it there put an
+# unreviewed submission in front of the whole server. They are one section
+# here instead, for the same reason the sign-offs are: this is the message the
+# mods already read, and nobody else can.
+#
+# One section over three tables rather than three sections over one each. The
+# queues are normally empty and a heading over nothing is noise; the row says
+# which product it came from, which is all a mod needs before they open it.
+
+#: Same bounded slice as the sign-offs, for the same reason: a backlog must
+#: not push the chores and tasks off the board.
+MAX_APPROVAL_ROWS = 5
+
+EMPTY_APPROVALS = "No paid requests waiting. ✨"
+
+#: What each queue is called on the board. The key matches
+#: ``economy_approvals_service.ApprovalQueue.key``; a product missing from here
+#: still renders, just without its label.
+APPROVAL_LABELS: dict[str, str] = {
+    "theme": "🎨 Theme",
+    "sponsor": "❓ Question",
+    "pin": "📌 Pin",
+}
+
+
+def approval_label(kind: str) -> str:
+    """``🎨 Theme`` — the queue a request came from, for its board row."""
+    return APPROVAL_LABELS.get(kind, str(kind).title())
+
+
+def render_approval_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = MAX_APPROVAL_ROWS,
+    currency_emoji: str = DEFAULT_CURRENCY_EMOJI,
+    total: int | None = None,
+) -> str:
+    """The paid-requests section: who paid, for what, how much.
+
+    ``rows`` are pending submissions oldest-first (see
+    ``economy_approvals_service.pending_approvals``), each carrying a
+    ``requester_name`` the cog resolved — the board never prints a raw id, and
+    a member who has left simply shows as "someone".
+
+    No id, same rule as the sign-offs: the ``#14`` on this board belongs to a
+    todo, and a submission id printed beside it invites the wrong row being
+    ticked. The price is shown because it is the size of the decision — a
+    denial refunds it — and the queue label because one section covers three
+    products.
+    """
+    if not rows:
+        return EMPTY_APPROVALS
+
+    total = len(rows) if total is None else total
+    shown = rows[:limit]
+    if not shown:  # limit <= 0
+        return EMPTY_APPROVALS
+
+    emoji = currency_emoji or DEFAULT_CURRENCY_EMOJI
+    lines: list[str] = []
+    for row in shown:
+        who = _flatten(row.get("requester_name") or "") or "someone"
+        what = _clip(_flatten(str(row.get("summary") or "")), TASK_CLIP)
+        price = int(row.get("price") or 0)
+        label = approval_label(str(row.get("kind") or ""))
+        lines.append(f"**{who}** — {label}: {what} · {emoji} {price:,}")
+
+    hidden = total - len(shown)
+    if hidden > 0:
+        lines.append(f"\n…and **{hidden}** more on the dashboard.")
+    return "\n".join(lines)
+
+
+def approval_signature(
+    rows: Iterable[Mapping[str, Any]],
+    total: int | None = None,
+    *,
+    limit: int = MAX_APPROVAL_ROWS,
+) -> tuple:
+    """A fingerprint of what the paid-requests section *shows*.
+
+    ``kind`` rides along with ``id`` because the ids are per-table: theme #3
+    and pin #3 are different requests, and a signature keyed on the id alone
+    would call one the other.
+    """
+    rows = list(rows)
+    shown = tuple(
+        (
+            str(row.get("kind") or ""),
+            row["id"],
+            _flatten(str(row.get("summary") or "")),
+            int(row.get("price") or 0),
+            _flatten(row.get("requester_name") or ""),
+        )
+        for row in rows[:limit]
+    )
+    return (shown, len(shown) if total is None else total)
+
+
 # ── The combined board ──────────────────────────────────────────────────────
 #
 # Migration 180 merged the two boards back into one. The renderers above stay
@@ -448,6 +553,7 @@ def signoff_signature(
 # question. See the migration for why the split was undone.
 
 SIGNOFF_HEADING = "✍️ **Quest sign-offs**"
+APPROVAL_HEADING = "🧾 **Paid requests**"
 CHORE_HEADING = "🔁 **Today's chores**"
 TASK_HEADING = "📋 **Tasks**"
 
@@ -464,11 +570,17 @@ EMPTY_BOARD = "Nothing pending and no chores yet — all clear. ✨"
 
 
 def task_row_budget(
-    chores_shown: int, *, signoffs_shown: int = 0, limit: int = MAX_BOARD_ROWS
+    chores_shown: int,
+    *,
+    signoffs_shown: int = 0,
+    approvals_shown: int = 0,
+    limit: int = MAX_BOARD_ROWS,
 ) -> int:
     """How many task rows fit under the sections above, never fewer than
     MIN_TASK_ROWS."""
-    return max(MIN_TASK_ROWS, limit - chores_shown - signoffs_shown)
+    return max(
+        MIN_TASK_ROWS, limit - chores_shown - signoffs_shown - approvals_shown
+    )
 
 
 def render_board(
@@ -477,21 +589,25 @@ def render_board(
     *,
     signoff_rows: Sequence[Mapping[str, Any]] = (),
     signoff_total: int | None = None,
+    approval_rows: Sequence[Mapping[str, Any]] = (),
+    approval_total: int | None = None,
     currency_emoji: str = DEFAULT_CURRENCY_EMOJI,
     task_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> str:
-    """The whole board body: sign-offs, the chore scoreboard, then the tasks.
+    """The whole board: sign-offs, paid requests, the chores, then the tasks.
 
     Each section is omitted when it has nothing in it, rather than rendering a
     heading over an empty-state sentence — two "nothing here" lines stacked on
     one board reads as broken. When *all* are empty the board says so once.
 
-    Sign-offs lead because they are the only section where a member is waiting
-    on the mods: a pending claim is somebody's payout held up, where a chore or
-    a task is only the server's own work. They also take their slice off the
-    top of the row budget for that reason, and — being normally 0-2 deep — cost
-    the sections below almost nothing to sit above them.
+    Sign-offs lead, and the paid requests come straight after them, because
+    those two are the sections where a *member* is waiting on the mods: a
+    pending claim is somebody's payout held up and a pending request is
+    somebody's coins already spent, where a chore or a task is only the
+    server's own work. They take their slices off the top of the row budget
+    for that reason, and — both being normally 0-2 deep — cost the sections
+    below almost nothing to sit above them.
 
     ``task_rows`` must already exclude chore-spawned rows (see
     ``todo_service.pending_todos(exclude_chores=True)``): the chore section
@@ -499,6 +615,7 @@ def render_board(
     """
     sections: list[str] = []
     signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
+    approvals_shown = min(len(approval_rows), MAX_APPROVAL_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
     if signoff_rows:
         sections.append(
@@ -509,6 +626,17 @@ def render_board(
                 limit=MAX_SIGNOFF_ROWS,
                 currency_emoji=currency_emoji,
                 total=signoff_total,
+            )
+        )
+    if approval_rows:
+        sections.append(
+            APPROVAL_HEADING
+            + "\n"
+            + render_approval_rows(
+                approval_rows,
+                limit=MAX_APPROVAL_ROWS,
+                currency_emoji=currency_emoji,
+                total=approval_total,
             )
         )
     if chore_rows:
@@ -523,7 +651,10 @@ def render_board(
                 task_rows,
                 total=task_total,
                 limit=task_row_budget(
-                    chores_shown, signoffs_shown=signoffs_shown, limit=limit
+                    chores_shown,
+                    signoffs_shown=signoffs_shown,
+                    approvals_shown=approvals_shown,
+                    limit=limit,
                 ),
             )
         )
@@ -536,9 +667,10 @@ def render_board_footer(
     chore_rows: Sequence[Mapping[str, Any]],
     task_total: int,
     signoff_total: int = 0,
+    approval_total: int = 0,
 ) -> str:
-    """``1 sign-off waiting · 2 of 3 chores done · 25 tasks · updates
-    automatically``.
+    """``1 sign-off waiting · 2 paid requests waiting · 2 of 3 chores done ·
+    25 tasks · updates automatically``.
 
     Every section the board is showing, because a footer that reported only one
     would silently contradict the sections it left out. A half is dropped
@@ -549,6 +681,9 @@ def render_board_footer(
     if signoff_total:
         noun = "sign-off" if signoff_total == 1 else "sign-offs"
         parts.append(f"{signoff_total} {noun} waiting")
+    if approval_total:
+        noun = "paid request" if approval_total == 1 else "paid requests"
+        parts.append(f"{approval_total} {noun} waiting")
     if chore_rows:
         done = sum(1 for row in chore_rows if chore_state(row) == "done")
         parts.append(f"{done} of {len(chore_rows)} chores done")
@@ -565,6 +700,8 @@ def board_content_signature(
     *,
     signoff_rows: Sequence[Mapping[str, Any]] = (),
     signoff_total: int | None = None,
+    approval_rows: Sequence[Mapping[str, Any]] = (),
+    approval_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> tuple:
     """A fingerprint of the whole board, for the refresh loop's skip check.
@@ -574,15 +711,20 @@ def board_content_signature(
     becoming "3h" still costs no API call.
     """
     signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
+    approvals_shown = min(len(approval_rows), MAX_APPROVAL_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
     return (
         signoff_signature(signoff_rows, signoff_total, limit=MAX_SIGNOFF_ROWS),
+        approval_signature(approval_rows, approval_total, limit=MAX_APPROVAL_ROWS),
         chore_signature(chore_rows, limit=MAX_CHORE_ROWS),
         board_signature(
             task_rows,
             task_total,
             limit=task_row_budget(
-                chores_shown, signoffs_shown=signoffs_shown, limit=limit
+                chores_shown,
+                signoffs_shown=signoffs_shown,
+                approvals_shown=approvals_shown,
+                limit=limit,
             ),
         ),
     )

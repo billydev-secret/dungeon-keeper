@@ -4672,11 +4672,15 @@ async def test_a_sponsored_question_from_the_shop_still_escrows(ctx, db):
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
 
+    # The request goes to the mods' todo board, never to the bank channel —
+    # that channel is a member-facing explainer in the main guild, and the
+    # card names the member and quotes what they wrote.
     with patch(
-        "bot_modules.cogs.economy_cog.post_review_card", new=AsyncMock()
-    ):
+        "bot_modules.cogs.economy_cog.refresh_approvals_board", new=AsyncMock()
+    ) as board:
         await cog.do_sponsor_submit(interaction, "What's your comfort meal?")
 
+    board.assert_awaited_once()
     assert "review" in interaction.followup.send.await_args.args[0]
     with open_db(db) as conn:
         assert get_balance(conn, GUILD_ID, 500) == 460

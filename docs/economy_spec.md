@@ -261,16 +261,18 @@ to currency.
   `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
   question in front of the server. **Charged at submit** — a free queue invites
   spam — which makes decline and expiry *refund* paths (ledger kind
-  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
-  persistent Approve/Decline card in the bank channel (DynamicItems
+  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it from the
+  **todo board's 🧾 Approvals button** (see "Where paid requests are reviewed"
+  below; the buttons behind it are DynamicItems
   `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
   dashboard queue (Economy → QOTD, `require_economy_manager`, which
   also **withdraws** an already-approved question back out of the post queue —
   the service only *resolves* pending rows, so withdrawal is its own path);
   declining opens a reason modal and the reason reaches the member by DM.
-  Resolving from the dashboard re-renders the bank-channel card and DMs the
-  sponsor with the same copy the card buttons use, best-effort: a Discord
-  failure leaves the API 200 with `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
+  Resolving from the dashboard repaints the todo board (and any legacy
+  bank-channel card) and DMs the sponsor with the same copy the buttons use,
+  best-effort: a Discord failure leaves the API 200 with
+  `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
   from when the mod supplies **no** question text; the QOTD card is bylined
   "sponsored by <name>" and `econ_qotd.sponsor_user_id` records them
   (`posted_by` stays the mod who ran the command — different people, both
@@ -292,8 +294,10 @@ to currency.
   `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
   artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
   at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
-  `pending`; a mod Approves/Declines on a bank-channel card
-  (`PinApproveButton`/`PinDenyButton`, persistent). Approve posts + pins a
+  `pending`; a mod Approves/Declines from the todo board's **🧾 Approvals**
+  button (`PinApproveButton`/`PinDenyButton`, persistent). Pin of the Day has
+  **no dashboard queue**, so that board section is its only review surface.
+  Approve posts + pins a
   "Pinned by @X" card in `pin_channel_id` and flips the row to `live` with a
   24h `expires_at` — the Discord post happens *before* the DB move, so a failed
   post refunds (the member is never charged for a pin nobody saw). One live pin
@@ -313,8 +317,9 @@ to currency.
   `economy_submission_store`. `/bank theme` opens a modal (theme name +
   blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
   out / `flash_theme_refund` back) and queued `pending`; a mod
-  Approves/Declines on a bank-channel card (`ThemeApproveButton` /
-  `ThemeDenyButton`, persistent) or from the dashboard's **Approvals** page.
+  Approves/Declines from the todo board's **🧾 Approvals** button
+  (`ThemeApproveButton` / `ThemeDenyButton`, persistent) or from the
+  dashboard's **Approvals** page.
   Two things distinguish it from Pin of the Day, which it otherwise mirrors:
   - **Approve posts nothing.** It moves the row to `approved` and that is all.
     The hourly loop's `run_theme_expiry` promotes the oldest approved row
@@ -345,6 +350,26 @@ to currency.
   holds a pinned announcement only the sweep can take down, and the sweep
   finds its work by reading live rows, so deleting it would strand the pin
   permanently. See `docs/data_register.md`.
+
+  **Where paid requests are reviewed (2026-08-29).** The sponsored question,
+  the pin and the themed day are one job to a moderator, so they are one
+  section and one button on the **mods' todo board** — 🧾 Approvals — rather
+  than three cards in `bank_channel_id`. That channel is the economy's
+  member-facing explainer in the main guild (`🏦│how-it-works`), and a review
+  card names the member and quotes what they submitted, so posting one there
+  published an unreviewed request to the whole server. The queue is
+  `economy_approvals_service.pending_approvals`, a `UNION ALL` over the
+  products in `QUEUES`; the button opens an ephemeral pick-one select and a
+  pick renders **that product's own card embed and buttons**, so nothing a mod
+  reads changed. Gate is `can_manage_economy`, not the board's mod check —
+  every decision moves currency. The persistent DynamicItems stay registered,
+  so cards posted before the move remain clickable; nothing posts new ones.
+  Emoji sponsorship is deliberately excluded (its approval is an upload, not a
+  yes/no, and it has a dashboard queue), and `notify_member`'s public
+  bank-channel fallback for a member with DMs closed is a different mechanism
+  and unchanged. Full shape in `docs/todo_spec.md` § "Paid requests on the
+  board".
+
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
   A sticky **hub panel** (`EconomyCog.bounty_panel`, `build_bounty_hub_panel`)
@@ -867,8 +892,9 @@ on their behalf through the ordinary `claim_quest` state machine:
 
 - **Instant quest:** pays on the spot — ✅ reaction only, no reply or DM.
   Wallet/quest log carries the news, same as every other trigger kind.
-- **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
-  reacts 📝 — a manager still approves the payout.
+- **Sign-off quest:** files the `pending` claim, repaints the mods' todo board
+  (where it becomes a sign-off row), and reacts 📝 — a manager still approves
+  the payout.
 
 `game_role_id` no longer affects trigger/photo/media quest completions (it
 used to gate an in-channel reply vs. a DM); it still gates other recurring
@@ -1046,7 +1072,7 @@ the xp_events-mirrored kinds is a stage-2 script job, not a migration
 Quests on a privacy-suppressed kind (`quests.ANON_KINDS`: `confession`,
 `confession_reply`, `whisper`, `ama_ask`, `guess_post`, `pen_pal`,
 `pen_pal_complete`) reject `signoff=1` at creation/update: a sign-off
-claim posts a bank-channel card naming the claimant, timing-correlatable against
+claim names the claimant on the mods' todo board, timing-correlatable against
 the anonymous feed. (Community and monthly quests take a kind but already
 forbid sign-off on their own account — tier settlement is automatic — so the
 paths left for these kinds are all silent: the daily/weekly/event auto-claims
