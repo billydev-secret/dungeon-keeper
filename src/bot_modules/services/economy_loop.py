@@ -862,7 +862,7 @@ async def _echo_quest_flip(
     pointing nowhere is the empty alarm ``raffle_last_call`` refuses to send
     for the same reason. Guilds with a bank channel but no panel, which used to
     get the fallback post, now get nothing. The ids are the guide pair because
-    the merged panel kept them (see ``economy.logic.plan_panel_merge``), not
+    the merged panel kept them, not
     because the guide is what gets linked.
     """
 

@@ -64,9 +64,12 @@ function render(container, cfg, channels, roles, members) {
         <div class="field">
           <label>Bank Channel</label>
           <span data-picker="bank_channel_id"></span>
-          <div class="field-hint">Home of the how-it-works panel members use to check
-            their balance and open the shop. Leave unset and members have to use the
-            slash commands instead.</div>
+          <div class="field-hint">Where the economy speaks up in public: mod review
+            cards for paid requests, the warning when the server is running out of
+            role slots, and anything the bot meant to DM a member but couldn&rsquo;t.
+            Leave unset and those go unsent. This is <em>not</em> where the economy
+            panel lives &mdash; that channel is chosen when you post the panel, under
+            Channel Panels below, and the two are often different.</div>
         </div>
         <div class="field">
           <label>Register Channel</label>
@@ -243,7 +246,8 @@ function render(container, cfg, channels, roles, members) {
           <span data-picker="bounty_channel_id"></span>
           <div class="field-hint">Where the board lives — one card per bounty,
             under a Bounty Board panel that sticks to the bottom of the channel
-            (post it from Channel Panels below). Members post and chip in from
+            (post it from Channel Panels below &mdash; it goes here, so there is
+            nothing to pick). Members post and chip in from
             that panel. A mod awards a bounty to whoever completed it (minus the
             bounty rake, set on the Sinks page), or cancels it to refund
             everyone. Unclaimed bounties expire and refund automatically. Leave

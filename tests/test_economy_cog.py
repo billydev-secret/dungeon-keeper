@@ -3595,15 +3595,42 @@ async def test_bounty_post_bad_stake_rejected(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_post_bounty_panel_refuses_a_channel_that_is_not_the_board(ctx, db):
+async def test_post_bounty_panel_ignores_the_channel_it_is_handed(ctx, db):
     """The hub's ids are looked up *through* bounty_channel_id, so a hub posted
-    anywhere else would be adopted by the restick as if it were on the board."""
+    anywhere else would be adopted by the restick as if it were on the board.
+
+    That used to be enforced by refusing every other channel, which left the
+    dashboard drawing a picker whose only valid answer was the setting sitting
+    above it (2026-08-29 audit). The panel owns its destination now, so a
+    channel arriving from anywhere — a stale page, a hand-rolled request — is
+    ignored rather than obeyed or complained about.
+    """
+    _enable(db, bounty_channel_id=5555)
+    cog = _make_cog(ctx)
+    board = MagicMock(spec=discord.TextChannel)
+    board.id = 5555
+    guild = FakeGuild(id=GUILD_ID)
+    guild.get_channel = lambda cid: board if cid == 5555 else None
+
+    with patch.object(
+        cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
+    ) as place:
+        assert await cog.post_bounty_panel(guild, SimpleNamespace(id=6666)) == "msg"
+
+    place.assert_awaited_once_with(guild, board)
+
+
+@pytest.mark.asyncio
+async def test_post_bounty_panel_refuses_a_board_channel_that_has_gone(ctx, db):
+    """A board channel deleted since it was set resolves to nothing. Say so —
+    place_or_refresh would otherwise be handed None."""
     _enable(db, bounty_channel_id=5555)
     cog = _make_cog(ctx)
     guild = FakeGuild(id=GUILD_ID)
+    guild.get_channel = lambda cid: None
 
-    with pytest.raises(ValueError, match="bounty board channel"):
-        await cog.post_bounty_panel(guild, SimpleNamespace(id=6666))
+    with pytest.raises(ValueError, match="isn't a text channel"):
+        await cog.post_bounty_panel(guild)
 
 
 @pytest.mark.asyncio
@@ -3614,20 +3641,22 @@ async def test_post_bounty_panel_refuses_when_no_board_channel_is_set(ctx, db):
     guild = FakeGuild(id=GUILD_ID)
 
     with pytest.raises(ValueError, match="No bounty board channel"):
-        await cog.post_bounty_panel(guild, SimpleNamespace(id=5555))
+        await cog.post_bounty_panel(guild)
 
 
 @pytest.mark.asyncio
 async def test_post_bounty_panel_places_it_in_the_board_channel(ctx, db):
     _enable(db, bounty_channel_id=5555)
     cog = _make_cog(ctx)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 5555
     guild = FakeGuild(id=GUILD_ID)
-    channel = SimpleNamespace(id=5555)
+    guild.get_channel = lambda cid: channel if cid == 5555 else None
 
     with patch.object(
         cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
     ) as place:
-        assert await cog.post_bounty_panel(guild, channel) == "msg"
+        assert await cog.post_bounty_panel(guild) == "msg"
 
     place.assert_awaited_once_with(guild, channel)
 
@@ -3650,10 +3679,13 @@ async def test_post_bounty_panel_refuses_a_channel_the_casino_hub_holds(ctx, db)
             (GUILD_ID, "casino_panel_channel_id", "5555"),
         )
     cog = _make_cog(ctx)
+    board = MagicMock(spec=discord.TextChannel)
+    board.id = 5555
     guild = FakeGuild(id=GUILD_ID)
+    guild.get_channel = lambda cid: board if cid == 5555 else None
 
     with pytest.raises(ValueError, match="casino hub panel"):
-        await cog.post_bounty_panel(guild, SimpleNamespace(id=5555))
+        await cog.post_bounty_panel(guild)
 
 
 @pytest.mark.asyncio
@@ -3663,13 +3695,15 @@ async def test_post_bounty_panel_allows_a_channel_a_human_only_panel_holds(ctx, 
     refusal's — and refusing here would block a working setup."""
     _enable(db, bounty_channel_id=5555, shop_channel_id=5555)
     cog = _make_cog(ctx)
+    board = MagicMock(spec=discord.TextChannel)
+    board.id = 5555
     guild = FakeGuild(id=GUILD_ID)
-    channel = SimpleNamespace(id=5555)
+    guild.get_channel = lambda cid: board if cid == 5555 else None
 
     with patch.object(
         cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
     ):
-        assert await cog.post_bounty_panel(guild, channel) == "msg"
+        assert await cog.post_bounty_panel(guild) == "msg"
 
 
 # ── the listener's fast path ─────────────────────────────────────────────────
@@ -3817,13 +3851,15 @@ async def test_posting_the_bounty_panel_deletes_a_hub_orphaned_by_a_repoint(ctx,
     old_message.delete = AsyncMock()
     old_channel = MagicMock(spec=discord.TextChannel)
     old_channel.get_partial_message.return_value = old_message
+    new_channel = MagicMock(spec=discord.TextChannel)
+    new_channel.id = 6666
     guild = FakeGuild(id=GUILD_ID)
-    guild.get_channel = lambda cid: old_channel if cid == 5555 else None
+    guild.get_channel = lambda cid: old_channel if cid == 5555 else new_channel
 
     with patch.object(
         cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
     ):
-        await cog.post_bounty_panel(guild, SimpleNamespace(id=6666))
+        await cog.post_bounty_panel(guild)
 
     old_channel.get_partial_message.assert_called_once_with(4242)
     old_message.delete.assert_awaited_once()
@@ -3838,168 +3874,18 @@ async def test_posting_the_bounty_panel_does_not_delete_a_hub_in_the_current_boa
     cog._save_bounty_panel_ids(GUILD_ID, 5555, 4242)
 
     channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 5555
     guild = FakeGuild(id=GUILD_ID)
     guild.get_channel = lambda cid: channel
 
     with patch.object(
         cog.bounty_panel, "place_or_refresh", new=AsyncMock(return_value="msg")
     ):
-        await cog.post_bounty_panel(guild, SimpleNamespace(id=5555))
+        await cog.post_bounty_panel(guild)
 
     channel.get_partial_message.assert_not_called()
     with open_db(db) as conn:
         assert load_econ_settings(conn, GUILD_ID).bounty_panel_message_id == 4242
-
-
-# ── the guide/leaderboard changeover (2026-08-18) ────────────────────────────
-#
-# plan_panel_merge decides; these cover the applying of it, which is the half
-# that touches Discord: the right message deleted, the ids written, and a
-# failure that must not leave the one-shot planning the same delete forever.
-
-
-def _merge_world(ctx, db, *, board_channel=None):
-    """A cog whose guild resolves ``board_channel`` by id, plus that channel."""
-    cog = _make_cog(ctx)
-    old = MagicMock(delete=AsyncMock())
-    channel = MagicMock(spec=discord.TextChannel)
-    channel.get_partial_message = MagicMock(return_value=old)
-    guild = MagicMock(id=GUILD_ID)
-    guild.get_channel = MagicMock(
-        side_effect=lambda cid: channel if cid == board_channel else None
-    )
-    cog._publish_panel_guilds = AsyncMock()  # type: ignore[method-assign]
-    return cog, guild, old
-
-
-def _ids(db):
-    with open_db(db) as conn:
-        s = load_econ_settings(conn, GUILD_ID)
-    return (s.guide_channel_id, s.guide_message_id,
-            s.leaderboard_channel_id, s.leaderboard_message_id)
-
-
-@pytest.mark.asyncio
-async def test_merge_deletes_the_old_board_and_clears_its_ids(ctx, db):
-    """Main-guild shape: two channels, and only the board message goes."""
-    _enable(db, guide_channel_id=11, guide_message_id=22,
-            leaderboard_channel_id=33, leaderboard_message_id=44)
-    cog, guild, old = _merge_world(ctx, db, board_channel=33)
-
-    await cog._merge_panels_for_guild(guild)
-
-    old.delete.assert_awaited_once()
-    assert _ids(db) == (11, 22, 0, 0)  # the panel's own ids untouched
-
-
-@pytest.mark.asyncio
-async def test_merge_runs_for_a_guild_with_the_economy_switched_off(ctx, db):
-    """A disabled economy still has the stale message; skipping it would strand
-    the board in the channel for as long as the economy stayed off."""
-    _enable(db, guide_channel_id=11, guide_message_id=22,
-            leaderboard_channel_id=33, leaderboard_message_id=44)
-    with open_db(db) as conn:
-        save_econ_settings(conn, GUILD_ID, {"enabled": False})
-    cog, guild, old = _merge_world(ctx, db, board_channel=33)
-
-    await cog._merge_panels_for_guild(guild)
-
-    old.delete.assert_awaited_once()
-    assert _ids(db)[2:] == (0, 0)
-
-
-@pytest.mark.asyncio
-async def test_merge_clears_the_ids_even_when_the_delete_fails(ctx, db):
-    """A message someone already removed, or a channel the bot lost access to,
-    both mean the board is gone — so the ids clear either way and the one-shot
-    cannot retry the same delete on every boot."""
-    _enable(db, guide_channel_id=11, guide_message_id=22,
-            leaderboard_channel_id=33, leaderboard_message_id=44)
-    cog, guild, old = _merge_world(ctx, db, board_channel=33)
-    old.delete = AsyncMock(
-        side_effect=discord.Forbidden(MagicMock(status=403), "no")
-    )
-
-    await cog._merge_panels_for_guild(guild)
-
-    assert _ids(db) == (11, 22, 0, 0)
-
-
-@pytest.mark.asyncio
-async def test_merge_clears_the_ids_when_the_channel_is_gone(ctx, db):
-    _enable(db, guide_channel_id=11, guide_message_id=22,
-            leaderboard_channel_id=33, leaderboard_message_id=44)
-    cog, guild, _old = _merge_world(ctx, db, board_channel=None)
-
-    await cog._merge_panels_for_guild(guild)
-
-    assert _ids(db) == (11, 22, 0, 0)
-
-
-@pytest.mark.asyncio
-async def test_merge_adopts_a_board_with_no_guide_and_deletes_nothing(ctx, db):
-    _enable(db, leaderboard_channel_id=33, leaderboard_message_id=44)
-    cog, guild, old = _merge_world(ctx, db, board_channel=33)
-
-    await cog._merge_panels_for_guild(guild)
-
-    old.delete.assert_not_awaited()
-    assert _ids(db) == (33, 44, 0, 0)
-
-
-@pytest.mark.asyncio
-async def test_merge_touches_nothing_for_a_guild_with_no_board(ctx, db):
-    """The `1358…` shape, and every boot after the first: no writes at all."""
-    _enable(db, guide_channel_id=11, guide_message_id=22)
-    cog, guild, old = _merge_world(ctx, db, board_channel=33)
-    cog._save_settings = MagicMock()  # type: ignore[method-assign]
-
-    await cog._merge_panels_for_guild(guild)
-
-    old.delete.assert_not_awaited()
-    cog._save_settings.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_merge_repaints_the_surviving_panel(ctx, db):
-    """The message survives the merge still showing the *guide* embed, so the
-    one-shot repaints it — including for a guild that had nothing to clean up,
-    which has no other trigger until the hourly tick."""
-    _enable(db, guide_channel_id=11, guide_message_id=22)
-    cog = _make_cog(ctx)
-    cog.bot.wait_until_ready = AsyncMock()
-    cog.bot.guilds = [MagicMock(id=GUILD_ID)]
-    cog.economy_panel.refresh = AsyncMock()  # type: ignore[method-assign]
-    cog._merge_panels_for_guild = AsyncMock()  # type: ignore[method-assign]
-
-    await cog._merge_panels_once()
-
-    cog.economy_panel.refresh.assert_awaited_once_with(
-        GUILD_ID, repost_if_missing=False
-    )
-
-
-@pytest.mark.asyncio
-async def test_merge_survives_a_guild_that_raises(ctx, db):
-    """One guild's failure must not stop the rest — the sweep is the only
-    chance each guild gets, since the next boot sees ids already cleared."""
-    cog = _make_cog(ctx)
-    bad, good = MagicMock(id=1), MagicMock(id=2)
-    cog.bot.wait_until_ready = AsyncMock()
-    cog.bot.guilds = [bad, good]
-    seen = []
-
-    async def _one(guild):
-        seen.append(guild.id)
-        if guild is bad:
-            raise RuntimeError("boom")
-
-    cog._merge_panels_for_guild = _one  # type: ignore[method-assign]
-    cog.economy_panel.refresh = AsyncMock()  # type: ignore[method-assign]
-
-    await cog._merge_panels_once()
-
-    assert seen == [1, 2]
 
 
 @pytest.mark.asyncio

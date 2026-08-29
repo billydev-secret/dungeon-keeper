@@ -9,7 +9,7 @@ only the surface that renders it moved.
 
 The panel's ids outlived the panel: ``guide_channel_id`` / ``guide_message_id``
 are still the surviving pair, because the message they name is the one the
-merged panel kept (see ``plan_panel_merge`` in ``economy.logic``).
+merged panel kept.
 
 Both buttons here — ❓ How it Works and the 🔔 Notifications toggle for the
 opt-in role (``game_role_id``) — carry static ``custom_id``s with no

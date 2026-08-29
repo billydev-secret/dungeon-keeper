@@ -44,14 +44,13 @@ def test_sticky_panel_channels_lists_configured_panels(db):
     """The two panels that only re-stick under human messages, so an auction
     sharing their channel is warned about rather than refused.
 
-    A retired ``leaderboard_channel_id`` must not resurface as a resident: the
-    panel it named merged into the economy panel on 2026-08-18, so warning
-    about it would name a channel that no longer holds anything.
+    The panel that once had its own pair merged into the economy panel on
+    2026-08-18 and its retired ids were deleted on 2026-08-29, so only the
+    surviving two resolve to residents.
     """
     with open_db(db) as conn:
         save_econ_settings(conn, GUILD, {
             "guide_channel_id": 11,
-            "leaderboard_channel_id": 22,
             "shop_channel_id": 33,
         })
         found = sticky_panel_channels(conn, GUILD)

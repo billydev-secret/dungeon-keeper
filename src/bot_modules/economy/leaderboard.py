@@ -12,7 +12,7 @@ Since 2026-08-18 this is the guild's **only** economy panel: the how-it-works
 guide it used to sit alongside became the ❓ button under this embed, and the
 merged panel kept the guide's home and the guide's stored ids
 (``guide_channel_id`` / ``guide_message_id`` in the ``econ_`` config — see
-``plan_panel_merge`` in ``economy.logic`` for why that pair won). This module
+the economy spec for why that pair won). This module
 still owns the content and both refresh loops; only the message it edits
 changed.
 

@@ -169,30 +169,46 @@ def _guess_prompt_destination(conn, guild_id: int) -> int:
     return int(config.prompt_channel_id or config.guess_channel_id or 0)
 
 
+def _bounty_destination(conn, guild_id: int) -> int:
+    from bot_modules.services.economy_service import (  # noqa: PLC0415
+        load_econ_settings,
+    )
+
+    # The board channel, not ``bounty_panel_channel_id``. Those two disagree
+    # exactly when an admin has repointed the board and the hub has not moved
+    # yet — and the hub is about to be placed in the *new* board channel, so
+    # that is the one whose residents and permissions matter.
+    return int(load_econ_settings(conn, guild_id).bounty_channel_id or 0)
+
+
 #: Where each panel that owns its destination actually posts.
 #:
 #: **Not** the sticky registry's channel for that panel. The registry answers
-#: "where is this panel *now*", and for these two that is a different key:
+#: "where is this panel *now*", and for these that is a different key:
 #: Voice Control records its panel's live location under
 #: ``voice_master_panel_channel_id`` while posting into
-#: ``voice_master_control_channel_id``, and the Guess prompt has no recorded
-#: channel at all until it has been posted once. Reading the registry here
-#: checked the wrong channel after a Control Channel move — refusing a post
-#: into a free channel because of who lived in the *old* one — and skipped the
-#: check entirely on the first-ever post, which is the one that needs it.
+#: ``voice_master_control_channel_id``, the Guess prompt has no recorded
+#: channel at all until it has been posted once, and the bounty hub records
+#: ``bounty_panel_channel_id`` while posting into ``bounty_channel_id``.
+#: Reading the registry here checked the wrong channel after a Control Channel
+#: move — refusing a post into a free channel because of who lived in the *old*
+#: one — and skipped the check entirely on the first-ever post, which is the
+#: one that needs it.
 _OWN_CHANNEL_DESTINATIONS = {
     "voice-control": _voice_control_destination,
     "guess-prompt": _guess_prompt_destination,
+    "economy-bounty": _bounty_destination,
 }
 
 
 async def own_channel_id(ctx, guild_id: int, key: str) -> int:
     """Where a panel that owns its destination is configured to post.
 
-    Voice Control and the Guess Who prompt take no channel from the caller, so
-    the collision check has to work out where they are going. Returns 0 for a
-    panel that takes its channel from the caller, or one with nothing
-    configured — the caller then has nothing to check.
+    Voice Control, the Guess Who prompt and the Bounty Board hub take no
+    channel from the caller, so the collision and permission checks have to
+    work out where they are going. Returns 0 for a panel that takes its channel
+    from the caller, or one with nothing configured — the caller then has
+    nothing to check.
     """
     resolve = _OWN_CHANNEL_DESTINATIONS.get(key)
     if resolve is None:

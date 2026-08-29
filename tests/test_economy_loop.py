@@ -1847,12 +1847,6 @@ def test_tier_echo_line_never_names_the_goal():
                      False, id="channel-set-but-panel-never-posted"),
         pytest.param({"guide_channel_id": 0, "guide_message_id": 0},
                      False, id="no-panel-at-all"),
-        # The retired pair must not resurrect the echo on its own: a guild
-        # that never restarted after the merge still carries those ids, and
-        # linking at a message the bot no longer edits is the "empty alarm"
-        # this gate exists to prevent.
-        pytest.param({"leaderboard_channel_id": 77, "leaderboard_message_id": 88},
-                     False, id="only-the-retired-ids-are-set"),
     ],
 )
 async def test_quest_flip_echo_needs_a_panel_to_link_at(db, monkeypatch, panel, echoed):

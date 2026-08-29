@@ -39,8 +39,9 @@ _ADMIN = Depends(require_perms({"admin"}))
 
 
 class PostPanelRequest(BaseModel):
-    #: Ignored by panels that own their destination (Voice Control, Guess Who),
-    #: which post into the channel configured on their own settings page.
+    #: Ignored by panels that own their destination (Voice Control, Guess Who,
+    #: the Bounty Board), which post into the channel configured on their own
+    #: settings page.
     channel_id: str | None = None
     #: Values for the options a spec declares. Anything not declared is dropped
     #: rather than forwarded, so the request body can't reach a keyword the
@@ -130,7 +131,45 @@ def _coerce_options(spec: PanelSpec, supplied: dict[str, str] | None) -> dict:
 # Panels that post into a channel from their own config rather than one the
 # caller picks. Passing a channel to these is accepted and ignored, so the UI
 # can hide the picker without the route depending on it having done so.
-_OWN_CHANNEL_METHODS = {"post_control_panel", "post_prompt_panel"}
+#
+# The Bounty Board joined them on 2026-08-29. It had always *behaved* like one
+# — ``post_bounty_panel`` refused every channel but ``bounty_channel_id``, so
+# the picker the dashboard drew had exactly one valid answer and every other
+# choice was an error message — while still sitting beside the Bounty Board
+# Channel setting that decides that answer. That is the duplication CLAUDE.md's
+# "collapse controls" rule is about: the panel owns its destination, so it says
+# so here instead of asking twice.
+_OWN_CHANNEL_METHODS = {
+    "post_control_panel",
+    "post_prompt_panel",
+    "post_bounty_panel",
+}
+
+
+def _require_can_post(guild, channel) -> None:
+    """Refuse up front when the bot can't post the panel where it is going.
+
+    Fails with something actionable rather than letting the cog return a bare
+    None the admin has to guess at — and, for a sticky panel, rather than
+    letting a half-finished placement delete the old message and then fail to
+    send the new one.
+    """
+    perms = channel.permissions_for(guild.me)
+    missing = [
+        label
+        for flag, label in (
+            (perms.view_channel, "View Channel"),
+            (perms.send_messages, "Send Messages"),
+            (perms.embed_links, "Embed Links"),
+        )
+        if not flag
+    ]
+    if missing:
+        raise HTTPException(
+            400,
+            f"The bot can't post in #{channel.name} — missing permissions: "
+            f"{', '.join(missing)}",
+        )
 
 
 @router.post("/panels/{key}/post")
@@ -177,24 +216,25 @@ async def post_panel(
         channel = guild.get_channel(channel_id)
         if not isinstance(channel, discord.TextChannel):
             raise HTTPException(400, "Channel must be a text channel in this guild")
-        # Fail here with something actionable rather than letting the cog return
-        # a bare None the admin has to guess at.
-        perms = channel.permissions_for(guild.me)
-        missing = [
-            label
-            for flag, label in (
-                (perms.view_channel, "View Channel"),
-                (perms.send_messages, "Send Messages"),
-                (perms.embed_links, "Embed Links"),
-            )
-            if not flag
-        ]
-        if missing:
-            raise HTTPException(
-                400,
-                f"The bot can't post in #{channel.name} — missing permissions: "
-                f"{', '.join(missing)}",
-            )
+        _require_can_post(guild, channel)
+        target_id = channel.id
+    else:
+        # The panel reads its destination from its own config, so there is no
+        # body to validate — but resolve it here anyway, because the permission
+        # check must not be the thing that gets skipped. A sticky panel's
+        # placement deletes the message it is replacing *before* it sends the
+        # new one, so a channel the bot cannot post in leaves the guild with no
+        # panel at all and a repost that fails the same way. Until 2026-08-29
+        # only caller-picked channels were checked, so every own-channel panel
+        # reached the placement unguarded.
+        #
+        # 0 means nothing is configured yet, which is the common case and the
+        # cog's own error message says it far better than a permission
+        # complaint would — so leave that to the cog.
+        target_id = await own_channel_id(ctx, guild_id, spec.key)
+        own_channel = guild.get_channel(target_id) if target_id else None
+        if isinstance(own_channel, discord.TextChannel):
+            _require_can_post(guild, own_channel)
 
     # One bottom slot per channel. Refuse the collision that cannot be lived
     # with, warn about the one that can — for every panel in the registry
@@ -205,14 +245,8 @@ async def post_panel(
     # so they have no bottom-slot contest to lose and refusing them would block
     # a placement that has always worked.
     warning = None
-    if is_sticky_panel(spec.key):
-        target_id = (
-            channel.id if channel else await own_channel_id(ctx, guild_id, spec.key)
-        )
-        if target_id:
-            warning = await sticky_conflict(
-                ctx, guild_id, target_id, excluding=spec.key
-            )
+    if is_sticky_panel(spec.key) and target_id:
+        warning = await sticky_conflict(ctx, guild_id, target_id, excluding=spec.key)
 
     try:
         message = await post(guild, channel, **_coerce_options(spec, body.options))

@@ -457,7 +457,7 @@ def test_panel_ids_round_trip(db):
     """The merged panel stores its ids in the *guide* pair (2026-08-18).
 
     Named for the guide because that is the message the merge kept, not
-    because the guide is what the panel renders — see plan_panel_merge.
+    because the guide is what the panel renders.
     """
     with open_db(db) as conn:
         save_econ_settings(

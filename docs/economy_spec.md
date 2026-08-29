@@ -366,7 +366,12 @@ to currency.
   `tests/test_economy_bounty_views.py` pins that. The expiry DM builds its link
   from `notice.card_channel_id`/`card_message_id` and simply omits it when
   those are 0 (a bounty whose card never posted). `post_bounty_panel`
-  refuses any channel but the board. Where the hub landed is stored in its own
+  **takes no channel from the caller** — it reads `bounty_channel_id` itself
+  (`_OWN_CHANNEL_METHODS`, alongside Voice Control and the Guess Who prompt),
+  so the dashboard draws no picker for it. It refused every other channel until
+  2026-08-29, which left a picker beside the Bounty Board Channel setting whose
+  only valid answer was that setting: the duplication the channel-settings
+  audit was opened to find. Where the hub landed is stored in its own
   pair (`bounty_panel_channel_id`/`_message_id`): an admin repointing
   `bounty_channel_id` doesn't touch them, so on a mismatch `_bounty_panel_ids`
   reads the hub as unposted — the restick stops chasing a message off the
@@ -1539,7 +1544,9 @@ ephemeral panel (§7), and **every one is giftable** (sinks round 2, stage 1:
 a gift is the base perk rented with `beneficiary_id` = the friend; the old
 `gift_color` kind and its separate `price_gift_color` retired in migration
 091, which rewrote live rows to `role_color`-with-beneficiary and widened the
-perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
+perk CHECK once for the round's later kinds, `voice_style` and `emoji`; the
+orphaned `econ_price_gift_color` config rows two guilds still carried were
+deleted in migration 191 —
 see `docs/plans/economy-sinks-round-3.md`). **Custom shop items** (2026-08-25)
 open the catalogue to admins — see the row below and
 `docs/plans/economy-shop-items.md` — **fully shipped 2026-08-26**: the
@@ -2040,20 +2047,14 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   `econ_guide_channel_id` / `econ_guide_message_id` — the guide's pair, kept
   because the merged panel *is* the guide's old message (same-channel repost
   edits in place, another channel deletes + reposts).
-  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` are **retired**:
-  zeroed on the first boot after the merge by `EconomyCog._merge_panels_once`,
-  and read by nothing.
+  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` were retired by
+  the merge and **deleted on 2026-08-29** (migration 191), along with the
+  boot-time one-shot that cleared them and the pure `plan_panel_merge` that
+  decided its work. The 2026-08-29 channel-settings audit confirmed every guild
+  had restarted past the changeover — two carried an explicit 0 and the third
+  had no row — so nothing was left for the one-shot to find.
 
-  **The changeover (2026-08-18).** Merging in code leaves two messages in
-  Discord, and only the running bot can remove one — so a startup one-shot
-  does it, per guild, deciding with the pure `plan_panel_merge`
-  (`economy/logic.py`): both posted ⇒ delete the board message and clear its
-  ids, the guide's message staying put and repainting as the panel; guide only
-  ⇒ nothing to do; board only (not a prod shape) ⇒ adopt its ids rather than
-  orphan a live panel. Self-clearing, so every later boot plans nothing; not
-  gated on `econ_enabled`, or a guild that switched its economy off would keep
-  the stale board forever; and the ids clear even when the delete fails, so it
-  cannot retry forever. **Refresh is event-driven:** every economy credit
+  **Refresh is event-driven:** every economy credit
   (`apply_credit`), community-counter bump, and dashboard progress edit
   marks the guild dirty in `economy/live_signal.py` (process-local,
   import-free), and `leaderboard_live_loop` (20 s poll) repaints a dirty
