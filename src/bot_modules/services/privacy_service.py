@@ -474,14 +474,6 @@ def purge_user_data(
             table=table,
         )
 
-    for col in ("user_a", "user_b"):
-        _delete(
-            conn,
-            f"DELETE FROM wellness_partners WHERE guild_id = ? AND {col} = ?",
-            (guild_id, user_id),
-            table=f"wellness_partners.{col}",
-        )
-
     # Economy + casino per-member state (the ledger is deliberately kept —
     # see economy_service._PURGE_USER_ID_TABLES for the list and the rule).
     from bot_modules.services.economy_service import econ_purge_user
@@ -568,7 +560,7 @@ THIRD_PARTY_TABLES = frozenset(
         "reaction_tip_awards", "rules_events", "rules_ledger", "starboard_reactors",
         "mahjong_tables",
         "tickets", "user_interactions", "user_interactions_log", "warnings",
-        "watched_users", "wellness_partners", "whisper_guesses", "whisper_replies",
+        "watched_users", "whisper_guesses", "whisper_replies",
         "whisper_reports", "whispers",
     }
 )

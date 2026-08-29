@@ -1,6 +1,9 @@
 # Wellness: one ephemeral panel in Discord (the bank paradigm)
 
-**Status: proposal — not built.** Written 2026-07-30 during the wellness review,
+**Status: proposal — not built; partly obsolete.** The 2026-08-28 readiness
+review deleted two building blocks this plan leans on: `_SettingsView` (dead
+code, cut) and the whole partners system (`wellness_partners.py`, migration
+188) — re-scope before acting on it. Written 2026-07-30 during the wellness review,
 at Ben's request: "look at how we could move [to] the panels-with-buttons
 paradigm we're using on the bank."
 

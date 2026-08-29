@@ -2486,7 +2486,6 @@ textarea.field-input { resize: vertical; }
 .w-streak-badge { font-size: 48px; margin-bottom: var(--s-1); }
 .w-streak-days { font-size: var(--t-6); font-weight: 700; }
 .w-streak-sub { color: var(--ink-dim); font-size: var(--t-2); margin-top: var(--s-1); }
-.w-pending { font-size: var(--t-2); color: var(--ink-dim); font-weight: 400; }
 
 .w-inline-form { display: flex; gap: var(--s-2); align-items: center; flex-wrap: wrap; max-width: none; }
 

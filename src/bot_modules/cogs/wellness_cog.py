@@ -21,7 +21,6 @@ from bot_modules.services.wellness_service import (
     get_wellness_user,
     opt_in_user,
     update_away_message,
-    update_user_settings,
     wellness_dashboard_link,
 )
 from bot_modules.core.utils import format_user_for_log
@@ -156,8 +155,8 @@ class _SetupWizardView(discord.ui.View):
                 "Your **Wellness Guardian** role has been assigned — "
                 "check out the new 🌿 Wellness channels in your channel list.\n\n"
                 "**Next steps:**\n"
-                "• Set message caps, schedule offline hours, find an "
-                "accountability partner and fine-tune everything from the "
+                "• Set message caps, schedule offline hours and fine-tune "
+                "everything from the "
                 f"**{wellness_dashboard_link()}**.\n"
                 "• `/wellness away set` — Turn your away auto-reply on or off, with an\n"
                 "  optional custom message"
@@ -285,141 +284,6 @@ class _SetupWizardView(discord.ui.View):
             embed=self._build_done_embed(member), view=None
         )
         self.stop()
-
-
-# ---------------------------------------------------------------------------
-# Settings view
-# ---------------------------------------------------------------------------
-
-
-class _SettingsView(discord.ui.View):
-    def __init__(
-        self,
-        ctx: AppContext,
-        invoker_id: int,
-        current_enforcement: str,
-        current_notifications: str,
-        current_public: bool,
-    ) -> None:
-        super().__init__(timeout=300)
-        self._ctx = ctx
-        self._invoker_id = invoker_id
-
-        enf_select: discord.ui.Select[discord.ui.View] = discord.ui.Select(
-            placeholder="Enforcement level…",
-            options=[
-                discord.SelectOption(
-                    label=ENFORCEMENT_LABELS[k],
-                    value=k,
-                    default=(k == current_enforcement),
-                    description=ENFORCEMENT_DESCRIPTIONS[k][:100],
-                )
-                for k in ("gentle", "slow_mode", "gradual")
-            ],
-            row=0,
-        )
-        enf_select.callback = self._make_enforcement_cb()  # type: ignore[assignment]
-        self.add_item(enf_select)
-
-        notif_select: discord.ui.Select[discord.ui.View] = discord.ui.Select(
-            placeholder="Notifications…",
-            options=[
-                discord.SelectOption(
-                    label="In-channel reply (visible ~30s)",
-                    value="ephemeral",
-                    default=(current_notifications == "ephemeral"),
-                ),
-                discord.SelectOption(
-                    label="DM only (private)",
-                    value="dm",
-                    default=(current_notifications == "dm"),
-                ),
-                discord.SelectOption(
-                    label="In-channel + DM",
-                    value="both",
-                    default=(current_notifications == "both"),
-                ),
-            ],
-            row=1,
-        )
-        notif_select.callback = self._make_notifications_cb()  # type: ignore[assignment]
-        self.add_item(notif_select)
-
-        commit_btn: discord.ui.Button[discord.ui.View] = discord.ui.Button(
-            label="Public Commitment: ON" if current_public else "Public Commitment: OFF",
-            style=discord.ButtonStyle.success if current_public else discord.ButtonStyle.secondary,
-            row=2,
-        )
-        commit_btn.callback = self._make_commit_cb(current_public)  # type: ignore[assignment]
-        self.add_item(commit_btn)
-
-    def _check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self._invoker_id
-
-    def _make_enforcement_cb(self):
-        async def cb(interaction: discord.Interaction) -> None:
-            if not self._check(interaction):
-                await interaction.response.defer()
-                return
-            value = interaction.data["values"][0]  # type: ignore[index,typeddict-item]
-            ctx = self._ctx
-            guild_id = interaction.guild_id or 0
-            user_id = interaction.user.id
-
-            def _write():
-                with ctx.open_db() as conn:
-                    update_user_settings(conn, guild_id, user_id, enforcement_level=value)
-
-            await asyncio.to_thread(_write)
-            await interaction.response.send_message(
-                f"✅ Enforcement set to **{ENFORCEMENT_LABELS[value]}**.", ephemeral=True
-            )
-        return cb
-
-    def _make_notifications_cb(self):
-        async def cb(interaction: discord.Interaction) -> None:
-            if not self._check(interaction):
-                await interaction.response.defer()
-                return
-            value = interaction.data["values"][0]  # type: ignore[index,typeddict-item]
-            ctx = self._ctx
-            guild_id = interaction.guild_id or 0
-            user_id = interaction.user.id
-
-            def _write():
-                with ctx.open_db() as conn:
-                    update_user_settings(conn, guild_id, user_id, notifications_pref=value)
-
-            await asyncio.to_thread(_write)
-            await interaction.response.send_message(
-                f"✅ Notifications set to **{value}**.", ephemeral=True
-            )
-        return cb
-
-    def _make_commit_cb(self, current: bool):
-        async def cb(interaction: discord.Interaction) -> None:
-            if not self._check(interaction):
-                await interaction.response.defer()
-                return
-            ctx = self._ctx
-            guild_id = interaction.guild_id or 0
-            user_id = interaction.user.id
-
-            def _write():
-                with ctx.open_db() as conn:
-                    wuser = get_wellness_user(conn, guild_id, user_id)
-                    new_val = not (wuser.public_commitment if wuser else current)
-                    update_user_settings(conn, guild_id, user_id, public_commitment=new_val)
-                return new_val
-
-            new_value = await asyncio.to_thread(_write)
-            await interaction.response.send_message(
-                "✅ You're now on the **Active in Commitment** list."
-                if new_value
-                else "✅ You've been removed from the **Active in Commitment** list.",
-                ephemeral=True,
-            )
-        return cb
 
 
 # ---------------------------------------------------------------------------

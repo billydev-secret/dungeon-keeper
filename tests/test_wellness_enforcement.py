@@ -771,7 +771,8 @@ async def test_on_message_nudge_returns_false_and_records_streak(db_path):
 async def test_on_message_cooldown_sends_breather_without_arming_state(db_path):
     """The breather notice IS the cooldown: the message is not consumed and
     no cooldown state is armed (the cooldown_until write was removed
-    2026-07-30 along with the never-enforced "cooldown" level)."""
+    2026-07-30 with the never-enforced "cooldown" level; migration 189
+    dropped the column itself)."""
     with open_db(db_path) as conn:
         _make_user(conn, notifications_pref="dm")
         cap_id = add_cap(
@@ -791,11 +792,6 @@ async def test_on_message_cooldown_sends_breather_without_arming_state(db_path):
     result = await wellness_on_message(ctx, msg)
     assert result is False
     msg.author.send.assert_awaited()  # the breather DM went out
-
-    with open_db(db_path) as conn:
-        u = get_wellness_user(conn, 100, 200)
-        assert u is not None
-        assert u.cooldown_until is None
 
 
 @freeze_time("2026-05-31 12:30:00")

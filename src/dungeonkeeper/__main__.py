@@ -55,10 +55,6 @@ from bot_modules.services.economy_loop import (
 )
 from bot_modules.services.greeting_watch_loop import greeting_watch_loop
 from bot_modules.services.voice_xp_service import voice_xp_loop
-from bot_modules.services.wellness_partners import (
-    WellnessPartnerAcceptButton,
-    WellnessPartnerDeclineButton,
-)
 from bot_modules.services.db_backup import db_backup_loop
 from bot_modules.services.xp_service import (
     handle_level_progress,
@@ -317,9 +313,6 @@ def main() -> None:
     # Register persistent announcement role buttons — posted announcements stay
     # clickable indefinitely, long after their queue row is gone.
     bot.add_dynamic_items(AnnouncementRoleButton)
-
-    # Register persistent wellness-partner request buttons so DM Accept/Decline survive restarts
-    bot.add_dynamic_items(WellnessPartnerAcceptButton, WellnessPartnerDeclineButton)
 
     # Register the persistent coin-drop Claim button — a pouch posted before a
     # restart stays claimable after it.

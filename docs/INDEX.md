@@ -87,7 +87,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers | Caveat |
 |---|---|---|
-| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body matches code (only `/wellness setup`/`away set` are slash commands; caps/blackouts/partners/streaks are dashboard- and engine-driven; opt-out and consent defaults reworked 2026-07-30). **Activation gap (provisioning only):** no code path provisions a guild's `role_id`/`channel_id` — a NEW guild stays dormant until that row is seeded by hand. The main guild's row IS seeded and the feature is live there with real opted-in members; "dormant everywhere" stopped being true well before 2026-07-30. |
+| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body matches code (only `/wellness setup`/`away set` are slash commands; caps/blackouts/streaks are dashboard- and engine-driven (partners retired 2026-08-28, migration 189); opt-out and consent defaults reworked 2026-07-30). **Activation gap (provisioning only):** no code path provisions a guild's `role_id`/`channel_id` — a NEW guild stays dormant until that row is seeded by hand. The main guild's row IS seeded and the feature is live there with real opted-in members; "dormant everywhere" stopped being true well before 2026-07-30. |
 
 ## Design specs (written to implement; may lag the code)
 

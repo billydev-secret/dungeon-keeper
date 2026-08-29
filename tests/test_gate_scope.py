@@ -92,7 +92,6 @@ def test_adding_a_new_migration_does_not_force_a_full_run():
     [
         "src/bot_modules/core/sticky.py",
         "src/bot_modules/models/thing.py",
-        "src/dungeonkeeper/bot.py",
         "pyproject.toml",
         "tests/conftest.py",
         "tests/web/conftest.py",
@@ -113,6 +112,25 @@ def test_select_tests_honours_a_new_migration():
 def test_select_tests_still_fans_out_on_an_edited_migration():
     _, _, run_full = gate.select_tests(["src/migrations/134_todo_board.sql"], new=set())
     assert run_full is True
+
+
+# ── bootstrap: mapped, not fanned out ────────────────────────────────────
+
+
+def test_bootstrap_edit_does_not_force_a_full_run():
+    """Nearly every feature ship registers itself in __main__.py; that edit
+    maps to the wiring tests instead of invalidating the whole suite."""
+    assert gate.forces_full_run("src/dungeonkeeper/__main__.py", is_new=False) is False
+
+
+def test_select_tests_maps_bootstrap_to_tests_that_name_it():
+    targets, unmapped, run_full = gate.select_tests(
+        ["src/dungeonkeeper/__main__.py"], new=set()
+    )
+    assert run_full is False
+    assert "src/dungeonkeeper/__main__.py" not in unmapped
+    # The wiring tests read __main__.py by path, so the content scan finds them.
+    assert any("wiring" in t or "structure" in t for t in targets), targets
 
 
 # ── cogs reach the app context one way ────────────────────────────────

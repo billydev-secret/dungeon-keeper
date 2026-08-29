@@ -4,9 +4,10 @@ Source: `docs/reviews/2026-08-28-wellness-readiness.md` (FIX-FIRST verdict;
 all §8 decisions resolved 2026-08-28, recorded in that doc). Branch:
 `wellness-top-down-review`. Commits reference their stage letter.
 
-Migration numbering: main tops out at 187; 185 looks claimed elsewhere —
-this branch uses **188+** (recheck against main at rebase time per the
-migration-collision memory).
+Migration numbering: this branch uses **189+**. It first claimed 188, but
+flash_themes took 188 on main while this branch was in flight — exactly the
+collision the migration-numbering memory warns about — so numbers here are
+provisional: recheck against main at every commit and again at rebase time.
 
 ## Stage A — Partners cut (decision 1)
 
@@ -14,7 +15,7 @@ Delete the partners surface end to end: `wellness_partners.py`,
 `wellness-partners.js`, the service section (~wellness_service.py:1611-1725),
 the api routes (request/list/delete + DM view wiring), nav row + dynamic-item
 registration, done-embed copy line, purge/export branches in
-`privacy_service`. Migration **188**: `DROP TABLE wellness_partners` (empty —
+`privacy_service`. Migration **189**: `DROP TABLE wellness_partners` (empty —
 approved by Billy 08-28), plus opportunistic column drops
 `wellness_users.cooldown_until`, `wellness_config.crisis_resource_url`.
 Same commit: `data_register.md` wellness row amended, manual.html partners
@@ -36,7 +37,7 @@ the stale "mirrors the slash command" comment.
   placeholder; dropdown filters already-exempt channels.
 - D6: pause chips render date/relative ("paused indefinitely" >30d) on member
   + admin panels; admin roster shows paused-until.
-- D4: migration **189** adds `wellness_weekly_reports.delivered_at`; set
+- D4: migration **190** adds `wellness_weekly_reports.delivered_at`; set
   after `send_branded_dm` succeeds; admin panel shows undelivered count.
 - Flat `PUT /caps/{id}` on a bucketed cap: reject with "edit the sliders".
 - `slow_mode_rate_seconds`: hard-code 120s, delete the API parameter (column
@@ -53,7 +54,7 @@ Each with logic-layer tests (failing-first where it's a bug fix).
   done-embed gains the goal nudge + sets week-one expectations; ~24h one-time
   follow-up DM nudging a first cap/blackout (rides the scheduler tick;
   respects notifications_pref; one-shot flag needed — column on
-  wellness_users in migration 189).
+  wellness_users in migration 190).
 - D2: wellness home panel + done embed disclose the economy-🔔 dependency of
   the daily digest line (deeper decoupling deferred).
 - D11 + unprovisioned copy: point at "ask the server owner" until D1 ships
@@ -72,7 +73,7 @@ Guild B's all-zero row becomes reachable instead of dead.
 
 ## Stage E — Goal payouts (decision 9; review §6b)
 
-Migration **190**: `wellness_config` payout dials (`payout_clean_week`,
+Migration **191**: `wellness_config` payout dials (`payout_clean_week`,
 `payout_milestone_json` or per-tier columns, default 0/off);
 `wellness_weekly_reports.payout_amount`; `wellness_streaks.paid_badge`.
 - Clean-week payout inside the weekly-report pass: qualifying = ≥1 enabled

@@ -1,6 +1,6 @@
 # Wellness Guardian — Feature Spec
 
-A self-managed boundary tool. Members opt in, pick their own enforcement level, set message caps, schedule blackout windows, and pair up with accountability partners. When someone hits a limit, the bot adds friction (per-user slow mode) rather than locking them out. **This is not therapy** — a one-time disclaimer surfaces during setup.
+A self-managed boundary tool. Members opt in, pick their own enforcement level, set message caps, and schedule blackout windows. When someone hits a limit, the bot adds friction (per-user slow mode) rather than locking them out. **This is not therapy** — a one-time disclaimer surfaces during setup.
 
 > **Document status (2026-07-15):** This doc was previously "Aspirational" and described ~22 `/wellness` slash commands as if they were live. In reality the surface is split by *how you reach a feature*, not by which feature: the **enforcement engine, background loops, and the web dashboard CRUD are built and wired**, but **only three slash commands exist** and there is **no supported path to provision a guild**. The sections below reflect that. Everything not confirmed in code lives under [Not Yet Built / Roadmap](#not-yet-built--roadmap), preserved for design intent.
 
@@ -83,7 +83,6 @@ Full CRUD, authenticated as the logged-in member. The Wellness nav section is ga
 | `GET/POST/PUT/DELETE /caps` | Create, edit, remove message caps (scope, window, limit, exclude-exempt, optional bucket limits) |
 | `GET /blackouts`, `POST /blackouts`, `PUT /blackouts/{id}/toggle`, `DELETE /blackouts/{id}` | Blackout windows, including the four preset **templates** (Night Owl 23:00–07:00 daily, Work Hours 09:00–17:00 weekdays, School Hours 08:00–15:00 weekdays, Weekend Detox all-day Sat–Sun) |
 | `GET/POST /away` | Away message text + toggle (mirrors the two slash commands) |
-| `GET /partners`, `POST /partners/request`, `DELETE /partners/{id}` | Accountability partners — request (DMs the target with Accept/Decline), list, dissolve |
 | `POST /settings` | Enforcement level, notifications pref, public-commitment toggle, timezone, daily reset hour, slow-mode rate |
 | `POST /pause`, `POST /resume` | Pause / resume the member's own tracking |
 | `POST /optout` | Leave the program — tracking deactivated, slow mode lifted, wellness role removed (best-effort); settings retained 30 days, then swept |
@@ -101,13 +100,13 @@ The admin panel does **not** provision the wellness role/category (see activatio
 
 ### Data model (confirmed)
 
-Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), partnerships, milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` is surfaced via `POST /api/wellness/optout` and the Overview panel's **Leave the Program** action (added 2026-07-30).
+Per-guild + per-member tables back all of the above: member settings (timezone, enforcement, notifications pref, slow-mode rate, public-commitment, daily reset hour), caps + per-window counters + overage counters, blackouts + active-marker state, the away message, streak state (current + personal-best + last-violation-date + clean-day history), milestone-badge celebration state, weekly-report cache, per-user slow-mode state, and per-guild config (role id, channel id, active-list message id, default enforcement, exempt channels). Schema lives in `wellness_service.py` (`init_wellness_tables`). `opt_out_user()` is surfaced via `POST /api/wellness/optout` and the Overview panel's **Leave the Program** action (added 2026-07-30).
 
 ---
 
 ## Not Yet Built / Roadmap
 
-Everything below was in the original design spec. Some of the *behavior* here already runs (see Current Behavior — caps/blackouts/partners/streaks/away are real via the dashboard + engine); what is **not** built is the member-facing **slash-command surface** these tables describe, the **provisioning** step, and the explicitly-deferred v2 items. The tables, message copy, and templates are preserved verbatim so the design intent isn't lost.
+Everything below was in the original design spec. Some of the *behavior* here already runs (see Current Behavior — caps/blackouts/streaks/away are real via the dashboard + engine; partners was real too until its 2026-08-28 retirement, below); what is **not** built is the member-facing **slash-command surface** these tables describe, the **provisioning** step, and the explicitly-deferred v2 items. The tables, message copy, and templates are preserved verbatim so the design intent isn't lost.
 
 ### Provisioning (`/wellness-admin setup`)
 
@@ -150,7 +149,7 @@ The original doc presented this full `/wellness` command table. **Only `/wellnes
 | `/wellness resume` | Slash | Wellness role | Resume tracking |
 | `/wellness optout` | Slash | Wellness role | Remove role, deactivate tracking, lift slow mode. Settings kept 30 days |
 
-**Dashboard-equivalent coverage of the above:** caps (add/list/edit/remove), blackouts (add/template/list/toggle/remove), away (on/off/set), partners (request/list/dissolve), settings, pause, resume all exist as dashboard endpoints today. **No equivalent anywhere** for `/wellness away preview`, `/wellness score`, and `/wellness optout` (the `opt_out_user()` backend function exists but is unsurfaced).
+**Dashboard-equivalent coverage of the above:** caps (add/list/edit/remove), blackouts (add/template/list/toggle/remove), away (on/off/set), settings, pause, resume all exist as dashboard endpoints today. **No equivalent anywhere** for `/wellness away preview`, `/wellness score`, and `/wellness optout` (the `opt_out_user()` backend function exists but is unsurfaced).
 
 ### Admin surface
 
@@ -229,6 +228,12 @@ Milestone upgrades are celebrated in the channel for opted-in members.
 > The live implementation posts a list that *includes* the streak-day count (`current_days`), a deviation from the "badges only, no numbers" design below.
 
 ### Partners
+
+> **Retired 2026-08-28.** The partners system shipped (dashboard request →
+> DM Accept/Decline → dissolution) but was never used once, an accepted
+> partnership had no downstream effect, and the request path predated the
+> no-contact rule. Migration 189 dropped the (empty) table and the code was
+> removed; the design below is preserved for reference only.
 
 `/wellness partner request @user` DMs the target with Accept / Decline buttons. Unlimited partners per user. `/wellness partner list` shows everyone's milestone badges. Either side can dissolve via `/wellness partner dissolve` — dissolving preserves both users' streaks. If a partner leaves the guild, the partnership auto-dissolves and the other user is notified.
 

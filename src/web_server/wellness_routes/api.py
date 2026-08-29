@@ -27,18 +27,14 @@ from bot_modules.services.wellness_service import (
     NOTIFICATION_PREFS,
     add_blackout,
     add_cap,
-    create_partner_request,
-    dissolve_partnership,
     ensure_streak,
     find_blackout_by_name,
     find_cap_by_label,
     get_cap,
-    get_partnership,
     get_wellness_config,
     get_wellness_user,
     list_blackouts,
     list_caps,
-    list_partnerships,
     list_weekly_reports,
     next_milestone,
     opt_out_user,
@@ -123,13 +119,12 @@ async def wellness_me(
             streak = ensure_streak(conn, guild_id, user_id, today_iso)
             caps = list_caps(conn, guild_id, user_id)
             blackouts = list_blackouts(conn, guild_id, user_id)
-            partnerships = list_partnerships(conn, guild_id, user_id, accepted_only=False)
-            return wuser, streak, caps, blackouts, partnerships
+            return wuser, streak, caps, blackouts
 
     _result = await run_query(_q)
     if _result is None:
         return {"opted_in": False}
-    wuser, streak, caps, blackouts, partnerships = _result
+    wuser, streak, caps, blackouts = _result
 
     nxt = next_milestone(streak.current_days)
     next_text = (
@@ -158,10 +153,6 @@ async def wellness_me(
         "next_milestone_text": next_text,
         "caps_count": len(caps),
         "blackouts_count": len([b for b in blackouts if b.enabled]),
-        "partners_count": len([p for p in partnerships if p.status == "accepted"]),
-        "pending_partners_count": len(
-            [p for p in partnerships if p.status == "pending"]
-        ),
         "enforcement_levels": ENFORCEMENT_LEVELS,
         "notification_prefs": NOTIFICATION_PREFS,
     }
@@ -329,43 +320,6 @@ async def get_away(
         "message": wuser.away_message,
         "max_len": AWAY_MESSAGE_MAX_LEN,
     }
-
-
-@router.get("/partners")
-async def get_partners(
-    user: AuthenticatedUser = Depends(require_user),
-    ctx=Depends(get_ctx),
-    guild_id: int = Depends(get_guild_id),
-):
-    user_id = user.user_id
-
-    def _q():
-        with ctx.open_db() as conn:
-            return list_partnerships(conn, guild_id, user_id, accepted_only=False)
-
-    partnerships = await run_query(_q)
-
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-
-    rows = []
-    for p in partnerships:
-        other_id = p.other(user.user_id)
-        name = f"User {other_id}"
-        if guild:
-            m = guild.get_member(other_id)
-            if m:
-                name = m.display_name
-        rows.append(
-            {
-                "id": p.id,
-                "other_id": other_id,
-                "other_name": name,
-                "status": p.status,
-                "is_requester": p.requester_id == user.user_id,
-            }
-        )
-    return {"partnerships": rows}
 
 
 @router.get("/history")
@@ -917,107 +871,4 @@ async def update_away(
             update_away_message(conn, guild_id, user_id, enabled=enabled, message=message)
 
     await run_query(_write)
-    return _ok()
-
-
-# ── Partners ────────────────────────────────────────────────────────────
-
-
-@router.post("/partners/request")
-async def request_partner(
-    payload: dict = Body(...),
-    user: AuthenticatedUser = Depends(require_user),
-    ctx=Depends(get_ctx),
-    guild_id: int = Depends(get_guild_id),
-) -> JSONResponse:
-    await _require_active(ctx, guild_id, user.user_id)
-    try:
-        target_id = int(payload.get("user_id", 0))
-    except (TypeError, ValueError):
-        return _err("user_id must be a Discord user ID")
-    if target_id <= 0:
-        return _err("user_id is required")
-    if target_id == user.user_id:
-        return _err("you cannot partner with yourself")
-
-    # Confirm target is also opted in, then create the request in one connection.
-    user_id = user.user_id
-
-    def _q_create():
-        with ctx.open_db() as conn:
-            target = get_wellness_user(conn, guild_id, target_id)
-            if target is None or not target.is_active:
-                return "not_opted_in", None
-            return "ok", create_partner_request(conn, guild_id, user_id, target_id)
-
-    _status, _partner = await run_query(_q_create)
-    if _status == "not_opted_in":
-        return _err("that user has not opted in to wellness")
-    if _partner is None:
-        return _err("a partnership request already exists with that user")
-    partner = _partner
-
-    # Try to DM the target with the persistent buttons. The web flow
-    # mirrors the slash command in commands/wellness_commands.py.
-    bot = getattr(ctx, "bot", None)
-    if bot:
-        target_user = None
-        try:
-            from bot_modules.services.wellness_partners import make_partner_request_view
-
-            target_user = bot.get_user(target_id) or await bot.fetch_user(target_id)
-            view = make_partner_request_view(partner.id)
-            try:
-                requester_name = user.username
-            except AttributeError:
-                requester_name = f"User {user_id}"
-            await target_user.send(
-                content=(
-                    f"**{requester_name}** wants to be your wellness accountability partner. "
-                    "If you accept, you'll both see each other's streaks and be able to "
-                    "send each other supportive nudges. You can dissolve this anytime."
-                ),
-                view=view,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.warning(
-                "Could not DM partner request to %s: %s",
-                format_user_for_log(target_user, target_id),
-                e,
-            )
-            partner_id_to_dissolve = partner.id
-
-            def _dissolve():
-                with ctx.open_db() as conn:
-                    dissolve_partnership(conn, partner_id_to_dissolve)
-
-            await run_query(_dissolve)
-            return _err("could not DM that user — they may have DMs disabled")
-
-    return _ok(id=partner.id)
-
-
-@router.delete("/partners/{partner_id}")
-async def delete_partnership(
-    partner_id: int,
-    user: AuthenticatedUser = Depends(require_user),
-    ctx=Depends(get_ctx),
-    guild_id: int = Depends(get_guild_id),
-) -> JSONResponse:
-    await _require_active(ctx, guild_id, user.user_id)
-    user_id = user.user_id
-
-    def _write():
-        with ctx.open_db() as conn:
-            p = get_partnership(conn, partner_id)
-            if p is None or p.guild_id != guild_id:
-                return {"_err": "partnership not found", "_status": 404}
-            if user_id not in (p.user_a, p.user_b):
-                return {"_err": "not your partnership", "_status": 403}
-            dissolve_partnership(conn, partner_id)
-            return None  # success
-
-    _res = await run_query(_write)
-    if _res is not None:
-        return _err(_res["_err"], status=_res["_status"])
     return _ok()
