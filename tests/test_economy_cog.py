@@ -1023,7 +1023,11 @@ async def test_shop_lists_perks_and_gates_features(ctx, db):
     # Gradient + holographic + icon buttons disabled; color + name enabled.
     buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
     disabled = {
-        str(b.custom_id).split(":")[1] for b in buttons if b.disabled
+        # The nav arrows and the "you are here" caption carry auto-generated
+        # ids, so restrict this to the perk buttons it is actually about.
+        str(b.custom_id).split(":")[1]
+        for b in buttons
+        if b.disabled and str(b.custom_id).startswith("econ_shop_")
     }
     assert disabled == {"role_gradient", "role_holographic", "role_icon"}
     blob = " ".join(f.value for f in kwargs["embed"].fields)
@@ -1225,7 +1229,7 @@ async def test_post_shop_posts_panel_and_saves_ids(ctx, db):
         await cog.post_shop_panel(FakeGuild(id=GUILD_ID), channel)
 
     kwargs = channel.send.await_args.kwargs
-    assert "Perk Shop" in kwargs["embed"].title
+    assert kwargs["embed"].title == "🛍️ Perk Shop"
     assert kwargs["view"].timeout is None  # persistent, never expires
     # One launcher button — the personal menu carries the per-perk buttons.
     assert {str(b.custom_id) for b in kwargs["view"].children} == {
@@ -1319,7 +1323,9 @@ async def test_open_shop_panel_button_serves_the_personal_menu(ctx, db):
 
     kwargs = interaction.response.send_message.await_args.kwargs
     assert kwargs["ephemeral"]
-    assert "Perk Shop" in kwargs["embed"].title
+    # This guild stocks nothing of its own, so the book opens on its first
+    # real section rather than on a Specials page it has no items for.
+    assert kwargs["embed"].title == "🎨 Role cosmetics"
     assert isinstance(kwargs["view"], _ShopView)
 
 
@@ -2930,14 +2936,20 @@ async def test_pay_memo_survives_the_large_amount_confirm_gate(ctx, db):
 async def test_shop_view_shield_button_disabled_while_held(ctx, db):
     _enable(db)
     cog = _make_cog(ctx)
-    view = _ShopView(cog, _settings(db), _guild_roles(), 500, set(), set())
+    from bot_modules.economy.shop import SECTION_GAMES
+
+    view = _ShopView(
+        cog, _settings(db), _guild_roles(), 500, set(), set(),
+        section=SECTION_GAMES,
+    )
     button = next(
         b for b in view.children
         if isinstance(b, discord.ui.Button) and b.custom_id == "econ_shop_shield"
     )
     assert button.disabled is False
     held = _ShopView(
-        cog, _settings(db), _guild_roles(), 500, set(), set(), shields_held=1
+        cog, _settings(db), _guild_roles(), 500, set(), set(), shields_held=1,
+        section=SECTION_GAMES,
     )
     button = next(
         b for b in held.children
@@ -4202,16 +4214,25 @@ async def test_the_shop_opens_on_the_store_where_a_guild_stocks_one(ctx, db):
 
     await _shop(cog, interaction)
 
-    assert _shop_embed(interaction).title == "🎁 Server Store"
+    assert _shop_embed(interaction).title == "🎁 Specials"
     assert isinstance(_shop_view(interaction), _StoreView)
 
 
-@pytest.mark.asyncio
-async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
-    """One page, no arrows, perks on arrival — TGM today.
+def _nav(view):
+    """The shop's navigation row: (label, disabled) for each of its three."""
+    return [
+        (b.label, b.disabled)
+        for b in view.children
+        if isinstance(b, discord.ui.Button) and getattr(b, "row", None) == 4
+    ]
 
-    The whole reorganisation has to be invisible where there is nothing to
-    reorganise, or it is a regression dressed as a feature.
+
+@pytest.mark.asyncio
+async def test_a_guild_with_no_store_never_sees_a_specials_page(ctx, db):
+    """TGM today: no custom items, so that section simply is not in its book.
+
+    An empty section gets no page rather than a page saying it is empty — the
+    shop's shape follows what the guild actually sells.
     """
     from bot_modules.cogs.economy_cog import _ShopView
 
@@ -4227,20 +4248,33 @@ async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
 
     view = _shop_view(interaction)
     assert isinstance(view, _ShopView)
-    assert _shop_embed(interaction).title == "🛍️ Perk Shop"
-    # No second page, so no navigation at all — not two dead arrows around a
-    # caption for the only page there is.
+    # Opens on the first section it does have, not on a blank shelf.
+    assert _shop_embed(interaction).title == "🎨 Role cosmetics"
     assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
-    assert not _nav(view)
+    assert "🎁 Specials" not in [label for label, _ in _nav(view)]
 
 
-def _nav(view):
-    """The shop's navigation row: (label, disabled) for each of its three."""
-    return [
-        (b.label, b.disabled)
-        for b in view.children
-        if isinstance(b, discord.ui.Button) and getattr(b, "row", None) == 4
-    ]
+@pytest.mark.asyncio
+async def test_a_shop_with_one_section_left_shows_no_arrows(ctx, db):
+    """Two dead arrows around the only page there is would be furniture.
+
+    The floor case: every perk switched off and no raffle, so cosmetics is all
+    that remains.
+    """
+    from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS
+
+    _enable(db, raffle_enabled=False,
+            **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS})
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        await _shop(cog, interaction)
+
+    assert not _nav(_shop_view(interaction))
 
 
 @pytest.mark.asyncio
@@ -4263,7 +4297,7 @@ async def test_the_arrows_step_the_sections_and_say_where_you_are(ctx, db):
     ):
         await _shop(cog, interaction)
         assert _nav(_shop_view(interaction)) == [
-            ("◀️", False), ("🎁 Store · 1–10", True), ("▶️", False),
+            ("◀️", False), ("🎁 Specials · 1–10", True), ("▶️", False),
         ]
 
         # ▶️ steps to the next store section: new caption, new embed rows.
@@ -4273,7 +4307,7 @@ async def test_the_arrows_step_the_sections_and_say_where_you_are(ctx, db):
         await nxt.callback(step)
 
     second = step.response.edit_message.await_args.kwargs
-    assert _nav(second["view"])[1] == ("🎁 Store · 11–20", True)
+    assert _nav(second["view"])[1] == ("🎁 Specials · 11–20", True)
     assert "Item 11" in second["embed"].description
     assert "Item 01" not in second["embed"].description
 
@@ -4324,9 +4358,9 @@ async def test_the_arrows_wrap_rather_than_dead_ending(ctx, db):
         new=AsyncMock(return_value=True),
     ):
         last = _interaction(_member(member_id=500))
-        await cog.turn_shop_page(last, 2)          # the perk page
+        await cog.turn_shop_page(last, 3)          # 🎲 Game features, the last
         view = last.response.edit_message.await_args.kwargs["view"]
-        assert _nav(view)[1] == ("✨ Perks", True)
+        assert _nav(view)[1] == ("🎲 Game features", True)
 
         wrapped = _interaction(_member(member_id=500))
         nxt = [b for b in view.children
@@ -4334,7 +4368,7 @@ async def test_the_arrows_wrap_rather_than_dead_ending(ctx, db):
         await nxt.callback(wrapped)
 
     assert _nav(wrapped.response.edit_message.await_args.kwargs["view"])[1] == (
-        "🎁 Store · 1–10", True
+        "🎁 Specials · 1–10", True
     )
 
 
@@ -4354,7 +4388,7 @@ async def test_a_big_store_keeps_the_same_three_controls(ctx, db):
     await _shop(cog, interaction)
 
     view = _shop_view(interaction)
-    assert _nav(view) == [("◀️", False), ("🎁 Store · 1–10", True), ("▶️", False)]
+    assert _nav(view) == [("◀️", False), ("🎁 Specials · 1–10", True), ("▶️", False)]
     # ◀️ from the first page lands on the perks, the last of six.
     assert len([c for c in view.children if isinstance(c, discord.ui.Select)]) == 1
 
@@ -4417,7 +4451,7 @@ async def test_bank_store_is_the_shop_by_a_shorter_name(ctx, db):
     await cog.bank_store.callback(cog, interaction)
 
     assert isinstance(_shop_view(interaction), _StoreView)
-    assert _shop_embed(interaction).title == "🎁 Server Store"
+    assert _shop_embed(interaction).title == "🎁 Specials"
 
 
 @pytest.mark.asyncio
@@ -4496,15 +4530,76 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         await _shop(cog, store)
         srows = _rows(_shop_view(store))
         assert srows == [
-            ["Pick something to buy…"], ["◀️", "🎁 Store · 1–10", "▶️"],
+            ["Pick something to buy…"], ["◀️", "🎁 Specials · 1–10", "▶️"],
         ]
 
         # The perk page, where eight buttons would otherwise leave a gap the
         # navigation falls into.
         perks = _interaction(_member(member_id=500))
-        await cog.turn_shop_page(perks, 2)
+        await cog.turn_shop_page(perks, 3)
 
     rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
-    assert rows[-1] == ["◀️", "✨ Perks", "▶️"]      # its own last row
+    assert rows[-1] == ["◀️", "🎲 Game features", "▶️"]   # its own last row
     assert len(rows) > 1                           # and not the only row
     assert all("◀️" not in r for r in rows[:-1])
+
+
+@pytest.mark.asyncio
+async def test_each_section_carries_only_its_own_controls(ctx, db):
+    """A page must not hold buttons for rows its embed doesn't show.
+
+    Otherwise a member taps 🛡️ Shield on the cosmetics page and has to work
+    out afterwards what they just bought.
+    """
+    from bot_modules.economy.shop import (
+        SECTION_COSMETICS, SECTION_GAMES, SECTION_SERVER,
+    )
+
+    _enable(db, shop_voice_style_enabled=True)
+    cog = _make_cog(ctx)
+
+    def _ids(section):
+        view = _ShopView(
+            cog, _settings(db), _guild_roles(), 500, set(), set(),
+            has_palette=True, shield_price=250, section=section,
+        )
+        return {
+            b.custom_id for b in view.children
+            if isinstance(b, discord.ui.Button)
+            and str(b.custom_id).startswith("econ_shop_")
+        }
+
+    cosmetics, server, games = map(
+        _ids, (SECTION_COSMETICS, SECTION_SERVER, SECTION_GAMES)
+    )
+    assert "econ_shop_rent:role_color" in cosmetics
+    assert "econ_shop_shield" not in cosmetics
+    assert "econ_shop_rent:voice_style" not in cosmetics
+
+    assert server == {"econ_shop_rent:voice_style", "econ_shop_refund"}
+    assert "econ_shop_shield" in games
+    assert "econ_shop_rent:role_color" not in games
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_refund_rides_every_section(ctx, db):
+    """It ends *any* rental, so filing it under one section would hide it.
+
+    A member whose only rental is the voice lease must not have to guess that
+    the refund button lives on the cosmetics page.
+    """
+    from bot_modules.economy.shop import (
+        SECTION_COSMETICS, SECTION_GAMES, SECTION_SERVER,
+    )
+
+    _enable(db, shop_voice_style_enabled=True)
+    cog = _make_cog(ctx)
+
+    for section in (SECTION_COSMETICS, SECTION_SERVER, SECTION_GAMES):
+        view = _ShopView(
+            cog, _settings(db), _guild_roles(), 500, set(), set(),
+            has_palette=True, shield_price=250, section=section,
+        )
+        assert "econ_shop_refund" in {
+            b.custom_id for b in view.children if isinstance(b, discord.ui.Button)
+        }, section

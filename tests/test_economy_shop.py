@@ -362,7 +362,7 @@ def test_switching_everything_off_still_shows_the_server_store(db):
     _enable(db, **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS})
     item = ItemView(item_id=1, name="Tuckshop Voucher", blurb="a treat", price=25)
     embed = build_shop_embed(_settings(db), set(), None, items=[item])
-    assert "Server Store" in [f.name for f in embed.fields]
+    assert "Specials" in [f.name for f in embed.fields]
 
 
 # ── the Server Store: its own pages of the shop, and the panel's teaser ─────
@@ -386,47 +386,70 @@ def test_the_store_section_is_a_teaser_on_the_panel(db):
     """
     _enable(db)
     embed = build_shop_embed(_settings(db), set(), None, panel=True, items=_items(20))
-    block = next(f for f in embed.fields if f.name == "Server Store").value
+    block = next(f for f in embed.fields if f.name == "Specials").value
     assert "Item 08" in block
     assert "Item 09" not in block
     assert "…and **12** more." in block
     assert "Tap **Open Shop** to browse and buy." in block
 
 
-def test_the_shop_is_a_flat_book_with_the_store_first(db):
-    """Billy's shape: one pair of arrows, store pages, then the perk ladder.
+def test_the_shop_is_a_book_of_sections_with_the_specials_first(db):
+    """Billy's four sections, and an empty one gets no page at all.
 
-    Flat rather than sections behind a switcher — ◀️/▶️ is the only navigation
-    in the whole shop. The cost is that a stocked guild's perks sit two taps
-    in; the perk page carries the shield, raffle and refunds precisely so
-    there is never a third page to walk to.
+    A guild that never turned the voice lease on should not have members
+    stepping through a blank shelf to reach the next section — so the shop's
+    shape differs per guild, which is the point.
     """
-    from bot_modules.economy.shop import PAGE_PERKS, PAGE_STORE, shop_pages
+    from bot_modules.economy.shop import (
+        SECTION_COSMETICS, SECTION_GAMES, SECTION_SERVER, SECTION_SPECIALS,
+        shop_pages,
+    )
 
-    assert shop_pages(_items(20)) == [
-        (PAGE_STORE, 0), (PAGE_STORE, 1), (PAGE_PERKS, 0)
+    _enable(db, shop_voice_style_enabled=True)
+    full = shop_pages(_settings(db), items=_items(20))
+    assert full == [
+        (SECTION_SPECIALS, 0), (SECTION_SPECIALS, 1),
+        (SECTION_COSMETICS, 0), (SECTION_SERVER, 0), (SECTION_GAMES, 0),
     ]
-    assert shop_pages(_items(3)) == [(PAGE_STORE, 0), (PAGE_PERKS, 0)]
-    # The case that has to stay invisible: a guild selling nothing of its own
-    # gets the one-page shop it always had.
-    assert shop_pages([]) == [(PAGE_PERKS, 0)]
-    assert shop_pages(None) == [(PAGE_PERKS, 0)]
+    # Only Specials runs to more than one page; the rest are a fixed handful.
+    assert shop_pages(_settings(db), items=_items(3))[0] == (SECTION_SPECIALS, 0)
+    assert len(shop_pages(_settings(db), items=_items(3))) == 4
+
+    # No custom items — TGM — and the Specials section simply isn't there.
+    assert SECTION_SPECIALS not in [s for s, _ in shop_pages(_settings(db))]
+
+    _enable(db, shop_voice_style_enabled=False)
+    assert SECTION_SERVER not in [s for s, _ in shop_pages(_settings(db))]
+
+
+def test_a_shop_with_nothing_left_still_has_one_page(db):
+    """Every switch off and nothing stocked: the arrows need something to hold.
+
+    A shop with no pages has nothing to show the member who opened it, so the
+    cosmetics section stays as the floor and renders its empty table.
+    """
+    from bot_modules.economy.shop import SECTION_COSMETICS, shop_pages
+    from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS
+
+    _enable(db, **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS},
+            raffle_enabled=False)
+    assert shop_pages(_settings(db)) == [(SECTION_COSMETICS, 0)]
 
 
 def test_the_page_counter_runs_over_the_whole_book(db):
-    """It crosses the store/perk seam, so it must not restart at it.
+    """It crosses every section seam, so it must not restart at one.
 
-    A counter that reset would read as the shop losing its place halfway
-    through the arrows.
+    The section itself is named by the embed title and by the caption between
+    the arrows, so the counter does not repeat it.
     """
     from bot_modules.economy.shop import page_note, shop_pages
 
-    pages = shop_pages(_items(20))
-    assert page_note(pages, 0) == "Page 1 of 3 · Server Store · "
-    assert page_note(pages, 1) == "Page 2 of 3 · Server Store · "
-    assert page_note(pages, 2) == "Page 3 of 3 · Perks · "
-    # One page is not a book: no counter, no arrows, nothing to explain.
-    assert page_note(shop_pages([]), 0) == ""
+    _enable(db)
+    pages = shop_pages(_settings(db), items=_items(20))
+    assert page_note(pages, 0) == "Page 1 of 4 · "
+    assert page_note(pages, 3) == "Page 4 of 4 · "
+    # One page is not a book: no counter at all.
+    assert page_note([("cosmetics", 0)], 0) == ""
 
 
 def test_the_note_reaches_both_page_kinds(db):
@@ -480,7 +503,7 @@ def test_store_embed_pages_a_stocked_store(db):
     items = _items(20)
 
     first = build_store_embed(settings, items, None, page=0)
-    assert first.title == "🎁 Server Store"
+    assert first.title == "🎁 Specials"
     assert "Item 01" in first.description and "Item 10" in first.description
     assert "Item 11" not in first.description
 
@@ -530,22 +553,25 @@ def test_the_header_stops_calling_everything_a_weekly_rental(db):
     assert panel.footer.text.startswith("Perk prices are per week")
 
 
-def test_page_captions_name_each_page_by_what_is_on_it(db):
-    """"Server Store" twice tells nobody which half they are looking at.
+def test_page_captions_name_each_page_by_its_section(db):
+    """Specials carries its span only when it runs to more than one page.
 
-    So the store's captions carry their span — and a store small enough for one
-    page drops it, because "🎁 Store · 1–7" is worse than "🎁 Store" when there
+    "🎁 Specials" twice over tells a member nothing about which half they are
+    looking at — but "🎁 Specials · 1–7" is worse than "🎁 Specials" when there
     is nothing to tell it apart from.
     """
-    from bot_modules.economy.shop import page_captions
+    from bot_modules.economy.shop import page_captions, shop_pages
 
-    assert page_captions(_items(20)) == [
-        "🎁 Store · 1–10", "🎁 Store · 11–20", "✨ Perks",
+    _enable(db, shop_voice_style_enabled=True)
+    pages = shop_pages(_settings(db), items=_items(20))
+    assert page_captions(pages, 20) == [
+        "🎁 Specials · 1–10", "🎁 Specials · 11–20",
+        "🎨 Role cosmetics", "🏠 Server features", "🎲 Game features",
     ]
     # A short final page reports its real span, not a rounded one.
-    assert page_captions(_items(12))[1] == "🎁 Store · 11–12"
-    assert page_captions(_items(7)) == ["🎁 Store", "✨ Perks"]
-    # One page is not a book: the caller renders no navigation for one caption.
-    assert page_captions([]) == ["✨ Perks"]
-    # The shape holds where a tab row would have overflowed.
-    assert len(page_captions(_items(45))) == 6
+    assert page_captions(shop_pages(_settings(db), items=_items(12)), 12)[1] == (
+        "🎁 Specials · 11–12"
+    )
+    assert page_captions(shop_pages(_settings(db), items=_items(7)), 7)[0] == (
+        "🎁 Specials"
+    )

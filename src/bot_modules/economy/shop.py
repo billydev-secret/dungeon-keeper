@@ -149,68 +149,145 @@ def _items_block(
     return "\n".join(lines)
 
 
-#: The two kinds of page the shop is made of. The store's pages come first —
-#: what a guild stocks itself is what it wants seen — and the perks are always
-#: the last one, so a guild selling nothing has a one-page shop with no
-#: navigation at all and reads exactly as it did before any of this.
-PAGE_STORE = "store"
-PAGE_PERKS = "perks"
+#: The shop's sections, in the order a member walks them. What a guild stocks
+#: itself leads — it is the part that changes and the part they came for; the
+#: rest is the same ladder in every guild.
+SECTION_SPECIALS = "specials"
+SECTION_COSMETICS = "cosmetics"
+SECTION_SERVER = "server"
+SECTION_GAMES = "games"
 
-#: What each page is called in the footer, so a member always knows where the
-#: arrows have put them.
-PAGE_TITLES = {PAGE_STORE: "Server Store", PAGE_PERKS: "Perks"}
+#: What each section calls itself — the caption between the arrows, and the
+#: title of its own embed, so the two can never disagree about where you are.
+#: "Server features" is deliberately wider than the one product in it today
+#: (the voice-room lease): personal channels land here when they ship, and a
+#: section renamed under members is worse than one that reads slightly roomy.
+SECTION_CAPTIONS = {
+    SECTION_SPECIALS: "🎁 Specials",
+    SECTION_COSMETICS: "🎨 Role cosmetics",
+    SECTION_SERVER: "🏠 Server features",
+    SECTION_GAMES: "🎲 Game features",
+}
 
 
-def shop_pages(items: list[ItemView] | None) -> list[tuple[str, int]]:
-    """The shop's pages in order, as ``(kind, index within that kind)``.
+def stocked_perks(
+    settings: EconSettings,
+    perks: tuple[str, ...],
+    *,
+    owned: set[str] | frozenset[str] = frozenset(),
+    has_palette: bool = True,
+) -> tuple[str, ...]:
+    """The perks of ``perks`` this guild is actually selling.
 
-    One flat book rather than sections behind a switcher: ◀️/▶️ is the only
-    navigation concept in the whole shop, and it walks the store into the perk
-    ladder without a second control to learn. The cost is real and deliberate —
-    in a guild with twenty items the perks are two taps in — so the perk page
-    carries the shield, the raffle and the refunds rather than splitting them
-    into a third page nobody would walk to.
+    Lifted out of ``build_shop_embed`` so section visibility and the table can
+    ask the same question — a section whose rows the embed would all drop must
+    not get a page of its own, and that decision now happens before either.
+
+    A switched-off perk leaves the table entirely, including the width
+    calculation, so a hidden row can never pad the visible ones. The carve-out
+    is a member still renting it out to their anniversary: billing them for a
+    perk with no row and no ✅ anywhere in the shop is how you get a support
+    ticket instead of a clean wind-down. ``has_palette`` is the same rule for
+    the colour palette, whose product disappears when the guild's swatches do.
+    """
+    return tuple(
+        p
+        for p in perks
+        if (p != "role_preset" or has_palette)
+        and (perk_on_sale(settings, p) or p in owned)
+    )
+
+
+def shop_sections(
+    settings: EconSettings,
+    *,
+    items: list[ItemView] | None = None,
+    owned: set[str] | frozenset[str] = frozenset(),
+    has_palette: bool = True,
+) -> list[str]:
+    """The sections this guild has anything to put in.
+
+    An empty section gets no page at all rather than a page saying it is empty
+    — a guild that never turned the voice lease on should not have members
+    stepping through a blank shelf to reach the next one. That means the shop's
+    shape differs per guild, which is the point: TGM sells no custom items, so
+    it has no Specials section and never sees one.
+    """
+    out: list[str] = []
+    if items:
+        out.append(SECTION_SPECIALS)
+    if stocked_perks(settings, SELF_PERKS, owned=owned, has_palette=has_palette):
+        out.append(SECTION_COSMETICS)
+    if stocked_perks(settings, ("voice_style",), owned=owned):
+        out.append(SECTION_SERVER)
+    if settings.shop_streak_shield_enabled or raffle_svc.raffle_enabled(settings):
+        out.append(SECTION_GAMES)
+    return out
+
+
+def shop_pages(
+    settings: EconSettings,
+    *,
+    items: list[ItemView] | None = None,
+    owned: set[str] | frozenset[str] = frozenset(),
+    has_palette: bool = True,
+) -> list[tuple[str, int]]:
+    """The shop's pages in order, as ``(section, index within that section)``.
+
+    Only Specials runs to more than one page: a guild can define unlimited
+    items, and ten to a page is what survives a phone. Every other section is
+    a fixed handful of rows.
+
+    Never empty. A guild with every switch off and nothing stocked still gets
+    one page — the cosmetics section, rendering its empty table and the "shop
+    is switched off" story — because a shop with no pages has nothing to show
+    a member who opened it, and the arrows have nothing to step between.
     """
     pages: list[tuple[str, int]] = []
-    if items:
-        pages += [(PAGE_STORE, i) for i in range(store_page_count(items))]
-    pages.append((PAGE_PERKS, 0))
-    return pages
+    for section in shop_sections(
+        settings, items=items, owned=owned, has_palette=has_palette
+    ):
+        if section == SECTION_SPECIALS:
+            pages += [
+                (SECTION_SPECIALS, i)
+                for i in range(store_page_count(items or []))
+            ]
+        else:
+            pages.append((section, 0))
+    return pages or [(SECTION_COSMETICS, 0)]
 
 
-def page_captions(items: list[ItemView] | None) -> list[str]:
+def page_captions(pages: list[tuple[str, int]], total_items: int = 0) -> list[str]:
     """What each page calls itself, for the caption between the arrows.
 
-    The store's captions carry their span — "Store · 1–10" — because "Server
-    Store" twice over tells a member nothing about which half they are looking
-    at. A store small enough to fit one page drops the span: "🎁 Store · 1–7"
-    is worse than "🎁 Store" when there is nothing to tell it apart from.
+    Specials carries its span when it runs to more than one page — "Specials"
+    twice over tells a member nothing about which half they are looking at —
+    and drops it when it doesn't, because "🎁 Specials · 1–7" is worse than
+    "🎁 Specials" with nothing to tell it apart from.
     """
-    total = len(items or [])
-    pages = shop_pages(items)
-    one_store_page = sum(1 for kind, _ in pages if kind == PAGE_STORE) == 1
+    spread = sum(1 for section, _ in pages if section == SECTION_SPECIALS) > 1
     out: list[str] = []
-    for kind, index in pages:
-        if kind == PAGE_STORE:
+    for section, index in pages:
+        caption = SECTION_CAPTIONS[section]
+        if section == SECTION_SPECIALS and spread:
             start = index * STORE_PAGE_SIZE + 1
-            end = min(total, (index + 1) * STORE_PAGE_SIZE)
-            out.append("🎁 Store" if one_store_page else f"🎁 Store · {start}–{end}")
-        else:
-            out.append("✨ Perks")
+            end = min(total_items, (index + 1) * STORE_PAGE_SIZE)
+            caption += f" · {start}–{end}"
+        out.append(caption)
     return out
 
 
 def page_note(pages: list[tuple[str, int]], page: int) -> str:
-    """The "Page 2 of 3 · Server Store · " prefix, or "" for a one-page shop.
+    """The "Page 2 of 4 · " prefix, or "" for a one-page shop.
 
-    Numbered over the whole book, not within a section: the arrows cross the
-    store/perk seam, so a counter that restarted at it would read as the shop
-    losing its place.
+    Numbered over the whole book, not within a section: the arrows cross every
+    seam, so a counter that restarted at one would read as the shop losing its
+    place. The section itself is named by the embed's title and by the caption
+    between the arrows, so it is not repeated here.
     """
     if len(pages) < 2:
         return ""
-    kind, _ = pages[page]
-    return f"Page {page + 1} of {len(pages)} · {PAGE_TITLES[kind]} · "
+    return f"Page {page + 1} of {len(pages)} · "
 
 
 def store_page_count(items: list[ItemView]) -> int:
@@ -255,14 +332,14 @@ def build_store_embed(
     """
     shown = store_page(items, page)
 
-    header = "Everything this server sells, beyond the perk shop."
+    header = "Everything this server sells, beyond the built-in perks."
     if balance is not None:
         header += f" You have {settings.currency_emoji} **{balance:,}**."
     body = "\n".join(_item_rows(settings, shown, owned_item_ids)) if shown else (
         "_Nothing on the shelves yet._"
     )
     embed = discord.Embed(
-        title="🎁 Server Store",
+        title=SECTION_CAPTIONS[SECTION_SPECIALS],
         description=f"{header}\n\u200b\n{body}",
         color=accent,
     )
@@ -287,6 +364,7 @@ def build_shop_embed(
     items: list[ItemView] | None = None,
     owned_item_ids: set[int] | frozenset[int] = frozenset(),
     note: str = "",
+    section: str | None = None,
 ) -> discord.Embed:
     """The shop listing, shared by /bank shop and the channel panel.
 
@@ -319,26 +397,30 @@ def build_shop_embed(
     # "Weekly rentals" was safe while the perk ladder came first. It is a lie
     # standing over a Server Store of mostly one-off items, so the claim is
     # made by the section that can keep it rather than by the whole embed.
-    header = (
-        "The server store, plus weekly perk rentals"
-        if items
-        else "Weekly rentals · cancel any time"
-    )
+    if section == SECTION_GAMES:
+        header = "Bought once — nothing here renews"
+    elif section is None and items:
+        header = "The server store, plus weekly perk rentals"
+    else:
+        header = "Weekly rentals · cancel any time"
     if balance is not None:
         header += f" · you have {settings.currency_emoji} **{balance:,}**"
-    description = (
-        header
-        + "\n"
-        + (
+    if panel:
+        second = (
             "Tap **Open Shop** for your personal menu — buy, rent, customize "
             "and refund, all private to you."
-            if panel
-            else "Green buttons customize what you've already rented."
         )
-        + "\n​"
-    )
+    elif section == SECTION_COSMETICS:
+        second = "Green buttons customize what you've already rented."
+    else:
+        # The green-button line is about the perk studio; on a section with no
+        # customise buttons it explains a control that isn't there.
+        second = "Step between sections with the arrows below."
+    description = header + "\n" + second + "\n​"
     embed = discord.Embed(
-        title="🛍️ Perk Shop", description=description, color=accent
+        title=SECTION_CAPTIONS.get(section or "", "🛍️ Perk Shop"),
+        description=description,
+        color=accent,
     )
     if settings.currency_icon_url:
         embed.set_thumbnail(url=settings.currency_icon_url)
@@ -354,21 +436,18 @@ def build_shop_embed(
     # ✅ anywhere in the shop.
     show_palette = color_catalog is not None or "role_preset" in owned
 
-    def _stocked(perks: tuple[str, ...]) -> tuple[str, ...]:
-        """Drop rows this guild isn't selling, for the same reason as above.
+    def _want(name: str) -> bool:
+        """Whether this embed carries ``name``'s rows.
 
-        A switched-off perk leaves the table exactly like an empty palette
-        does — including the width calculation, so a hidden row can never pad
-        the visible ones. The one carve-out is identical too: a member still
-        renting it out to their anniversary keeps their row, because billing
-        them for a perk with no row and no ✅ anywhere in the shop is how you
-        get a support ticket instead of a clean wind-down.
+        ``section=None`` is the channel panel, which is one poster for a whole
+        shop and so carries everything; a section renders only its own, which
+        is what makes the ephemeral shop a book rather than a scroll.
         """
-        return tuple(
-            p
-            for p in perks
-            if (p != "role_preset" or show_palette)
-            and (perk_on_sale(settings, p) or p in owned)
+        return section is None or section == name
+
+    def _stocked(perks: tuple[str, ...]) -> tuple[str, ...]:
+        return stocked_perks(
+            settings, perks, owned=owned, has_palette=show_palette
         )
 
     tiers = [(name, _stocked(perks)) for name, perks in PERK_TIERS]
@@ -376,9 +455,13 @@ def build_shop_embed(
     # The Voice tier exists only while the guild sells the lease. Its price is
     # no longer the switch — a price of 0 means a free lease, not a hidden one
     # (see SHOP_TOGGLE_PERKS).
-    if _stocked(("voice_style",)):
-        tiers.append(("Voice", ("voice_style",)))
+    voice = _stocked(("voice_style",))
+    if voice:
         table_perks.append("voice_style")
+        # Its own section now, so it only joins the tier list on the panel,
+        # where every section shares one embed.
+        if section is None:
+            tiers.append(("Voice", voice))
 
     # One width per table, not per tier, so cells line up across the whole
     # embed rather than jumping at each heading. Defaulted, not asserted: a
@@ -414,13 +497,16 @@ def build_shop_embed(
     # for and the part that changes; the perk ladder below is the same six
     # rows in every guild, and it was pushing the server's own goods to the
     # fourth field of five.
-    if items:
+    if items and section is None:
+        # Panel only. In the shop the store is the Specials section, with pages
+        # of its own from ``build_store_embed`` — a preview here as well would
+        # be the same list twice in one book.
         embed.add_field(
-            name="Server Store",
+            name="Specials",
             value=_items_block(settings, items, owned_item_ids),
             inline=False,
         )
-    for tier_name, perks in tiers:
+    for tier_name, perks in (tiers if _want(SECTION_COSMETICS) else []):
         if not perks:
             continue
         ordered = sorted(
@@ -432,7 +518,13 @@ def build_shop_embed(
             value="\n".join(_line(p) for p in ordered) + "\n​",
             inline=False,
         )
-    if settings.shop_streak_shield_enabled:
+    if _want(SECTION_SERVER) and section is not None and voice:
+        embed.add_field(
+            name="Voice",
+            value="\n".join(_line(p) for p in voice) + "\n​",
+            inline=False,
+        )
+    if _want(SECTION_GAMES) and settings.shop_streak_shield_enabled:
         # One-shot, not a rental — the only non-weekly row, so it carries its
         # own field with the "once" spelled out instead of joining the table.
         # No ``or held`` carve-out: a held shield needs no shop row to work, it
@@ -449,7 +541,7 @@ def build_shop_embed(
             ),
             inline=False,
         )
-    if raffle_svc.raffle_enabled(settings):
+    if _want(SECTION_GAMES) and raffle_svc.raffle_enabled(settings):
         embed.add_field(
             name="Weekly Raffle",
             value=(
@@ -463,7 +555,7 @@ def build_shop_embed(
         )
     # Gifting needs something to gift: with every perk switched off, the only
     # rows left are the store's own items, which `/bank gift` doesn't sell.
-    if table_perks:
+    if table_perks and _want(SECTION_COSMETICS):
         embed.add_field(
             name="For a Friend",
             value=(
@@ -473,11 +565,17 @@ def build_shop_embed(
             inline=False,
         )
 
-    embed.set_footer(
-        text=(
-            # Likewise: with a store above, "prices" is no longer only perks.
-            f"{note}{'Perk prices' if items else 'Prices'} are per week, "
-            "billed every 7 days. A short grace period covers a missed renewal."
+    if section == SECTION_GAMES:
+        # Neither of these renews, so the weekly-billing footer would be a lie
+        # standing under a shield and a raffle ticket.
+        embed.set_footer(text=f"{note}Bought outright — no weekly rent.")
+    else:
+        embed.set_footer(
+            text=(
+                # With a store above, "prices" is no longer only perks.
+                f"{note}{'Perk prices' if items and section is None else 'Prices'} "
+                "are per week, billed every 7 days. A short grace period covers "
+                "a missed renewal."
+            )
         )
-    )
     return embed

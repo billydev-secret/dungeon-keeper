@@ -51,7 +51,10 @@ from bot_modules.economy.perks import (
     perks_on_sale,
 )
 from bot_modules.economy.shop import (
-    PAGE_STORE,
+    SECTION_COSMETICS,
+    SECTION_GAMES,
+    SECTION_SERVER,
+    SECTION_SPECIALS,
     build_shop_embed,
     build_store_embed,
     page_note,
@@ -1284,11 +1287,18 @@ class _RefundConfirmView(_MemberScopedView):
 
 
 class _ShopView(_MemberScopedView):
-    """One button per self-perk: Rent when unowned, a customise modal when owned.
+    """The controls for one non-Specials section of the shop.
 
-    Feature-gated rows are disabled either way. ``owned`` is the viewer's
-    beneficiary-based entitlements, so a gifted perk shows its customise
-    button exactly like a self-rented one.
+    One button per self-perk on 🎨 Role cosmetics: Rent when unowned, a
+    customise modal when owned. Feature-gated rows are disabled either way, and
+    ``owned`` is the viewer's beneficiary-based entitlements, so a gifted perk
+    shows its customise button exactly like a self-rented one.
+
+    ``section`` decides which controls appear at all — a page must not carry
+    buttons for rows its embed does not show, or a member taps Shield on the
+    cosmetics page and wonders what they just bought. ↩️ Cancel & Refund is the
+    exception and rides every section: it ends *any* rental, so filing it under
+    one section would hide it from someone whose only rental lives elsewhere.
     """
 
     def __init__(
@@ -1306,6 +1316,7 @@ class _ShopView(_MemberScopedView):
         shield_price: int = 0,
         page: int = 0,
         nav: list[str] | None = None,
+        section: str = SECTION_COSMETICS,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1313,7 +1324,7 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
-        for perk in SELF_PERKS:
+        for perk in SELF_PERKS if section == SECTION_COSMETICS else ():
             if not perk_on_sale(settings, perk) and perk not in owned:
                 # Switched off on the Shop & Perks page: no row in the embed,
                 # so no button either. A member still renting it to their
@@ -1393,7 +1404,9 @@ class _ShopView(_MemberScopedView):
                 )
                 button.callback = self._make_rent_callback(perk)
             self.add_item(button)
-        if settings.shop_voice_style_enabled or "voice_style" in owned:
+        if section == SECTION_SERVER and (
+            settings.shop_voice_style_enabled or "voice_style" in owned
+        ):
             if "voice_style" in owned:
                 button = discord.ui.Button(
                     label="🎙️ Leased",
@@ -1409,7 +1422,7 @@ class _ShopView(_MemberScopedView):
                 )
                 button.callback = self._make_rent_callback("voice_style")
             self.add_item(button)
-        if raffle_svc.raffle_enabled(settings):
+        if section == SECTION_GAMES and raffle_svc.raffle_enabled(settings):
             button = discord.ui.Button(
                 label="🎟️ Tickets",
                 style=discord.ButtonStyle.secondary,
@@ -1417,7 +1430,7 @@ class _ShopView(_MemberScopedView):
             )
             button.callback = self._make_raffle_callback()
             self.add_item(button)
-        if settings.shop_streak_shield_enabled:
+        if section == SECTION_GAMES and settings.shop_streak_shield_enabled:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
             held = shields_held > 0
@@ -2299,16 +2312,20 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        pages = shop_pages(shop.items)
-        # Clamped, not trusted: an admin can withdraw the last item while a
-        # member sits on a store page, and the book shrinks under them.
+        has_palette = shop.color_range is not None or "role_preset" in shop.owned
+        pages = shop_pages(
+            settings, items=shop.items, owned=shop.owned, has_palette=has_palette
+        )
+        # Clamped, not trusted: an admin can withdraw the last item — or switch
+        # a whole section off — while a member sits on that page, and the book
+        # shrinks under them.
         page = max(0, min(page, len(pages) - 1))
-        kind, index = pages[page]
+        section, index = pages[page]
         note = page_note(pages, page)
-        nav = page_captions(shop.items)
+        nav = page_captions(pages, len(shop.items))
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
 
-        if kind == PAGE_STORE:
+        if section == SECTION_SPECIALS:
             embed = build_store_embed(
                 settings, shop.items, accent,
                 owned_item_ids=shop.owned_item_ids,
@@ -2320,10 +2337,10 @@ class EconomyCog(commands.Cog):
             )
         else:
             gated = await self._gated_perks(guild.id)
-            # No ``items``: the store has its own pages now, so repeating an
-            # eight-row preview here would be the same list twice in one book.
+            # No ``items``: the store is the Specials section with pages of its
+            # own, so a preview here would be the same list twice in one book.
             embed = build_shop_embed(
-                settings, gated, accent,
+                settings, gated, accent, section=section,
                 owned=shop.owned, comped=shop.comped,
                 icon_catalog=shop.icon_range, color_catalog=shop.color_range,
                 balance=shop.balance, shields_held=shop.shields_held, note=note,
@@ -2334,11 +2351,10 @@ class EconomyCog(commands.Cog):
                 # A renter keeps their button even if the palette emptied out
                 # under them — otherwise the only route to the perk they are
                 # still paying for is the generic refund picker.
-                has_palette=(
-                    shop.color_range is not None or "role_preset" in shop.owned
-                ),
+                has_palette=has_palette,
                 shields_held=shop.shields_held, refundable=shop.refundable,
                 shield_price=shop.shield_price, page=page, nav=nav,
+                section=section,
             )
 
         if edit:
