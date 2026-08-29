@@ -2297,7 +2297,7 @@
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="todo" class="section-break"><span class="section-num">24</span> Todo List &amp; Boards</h2>
     <p>A shared worklist for the mod team. Tasks can be added from Discord or from the dashboard, and everything lands in the same list. It is moderator-only end to end — members never see it unless you post the board in a channel they can read.</p>
-    <p>There is <strong>one</strong> board you can post, and it answers every question the team asks: <em>is anyone waiting on us?</em>, <em>did we do today's chores?</em> and <em>what else is outstanding?</em> It shows <a href="#todo-signoffs">quest sign-offs</a> first, then <a href="#todo-chore-board">today's chores</a> as a "did we do it today?" scoreboard, then <a href="#todo-board">everything else</a> oldest-first. Until August 2026 the chores and tasks were two separate boards needing two separate channels; servers with one mod channel had to pick, and the tasks half usually lost.</p>
+    <p>There is <strong>one</strong> board you can post, and it answers every question the team asks: <em>is anyone waiting on us?</em>, <em>did we do today's chores?</em> and <em>what else is outstanding?</em> It shows <a href="#todo-signoffs">quest sign-offs</a> first, then <a href="#todo-approvals">paid requests</a> waiting on a decision, then <a href="#todo-chore-board">today's chores</a> as a "did we do it today?" scoreboard, then <a href="#todo-board">everything else</a> oldest-first. Until August 2026 the chores and tasks were two separate boards needing two separate channels; servers with one mod channel had to pick, and the tasks half usually lost.</p>
 
     <h3 id="todo-board">The Discord board</h3>
     <p>The board is a single message the bot keeps at the <strong>bottom of a channel</strong>. Under <strong>Tasks</strong> it lists everything pending oldest-first, so whatever has been waiting longest sits at the top. Long tasks are shortened with a “…” to keep the board readable on a phone — the full text is always on the <a href="/#/mod-todo">Todo List</a> page, along with the date each one was added.</p>
@@ -2305,10 +2305,11 @@
       <li><strong>➕ Add Task</strong> — opens a small form for the task and optional notes.</li>
       <li><strong>✅ Complete</strong> — shows a private picker of everything still open, chores first, then tasks; tick one or several off at once.</li>
       <li><strong>✍️ Sign-Offs</strong> — reviews the quest claims waiting on staff. See <a href="#todo-signoffs">below</a>.</li>
+      <li><strong>🧾 Approvals</strong> — reviews the things members have <em>paid</em> for and are waiting on: a themed day, a sponsored question of the day, a pin. See <a href="#todo-approvals">below</a>.</li>
     </ul>
-    <p>Add and Complete are moderator-only. Anyone else who clicks gets a private "moderators only" reply and nothing changes. Sign-Offs asks for a little more — see below.</p>
+    <p>Add and Complete are moderator-only. Anyone else who clicks gets a private "moderators only" reply and nothing changes. Sign-Offs and Approvals ask for a little more — see below.</p>
     <p>The board updates itself. Adding or completing a task anywhere — the buttons, <code>/todo</code>, or the dashboard — is reflected within about a minute, and immediately when the action came from Discord. When people chat in the channel, the board deletes itself and re-posts underneath so it never scrolls out of sight.</p>
-    <p>Because the board holds your mod chores and the names of members waiting on a sign-off as well as your tasks, put it in a <strong>mod channel</strong>.</p>
+    <p>Because the board holds your mod chores, the names of members waiting on a sign-off, and what members have written on requests nobody has reviewed yet, put it in a <strong>mod channel</strong>.</p>
 
     <h3 id="todo-signoffs">Quest sign-offs</h3>
     <p>Some quests need a person to say yes before they pay. When a member claims one, it lands at the <strong>top</strong> of the board — one line each, naming the member, the quest and what it pays. They sit above the chores and tasks on purpose: these are the only rows where somebody else is waiting on you.</p>
@@ -2316,6 +2317,12 @@
     <p>This button asks for <strong>Bank Manager</strong> rather than plain moderator, because approving hands out real currency: you need Discord's <em>Administrator</em> permission or the economy manager role set on the dashboard. Everything here can also be done on the <a href="/#/economy-claims">Claims</a> page, and a claim resolved in either place disappears from the other.</p>
     <p>The result is posted in your server's <strong>register channel</strong> — an approval as the usual payout entry, a denial with the reason you gave, and a claim nobody gets to within a week as an "expired" note. Members are not sent a DM about any of it. A few quests are deliberately kept off that feed for privacy (anything tied to whispers, confessions, AMA questions, Pen Pals or Guess Who rounds); those sign-offs are announced nowhere, and the member simply sees the quest come back onto their board.</p>
     <p class="note">Before 27 August 2026 each claim posted its own card into the bank channel. Those old cards still work if you have any left over; nothing new goes there.</p>
+
+    <h3 id="todo-approvals">Paid requests</h3>
+    <p>Three things in the shop take a member's coins and then wait for a person to say yes: a <strong>themed day</strong>, a <strong>sponsored question of the day</strong>, and a <strong>pin</strong>. Each one shows up on the board directly under the sign-offs — one line each, naming the member, which of the three they bought, what they wrote, and what it cost them.</p>
+    <p>Press <strong>🧾 Approvals</strong> to deal with one. You get a private list of everything waiting; pick a request and you'll see the full card for it — the same card you'd have reviewed before — with its own <strong>Approve</strong> and <strong>Decline</strong> buttons underneath. Declining asks you for a reason, refunds them in full, and sends them the reason.</p>
+    <p>Like Sign-Offs, this button asks for <strong>Bank Manager</strong> rather than plain moderator: every decision here moves real currency, since turning a request down gives the money back. Themed days and sponsored questions can also be handled on the dashboard (<a href="/#/shop-approvals">Approvals</a> and <a href="/#/economy-qotd-submissions">QOTD</a>); pins can only be reviewed here.</p>
+    <p class="note">Before 29 August 2026 each of these posted its own card into the bank channel — which on many servers is a channel members can read, so an unreviewed request went up in public with the member's name on it. Those old cards still work if you have any left over; nothing new goes there.</p>
 
     <h3 id="todo-chore-board">Today's chores</h3>
     <p>The top section of the board, showing <strong>only</strong> recurring chores. Where the Tasks section asks "what's outstanding?", this one asks "did we do it today?" — so it keeps a chore on screen after it's ticked, rather than removing the answer the moment it's yes. A chore appears here and not in Tasks, so nothing is listed twice.</p>
@@ -2326,7 +2333,7 @@
       <li><strong>❌ missed last run</strong> — still to do today, <em>and</em> the last one went by without anyone doing it. It clears as soon as the chore is ticked again.</li>
       <li><strong>🔥 6</strong> — six days running. Shown from two days up.</li>
     </ul>
-    <p>The footer keeps the score for the day — "2 of 3 chores done", alongside the number of sign-offs waiting and the number of tasks still pending. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
+    <p>The footer keeps the score for the day — "2 of 3 chores done", alongside the number of sign-offs and paid requests waiting and the number of tasks still pending. Chores you've <em>paused</em> are left off entirely: a chore parked for the holidays isn't one the team is failing.</p>
     <p>Chores are ticked off with the board's own <strong>✅ Complete</strong> button, which offers them above the ordinary tasks. There's no separate Add for a chore — chores are recurring entries with a schedule, set up on the dashboard, and <strong>➕ Add Task</strong> adds a one-off.</p>
     <p>When there is nothing at all to offer, the reply says which of three things is true, because they mean very different things: <em>"Every chore is already ticked off"</em>, <em>"Nothing due yet"</em> — naming the next chore and when it lands, for a weekly set up on a day it doesn't run — or that no chores are configured at all.</p>
 

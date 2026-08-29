@@ -19,9 +19,12 @@ from bot_modules.services.economy_quests_service import (
     set_quest_active,
 )
 from bot_modules.services.economy_service import (
+    apply_credit,
     load_econ_settings,
     save_econ_settings,
 )
+from bot_modules.services.economy_theme_service import deny as deny_theme
+from bot_modules.services.economy_theme_service import submit_theme
 from bot_modules.services.todo_service import (
     create_todo,
     get_board,
@@ -679,5 +682,109 @@ async def test_the_signoffs_button_hands_off_to_the_economy(board_db):
         "bot_modules.cogs.todo_cog.open_signoff_picker", new=AsyncMock()
     ) as picker:
         await TodoBoardView()._signoffs.callback(interaction)
+
+    picker.assert_awaited_once_with(interaction)
+
+
+# ── paid requests on the board ────────────────────────────────────────
+
+
+def _pending_theme(db_path, *, title="Cursed Cooking", price=300, user_id=778) -> int:
+    """A paid themed day waiting on a mod, in the guild the board fixtures use."""
+    with open_db(db_path) as conn:
+        save_econ_settings(
+            conn,
+            123,
+            {
+                "enabled": True,
+                "currency_emoji": "🪙",
+                "flash_theme_enabled": True,
+                "price_flash_theme": price,
+                "theme_channel_id": 6666,
+            },
+        )
+        apply_credit(conn, 123, user_id, price * 2, "grant", actor_id=1)
+        settings = load_econ_settings(conn, 123)
+        return submit_theme(
+            conn, settings, 123, user_id, title, "The idea"
+        ).submission_id
+
+
+@pytest.mark.asyncio
+async def test_the_board_shows_who_is_waiting_on_a_paid_request(board_db):
+    """The bug: this card used to be posted publicly to the bank channel,
+    which in the main guild is a member-facing explainer."""
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    requester = MagicMock()
+    requester.display_name = "Alex"
+    guild.get_member = MagicMock(return_value=requester)
+    cog = _board_cog(board_db, guild)
+    _pending_theme(board_db)
+
+    with patch("bot_modules.core.branding.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        await cog.place_board(guild, channel)
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "Alex" in embed.description
+    assert "Cursed Cooking" in embed.description
+    assert "🪙 300" in embed.description  # the guild's own currency emoji
+    assert "1 paid request waiting" in embed.footer.text
+
+
+@pytest.mark.asyncio
+async def test_a_resolved_paid_request_leaves_the_board(board_db):
+    """Only pending rows are read, so resolving one is what removes it —
+    there is no mirrored todo row to clean up."""
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+    submission_id = _pending_theme(board_db)
+    with open_db(board_db) as conn:
+        deny_theme(conn, submission_id, resolver_id=1, deny_reason="too close")
+
+    with patch("bot_modules.core.branding.resolve_accent_color",
+               new=AsyncMock(return_value=discord.Color.blurple())):
+        await cog.place_board(guild, channel)
+
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "Cursed Cooking" not in embed.description
+    assert "paid request" not in embed.footer.text
+
+
+@pytest.mark.asyncio
+async def test_a_paid_request_is_never_offered_to_the_complete_button(board_db):
+    """A request is approved, not ticked off. It has no todo row, so the
+    picker that lists todos can't reach it."""
+    channel, _ = _fake_channel()
+    guild = _fake_guild(channel)
+    cog = _board_cog(board_db, guild)
+    _pending_theme(board_db)
+    interaction = _interaction(_member(mod=True))
+    interaction.guild = guild
+    interaction.client = MagicMock()
+    interaction.client.get_cog = MagicMock(return_value=cog)
+
+    await TodoBoardView()._complete.callback(interaction)
+
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "already clear" in msg
+
+
+@pytest.mark.asyncio
+async def test_the_approvals_button_hands_off_to_the_economy(board_db):
+    """Same as Sign-Offs: the button is only a door, because every decision
+    behind it moves currency and a denial refunds it."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    interaction = _interaction(_member(mod=False))
+    interaction.client = MagicMock()
+    interaction.client.get_cog = MagicMock(return_value=cog)
+
+    with patch(
+        "bot_modules.cogs.todo_cog.open_approvals_picker", new=AsyncMock()
+    ) as picker:
+        await TodoBoardView()._approvals.callback(interaction)
 
     picker.assert_awaited_once_with(interaction)

@@ -12,7 +12,12 @@ from discord.ext import commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.economy.approval_views import open_approvals_picker
 from bot_modules.economy.quest_views import open_signoff_picker
+from bot_modules.services.economy_approvals_service import (
+    pending_approval_count,
+    pending_approvals,
+)
 from bot_modules.services.economy_quests_service import (
     pending_signoff_count,
     pending_signoff_rows,
@@ -35,6 +40,7 @@ from bot_modules.services.todo_service import (
     save_board,
 )
 from bot_modules.todo.board_logic import (
+    MAX_APPROVAL_ROWS,
     MAX_BOARD_ROWS,
     MAX_SIGNOFF_ROWS,
     board_content_signature,
@@ -255,6 +261,26 @@ class TodoBoardView(discord.ui.View):
             return
         await open_signoff_picker(interaction)
 
+    @discord.ui.button(
+        label="Approvals",
+        emoji="🧾",
+        style=discord.ButtonStyle.secondary,
+        custom_id="todo_board_approvals",
+    )
+    async def _approvals(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        """Review the paid requests waiting on a mod — themes, questions, pins.
+
+        Same deal as Sign-Offs: deliberately *not* behind ``_require_mod``,
+        because every decision behind it moves currency and the economy's own
+        manager gate applies. This button is only the door onto the board.
+        """
+        if _resolve_cog(interaction) is None:
+            await _unavailable(interaction)
+            return
+        await open_approvals_picker(interaction)
+
 
 def _resolve_cog(interaction: discord.Interaction) -> "TodoCog | None":
     """Resolve the cog at click time — the board outlives cog reloads."""
@@ -401,8 +427,19 @@ class TodoCog(commands.Cog):
             # claims — the normal state, and every guild with the economy off
             # — pays nothing for the section it isn't rendering.
             signoff_total = pending_signoff_count(conn, guild_id) if signoffs else 0
+            # The three paid queues, read the same way and for the same
+            # reason: a submission is not a todo row, so nothing is mirrored
+            # and resolving it anywhere takes it off the board.
+            approvals = pending_approvals(
+                conn, guild_id, limit=MAX_APPROVAL_ROWS + 1
+            )
+            approval_total = (
+                pending_approval_count(conn, guild_id) if approvals else 0
+            )
             currency_emoji = (
-                load_econ_settings(conn, guild_id).currency_emoji if signoffs else ""
+                load_econ_settings(conn, guild_id).currency_emoji
+                if (signoffs or approvals)
+                else ""
             )
             chores = [
                 dict(r) for r in chore_board_rows(conn, guild_id, limit=_CHORE_FETCH)
@@ -421,6 +458,8 @@ class TodoCog(commands.Cog):
         return {
             "signoffs": signoffs,
             "signoff_total": signoff_total,
+            "approvals": approvals,
+            "approval_total": approval_total,
             "currency_emoji": currency_emoji,
             "chores": chores,
             "rows": rows,
@@ -432,6 +471,7 @@ class TodoCog(commands.Cog):
         chores, rows = data["chores"], data["rows"]
         signoffs, total = data["signoffs"], data["total"]
         signoff_total = data["signoff_total"]
+        approvals, approval_total = data["approvals"], data["approval_total"]
         for chore in chores:
             chore["completed_by_name"] = self._display_name(
                 guild, chore.get("completed_by")
@@ -440,6 +480,10 @@ class TodoCog(commands.Cog):
             row["buyer_name"] = self._display_name(guild, row.get("buyer_id"))
         for claim in signoffs:
             claim["claimant_name"] = self._display_name(guild, claim.get("user_id"))
+        for request in approvals:
+            request["requester_name"] = self._display_name(
+                guild, request.get("user_id")
+            )
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="todo")
         embed = discord.Embed(
             title="📋 Server Todo",
@@ -448,12 +492,16 @@ class TodoCog(commands.Cog):
                 rows,
                 signoff_rows=signoffs,
                 signoff_total=signoff_total,
+                approval_rows=approvals,
+                approval_total=approval_total,
                 currency_emoji=data["currency_emoji"],
                 task_total=total,
             ),
             color=accent,
         )
-        embed.set_footer(text=render_board_footer(chores, total, signoff_total))
+        embed.set_footer(
+            text=render_board_footer(chores, total, signoff_total, approval_total)
+        )
         return PanelContent(
             embed=embed,
             view=TodoBoardView(),
@@ -463,6 +511,8 @@ class TodoCog(commands.Cog):
                 total,
                 signoff_rows=signoffs,
                 signoff_total=signoff_total,
+                approval_rows=approvals,
+                approval_total=approval_total,
             ),
         )
 

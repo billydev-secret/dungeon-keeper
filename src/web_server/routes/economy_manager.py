@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.economy import quests as quest_rules
 from bot_modules.economy.perk_actions import revoke_role_perks
+from bot_modules.economy.approval_views import refresh_approvals_board
 from bot_modules.economy.quest_views import refresh_signoff_board
 from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services import economy_quests_service as quests_svc
@@ -911,6 +912,9 @@ async def _resolve_submission_and_notify(
         card_updated = await _update_sponsor_card_and_dm(
             bot, ctx, guild_id, settings, fresh
         )
+        # It has left the queue the todo board renders, so the board has to
+        # stop showing it — the same repaint the Discord buttons do.
+        await refresh_approvals_board(bot, guild_id)
 
     return {
         "ok": True,
@@ -1101,6 +1105,7 @@ async def _resolve_theme_and_notify(
         card_updated = await _update_theme_card_and_dm(
             bot, ctx, guild_id, settings, fresh
         )
+        await refresh_approvals_board(bot, guild_id)
     return {"ok": True, "state": str(fresh["state"]), "card_updated": card_updated}
 
 

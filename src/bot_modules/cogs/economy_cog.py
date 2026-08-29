@@ -106,24 +106,18 @@ from bot_modules.services.economy_auction_service import (
     open_auction_guild_ids,
 )
 from bot_modules.services.sticky_registry import bot_chasing_resident
+from bot_modules.economy.approval_views import refresh_approvals_board
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
-)
-from bot_modules.economy.pin_views import (
-    post_review_card as post_pin_review_card,
 )
 from bot_modules.economy.theme_views import (
     ThemeApproveButton,
     ThemeDenyButton,
 )
-from bot_modules.economy.theme_views import (
-    post_review_card as post_theme_review_card,
-)
 from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
-    post_review_card,
 )
 from bot_modules.services.economy_bounty_service import (
     MAX_DESC_LEN,
@@ -2807,19 +2801,13 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # The money is already taken and the row exists; a card failure must
-        # never surface as an error to the member (it's still resolvable from
-        # the dashboard), so this is best-effort inside post_review_card.
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
-        await post_review_card(
-            self.bot,
-            self.bot.ctx,
-            guild,
-            settings,
-            accent,
-            outcome.submission_id,
-            member,
-        )
+        # The request goes on the mods' todo board, not into the bank channel:
+        # it names the member and quotes what they wrote, and the bank channel
+        # in the main guild is a member-facing explainer. The money is already
+        # taken and the row exists, so a failed repaint must never surface as
+        # an error to the member — the board reads the queue live and the next
+        # repaint picks it up regardless.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your question to the mods for review — {outcome.price} "
@@ -2860,12 +2848,10 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Money's taken and the row exists; a card failure must never surface as
-        # an error to the member (it's still resolvable), so it's best-effort.
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
-        await post_pin_review_card(
-            self.bot, self.bot.ctx, guild, settings, accent, outcome.submission_id, member
-        )
+        # Onto the mods' todo board, not the bank channel — see the sponsored
+        # question above. Pin of the Day has no dashboard queue at all, so
+        # that board section is now its only review surface.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your message to the mods for review — {outcome.price} "
@@ -2879,7 +2865,7 @@ class EconomyCog(commands.Cog):
     async def do_theme_submit(
         self, interaction: discord.Interaction, title: str, blurb: str
     ) -> None:
-        """Escrow the price, queue the theme, and post the mod-approval card."""
+        """Escrow the price, queue the theme, and put it on the mods' board."""
         assert interaction.guild is not None
         guild = interaction.guild
         member = interaction.user
@@ -2906,16 +2892,9 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Money's taken and the row exists; a card failure must never surface
-        # as an error to the member (it's still resolvable), so it's
-        # best-effort.
-        accent = await safe_resolve_accent(
-            self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
-        )
-        await post_theme_review_card(
-            self.bot, self.bot.ctx, guild, settings, accent,
-            outcome.submission_id, member,
-        )
+        # Onto the mods' todo board, not the bank channel — see the sponsored
+        # question above.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your theme to the mods for review — {outcome.price} {unit} "

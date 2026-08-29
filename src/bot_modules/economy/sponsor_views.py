@@ -10,6 +10,11 @@ modal and refunds.
 Every handler is fail-safe — a service error becomes an ephemeral note, never a
 dead button. Two mods clicking at once is resolved in the service (the state
 guard), and the loser gets the card refreshed rather than a second refund.
+
+Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
+the ephemeral detail view behind the todo board's 🧾 Approvals button (see
+``economy/approval_views.py``); the DynamicItems below stay registered so the
+cards posted into bank channels before the move remain clickable.
 """
 
 from __future__ import annotations
@@ -27,7 +32,6 @@ from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.services.economy_qotd_sponsor_service import (
     get_submission,
     resolve_submission,
-    set_submission_card,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -39,6 +43,8 @@ from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.view_helpers import (
     edit_review_card,
     refresh_review_card,
+    refresh_todo_board,
+    review_surface,
 )
 
 if TYPE_CHECKING:
@@ -71,10 +77,10 @@ def render_sponsor_card_embed(
     resolver_id: int | None = None,
     deny_reason: str | None = None,
 ) -> discord.Embed:
-    """Build the bank-channel card for a submission in the given state.
+    """Build the review card for a submission in the given state.
 
-    Reused for the initial ``pending`` post and the resolved edit, so the card
-    always mirrors the row's true state. Colour is semantic on resolution
+    Reused by the todo board's Approvals detail view and by the resolved
+    edit, so the card always mirrors the row's true state. Colour is semantic on resolution
     (green approved, red denied/refunded) and accent while pending.
     """
     if state == "approved":
@@ -223,6 +229,7 @@ class SponsorReviewView(discord.ui.View):
 
 
 _safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ sponsor")
+_refresh_board = partial(refresh_todo_board, log_label="econ sponsor")
 
 
 async def _handle_resolution(
@@ -238,7 +245,13 @@ async def _handle_resolution(
     member = interaction.user
     bot = cast("Bot", interaction.client)
     ctx = bot.ctx
-    card = card_message if card_message is not None else interaction.message
+    # An ephemeral card means the todo board's Approvals flow; see
+    # ``view_helpers.review_surface``. Everything downstream repaints the
+    # same way either way.
+    card = review_surface(
+        interaction,
+        card_message if card_message is not None else interaction.message,
+    )
 
     try:
         await interaction.response.defer(ephemeral=True)
@@ -300,6 +313,7 @@ async def _handle_resolution(
 
     await _edit_card(card, accent, settings, fresh)
     await _dm_sponsor(bot, ctx, guild, settings, fresh)
+    await _refresh_board(bot, guild.id)
     await _safe_ephemeral(
         interaction,
         "Queued for the next `/qotd post`." if approve
@@ -370,60 +384,3 @@ async def _dm_sponsor(
         )
     except Exception:
         log.debug("econ sponsor: failed to DM sponsor", exc_info=True)
-
-
-async def post_review_card(
-    bot: Bot,
-    ctx: AppContext,
-    guild: discord.Guild,
-    settings: EconSettings,
-    accent: discord.Color,
-    submission_id: int,
-    sponsor: discord.Member,
-) -> None:
-    """Best-effort: post the review card to the bank channel and record its ids.
-
-    The pending row already exists and the member has already paid, so a
-    missing or forbidden bank channel must never raise back to them — a
-    cardless submission is still resolvable from the dashboard.
-    """
-    if not settings.bank_channel_id:
-        return
-    channel = guild.get_channel(settings.bank_channel_id)
-    if not isinstance(channel, discord.abc.Messageable):
-        return
-
-    def _read():
-        with ctx.open_db() as conn:
-            return get_submission(conn, submission_id)
-
-    try:
-        row = await asyncio.to_thread(_read)
-        if row is None:
-            return
-        embed = render_sponsor_card_embed(
-            accent,
-            settings,
-            sponsor_mention=sponsor.mention,
-            question=str(row["question"]),
-            price=int(row["price"]),
-            state="pending",
-        )
-        message = await channel.send(
-            embed=embed, view=SponsorReviewView(submission_id)
-        )
-    except discord.HTTPException:
-        log.warning("econ sponsor: failed to post review card for %s", submission_id)
-        return
-    except Exception:
-        log.exception("econ sponsor: unexpected error posting card %s", submission_id)
-        return
-
-    def _record() -> None:
-        with ctx.open_db() as conn:
-            set_submission_card(conn, submission_id, channel.id, message.id)
-
-    try:
-        await asyncio.to_thread(_record)
-    except Exception:
-        log.debug("econ sponsor: failed to record card ids", exc_info=True)
