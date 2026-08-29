@@ -202,6 +202,30 @@ function render(container, cfg, channels, roles, members) {
         </div>
 
         <div class="card">
+        <div class="section-label">Themed Days</div>
+        <div class="field">
+          <label style="display:flex; gap:6px; align-items:center;">
+            <input type="checkbox" name="flash_theme_enabled"${cfg.flash_theme_enabled ? " checked" : ""} />
+            Sell themed days
+          </label>
+          <div class="field-hint">A member pays to name the theme for a day; a mod
+            approves it; it is announced and pinned in the channel below whenever
+            that channel is next free. Approved themes queue up and run one at a
+            time — a day with nothing queued simply has no theme, and nothing is
+            posted. This checkbox is the on switch, <em>not</em> the price: set the
+            price to 0 and themed days are free rather than off. Set the price and
+            the day length on <a href="#/pricing">Pricing</a>.</div>
+        </div>
+        <div class="field">
+          <label>Theme Channel</label>
+          <span data-picker="theme_channel_id"></span>
+          <div class="field-hint">Where the theme is announced and pinned — one
+            message, not two. The bot needs Manage Messages here to pin and unpin.
+            Themed days stay off until this is set, whatever the checkbox says.</div>
+        </div>
+        </div>
+
+        <div class="card">
         <div class="section-label">Community Bounty</div>
         <div class="field">
           <label>Bounty Board Channel</label>
@@ -346,6 +370,12 @@ function render(container, cfg, channels, roles, members) {
     String(cfg.pin_channel_id),
     { label: "Pin Channel" },
   );
+  const themeChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="theme_channel_id"]'),
+    channels,
+    String(cfg.theme_channel_id),
+    { label: "Theme Channel" },
+  );
   const bountyChannelPicker = mountChannelPicker(
     form.querySelector('[data-picker="bounty_channel_id"]'),
     channels,
@@ -397,6 +427,7 @@ function render(container, cfg, channels, roles, members) {
     const payload = {
       enabled: form.querySelector("[name=enabled]").checked,
       transfers_enabled: form.querySelector("[name=transfers_enabled]").checked,
+      flash_theme_enabled: form.querySelector("[name=flash_theme_enabled]").checked,
       // All snowflakes go as strings: parseInt on a 19-digit id silently
       // rounds it (parseInt("1526051848518373608") === 1526051848518373600),
       // which repoints the setting at a role/channel that doesn't exist.
@@ -405,6 +436,7 @@ function render(container, cfg, channels, roles, members) {
       register_channel_id: registerChannelPicker.getValue() || "0",
       drops_channel_id: dropsChannelPicker.getValue() || "0",
       pin_channel_id: pinChannelPicker.getValue() || "0",
+      theme_channel_id: themeChannelPicker.getValue() || "0",
       bounty_channel_id: bountyChannelPicker.getValue() || "0",
       manager_role_id: rolePicker.getValue() || "0",
       game_role_id: gameRolePicker.getValue() || "0",

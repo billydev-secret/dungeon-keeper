@@ -223,6 +223,26 @@ class EconSettings:
     price_pin_of_day: int = 0
     pin_channel_id: int = 0
     pin_expire_days: int = 3
+    # Flash Themes (migration 188): a member pays to name the day's theme; a
+    # mod approves it; approved themes queue and the hourly loop runs the
+    # oldest one whenever `theme_channel_id` is free, posting ONE card there
+    # and pinning it for `theme_hours`. An empty queue posts nothing — a day
+    # with no theme is simply a normal day.
+    #
+    # Unlike the two above, price 0 does NOT switch this off:
+    # `flash_theme_enabled` is a real toggle, following the per-perk switches
+    # added in migration 182 precisely so a zero price stops meaning two
+    # things at once. A free themed day is a legitimate thing to run.
+    #
+    # Charged at submit, so denial and pending-expiry refund; a theme that ran
+    # its window does not. 300 is provisional and sits with the premium tier
+    # (holographic roles, room rentals) rather than the small consumables —
+    # set it per guild on the dashboard.
+    flash_theme_enabled: bool = False
+    price_flash_theme: int = 300
+    theme_channel_id: int = 0
+    theme_expire_days: int = 3
+    theme_hours: int = 24
     # Community Bounty (plan: docs/plans/community-bounty.md): anyone posts a
     # freeform task and seeds a pot; anyone chips in; a mod awards the pot to the
     # winner minus `bounty_rake_pct` (which evaporates — a real sink, next to the
@@ -400,6 +420,9 @@ _BOOL_KEYS = [
     "transfers_enabled",
     "raffle_enabled",
     "mod_perk_comp",
+    # Not a SHOP_TOGGLE_PERKS entry: that tuple drives the shop's own list of
+    # rentable perk lines, and a flash theme is a paid submission queue.
+    "flash_theme_enabled",
     *(f"shop_{p}_enabled" for p in SHOP_TOGGLE_PERKS),
 ]
 _FLOAT_KEYS = ["booster_multiplier", "xp_per_coin"]
@@ -1531,6 +1554,7 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_intake_rewards",
     "econ_qotd_rewards",
     "econ_pin_submissions",
+    "econ_theme_submissions",
     "econ_shop_purchases",
     "econ_community_contrib",
     "econ_community_tier_payouts",
@@ -1589,6 +1613,22 @@ def econ_purge_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> No
     except sqlite3.Error as exc:
         log.warning(
             "econ purge: failed releasing shop orders for user %d in guild %d: %s",
+            user_id, guild_id, exc,
+        )
+    # A RUNNING flash theme is detached rather than deleted, for the same
+    # reason: it holds a pinned announcement that only the expiry sweep knows
+    # how to take down, and the sweep finds its work by reading live rows.
+    # Deleting it would strip the name and strand the pin permanently. The
+    # member's other theme rows are deleted by the sweep below.
+    try:
+        from bot_modules.services.economy_theme_service import (  # noqa: PLC0415
+            anonymise_live_theme,
+        )
+
+        anonymise_live_theme(conn, guild_id, user_id)
+    except sqlite3.Error as exc:
+        log.warning(
+            "econ purge: failed detaching live theme for user %d in guild %d: %s",
             user_id, guild_id, exc,
         )
     for table in _PURGE_USER_ID_TABLES:

@@ -36,6 +36,7 @@ export function mount(container) {
     const cfg = await api("/api/economy/config").catch(() => null);
     render(container, cfg);
     wireEmojiQueue(container);
+    wireThemeQueue(container);
     wireShopOrders(container);
   }, { errorMsg: "Couldn’t load the approval queues." });
 }
@@ -62,6 +63,21 @@ function render(container, cfg) {
         </div>
         <div data-emoji-queue></div>
         <div data-emoji-empty class="field-hint" style="display:none;">Nothing is waiting for review.</div>
+      </section>
+
+      <section class="form card" style="margin-top:1.5rem;">
+        <div class="section-label">Themed Days</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Days members have paid to theme, waiting on your decision. Approving puts a
+          theme in the queue — it isn’t announced yet; the next one goes up on its own
+          whenever the theme channel is free. Turning one down refunds the member in
+          full, and so does pulling a queued one back out. Ending a theme that’s already
+          running does <b>not</b> refund it: it was announced and people saw it.
+        </div>
+        <div data-theme-queue></div>
+        <div data-theme-empty class="field-hint" style="display:none;">
+          Nothing waiting, queued or running.
+        </div>
       </section>
 
       <section class="form card" style="margin-top:1.5rem;">
@@ -157,6 +173,124 @@ function wireEmojiQueue(container) {
           reason: reason.trim() || "not a fit for the server",
         });
         showStatus(rowStatus, true, "Turned down and refunded");
+      }
+      await refresh();
+    } catch (err) {
+      showStatus(rowStatus, false, err.message);
+      btn.disabled = false;
+    }
+  });
+}
+
+const THEME_STATE_LABEL = {
+  pending: "waiting on you",
+  approved: "queued",
+  live: "running now",
+};
+
+function themeRow(sub, memberName) {
+  const state = String(sub.state);
+  const blurb = sub.blurb
+    ? `<div class="field-hint">“${esc(sub.blurb)}”</div>` : "";
+  // Contextual, because the refund rule differs per state and a button that
+  // silently means something else in another row is how a mod refunds a day
+  // that already ran.
+  let actions = "";
+  if (state === "pending") {
+    actions = `
+      <button type="button" class="btn btn-primary" data-approve>Approve</button>
+      <button type="button" class="btn btn-danger" data-deny>Turn Down</button>`;
+  } else if (state === "approved") {
+    actions = `<button type="button" class="btn btn-danger" data-withdraw>Remove from Queue</button>`;
+  } else if (state === "live") {
+    actions = `<button type="button" class="btn btn-danger" data-takedown>End Early</button>`;
+  }
+  return `
+    <div class="card" data-sub-id="${sub.id}"
+         style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px;">
+      <div>
+        <div><b>${esc(sub.title)}</b>
+          <span class="field-hint">(${sub.price}, ${esc(THEME_STATE_LABEL[state] || state)})</span></div>
+        <div class="field-hint">from <span data-member-id="${esc(sub.user_id)}">${esc(memberName(sub.user_id))}</span></div>
+        ${blurb}
+      </div>
+      <div style="display:flex;gap:8px;margin-left:auto;flex-wrap:wrap;">${actions}</div>
+      <span data-row-status></span>
+    </div>`;
+}
+
+function wireThemeQueue(container) {
+  const listEl = container.querySelector("[data-theme-queue]");
+  const emptyEl = container.querySelector("[data-theme-empty]");
+
+  let nameById = new Map();
+  const memberName = (id) => nameById.get(String(id)) || String(id);
+
+  async function refresh() {
+    let subs = [];
+    try {
+      // Three states in one list, ordered the way a mod works through them:
+      // what needs a decision, what is queued behind it, what is up right now.
+      const [members, pending, queued, live] = await Promise.all([
+        loadMembers().catch(() => []),
+        api("/api/economy/theme-submissions?state=pending"),
+        api("/api/economy/theme-submissions?state=approved"),
+        api("/api/economy/theme-submissions?state=live"),
+      ]);
+      nameById = new Map(
+        members.map((m) => [String(m.id), m.display_name || m.name || String(m.id)]),
+      );
+      subs = [...live.submissions, ...pending.submissions, ...queued.submissions];
+    } catch {
+      listEl.innerHTML = renderError("Couldn’t load the themed days.");
+      emptyEl.style.display = "none";
+      return;
+    }
+    listEl.innerHTML = subs.map((sub) => themeRow(sub, memberName)).join("");
+    emptyEl.style.display = subs.length ? "none" : "block";
+  }
+  refresh();
+
+  listEl.addEventListener("click", async (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const row = btn.closest("[data-sub-id]");
+    const id = row.getAttribute("data-sub-id");
+    const rowStatus = row.querySelector("[data-row-status]");
+    btn.disabled = true;
+    try {
+      if (btn.hasAttribute("data-approve")) {
+        await apiPost(`/api/economy/theme-submissions/${id}/approve`, {});
+        showStatus(rowStatus, true, "Queued");
+      } else if (btn.hasAttribute("data-deny")) {
+        const reason = await promptDialog(
+          "This member is refunded in full and sent your reason. What should they be told?",
+          { title: "Turn down this theme?", confirmLabel: "Turn Down", danger: true },
+        );
+        if (reason === null) { btn.disabled = false; return; }
+        await apiPost(`/api/economy/theme-submissions/${id}/deny`, {
+          reason: reason.trim() || "not a fit for the server",
+        });
+        showStatus(rowStatus, true, "Turned down and refunded");
+      } else if (btn.hasAttribute("data-withdraw")) {
+        const reason = await promptDialog(
+          "It never ran, so the member is refunded in full.",
+          { title: "Remove this theme from the queue?", confirmLabel: "Remove", danger: true },
+        );
+        if (reason === null) { btn.disabled = false; return; }
+        await apiPost(`/api/economy/theme-submissions/${id}/withdraw`, {
+          reason: reason.trim(),
+        });
+        showStatus(rowStatus, true, "Removed and refunded");
+      } else if (btn.hasAttribute("data-takedown")) {
+        const ok = await promptDialog(
+          "The announcement is unpinned and deleted. There is no refund — the theme "
+          + "was announced and people saw it.",
+          { title: "End this theme early?", confirmLabel: "End It", danger: true },
+        );
+        if (ok === null) { btn.disabled = false; return; }
+        await apiPost(`/api/economy/theme-submissions/${id}/take-down`, {});
+        showStatus(rowStatus, true, "Ended");
       }
       await refresh();
     } catch (err) {

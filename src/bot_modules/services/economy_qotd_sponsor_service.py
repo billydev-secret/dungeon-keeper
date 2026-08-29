@@ -32,10 +32,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from bot_modules.services.economy_service import (
-    apply_debit,
     get_balance,
 )
-from bot_modules.services.economy_submission_store import list_rows, refund_once
+from bot_modules.services import economy_submission_store as store
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -48,6 +47,16 @@ MIN_QUESTION_LEN = 8
 _OPEN_STATES = ("pending", "approved")
 SPEND_KIND = "qotd_sponsor"
 REFUND_KIND = "qotd_sponsor_refund"
+
+#: Everything the shared paid-submission mechanics need to know about this
+#: product. What approval *produces* — a queue ``/qotd post`` draws from — is
+#: this module's own business and stays below.
+PRODUCT = store.SubmissionProduct(
+    table="econ_qotd_submissions",
+    spend_kind=SPEND_KIND,
+    refund_kind=REFUND_KIND,
+    open_states=_OPEN_STATES,
+)
 
 
 @dataclass(frozen=True)
@@ -72,12 +81,7 @@ def open_submission(
     conn: sqlite3.Connection, guild_id: int, user_id: int
 ) -> sqlite3.Row | None:
     """The member's in-flight submission (pending or approved), if any."""
-    placeholders = ", ".join("?" for _ in _OPEN_STATES)
-    return conn.execute(
-        "SELECT * FROM econ_qotd_submissions "
-        f"WHERE guild_id = ? AND user_id = ? AND state IN ({placeholders})",
-        (guild_id, user_id, *_OPEN_STATES),
-    ).fetchone()
+    return store.open_submission(conn, PRODUCT, guild_id, user_id)
 
 
 def submit_sponsor(
@@ -110,34 +114,21 @@ def submit_sponsor(
 
     price = sponsor_price(settings)
     unit = settings.currency_plural or "coins"
-    if not apply_debit(
-        conn, guild_id, user_id, price, SPEND_KIND, meta={"question": text}
-    ):
+    submission_id = store.charge_and_insert(
+        conn, PRODUCT, guild_id, user_id, price, {"question": text}
+    )
+    if submission_id is None:
         have = get_balance(conn, guild_id, user_id)
         raise ValueError(
             f"Sponsoring a question costs {price} {unit} — you have {have}."
         )
-    now = time.time()
-    cur = conn.execute(
-        "INSERT INTO econ_qotd_submissions "
-        "(guild_id, user_id, question, state, price, created_at) "
-        "VALUES (?, ?, ?, 'pending', ?, ?)",
-        (guild_id, user_id, text, price, now),
-    )
-    # shop_purchase quest trigger (one-time setup kind); deferred import —
-    # the quests service imports the wider economy machinery.
-    from bot_modules.services.economy_quests_service import (  # noqa: PLC0415
-        fire_trigger_inline,
-    )
-
-    fire_trigger_inline(conn, guild_id, "shop_purchase", user_id, occurrence="set")
-    return SponsorOutcome(submission_id=int(cur.lastrowid or 0), price=price)
+    return SponsorOutcome(submission_id=submission_id, price=price)
 
 
 def _refund(conn: sqlite3.Connection, row: sqlite3.Row, reason: str) -> int:
     """Give the money back exactly once. Returns the amount actually refunded."""
-    return refund_once(
-        conn, "econ_qotd_submissions", row, reason, refund_kind=REFUND_KIND
+    return store.refund_once(
+        conn, PRODUCT.table, row, reason, refund_kind=PRODUCT.refund_kind
     )
 
 
@@ -154,30 +145,23 @@ def resolve_submission(
     Only ``pending`` resolves — an approved question is already in the post
     queue and is withdrawn with :func:`withdraw_approved`, not re-resolved.
     """
-    row = conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
+    row = store.get(conn, PRODUCT, submission_id)
     if row is None:
         raise ValueError("❌ That submission no longer exists.")
     if str(row["state"]) != "pending":
         raise ValueError(f"❌ That submission is already {row['state']}.")
 
-    now = time.time()
-    state = "approved" if approve else "denied"
-    cur = conn.execute(
-        "UPDATE econ_qotd_submissions SET state = ?, resolver_id = ?, "
-        "resolved_at = ?, deny_reason = ? WHERE id = ? AND state = 'pending'",
-        (state, resolver_id, now, deny_reason[:500], submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="pending",
+        to_state="approved" if approve else "denied",
+        resolver_id=resolver_id,
+        deny_reason=deny_reason,
+        refund_reason=None if approve else "denied",
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         # Lost a race with another resolver; their write stands.
         raise ValueError("❌ That submission was just resolved by someone else.")
-    if not approve:
-        _refund(conn, row, "denied")
-    fresh = conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    assert fresh is not None
     return fresh
 
 
@@ -185,23 +169,17 @@ def withdraw_approved(
     conn: sqlite3.Connection, submission_id: int, *, resolver_id: int, reason: str = ""
 ) -> sqlite3.Row:
     """Pull an already-approved question back out of the queue, refunding it."""
-    row = conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    if row is None:
+    if store.get(conn, PRODUCT, submission_id) is None:
         raise ValueError("That submission no longer exists.")
-    cur = conn.execute(
-        "UPDATE econ_qotd_submissions SET state = 'denied', resolver_id = ?, "
-        "resolved_at = ?, deny_reason = ? WHERE id = ? AND state = 'approved'",
-        (resolver_id, time.time(), reason[:500], submission_id),
+    fresh = store.move_state(
+        conn, PRODUCT, submission_id,
+        from_state="approved", to_state="denied",
+        resolver_id=resolver_id,
+        deny_reason=reason,
+        refund_reason="withdrawn",
     )
-    if (cur.rowcount or 0) == 0:
+    if fresh is None:
         raise ValueError("That question isn't waiting to be posted.")
-    _refund(conn, row, "withdrawn")
-    fresh = conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
-    assert fresh is not None
     return fresh
 
 
@@ -281,50 +259,27 @@ def expire_stale_submissions(
     waiting on a mod to run ``/qotd post``, and timing that out would punish
     the member for staff latency.
     """
-    days = max(0, int(settings.qotd_sponsor_expire_days))
-    if days <= 0:
-        return []
-    cutoff = now - days * 86400.0
-    stale = conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE guild_id = ? AND state = 'pending' "
-        "AND created_at < ?",
-        (guild_id, cutoff),
-    ).fetchall()
-    out: list[sqlite3.Row] = []
-    for row in stale:
-        cur = conn.execute(
-            "UPDATE econ_qotd_submissions SET state = 'expired', resolved_at = ? "
-            "WHERE id = ? AND state = 'pending'",
-            (now, int(row["id"])),
-        )
-        if (cur.rowcount or 0) == 0:
-            continue
-        _refund(conn, row, "expired")
-        out.append(row)
-    return out
+    return store.expire_stale_pending(
+        conn, PRODUCT, guild_id,
+        days=max(0, int(settings.qotd_sponsor_expire_days)), now=now,
+    )
 
 
 def list_submissions(
     conn: sqlite3.Connection, guild_id: int, state: str | None = None, limit: int = 100
 ) -> list[sqlite3.Row]:
     """Submissions for the dashboard queue, oldest first."""
-    return list_rows(conn, "econ_qotd_submissions", guild_id, state, limit)
+    return store.list_for(conn, PRODUCT, guild_id, state, limit)
 
 
 def get_submission(
     conn: sqlite3.Connection, submission_id: int
 ) -> sqlite3.Row | None:
-    return conn.execute(
-        "SELECT * FROM econ_qotd_submissions WHERE id = ?", (submission_id,)
-    ).fetchone()
+    return store.get(conn, PRODUCT, submission_id)
 
 
 def set_submission_card(
     conn: sqlite3.Connection, submission_id: int, channel_id: int, message_id: int
 ) -> None:
     """Record where the approval card lives so it can be edited on resolution."""
-    conn.execute(
-        "UPDATE econ_qotd_submissions SET card_channel_id = ?, card_message_id = ? "
-        "WHERE id = ?",
-        (channel_id, message_id, submission_id),
-    )
+    store.set_card(conn, PRODUCT, submission_id, channel_id, message_id)
