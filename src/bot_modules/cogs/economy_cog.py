@@ -52,11 +52,10 @@ from bot_modules.economy.perks import (
 )
 from bot_modules.economy.shop import (
     PAGE_STORE,
-    PageOption,
     build_shop_embed,
     build_store_embed,
     page_note,
-    page_options,
+    page_captions,
     shop_pages,
     store_page,
 )
@@ -1028,17 +1027,12 @@ class _StoreSelect(discord.ui.Select):
 _NAV_ROW = 4
 
 
-#: Buttons a Discord action row holds. Past this many pages the tabs cannot
-#: fit, and the shop falls back to the select.
-_MAX_TABS = 5
-
-
 def _make_turn(cog: EconomyCog, target: int):
     """A page-turn callback bound to one destination.
 
-    A factory rather than a closure in the loop below: every tab is built in
-    the same iteration, and a late-bound ``target`` would send them all to the
-    last page.
+    A factory rather than a closure at the call site: both arrows are built in
+    the same breath, and a late-bound ``target`` would send them to the same
+    page.
     """
 
     async def _cb(interaction: discord.Interaction) -> None:
@@ -1047,84 +1041,51 @@ def _make_turn(cog: EconomyCog, target: int):
     return _cb
 
 
-class _PageSelect(discord.ui.Select):
-    """Jump straight to any page of the shop.
-
-    Replaced a ◀️/▶️ pair. Arrows were one tap to a neighbour but N taps to
-    anywhere, which put the perk ladder two taps behind a stocked store and
-    would only have got worse as a guild added items; a picker is two
-    interactions to any page and stays two however long the book gets. It also
-    says what is on each page, so nobody has to walk the store to discover
-    where the refund button lives.
-
-    The current page is the select's ``default``, so Discord shows it in the
-    closed state and the control doubles as a "you are here".
-    """
-
-    def __init__(self, cog: EconomyCog, options: list[PageOption], page: int):
-        self.cog = cog
-        super().__init__(
-            placeholder="Jump to a page…",
-            min_values=1,
-            max_values=1,
-            row=_NAV_ROW,
-            options=[
-                discord.SelectOption(
-                    label=opt.label[:100],
-                    description=opt.description[:100],
-                    value=str(i),
-                    default=(i == page),
-                )
-                for i, opt in enumerate(options)
-            ],
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self.cog.turn_shop_page(interaction, int(self.values[0]))
-
-
 def _add_page_nav(
-    view: discord.ui.View,
-    cog: EconomyCog,
-    options: list[PageOption],
-    page: int,
+    view: discord.ui.View, cog: EconomyCog, captions: list[str], page: int
 ) -> None:
-    """The shop's only navigation, shared by both page kinds.
+    """The shop's only navigation: ◀️, the page you are on, ▶️.
 
-    **Tabs** while they fit — one button per page, the current one shown as a
-    disabled green chip so the row doubles as a "you are here" and a tab you
-    are already on cannot cost a round trip. A row holds five buttons, so a
-    guild past that many pages (roughly forty items) falls back to the select
-    rather than losing a page off the end: the shape changes, the position and
-    the labels do not.
+    The caption between the arrows is a **disabled button**, not decoration —
+    Discord has no label component, and a greyed chip is how the rest of this
+    shop already says "you are here" (🎙️ Leased, 🛡️ Shield Held). It supplies
+    what bare arrows lacked: they moved you without ever saying where you were.
 
-    Pinned to the last row either way, so navigation sits under everything else
-    rather than in whatever gap the auto-layout had left — packed loose, an
-    earlier ◀️/▶️ pair landed beside 🛡️ Shield and ↩️ Cancel & Refund, putting
-    "Next" exactly where a member is aiming for a refund. Discord drops empty
-    rows, so row 4 renders directly under the last row holding anything.
+    Three components whatever the store's size, which is why there is no
+    overflow shape to fall back to — a tab row ran out at five pages, and a
+    select spent a whole row saying the same thing. The arrows **wrap**, so the
+    last page steps round to the first rather than dead-ending on a greyed
+    control that reads as broken.
+
+    Pinned to the last row so navigation sits under everything else rather than
+    in whatever gap the auto-layout had left — packed loose, an earlier pair
+    landed beside 🛡️ Shield and ↩️ Cancel & Refund, putting "Next" exactly
+    where a member is aiming for a refund. Discord drops empty rows, so row 4
+    renders directly under the last row holding anything.
 
     A single-page shop (a guild selling nothing of its own) gets no navigation
-    at all — not one dead tab — and looks exactly as it always did.
+    at all — not two dead arrows around a caption for the only page there is.
     """
-    if len(options) < 2:
+    if len(captions) < 2:
         return
-    if len(options) > _MAX_TABS:
-        view.add_item(_PageSelect(cog, options, page))
-        return
-    for i, opt in enumerate(options):
-        here = i == page
-        button = discord.ui.Button(
-            label=opt.tab,
-            style=(
-                discord.ButtonStyle.success if here else discord.ButtonStyle.secondary
-            ),
-            disabled=here,
-            row=_NAV_ROW,
-        )
-        if not here:
-            button.callback = _make_turn(cog, i)
-        view.add_item(button)
+    total = len(captions)
+    view.add_item(_nav_arrow(cog, "◀️", (page - 1) % total))
+    view.add_item(discord.ui.Button(
+        label=captions[page][:80],
+        style=discord.ButtonStyle.secondary,
+        disabled=True,
+        row=_NAV_ROW,
+    ))
+    view.add_item(_nav_arrow(cog, "▶️", (page + 1) % total))
+
+
+def _nav_arrow(cog: EconomyCog, label: str, target: int) -> discord.ui.Button:
+    button = discord.ui.Button(
+        label=label, style=discord.ButtonStyle.secondary, row=_NAV_ROW
+    )
+    button.callback = _make_turn(cog, target)
+    return button
+
 
 
 class _StoreView(_MemberScopedView):
@@ -1151,7 +1112,7 @@ class _StoreView(_MemberScopedView):
         store_index: int = 0,
         *,
         page: int = 0,
-        nav: list[PageOption] | None = None,
+        nav: list[str] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1344,7 +1305,7 @@ class _ShopView(_MemberScopedView):
         refundable: list[dict] | None = None,
         shield_price: int = 0,
         page: int = 0,
-        nav: list[PageOption] | None = None,
+        nav: list[str] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -2344,7 +2305,7 @@ class EconomyCog(commands.Cog):
         page = max(0, min(page, len(pages) - 1))
         kind, index = pages[page]
         note = page_note(pages, page)
-        nav = page_options(shop.items)
+        nav = page_captions(shop.items)
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
 
         if kind == PAGE_STORE:

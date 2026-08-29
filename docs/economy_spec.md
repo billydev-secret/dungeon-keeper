@@ -1490,32 +1490,21 @@ picker that cut at Discord's 25-option ceiling.
 
 The ephemeral shop is now **one flat book of pages** (`shop_pages`): the
 guild's store first at `STORE_PAGE_SIZE = 10` items a page, the perk ladder
-always last, navigated by **tabs** — `_add_page_nav`, pinned to row 4 so navigation is
-always its own bottom row, one button per page from `page_options`, the current
-one a disabled green chip so the row doubles as a "you are here". A Discord row
-holds five buttons, so a guild past five pages (~40 items) falls back to
-`_PageSelect` in the same place with the same labels: the shape changes, the
-position and the wording do not. The footer counter (`page_note`) runs across
-the whole book so it does not restart at the store/perk seam.
+always last, navigated by a **stepper** — `_add_page_nav`, pinned to row 4 so navigation is
+always its own bottom row: ◀️, a *disabled* button carrying the current page's
+caption from `page_captions`, ▶️. The caption is a button because Discord has no
+label component, and a greyed chip is how this shop already says "you are here"
+(🎙️ Leased, 🛡️ Shield Held). Arrows wrap. Three components whatever the store's
+size, so there is no overflow shape. The footer counter (`page_note`) runs
+across the whole book so it does not restart at the store/perk seam.
 
-`page_options` returns a `PageOption(tab, label, description)` — two captions
-because a button and a select line have very different room. A lone store page
-is "🎁 Store" rather than "🎁 1–7": there is nothing to tell it apart from.
-
-Navigation went through three shapes on 2026-08-28/29, and the discarded two
-are worth not re-proposing. **Wrapping ◀️/▶️ arrows** were one tap to a
-neighbour but N taps to anywhere, burying the refund button behind a stocked
-store; left to auto-layout they also packed in beside 🛡️ Shield and ↩️ Cancel &
-Refund — "Next" where a member aims for a refund — which is why the row is
-pinned. A **select** fixed the depth but spent a whole row on a control that,
-at three pages, three buttons say better. The panel keeps its **single** Open
-Shop button throughout: it is one shared message, so it cannot tab in place
-without one member's click changing what everyone else sees. `/bank shop`, `/bank store` and the panel's Open Shop
-button all call `open_personal_shop` → `_render_shop`, which re-reads on every
-turn — an arrow tap can land minutes later, and a sold-out row shown as buyable
-is a refusal the member discovers by paying. `store_page` and `_render_shop`
-both clamp, because an admin can withdraw the last item while a member sits on
-page 2 and the book shrinks under them.
+Navigation went through four shapes on 2026-08-28/29; the three discarded ones
+are worth not re-proposing. **Bare ◀️/▶️** moved you without saying where to.
+**A select** fixed that but spent a whole row to say what a caption says. **A
+tab row** showed every page at once but ran out at five pages (~40 items). The
+stepper is the select's clarity at the arrows' cost. Separately: left to
+auto-layout the arrows had packed in beside 🛡️ Shield and ↩️ Cancel & Refund —
+"Next" where a member aims for a refund — which is why the row is pinned.
 
 So there is **no** 🎁 Store button and **no** second panel button: an earlier
 cut of this work added both and they were taken back out, because a shop that

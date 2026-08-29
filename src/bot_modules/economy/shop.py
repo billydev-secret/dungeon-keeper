@@ -17,8 +17,6 @@ table it drives.
 
 from __future__ import annotations
 
-from typing import NamedTuple
-
 import discord
 
 from bot_modules.economy.perks import (
@@ -180,49 +178,25 @@ def shop_pages(items: list[ItemView] | None) -> list[tuple[str, int]]:
     return pages
 
 
-class PageOption(NamedTuple):
-    """How one page of the shop names itself.
+def page_captions(items: list[ItemView] | None) -> list[str]:
+    """What each page calls itself, for the caption between the arrows.
 
-    Two labels because the shop has two navigation shapes and they have very
-    different room: ``tab`` is a button caption, where anything past a couple of
-    words wraps or truncates on a phone, while ``label`` is a select-option
-    line with a whole row to itself.
-    """
-
-    tab: str
-    label: str
-    description: str
-
-
-def page_options(items: list[ItemView] | None) -> list[PageOption]:
-    """One ``PageOption`` per page, for whichever navigation the shop renders.
-
-    The store's labels carry their span — "1–10 of 20" — because "Server Store"
-    twice over tells a member nothing about which half they are picking. The
-    perk page names what is on it rather than just saying "Perks", so nobody has
-    to open it to find out the refund button lives there. A store small enough
-    to fit one page drops the span entirely: "🎁 1–7" is a worse caption than
-    "🎁 Store" when there is nothing to tell it apart from.
+    The store's captions carry their span — "Store · 1–10" — because "Server
+    Store" twice over tells a member nothing about which half they are looking
+    at. A store small enough to fit one page drops the span: "🎁 Store · 1–7"
+    is worse than "🎁 Store" when there is nothing to tell it apart from.
     """
     total = len(items or [])
     pages = shop_pages(items)
     one_store_page = sum(1 for kind, _ in pages if kind == PAGE_STORE) == 1
-    out: list[PageOption] = []
+    out: list[str] = []
     for kind, index in pages:
         if kind == PAGE_STORE:
             start = index * STORE_PAGE_SIZE + 1
             end = min(total, (index + 1) * STORE_PAGE_SIZE)
-            out.append(PageOption(
-                "🎁 Store" if one_store_page else f"🎁 {start}–{end}",
-                f"🎁 Server Store · {start}–{end} of {total}",
-                "What this server sells itself",
-            ))
+            out.append("🎁 Store" if one_store_page else f"🎁 Store · {start}–{end}")
         else:
-            out.append(PageOption(
-                "✨ Perks",
-                "✨ Perks & rentals",
-                "Name, colour, icon, shield, gifting, refunds",
-            ))
+            out.append("✨ Perks")
     return out
 
 

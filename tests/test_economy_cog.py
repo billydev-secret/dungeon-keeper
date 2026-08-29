@@ -4228,29 +4228,28 @@ async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
     view = _shop_view(interaction)
     assert isinstance(view, _ShopView)
     assert _shop_embed(interaction).title == "🛍️ Perk Shop"
-    # No second page, so no navigation at all — not one dead tab, not a
-    # picker with a single entry.
+    # No second page, so no navigation at all — not two dead arrows around a
+    # caption for the only page there is.
     assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
-    assert not _tabs(view)
+    assert not _nav(view)
 
 
-def _tabs(view):
-    """The shop's navigation buttons: (label, is-the-page-you-are-on)."""
+def _nav(view):
+    """The shop's navigation row: (label, disabled) for each of its three."""
     return [
         (b.label, b.disabled)
         for b in view.children
-        if isinstance(b, discord.ui.Button)
-        and (b.label or "").startswith(("🎁", "✨ Perks"))
+        if isinstance(b, discord.ui.Button) and getattr(b, "row", None) == 4
     ]
 
 
 @pytest.mark.asyncio
-async def test_tabs_jump_straight_to_any_page(ctx, db):
-    """One tap to any page, and the row says where you are.
+async def test_the_arrows_step_the_sections_and_say_where_you_are(ctx, db):
+    """Billy's shape: ◀️, the page you are on, ▶️.
 
-    The tab you are on is a disabled green chip rather than a live button: it
-    doubles as a "you are here", and a tab that re-renders the page you are
-    already looking at is a round trip for nothing.
+    The caption is a disabled button because Discord has no label component —
+    and it is what bare arrows lacked, which moved you without ever saying
+    where you had been moved to.
     """
     _enable(db)
     for n in range(1, 21):
@@ -4263,41 +4262,91 @@ async def test_tabs_jump_straight_to_any_page(ctx, db):
         new=AsyncMock(return_value=True),
     ):
         await _shop(cog, interaction)
-        assert _shop_embed(interaction).footer.text.startswith(
-            "Page 1 of 3 · Server Store"
-        )
-        assert _tabs(_shop_view(interaction)) == [
-            ("🎁 1–10", True), ("🎁 11–20", False), ("✨ Perks", False),
+        assert _nav(_shop_view(interaction)) == [
+            ("◀️", False), ("🎁 Store · 1–10", True), ("▶️", False),
         ]
 
-        # Straight from the first store page to the perks — one tap.
-        perks_tab = next(
-            b for b in _shop_view(interaction).children
-            if isinstance(b, discord.ui.Button) and b.label == "✨ Perks"
-        )
-        jump = _interaction(_member(member_id=500))
-        await perks_tab.callback(jump)
+        # ▶️ steps to the next store section: new caption, new embed rows.
+        step = _interaction(_member(member_id=500))
+        nxt = [b for b in _shop_view(interaction).children
+               if isinstance(b, discord.ui.Button) and b.label == "▶️"][0]
+        await nxt.callback(step)
 
-    landed = jump.response.edit_message.await_args.kwargs["embed"]
-    assert landed.title == "🛍️ Perk Shop"
-    assert landed.footer.text.startswith("Page 3 of 3 · Perks")
-    # The chip moved with us.
-    assert _tabs(jump.response.edit_message.await_args.kwargs["view"]) == [
-        ("🎁 1–10", False), ("🎁 11–20", False), ("✨ Perks", True),
-    ]
+    second = step.response.edit_message.await_args.kwargs
+    assert _nav(second["view"])[1] == ("🎁 Store · 11–20", True)
+    assert "Item 11" in second["embed"].description
+    assert "Item 01" not in second["embed"].description
 
 
 @pytest.mark.asyncio
-async def test_a_store_too_big_for_tabs_falls_back_to_a_picker(ctx, db):
-    """A row holds five buttons; a sixth page must not fall off the end.
+async def test_stepping_changes_what_the_dropdown_will_sell_you(ctx, db):
+    """The section drives the buy picker, not just the embed text.
 
-    The shape changes, the position and the labels do not — so the fallback is
-    a different control in the same place, not a different design.
+    Billy's note on the sketch: the arrows change what shows *and* what is
+    selectable. A picker still offering page 1's items from page 2 would sell
+    the wrong thing.
     """
-    from bot_modules.cogs.economy_cog import _PageSelect
-
     _enable(db)
-    for n in range(1, 46):  # 5 store pages + perks = 6
+    for n in range(1, 21):
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+
+    first = _interaction(_member(member_id=500))
+    await _shop(cog, first)
+    opts = next(
+        c for c in _shop_view(first).children if isinstance(c, discord.ui.Select)
+    ).options
+    assert [o.label for o in opts] == [f"Item {n:02d}" for n in range(1, 11)]
+
+    second = _interaction(_member(member_id=500))
+    await cog.turn_shop_page(second, 1)
+    opts = next(
+        c for c in second.response.edit_message.await_args.kwargs["view"].children
+        if isinstance(c, discord.ui.Select)
+    ).options
+    assert [o.label for o in opts] == [f"Item {n:02d}" for n in range(11, 21)]
+
+
+@pytest.mark.asyncio
+async def test_the_arrows_wrap_rather_than_dead_ending(ctx, db):
+    """From the last page ▶️ comes round to the first.
+
+    A greyed-out arrow at the end reads as a broken button more often than as
+    "you are at the end".
+    """
+    _enable(db)
+    for n in range(1, 21):
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+
+    with patch(
+        "bot_modules.cogs.economy_cog.feature_gate_ok",
+        new=AsyncMock(return_value=True),
+    ):
+        last = _interaction(_member(member_id=500))
+        await cog.turn_shop_page(last, 2)          # the perk page
+        view = last.response.edit_message.await_args.kwargs["view"]
+        assert _nav(view)[1] == ("✨ Perks", True)
+
+        wrapped = _interaction(_member(member_id=500))
+        nxt = [b for b in view.children
+               if isinstance(b, discord.ui.Button) and b.label == "▶️"][0]
+        await nxt.callback(wrapped)
+
+    assert _nav(wrapped.response.edit_message.await_args.kwargs["view"])[1] == (
+        "🎁 Store · 1–10", True
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_big_store_keeps_the_same_three_controls(ctx, db):
+    """Forty-five items is six pages and still ◀️ · caption · ▶️.
+
+    This is why there is no overflow shape: a tab row ran out at five pages,
+    and a select spent a whole row saying the same thing.
+    """
+    _enable(db)
+    for n in range(1, 46):
         _store_item(db, name=f"Item {n:02d}", price=10 * n)
     cog = _make_cog(ctx)
     interaction = _interaction(_member(member_id=500))
@@ -4305,10 +4354,9 @@ async def test_a_store_too_big_for_tabs_falls_back_to_a_picker(ctx, db):
     await _shop(cog, interaction)
 
     view = _shop_view(interaction)
-    assert not _tabs(view)
-    nav = next(c for c in view.children if isinstance(c, _PageSelect))
-    assert [o.value for o in nav.options if o.default] == ["0"]
-    assert len(nav.options) == 6
+    assert _nav(view) == [("◀️", False), ("🎁 Store · 1–10", True), ("▶️", False)]
+    # ◀️ from the first page lands on the perks, the last of six.
+    assert len([c for c in view.children if isinstance(c, discord.ui.Select)]) == 1
 
 
 @pytest.mark.asyncio
@@ -4448,7 +4496,7 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         await _shop(cog, store)
         srows = _rows(_shop_view(store))
         assert srows == [
-            ["Pick something to buy…"], ["🎁 1–10", "🎁 11–20", "✨ Perks"],
+            ["Pick something to buy…"], ["◀️", "🎁 Store · 1–10", "▶️"],
         ]
 
         # The perk page, where eight buttons would otherwise leave a gap the
@@ -4457,6 +4505,6 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         await cog.turn_shop_page(perks, 2)
 
     rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
-    assert rows[-1] == ["🎁 1–10", "🎁 11–20", "✨ Perks"]   # its own last row
-    assert len(rows) > 1                                    # not the only row
-    assert all("✨ Perks" not in r for r in rows[:-1])
+    assert rows[-1] == ["◀️", "✨ Perks", "▶️"]      # its own last row
+    assert len(rows) > 1                           # and not the only row
+    assert all("◀️" not in r for r in rows[:-1])

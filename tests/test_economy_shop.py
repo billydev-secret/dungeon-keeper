@@ -530,26 +530,22 @@ def test_the_header_stops_calling_everything_a_weekly_rental(db):
     assert panel.footer.text.startswith("Perk prices are per week")
 
 
-def test_page_options_label_each_page_by_what_is_on_it(db):
-    """"Server Store" twice tells nobody which half they are picking.
+def test_page_captions_name_each_page_by_what_is_on_it(db):
+    """"Server Store" twice tells nobody which half they are looking at.
 
-    Two captions because the shop has two navigation shapes with very different
-    room: ``tab`` is a button, where more than a couple of words wraps on a
-    phone; ``label`` is a select line with a whole row to itself.
+    So the store's captions carry their span — and a store small enough for one
+    page drops it, because "🎁 Store · 1–7" is worse than "🎁 Store" when there
+    is nothing to tell it apart from.
     """
-    from bot_modules.economy.shop import page_options
+    from bot_modules.economy.shop import page_captions
 
-    tabs = [o.tab for o in page_options(_items(20))]
-    assert tabs == ["🎁 1–10", "🎁 11–20", "✨ Perks"]
-    assert [o.label for o in page_options(_items(20))] == [
-        "🎁 Server Store · 1–10 of 20",
-        "🎁 Server Store · 11–20 of 20",
-        "✨ Perks & rentals",
+    assert page_captions(_items(20)) == [
+        "🎁 Store · 1–10", "🎁 Store · 11–20", "✨ Perks",
     ]
     # A short final page reports its real span, not a rounded one.
-    assert page_options(_items(12))[1].tab == "🎁 11–12"
-    # With nothing to tell it apart from, a lone store page drops the span:
-    # "🎁 1–7" is a worse caption than "🎁 Store".
-    assert page_options(_items(7))[0].tab == "🎁 Store"
-    # One page is not a book: the caller renders no navigation for one entry.
-    assert len(page_options([])) == 1
+    assert page_captions(_items(12))[1] == "🎁 Store · 11–12"
+    assert page_captions(_items(7)) == ["🎁 Store", "✨ Perks"]
+    # One page is not a book: the caller renders no navigation for one caption.
+    assert page_captions([]) == ["✨ Perks"]
+    # The shape holds where a tab row would have overflowed.
+    assert len(page_captions(_items(45))) == 6
