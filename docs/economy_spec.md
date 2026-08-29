@@ -1596,10 +1596,13 @@ to append their own spacer, which left One-shot, Weekly Raffle, Specials and
 For a Friend hugging whatever was above them.
 
 `_ShopView(section=...)` carries only that section's controls, and renders them
-as a **single `_ActionSelect`** where the section has more than one product —
-scoped to the section, built from the very buttons it replaces, so there is one
-place deciding what a section offers. A lone product keeps its button, since a
-one-option dropdown is two taps to do what one would. Discord cannot grey out a
+as a **single `_ActionSelect`**, scoped to the section and built from the very
+buttons it replaces, so there is one place deciding what a section offers.
+**Always a picker, even for one product** — a one-option dropdown costs a tap
+over a button, but which sections hold a single product changes with a
+dashboard toggle, so letting the shape follow the count moves the furniture
+under a member for reasons they cannot see. (A "lone product keeps its button"
+rule shipped in `3c601c09` and was removed the same day for exactly that.) Discord cannot grey out a
 single option, so an unavailable row (a gated perk, a held shield, an
 already-leased voice room) keeps its place and explains itself when chosen —
 dropping it would make the picker disagree with the table above it — a page holding buttons for rows its
