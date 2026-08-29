@@ -8,7 +8,7 @@ tested for matplotlib PNG magic; pixel content is not validated.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -376,8 +376,24 @@ def test_query_xp_activity_sums_amounts(db_conn):
     assert max(members) == 2
 
 
+def _recent_utc_hour(hour: int) -> int:
+    """Yesterday at ``hour`` UTC — inside the histogram's 90-day window.
+
+    The window is measured from ``time.time()``, so a hard-coded date is a
+    time bomb: it passes when written and goes red weeks later with nobody
+    having touched the code (this pair detonated 2026-08-29, exactly 90 days
+    after the 2026-05-31 they pinned). Only the *hour* matters to an
+    hour-of-day bucket, so anchor the day to now and keep the hour fixed.
+    """
+    return int(
+        (datetime.now(timezone.utc) - timedelta(days=1))
+        .replace(hour=hour, minute=0, second=0, microsecond=0)
+        .timestamp()
+    )
+
+
 def test_query_xp_histogram_sums_by_hour(db_conn):
-    ts = int(datetime(2026, 5, 31, 9, 0, tzinfo=timezone.utc).timestamp())
+    ts = _recent_utc_hour(9)
     _seed_xp(db_conn, rows=[(7, "text", 4.0, ts), (8, "text", 3.0, ts + 60)])
     db_conn.commit()
     _, counts = query_xp_histogram(
@@ -403,7 +419,7 @@ def test_query_xp_activity_with_breakdown_separates_sources(db_conn):
 
 
 def test_query_xp_histogram_with_breakdown_separates_sources(db_conn):
-    ts = int(datetime(2026, 5, 31, 10, 0, tzinfo=timezone.utc).timestamp())
+    ts = _recent_utc_hour(10)
     _seed_xp(
         db_conn,
         rows=[(7, "text", 2.0, ts), (7, "reply", 1.0, ts + 60)],
