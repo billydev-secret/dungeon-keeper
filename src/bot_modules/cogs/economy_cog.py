@@ -51,11 +51,14 @@ from bot_modules.economy.perks import (
     perks_on_sale,
 )
 from bot_modules.economy.shop import (
-    PAGE_STORE,
+    SECTION_COSMETICS,
+    SECTION_GAMES,
+    SECTION_SERVER,
+    SECTION_SPECIALS,
     build_shop_embed,
     build_store_embed,
     page_note,
-    page_options,
+    page_captions,
     shop_pages,
     store_page,
 )
@@ -1027,62 +1030,65 @@ class _StoreSelect(discord.ui.Select):
 _NAV_ROW = 4
 
 
-class _PageSelect(discord.ui.Select):
-    """Jump straight to any page of the shop.
+def _make_turn(cog: EconomyCog, target: int):
+    """A page-turn callback bound to one destination.
 
-    Replaced a ◀️/▶️ pair. Arrows were one tap to a neighbour but N taps to
-    anywhere, which put the perk ladder two taps behind a stocked store and
-    would only have got worse as a guild added items; a picker is two
-    interactions to any page and stays two however long the book gets. It also
-    says what is on each page, so nobody has to walk the store to discover
-    where the refund button lives.
-
-    The current page is the select's ``default``, so Discord shows it in the
-    closed state and the control doubles as a "you are here".
+    A factory rather than a closure at the call site: both arrows are built in
+    the same breath, and a late-bound ``target`` would send them to the same
+    page.
     """
 
-    def __init__(self, cog: EconomyCog, options: list[tuple[str, str]], page: int):
-        self.cog = cog
-        super().__init__(
-            placeholder="Jump to a page…",
-            min_values=1,
-            max_values=1,
-            row=_NAV_ROW,
-            options=[
-                discord.SelectOption(
-                    label=label[:100],
-                    description=desc[:100],
-                    value=str(i),
-                    default=(i == page),
-                )
-                for i, (label, desc) in enumerate(options)
-            ],
-        )
+    async def _cb(interaction: discord.Interaction) -> None:
+        await cog.turn_shop_page(interaction, target)
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        await self.cog.turn_shop_page(interaction, int(self.values[0]))
+    return _cb
 
 
 def _add_page_nav(
-    view: discord.ui.View,
-    cog: EconomyCog,
-    options: list[tuple[str, str]],
-    page: int,
+    view: discord.ui.View, cog: EconomyCog, captions: list[str], page: int
 ) -> None:
-    """The shop's only navigation, shared by both page kinds.
+    """The shop's only navigation: ◀️, the page you are on, ▶️.
 
-    Pinned to the last row so it sits under everything else rather than in
-    whatever gap the auto-layout had left — packed loose, the old arrows landed
-    beside 🛡️ Shield and ↩️ Cancel & Refund, putting "Next" exactly where a
-    member is aiming for a refund. Discord drops empty rows, so row 4 renders
-    directly under the last row holding anything.
+    The caption between the arrows is a **disabled button**, not decoration —
+    Discord has no label component, and a greyed chip is how the rest of this
+    shop already says "you are here" (🎙️ Leased, 🛡️ Shield Held). It supplies
+    what bare arrows lacked: they moved you without ever saying where you were.
 
-    A single-page shop (a guild selling nothing of its own) gets no picker at
-    all and looks exactly as it always did.
+    Three components whatever the store's size, which is why there is no
+    overflow shape to fall back to — a tab row ran out at five pages, and a
+    select spent a whole row saying the same thing. The arrows **wrap**, so the
+    last page steps round to the first rather than dead-ending on a greyed
+    control that reads as broken.
+
+    Pinned to the last row so navigation sits under everything else rather than
+    in whatever gap the auto-layout had left — packed loose, an earlier pair
+    landed beside 🛡️ Shield and ↩️ Cancel & Refund, putting "Next" exactly
+    where a member is aiming for a refund. Discord drops empty rows, so row 4
+    renders directly under the last row holding anything.
+
+    A single-page shop (a guild selling nothing of its own) gets no navigation
+    at all — not two dead arrows around a caption for the only page there is.
     """
-    if len(options) < 2:
+    if len(captions) < 2:
         return
-    view.add_item(_PageSelect(cog, options, page))
+    total = len(captions)
+    view.add_item(_nav_arrow(cog, "◀️", (page - 1) % total))
+    view.add_item(discord.ui.Button(
+        label=captions[page][:80],
+        style=discord.ButtonStyle.secondary,
+        disabled=True,
+        row=_NAV_ROW,
+    ))
+    view.add_item(_nav_arrow(cog, "▶️", (page + 1) % total))
+
+
+def _nav_arrow(cog: EconomyCog, label: str, target: int) -> discord.ui.Button:
+    button = discord.ui.Button(
+        label=label, style=discord.ButtonStyle.secondary, row=_NAV_ROW
+    )
+    button.callback = _make_turn(cog, target)
+    return button
+
 
 
 class _StoreView(_MemberScopedView):
@@ -1109,7 +1115,7 @@ class _StoreView(_MemberScopedView):
         store_index: int = 0,
         *,
         page: int = 0,
-        nav: list[tuple[str, str]] | None = None,
+        nav: list[str] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1281,11 +1287,18 @@ class _RefundConfirmView(_MemberScopedView):
 
 
 class _ShopView(_MemberScopedView):
-    """One button per self-perk: Rent when unowned, a customise modal when owned.
+    """The controls for one non-Specials section of the shop.
 
-    Feature-gated rows are disabled either way. ``owned`` is the viewer's
-    beneficiary-based entitlements, so a gifted perk shows its customise
-    button exactly like a self-rented one.
+    One button per self-perk on 🎨 Role cosmetics: Rent when unowned, a
+    customise modal when owned. Feature-gated rows are disabled either way, and
+    ``owned`` is the viewer's beneficiary-based entitlements, so a gifted perk
+    shows its customise button exactly like a self-rented one.
+
+    ``section`` decides which controls appear at all — a page must not carry
+    buttons for rows its embed does not show, or a member taps Shield on the
+    cosmetics page and wonders what they just bought. ↩️ Cancel & Refund is the
+    exception and rides every section: it ends *any* rental, so filing it under
+    one section would hide it from someone whose only rental lives elsewhere.
     """
 
     def __init__(
@@ -1302,7 +1315,8 @@ class _ShopView(_MemberScopedView):
         refundable: list[dict] | None = None,
         shield_price: int = 0,
         page: int = 0,
-        nav: list[tuple[str, str]] | None = None,
+        nav: list[str] | None = None,
+        section: str = SECTION_COSMETICS,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1310,7 +1324,7 @@ class _ShopView(_MemberScopedView):
         self.guild = guild
         self.refundable = refundable or []
         self.shield_price = shield_price
-        for perk in SELF_PERKS:
+        for perk in SELF_PERKS if section == SECTION_COSMETICS else ():
             if not perk_on_sale(settings, perk) and perk not in owned:
                 # Switched off on the Shop & Perks page: no row in the embed,
                 # so no button either. A member still renting it to their
@@ -1390,7 +1404,9 @@ class _ShopView(_MemberScopedView):
                 )
                 button.callback = self._make_rent_callback(perk)
             self.add_item(button)
-        if settings.shop_voice_style_enabled or "voice_style" in owned:
+        if section == SECTION_SERVER and (
+            settings.shop_voice_style_enabled or "voice_style" in owned
+        ):
             if "voice_style" in owned:
                 button = discord.ui.Button(
                     label="🎙️ Leased",
@@ -1406,7 +1422,7 @@ class _ShopView(_MemberScopedView):
                 )
                 button.callback = self._make_rent_callback("voice_style")
             self.add_item(button)
-        if raffle_svc.raffle_enabled(settings):
+        if section == SECTION_GAMES and raffle_svc.raffle_enabled(settings):
             button = discord.ui.Button(
                 label="🎟️ Tickets",
                 style=discord.ButtonStyle.secondary,
@@ -1414,7 +1430,7 @@ class _ShopView(_MemberScopedView):
             )
             button.callback = self._make_raffle_callback()
             self.add_item(button)
-        if settings.shop_streak_shield_enabled:
+        if section == SECTION_GAMES and settings.shop_streak_shield_enabled:
             # A held shield stays visible (green, disabled) so the cap reads
             # as "you have one", not as the button being broken.
             held = shields_held > 0
@@ -2296,16 +2312,20 @@ class EconomyCog(commands.Cog):
             )
             return
 
-        pages = shop_pages(shop.items)
-        # Clamped, not trusted: an admin can withdraw the last item while a
-        # member sits on a store page, and the book shrinks under them.
+        has_palette = shop.color_range is not None or "role_preset" in shop.owned
+        pages = shop_pages(
+            settings, items=shop.items, owned=shop.owned, has_palette=has_palette
+        )
+        # Clamped, not trusted: an admin can withdraw the last item — or switch
+        # a whole section off — while a member sits on that page, and the book
+        # shrinks under them.
         page = max(0, min(page, len(pages) - 1))
-        kind, index = pages[page]
+        section, index = pages[page]
         note = page_note(pages, page)
-        nav = page_options(shop.items)
+        nav = page_captions(pages, len(shop.items))
         accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy")
 
-        if kind == PAGE_STORE:
+        if section == SECTION_SPECIALS:
             embed = build_store_embed(
                 settings, shop.items, accent,
                 owned_item_ids=shop.owned_item_ids,
@@ -2317,10 +2337,10 @@ class EconomyCog(commands.Cog):
             )
         else:
             gated = await self._gated_perks(guild.id)
-            # No ``items``: the store has its own pages now, so repeating an
-            # eight-row preview here would be the same list twice in one book.
+            # No ``items``: the store is the Specials section with pages of its
+            # own, so a preview here would be the same list twice in one book.
             embed = build_shop_embed(
-                settings, gated, accent,
+                settings, gated, accent, section=section,
                 owned=shop.owned, comped=shop.comped,
                 icon_catalog=shop.icon_range, color_catalog=shop.color_range,
                 balance=shop.balance, shields_held=shop.shields_held, note=note,
@@ -2331,11 +2351,10 @@ class EconomyCog(commands.Cog):
                 # A renter keeps their button even if the palette emptied out
                 # under them — otherwise the only route to the perk they are
                 # still paying for is the generic refund picker.
-                has_palette=(
-                    shop.color_range is not None or "role_preset" in shop.owned
-                ),
+                has_palette=has_palette,
                 shields_held=shop.shields_held, refundable=shop.refundable,
                 shield_price=shop.shield_price, page=page, nav=nav,
+                section=section,
             )
 
         if edit:

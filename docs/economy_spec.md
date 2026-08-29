@@ -1488,27 +1488,44 @@ queue. **Shortened 2026-08-28** — the store was two clicks from the channel
 panel (Open Shop → 🎁 Store) and buried fourth of five embed fields, with a
 picker that cut at Discord's 25-option ceiling.
 
-The ephemeral shop is now **one flat book of pages** (`shop_pages`): the
-guild's store first at `STORE_PAGE_SIZE = 10` items a page, the perk ladder
-always last, navigated by a single **page picker** (`_PageSelect` /
-`_add_page_nav`, pinned to row 4 so it is always its own bottom row) whose
-options come from `page_options` — each labelled by what is on it, with the
-current page as the select's `default` so it doubles as a "you are here". The
-footer counter (`page_note`) runs across the whole book so it does not restart
-at the store/perk seam.
+The ephemeral shop is now **a book of sections** (`shop_sections` /
+`shop_pages`), in this order: **🎁 Specials** (the guild's own items, ten to a
+page and the only section that runs to more than one), **🎨 Role cosmetics**,
+**🏠 Server features** (the voice-room lease today; personal channels when they
+ship — named wider than its one product on purpose, since renaming a section
+under members is worse than one that reads roomy) and **🎲 Game features**
+(streak shield, raffle).
 
-That picker replaced a wrapping ◀️/▶️ pair (2026-08-28, same day): arrows were
-one tap to a neighbour but N taps to anywhere, which left the perk ladder two
-taps behind a stocked store and would only have worsened as a guild added
-items. A picker is two interactions to any page and stays two. Left to
-auto-layout the arrows had also packed in beside 🛡️ Shield and ↩️ Cancel &
-Refund — "Next" where a member is aiming for a refund — which is why the
-navigation row is pinned rather than allowed to float. `/bank shop`, `/bank store` and the panel's Open Shop
-button all call `open_personal_shop` → `_render_shop`, which re-reads on every
-turn — an arrow tap can land minutes later, and a sold-out row shown as buyable
-is a refusal the member discovers by paying. `store_page` and `_render_shop`
-both clamp, because an admin can withdraw the last item while a member sits on
-page 2 and the book shrinks under them.
+**An empty section gets no page at all**, so the shop's shape follows what the
+guild actually sells: TGM has no custom items and therefore no Specials
+section. `shop_pages` is never empty — a guild with every switch off still gets
+the cosmetics page as a floor, because a shop with no pages has nothing to show
+and the arrows nothing to step between.
+
+Navigation is a **stepper** — `_add_page_nav`, pinned to row 4 so it is always
+its own bottom row: ◀️, a *disabled* button carrying the section's caption from
+`page_captions`, ▶️. The caption is a button because Discord has no label
+component, and a greyed chip is how this shop already says "you are here"
+(🎙️ Leased, 🛡️ Shield Held). Arrows wrap. Three components whatever the store's
+size, so there is no overflow shape. `page_note` numbers across the whole book;
+it does not repeat the section name, which the embed title and the caption both
+already carry.
+
+`build_shop_embed(section=...)` renders one section's fields; `section=None` is
+the channel panel, one poster carrying everything. `_ShopView(section=...)`
+carries only that section's controls — a page holding buttons for rows its
+embed does not show is how a member taps 🛡️ Shield on the cosmetics page and
+then works out what they bought. **↩️ Cancel & Refund is the exception and
+rides every section**: it ends any rental, so filing it under one would hide it
+from a member whose only rental lives elsewhere.
+
+Navigation went through four shapes on 2026-08-28/29; the three discarded ones
+are worth not re-proposing. **Bare ◀️/▶️** moved you without saying where to.
+**A select** fixed that but spent a whole row to say what a caption says. **A
+tab row** showed every page at once but ran out at five pages. Separately: left
+to auto-layout the arrows had packed in beside 🛡️ Shield and ↩️ Cancel &
+Refund — "Next" where a member aims for a refund — which is why the row is
+pinned.
 
 So there is **no** 🎁 Store button and **no** second panel button: an earlier
 cut of this work added both and they were taken back out, because a shop that
