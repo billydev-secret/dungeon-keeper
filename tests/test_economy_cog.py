@@ -4381,7 +4381,7 @@ async def test_the_arrows_wrap_rather_than_dead_ending(ctx, db):
         new=AsyncMock(return_value=True),
     ):
         last = _interaction(_member(member_id=500))
-        await cog.turn_shop_page(last, 3)          # 🎲 Game features, the last
+        await cog.turn_shop_page(last, 4)          # 🎲 Game features, the last
         view = last.response.edit_message.await_args.kwargs["view"]
         assert _nav(view)[1] == ("🎲 Game features", True)
 
@@ -4559,7 +4559,7 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         # The perk page, where eight buttons would otherwise leave a gap the
         # navigation falls into.
         perks = _interaction(_member(member_id=500))
-        await cog.turn_shop_page(perks, 3)
+        await cog.turn_shop_page(perks, 4)
 
     rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
     assert rows[-1] == ["◀️", "🎲 Game features", "▶️"]   # its own last row
@@ -4595,7 +4595,9 @@ async def test_each_section_carries_only_its_own_controls(ctx, db):
     assert "econ_shop_shield" not in cosmetics
     assert "econ_shop_rent:voice_style" not in cosmetics
 
-    assert server == {"econ_shop_rent:voice_style", "econ_shop_refund"}
+    assert server == {
+        "econ_shop_rent:voice_style", "econ_shop_sponsor", "econ_shop_refund",
+    }
     assert "econ_shop_shield" in games
     assert "econ_shop_rent:role_color" not in games
 
@@ -4658,7 +4660,7 @@ async def test_a_lone_product_stays_a_button(ctx, db):
     from bot_modules.cogs.economy_cog import _ActionSelect
     from bot_modules.economy.shop import SECTION_SERVER
 
-    _enable(db, shop_voice_style_enabled=True)
+    _enable(db, shop_voice_style_enabled=True, price_qotd_sponsor=0)
     view = _ShopView(
         cog=_make_cog(ctx), settings=_settings(db), guild=_guild_roles(),
         user_id=500, gated=set(), owned=set(), section=SECTION_SERVER,
@@ -4721,3 +4723,73 @@ async def test_the_channel_panel_carries_no_prices(ctx, db):
     # It names its shelves instead, from the same list the shop itself walks.
     assert "🎨 Role cosmetics" in blob
     assert [b.custom_id for b in content.view.children] == ["econ_shop_open"]
+
+
+@pytest.mark.asyncio
+async def test_the_consumables_are_bought_from_the_shop_not_a_command(ctx, db):
+    """A product reachable only by knowing a command's name is one most
+    members never find, so the themed day, the sponsored question and the
+    paid pin moved into 🏠 Server features — and their commands went with
+    them, rather than leaving two surfaces to drift.
+    """
+    from bot_modules.cogs.economy_cog import EconomyCog
+    from bot_modules.economy.shop import SECTION_SERVER
+
+    assert not hasattr(EconomyCog, "bank_theme")
+    assert not hasattr(EconomyCog, "bank_sponsor")
+    assert not hasattr(EconomyCog, "bank_pin")
+
+    _enable(
+        db, shop_voice_style_enabled=True, flash_theme_enabled=True,
+        theme_channel_id=42, price_flash_theme=300,
+        price_qotd_sponsor=40, price_pin_of_day=25, pin_channel_id=43,
+    )
+    view = _ShopView(
+        cog=_make_cog(ctx), settings=_settings(db), guild=_guild_roles(),
+        user_id=500, gated=set(), owned=set(), section=SECTION_SERVER,
+    )
+    assert set(_offers(view)) >= {
+        "econ_shop_rent:voice_style", "econ_shop_theme",
+        "econ_shop_sponsor", "econ_shop_pin",
+    }
+
+
+@pytest.mark.asyncio
+async def test_choosing_a_consumable_opens_its_modal(ctx, db):
+    """Each one still needs the member's words, so the picker opens the box.
+
+    A modal must be an interaction's first response, which is why these go
+    straight to it — the control only exists when the enable check passed, and
+    the submit handler re-checks before taking money.
+    """
+    from bot_modules.cogs.economy_cog import _SponsorSubmitModal
+    from bot_modules.economy.shop import SECTION_SERVER
+
+    _enable(db, price_qotd_sponsor=40)
+    view = _ShopView(
+        cog=_make_cog(ctx), settings=_settings(db), guild=_guild_roles(),
+        user_id=500, gated=set(), owned=set(), section=SECTION_SERVER,
+    )
+    interaction = _interaction(_member(member_id=500))
+    await _entry(view, "econ_shop_sponsor").callback(interaction)
+
+    modal = interaction.response.send_modal.await_args.args[0]
+    assert isinstance(modal, _SponsorSubmitModal)
+
+
+@pytest.mark.asyncio
+async def test_a_sponsored_question_from_the_shop_still_escrows(ctx, db):
+    """The modal path lands in the same handler the command used to call."""
+    _enable(db, price_qotd_sponsor=40)
+    _credit(db, 500, 500)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
+
+    with patch(
+        "bot_modules.cogs.economy_cog.post_review_card", new=AsyncMock()
+    ):
+        await cog.do_sponsor_submit(interaction, "What's your comfort meal?")
+
+    assert "review" in interaction.followup.send.await_args.args[0]
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 500) == 460

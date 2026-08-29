@@ -1552,9 +1552,10 @@ picker that cut at Discord's 25-option ceiling.
 The ephemeral shop is now **a book of sections** (`shop_sections` /
 `shop_pages`), in this order: **🎁 Specials** (the guild's own items, ten to a
 page and the only section that runs to more than one), **🎨 Role cosmetics**,
-**🏠 Server features** (the voice-room lease today; personal channels when they
-ship — named wider than its one product on purpose, since renaming a section
-under members is worse than one that reads roomy) and **🎲 Game features**
+**🏠 Server features** (the voice-room lease, the sponsored question of the day,
+the paid pin and the themed day; personal channels when they ship — named wider
+than its products on purpose, since renaming a section under members is worse
+than one that reads roomy) and **🎲 Game features**
 (streak shield, raffle).
 
 **An empty section gets no page at all**, so the shop's shape follows what the
@@ -1599,6 +1600,25 @@ embed does not show is how a member taps 🛡️ Shield on the cosmetics page an
 then works out what they bought. **↩️ Cancel & Refund is the exception and
 rides every section**: it ends any rental, so filing it under one would hide it
 from a member whose only rental lives elsewhere.
+
+**The consumables moved into the shop and lost their commands** (2026-08-29):
+`/bank sponsor`, `/bank pin` and `/bank theme` are **deleted**. All three now
+sit in 🏠 Server features, and their picker entries open the same submit modals
+— `_SponsorSubmitModal` is new, since `/bank sponsor` took its question as a
+command argument and a shop control has nowhere to type one; `do_sponsor_submit`
+was split out of the command so both paths share it, and re-checks the gate
+because a shop opened before an admin switched sponsoring off would otherwise
+take the money. A product reachable only by knowing a command's name is one
+most members never find, and two surfaces for one purchase is two surfaces to
+drift.
+
+`/bank emoji` **stays a command** and is the one that cannot move: it takes an
+image attachment, and a Discord modal cannot collect a file.
+
+Because the section now mixes a weekly lease with one-off consumables, its
+header and footer say so per row rather than making a blanket billing claim.
+Note `price_qotd_sponsor` defaults to **40**, so 🏠 Server features exists in a
+guild that has configured nothing.
 
 Navigation went through four shapes on 2026-08-28/29; the three discarded ones
 are worth not re-proposing. **Bare ◀️/▶️** moved you without saying where to.

@@ -31,6 +31,12 @@ from bot_modules.economy.perks import (
 from bot_modules.economy.shop_items import ItemView
 from bot_modules.services.embeds import pad_cell as _pad
 from bot_modules.services import economy_raffle_service as raffle_svc
+from bot_modules.services.economy_pin_service import pin_enabled, pin_price
+from bot_modules.services.economy_qotd_sponsor_service import (
+    sponsor_enabled,
+    sponsor_price,
+)
+from bot_modules.services.economy_theme_service import theme_enabled
 from bot_modules.services.economy_service import EconSettings
 
 #: Store rows shown inline before the section defers to the picker. The embed
@@ -219,7 +225,12 @@ def shop_sections(
         out.append(SECTION_SPECIALS)
     if stocked_perks(settings, SELF_PERKS, owned=owned, has_palette=has_palette):
         out.append(SECTION_COSMETICS)
-    if stocked_perks(settings, ("voice_style",), owned=owned):
+    if (
+        stocked_perks(settings, ("voice_style",), owned=owned)
+        or theme_enabled(settings)
+        or sponsor_enabled(settings)
+        or pin_enabled(settings)
+    ):
         out.append(SECTION_SERVER)
     if settings.shop_streak_shield_enabled or raffle_svc.raffle_enabled(settings):
         out.append(SECTION_GAMES)
@@ -443,8 +454,15 @@ def build_shop_embed(
     # "Weekly rentals" was safe while the perk ladder came first. It is a lie
     # standing over a Server Store of mostly one-off items, so the claim is
     # made by the section that can keep it rather than by the whole embed.
+    # The section mixes a weekly voice lease with one-off consumables, so
+    # neither blanket billing claim is true of it.
+    mixed_server = section == SECTION_SERVER and (
+        theme_enabled(settings) or sponsor_enabled(settings) or pin_enabled(settings)
+    )
     if section == SECTION_GAMES:
         header = "Bought once — nothing here renews"
+    elif mixed_server:
+        header = "Rent by the week, or buy a one-off"
     elif section is None and items:
         header = "The server store, plus weekly perk rentals"
     else:
@@ -570,6 +588,44 @@ def build_shop_embed(
             value="\n".join(_line(p) for p in voice),
             inline=False,
         )
+    if _want(SECTION_SERVER) and sponsor_enabled(settings):
+        embed.add_field(
+            name="Question of the Day",
+            value=(
+                f"💬 Sponsor a question — {settings.currency_emoji} "
+                f"**{sponsor_price(settings):,}** once\n"
+                "A mod reviews it first (full refund if it's turned down, or "
+                "if nobody gets to it). Your name goes on the card. One in "
+                "flight at a time."
+            ),
+            inline=False,
+        )
+    if _want(SECTION_SERVER) and pin_enabled(settings):
+        embed.add_field(
+            name="Pinned Message",
+            value=(
+                f"📌 Pin a message — {settings.currency_emoji} "
+                f"**{pin_price(settings):,}** once\n"
+                "A mod reviews it, then it's pinned for 24 hours with your "
+                "name on it and unpins itself. One in flight at a time."
+            ),
+            inline=False,
+        )
+    if _want(SECTION_SERVER) and theme_enabled(settings):
+        # Not a rental and not a row in the perk table: it is bought once, a
+        # mod approves it, and it runs for a day — so it gets its own field
+        # with that whole deal spelled out, like the streak shield does.
+        embed.add_field(
+            name="Themed Day",
+            value=(
+                f"🎭 A themed day — {settings.currency_emoji} "
+                f"**{settings.price_flash_theme:,}** once\n"
+                f"Name the theme and pitch it; a mod approves it first (full "
+                f"refund if not), then it runs for "
+                f"{settings.theme_hours} hours with your name on it."
+            ),
+            inline=False,
+        )
     if _want(SECTION_GAMES) and settings.shop_streak_shield_enabled:
         # One-shot, not a rental — the only non-weekly row, so it carries its
         # own field with the "once" spelled out instead of joining the table.
@@ -620,6 +676,10 @@ def build_shop_embed(
         # Neither of these renews, so the weekly-billing footer would be a lie
         # standing under a shield and a raffle ticket.
         embed.set_footer(text=f"{note}Bought outright — no weekly rent.")
+    elif mixed_server:
+        embed.set_footer(
+            text=f"{note}Each row says whether it renews weekly or is bought once."
+        )
     else:
         embed.set_footer(
             text=(

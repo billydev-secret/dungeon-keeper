@@ -60,7 +60,12 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     embed = build_shop_embed(_settings(db), set(), None, panel=True)
 
     tiers = {f.name: f.value for f in embed.fields}
-    assert list(tiers) == ["Essentials", "Signature", "One-shot", "For a Friend"]
+    # The panel carries every section, so the QOTD sponsorship (on by default)
+    # sits among them.
+    assert list(tiers) == [
+        "Essentials", "Signature", "Question of the Day", "One-shot",
+        "For a Friend",
+    ]
 
     # Every row's cells share one width across the whole embed, so the columns
     # line up across tier headings rather than restarting at each one.
@@ -405,7 +410,7 @@ def test_the_shop_is_a_book_of_sections_with_the_specials_first(db):
         shop_pages,
     )
 
-    _enable(db, shop_voice_style_enabled=True)
+    _enable(db, shop_voice_style_enabled=True, price_qotd_sponsor=0)
     full = shop_pages(_settings(db), items=_items(20))
     assert full == [
         (SECTION_SPECIALS, 0), (SECTION_SPECIALS, 1),
@@ -418,7 +423,11 @@ def test_the_shop_is_a_book_of_sections_with_the_specials_first(db):
     # No custom items — TGM — and the Specials section simply isn't there.
     assert SECTION_SPECIALS not in [s for s, _ in shop_pages(_settings(db))]
 
-    _enable(db, shop_voice_style_enabled=False)
+    # Server features survives on any one of its products, so switching the
+    # voice lease off is not enough to retire the section.
+    _enable(db, shop_voice_style_enabled=False, price_qotd_sponsor=40)
+    assert SECTION_SERVER in [s for s, _ in shop_pages(_settings(db))]
+    _enable(db, price_qotd_sponsor=0)
     assert SECTION_SERVER not in [s for s, _ in shop_pages(_settings(db))]
 
 
@@ -432,7 +441,7 @@ def test_a_shop_with_nothing_left_still_has_one_page(db):
     from bot_modules.services.economy_service import SHOP_TOGGLE_PERKS
 
     _enable(db, **{f"shop_{p}_enabled": False for p in SHOP_TOGGLE_PERKS},
-            raffle_enabled=False)
+            raffle_enabled=False, price_qotd_sponsor=0)
     assert shop_pages(_settings(db)) == [(SECTION_COSMETICS, 0)]
 
 
@@ -444,7 +453,7 @@ def test_the_page_counter_runs_over_the_whole_book(db):
     """
     from bot_modules.economy.shop import page_note, shop_pages
 
-    _enable(db)
+    _enable(db, price_qotd_sponsor=0)
     pages = shop_pages(_settings(db), items=_items(20))
     assert page_note(pages, 0) == "Page 1 of 4 · "
     assert page_note(pages, 3) == "Page 4 of 4 · "
@@ -562,7 +571,7 @@ def test_page_captions_name_each_page_by_its_section(db):
     """
     from bot_modules.economy.shop import page_captions, shop_pages
 
-    _enable(db, shop_voice_style_enabled=True)
+    _enable(db, shop_voice_style_enabled=True, price_qotd_sponsor=0)
     pages = shop_pages(_settings(db), items=_items(20))
     assert page_captions(pages, 20) == [
         "🎁 Specials · 1–10", "🎁 Specials · 11–20",
@@ -611,7 +620,7 @@ def test_the_panel_only_names_shelves_the_shop_has(db):
     """It reads the same `shop_sections` the shop walks, so it cannot lie."""
     from bot_modules.economy.shop import build_panel_embed
 
-    _enable(db, shop_voice_style_enabled=False)
+    _enable(db, shop_voice_style_enabled=False, price_qotd_sponsor=0)
     blob = " ".join(f.value for f in build_panel_embed(_settings(db), None).fields)
     assert "🏠 Server features" not in blob
     assert "🎁 Specials" not in blob  # nothing stocked
