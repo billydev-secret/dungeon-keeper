@@ -18,7 +18,7 @@ export function mountQueue(container, initialParams) {
       <h3 style="margin-top:16px;">Welcomers</h3>
       <div data-welcomers></div>
       <h3 style="margin-top:16px;">Skipped steps</h3>
-      <div class="subtitle">Steps marked skipped when the completion code closed a card — the procedure’s own feedback about what the team doesn’t run.</div>
+      <div class="subtitle">Steps marked skipped when the completion code closed a card early — the procedure’s own feedback about what the team doesn’t run.</div>
       <div data-skipped></div>
     </div>
   `;

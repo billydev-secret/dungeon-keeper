@@ -88,10 +88,30 @@ slash commands:
   `intake_service.reply_target_id` — otherwise a canned reply with its ping
   off is dropped before intake ever evaluates it. Applies to greets and
   both kinds of code alike.
-- **Close paths:** completion, mod-only Dismiss button, member leave
-  (`left`) or ban (`banned` — the ban hook closes first so the remove hook
-  finds nothing). **No expiry**: cards otherwise stay open; the queue is
-  always the truth.
+- **Auto-completion:** a card closes itself the moment its **last step
+  ticks** (`intake_service.autocomplete_if_finished`, called from every tick
+  path — button, step code, greet auto-tick, role-gain auto-tick). A fully
+  ticked checklist *is* a finished intake; before this, only a posted
+  completion code closed a card, so finished intakes aged in the queue
+  indefinitely (prod had 26 of them, and zero cards had ever reached
+  `completed`, leaving both completion-keyed report panels permanently
+  empty). Nothing is stamped skipped — every step was genuinely done — and
+  the card closes at the **last step's own tick time**, not the wall clock,
+  so time-to-complete stays honest for a card the sweep picks up late. The
+  welcomer of record is whoever ticked the final step, falling back to the
+  last human to tick anything on the card when an auto step lands last (an
+  automation closing a card must not drop it out of the per-welcomer
+  counts); 0 when no human ever ticked. The completion code is still what
+  closes a **part-done** card, which is now all it is for.
+- **Finished-card sweep:** the nudge loop's tick first closes any open card
+  that is already fully ticked (`intake_views.close_finished_cards` over
+  `intake_service.finished_open_cards`) — the backstop for cards finished
+  while the bot was down, and what drains a pre-existing backlog on the
+  first tick after deploy. A finished card is therefore never nudged.
+- **Close paths:** completion (the code, or the last step ticking), mod-only
+  Dismiss button, member leave (`left`) or ban (`banned` — the ban hook
+  closes first so the remove hook finds nothing). **No expiry**: cards
+  otherwise stay open; the queue is always the truth.
 - **Payouts:** ticking a step pays the greeter through the `intake_step`
   income source (`economy/intake_rewards.pay_intake_steps`, called from all
   three human tick paths — the `greeted` auto-tick, a posted step code, and
@@ -193,7 +213,9 @@ channel's history, oldest first; refuses a non-empty editor.
   Queue** (`intake-report.js`): open queue oldest-first with progress and
   pending steps, outcome counts + median/mean time-to-complete,
   per-welcomer completions and manual ticks (auto-ticks never credited),
-  per-step skip rates on completed cards.
+  per-step skip rates on completed cards. The queue holds only genuinely
+  open cards: a finished one closes itself rather than needing filtering
+  out of the report.
 
 ## Code
 

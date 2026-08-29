@@ -23,6 +23,7 @@ from tests.db_template import migrated_db
 
 GUILD = 42
 NEWCOMER = 7
+GREETER = 501
 CHANNEL = 555
 HOUR = 3600.0
 NOW = 30 * HOUR  # well past the 24h default window
@@ -142,6 +143,36 @@ async def test_screening_member_is_not_nudged_and_stays_eligible(db_path):
     await run_tick(_bot(db_path, guild), db_path, NOW + HOUR)
     channel.send.assert_awaited_once()
     assert _card(db_path, card_id)["nudged_at"] == NOW + HOUR
+
+
+async def test_finished_card_is_closed_by_the_sweep_not_nudged(db_path):
+    """The backlog fix: a card with every box ticked is done, not stale.
+
+    Before auto-completion existed only a posted completion code closed a
+    card, so finished intakes aged in the queue and eventually got nudged —
+    greeters pinged to pick up work that was already finished.
+    """
+    card_id = _stale_card(db_path)
+    with open_db(db_path) as conn:
+        for step in svc.steps_for(conn, card_id):
+            svc.set_step_state(
+                conn,
+                card_id,
+                str(step["step_key"]),
+                done=True,
+                actor_id=GREETER,
+                at=HOUR,
+            )
+    channel = FakeChannel()
+    await run_tick(
+        _bot(db_path, FakeGuild(channel, _member(pending=False))), db_path, NOW
+    )
+    channel.send.assert_not_awaited()
+    row = _card(db_path, card_id)
+    assert row["resolution"] == svc.RESOLUTION_COMPLETED
+    assert row["resolved_by"] == GREETER
+    assert row["resolved_at"] == HOUR  # the last tick, not the sweep's clock
+    assert row["nudged_at"] is None
 
 
 async def test_departed_member_closes_the_card_instead_of_pinging(db_path):

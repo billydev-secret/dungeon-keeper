@@ -256,6 +256,19 @@ async def _edit_card_message(
         log.debug("intake: failed to edit card message", exc_info=True)
 
 
+def _autocompleted(conn: Any, card: Any, actor_id: int) -> bool:
+    """Close the card if that tick was the last one. True when it closed."""
+    return (
+        svc.autocomplete_if_finished(conn, int(card["id"]), actor_id=actor_id)
+        is not None
+    )
+
+
+def _welcomer_mention(welcomer_id: int) -> str:
+    """Who the closed card credits — nobody, when only auto steps ever ticked."""
+    return f"<@{welcomer_id}>" if welcomer_id > 0 else "the checklist"
+
+
 async def _rerender_card(ctx: AppContext, guild: discord.Guild, card: Any) -> None:
     """Refresh an open card's embed + buttons after a tick."""
     card_id = int(card["id"])
@@ -447,7 +460,10 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
                             booster=author.premium_since is not None,
                             at=now,
                         )
-                        results.append((svc.ACTION_STEP, card, uid))
+                        if _autocompleted(conn, card, author.id):
+                            results.append((svc.ACTION_COMPLETE, card, uid))
+                        else:
+                            results.append((svc.ACTION_STEP, card, uid))
                 else:
                     card, ticked = svc.auto_tick(
                         conn, guild_id, uid, svc.AUTO_GREETED, now, actor_id=author.id
@@ -467,7 +483,10 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
                             booster=author.premium_since is not None,
                             at=now,
                         )
-                        results.append((svc.ACTION_GREET, card, uid))
+                        if _autocompleted(conn, card, author.id):
+                            results.append((svc.ACTION_COMPLETE, card, uid))
+                        else:
+                            results.append((svc.ACTION_GREET, card, uid))
             return results
 
     try:
@@ -479,18 +498,25 @@ async def handle_intake_message(ctx: AppContext, message: discord.Message) -> No
     # One message can greet *and* carry step codes for the same card; collapse
     # those into a single re-render instead of editing the message N times.
     rerender: dict[int, sqlite3.Row] = {}
+    completed: dict[int, tuple[sqlite3.Row, int]] = {}
     for action, card, uid in results:
         if action == svc.ACTION_COMPLETE:
-            svc.discard(guild_id, uid)
-            await _render_resolved(
-                ctx, guild, card, svc.RESOLUTION_COMPLETED, author.mention
-            )
-            try:
-                await message.add_reaction("🎉")
-            except discord.HTTPException:
-                log.debug("intake: completion reaction failed", exc_info=True)
+            completed.setdefault(int(card["id"]), (card, uid))
         else:
             rerender.setdefault(int(card["id"]), card)
+    # A message can carry a step code *and* a greeting for the same card; if
+    # either closed it, the closed rendering wins — re-rendering afterwards
+    # would paint the buttons back onto a resolved card.
+    for card_id, (card, uid) in completed.items():
+        rerender.pop(card_id, None)
+        svc.discard(guild_id, uid)
+        await _render_resolved(
+            ctx, guild, card, svc.RESOLUTION_COMPLETED, author.mention
+        )
+        try:
+            await message.add_reaction("🎉")
+        except discord.HTTPException:
+            log.debug("intake: completion reaction failed", exc_info=True)
     for card in rerender.values():
         await _rerender_card(ctx, guild, card)
 
@@ -523,7 +549,12 @@ async def handle_role_changes(
                     conn, guild_id, member.id, svc.AUTO_VERIFIED, now
                 )
                 ticked.extend(keys)
-            return (card, ticked)
+            welcomer = None
+            if card is not None and ticked:
+                closed = svc.autocomplete_if_finished(conn, int(card["id"]))
+                if closed is not None:
+                    welcomer = closed[1]
+            return (card, ticked, welcomer)
 
     try:
         result = await asyncio.to_thread(_work)
@@ -532,9 +563,65 @@ async def handle_role_changes(
         return
     if result is None:
         return
-    card, ticked = result
-    if card is not None and ticked:
+    card, ticked, welcomer = result
+    if card is None or not ticked:
+        return
+    if welcomer is None:
         await _rerender_card(ctx, member.guild, card)
+        return
+    # A role grant can be the last box on the checklist — close it here too,
+    # or the queue keeps a finished intake until the sweep catches it.
+    svc.discard(guild_id, member.id)
+    await _render_resolved(
+        ctx,
+        member.guild,
+        card,
+        svc.RESOLUTION_COMPLETED,
+        _welcomer_mention(welcomer),
+    )
+
+
+async def close_finished_cards(ctx: AppContext, guild: discord.Guild) -> int:
+    """Close every open card whose checklist is already fully ticked.
+
+    The sweep behind :func:`intake_service.autocomplete_if_finished`, run from
+    the nudge loop. The live tick paths close a card the instant its last box
+    is ticked, so in steady state this finds nothing; it exists for cards
+    finished before auto-completion shipped (the queue was full of them) and
+    for anything ticked while the bot was down. Returns how many it closed.
+    """
+
+    def _work():
+        with ctx.open_db() as conn:
+            if not svc.is_enabled(conn, guild.id):
+                return []
+            closed = []
+            for card in svc.finished_open_cards(conn, guild.id):
+                done = svc.autocomplete_if_finished(conn, int(card["id"]))
+                if done is not None:
+                    closed.append(done)
+            return closed
+
+    try:
+        closed = await asyncio.to_thread(_work)
+    except Exception:
+        log.exception("intake: finished-card sweep failed in guild %s", guild.id)
+        return 0
+    for card, welcomer in closed:
+        svc.discard(guild.id, int(card["user_id"]))
+        if int(card["message_id"]) > 0:
+            await _render_resolved(
+                ctx,
+                guild,
+                card,
+                svc.RESOLUTION_COMPLETED,
+                _welcomer_mention(welcomer),
+            )
+    if closed:
+        log.info(
+            "intake: closed %d finished card(s) in guild %s", len(closed), guild.id
+        )
+    return len(closed)
 
 
 async def close_member_card(
@@ -617,8 +704,13 @@ async def _toggle_step(
                     booster=actor.premium_since is not None,
                     at=now,
                 )
+            closed = (
+                svc.autocomplete_if_finished(conn, card_id, actor_id=actor.id)
+                if ticking and changed
+                else None
+            )
             return (
-                "ok",
+                "done" if closed is not None else "ok",
                 card,
                 svc.steps_for(conn, card_id),
                 svc.inviter_for(conn, guild.id, int(card["user_id"])),
@@ -638,9 +730,23 @@ async def _toggle_step(
         await _safe_ephemeral(interaction, "❌ Only greeters and mods can tick steps.")
         return
 
-    _, card, steps, inviter_id = result
-    embed = await _build_embed_for_card(ctx, guild, card, steps, inviter_id)
-    view = IntakeCardView(card_id, steps)
+    status, card, steps, inviter_id = result
+    finished = status == "done"
+    if finished:
+        # That was the last box: the card closes on the same edit rather than
+        # sitting in the queue waiting for a completion code nobody posts.
+        svc.discard(guild.id, int(card["user_id"]))
+    embed = await _build_embed_for_card(
+        ctx,
+        guild,
+        card,
+        steps,
+        inviter_id,
+        resolved=(
+            (svc.RESOLUTION_COMPLETED, actor.mention) if finished else None
+        ),
+    )
+    view = None if finished else IntakeCardView(card_id, steps)
     try:
         await interaction.response.edit_message(embed=embed, view=view)
     except discord.HTTPException:
