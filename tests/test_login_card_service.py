@@ -15,6 +15,8 @@ import discord
 import pytest
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.services.embeds import DM_PRIMARY
+from bot_modules.services.economy_service import set_notify_muted
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_service import (
     DEFAULT_ECON_SETTINGS,
@@ -41,6 +43,7 @@ USER = 1001
 OTHER = 1002
 DM_CHANNEL = 555
 MESSAGE = 999
+GAME_ROLE = 4242
 
 # The sweep derives the guild's local day from the timestamp it is handed, so
 # the test days are derived the same way rather than hard-coded — otherwise a
@@ -237,13 +240,16 @@ def test_yesterdays_card_is_dropped_not_edited(db, today, yesterday):
 def test_mark_and_forget(db, today):
     _store(db, local_day=today)
     with open_db(db) as conn:
-        mark_card(conn, GUILD, USER, signature="new", final=True, now_ts=2000.0)
+        mark_card(
+            conn, GUILD, USER, local_day=today,
+            signature="new", final=True, now_ts=2000.0,
+        )
         row = conn.execute(
             "SELECT * FROM econ_login_digest_cards WHERE user_id = ?", (USER,)
         ).fetchone()
         assert row["signature"] == "new"
         assert row["final"] == 1
-        forget_card(conn, GUILD, USER)
+        forget_card(conn, GUILD, USER, local_day=today)
         assert conn.execute(
             "SELECT COUNT(*) c FROM econ_login_digest_cards"
         ).fetchone()["c"] == 0
@@ -252,9 +258,18 @@ def test_mark_and_forget(db, today):
 # ── the sweep ─────────────────────────────────────────────────────────
 
 
-def _bot(partial):
+def _bot(partial, *, role_ids=(GAME_ROLE,), member_present=True):
     bot = MagicMock()
-    bot.get_guild.return_value = MagicMock(spec=discord.Guild)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+    guild.name = "Test Guild"
+    guild.icon = None
+    member = None
+    if member_present:
+        member = MagicMock()
+        member.roles = [MagicMock(id=rid) for rid in role_ids]
+    guild.get_member.return_value = member
+    bot.get_guild.return_value = guild
     messageable = MagicMock()
     messageable.get_partial_message.return_value = partial
     bot.get_partial_messageable.return_value = messageable
@@ -269,7 +284,9 @@ def _partial(edit_error: Exception | None = None):
 
 def _enable(db, **extra):
     with open_db(db) as conn:
-        save_econ_settings(conn, GUILD, {"enabled": True, **extra})
+        save_econ_settings(
+            conn, GUILD, {"enabled": True, "game_role_id": GAME_ROLE, **extra}
+        )
 
 
 def _open_board(monkeypatch, quests):
@@ -461,3 +478,92 @@ async def test_sweep_edits_a_private_dm_channel_not_a_guild_channel(db, today):
     args, kwargs = bot.get_partial_messageable.call_args
     assert args[0] == DM_CHANNEL
     assert kwargs["type"] is discord.ChannelType.private
+
+
+# ── regressions found in review ───────────────────────────────────────
+
+
+async def test_refreshed_card_keeps_the_dm_branding(db, today, monkeypatch):
+    """The send path brands the embed (attribution footer + the DM accent) on
+    its way out; a refresh that re-renders from scratch has to apply the same
+    branding or the card silently loses its footer — and, in a guild with no
+    accent configured, changes colour — at the first edit."""
+    _enable(db)
+    _open_board(monkeypatch, [_quest("Open", "message_count",
+                                     progress_current=3, progress_target=10)])
+    _store(db, local_day=today, signature="stale")
+    partial = _partial()
+    await refresh_guild_cards(_bot(partial), db, GUILD, NOW)
+    sent = partial.edit.await_args.kwargs["embed"]
+    assert sent.footer.text == "Test Guild"
+    # DM_PRIMARY, not the generic embed default: an unbranded guild keeps the
+    # look every other economy DM has.
+    assert sent.color == discord.Color(DM_PRIMARY)
+
+
+def test_mark_card_will_not_stamp_over_another_day(db, today, yesterday):
+    """The sweep takes its day once and then does Discord I/O per member. If
+    the day rolls mid-pass and that member logs in again, their fresh row must
+    not be stamped with the finished flag from yesterday's card."""
+    _store(db, local_day=today, signature="fresh")
+    with open_db(db) as conn:
+        mark_card(
+            conn, GUILD, USER, local_day=yesterday,
+            signature="stale", final=True, now_ts=2000.0,
+        )
+        row = conn.execute(
+            "SELECT * FROM econ_login_digest_cards WHERE user_id = ?", (USER,)
+        ).fetchone()
+    assert row["signature"] == "fresh"
+    assert row["final"] == 0
+
+
+def test_forget_card_will_not_delete_another_day(db, today, yesterday):
+    """A 404 for yesterday's message must not throw away a card sent minutes
+    ago."""
+    _store(db, local_day=today)
+    with open_db(db) as conn:
+        forget_card(conn, GUILD, USER, local_day=yesterday)
+        assert len(due_cards(conn, GUILD, today)) == 1
+
+
+async def test_sweep_stops_for_a_member_who_muted_economy_dms(db, today, monkeypatch):
+    """Muting is a stored preference, and the sweep is a second path writing
+    to the same message — "the edit is silent anyway" is not ours to decide."""
+    _enable(db)
+    _open_board(monkeypatch, [_quest("Open", "message_count",
+                                     progress_current=3, progress_target=10)])
+    _store(db, local_day=today, signature="stale")
+    with open_db(db) as conn:
+        set_notify_muted(conn, GUILD, USER, True)
+    partial = _partial()
+    assert await refresh_guild_cards(_bot(partial), db, GUILD, NOW) == 0
+    partial.edit.assert_not_awaited()
+    with open_db(db) as conn:
+        assert due_cards(conn, GUILD, today) == []
+
+
+async def test_sweep_stops_for_a_member_who_lost_the_opt_in_role(db, today, monkeypatch):
+    """The send path gates on the opt-in role; dropping it mid-day has to stop
+    the refresh too, or the opt-out only half works."""
+    _enable(db)
+    _open_board(monkeypatch, [_quest("Open", "message_count",
+                                     progress_current=3, progress_target=10)])
+    _store(db, local_day=today, signature="stale")
+    partial = _partial()
+    bot = _bot(partial, role_ids=())  # role removed since this morning
+    assert await refresh_guild_cards(bot, db, GUILD, NOW) == 0
+    partial.edit.assert_not_awaited()
+    with open_db(db) as conn:
+        assert due_cards(conn, GUILD, today) == []
+
+
+async def test_sweep_stops_for_a_member_who_left(db, today, monkeypatch):
+    _enable(db)
+    _open_board(monkeypatch, [_quest("Open", "message_count",
+                                     progress_current=3, progress_target=10)])
+    _store(db, local_day=today, signature="stale")
+    partial = _partial()
+    bot = _bot(partial, member_present=False)
+    assert await refresh_guild_cards(bot, db, GUILD, NOW) == 0
+    partial.edit.assert_not_awaited()

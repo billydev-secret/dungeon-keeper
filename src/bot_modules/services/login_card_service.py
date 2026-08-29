@@ -55,6 +55,7 @@ from bot_modules.services.economy_service import (
     DmDelivery,
     EconSettings,
     LoginOutcome,
+    get_notify_muted,
     load_econ_settings,
 )
 from bot_modules.services.wellness_service import login_digest_value
@@ -275,24 +276,40 @@ def mark_card(
     guild_id: int,
     user_id: int,
     *,
+    local_day: str,
     signature: str,
     final: bool,
     now_ts: float,
 ) -> None:
-    """Store the signature just rendered, and whether that was the last one."""
+    """Store the signature just rendered, and whether that was the last one.
+
+    Scoped to ``local_day`` because the sweep takes its day once and then does
+    Discord I/O per member: if the guild-local day rolls mid-pass and that
+    member logs in again, ``record_card`` has already replaced their row with
+    a fresh card, and an unscoped UPDATE here would stamp yesterday's
+    signature — and possibly ``final`` — onto today's, freezing a brand-new
+    card for the whole day.
+    """
     conn.execute(
         "UPDATE econ_login_digest_cards "
         "SET signature = ?, final = ?, updated_at = ? "
-        "WHERE guild_id = ? AND user_id = ?",
-        (signature, int(final), now_ts, guild_id, user_id),
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (signature, int(final), now_ts, guild_id, user_id, local_day),
     )
 
 
-def forget_card(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
-    """Drop one card — the message is gone, so there is nothing to edit."""
+def forget_card(
+    conn: sqlite3.Connection, guild_id: int, user_id: int, *, local_day: str
+) -> None:
+    """Stop editing one card — the message is gone, or the member opted out.
+
+    Day-scoped for the same reason as :func:`mark_card`: a 404 for yesterday's
+    message must not delete the row for a card sent minutes ago.
+    """
     conn.execute(
-        "DELETE FROM econ_login_digest_cards WHERE guild_id = ? AND user_id = ?",
-        (guild_id, user_id),
+        "DELETE FROM econ_login_digest_cards "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (guild_id, user_id, local_day),
     )
 
 
@@ -357,7 +374,12 @@ async def refresh_guild_cards(
     Returns the number of messages actually edited (an unchanged card is not
     one of them). Called once an hour from the economy tick.
     """
-    from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+    from bot_modules.services.dm_branding import (
+        brand_dm_embed,
+        guild_display_name,
+        guild_icon_url,
+        resolve_dm_accent,
+    )
 
     def _load() -> tuple[EconSettings, str, list[sqlite3.Row]] | None:
         with open_db(db_path) as conn:
@@ -376,13 +398,43 @@ async def refresh_guild_cards(
         return 0
 
     guild = bot.get_guild(guild_id)
-    accent = await safe_resolve_accent(
-        db_path, guild, log_label="login-card", default=DEFAULT_ACCENT_COLOR
-    )
+    # The same branding the send path applies (economy_service.deliver_econ_dm):
+    # the attribution footer and the DM accent, which defaults to DM_PRIMARY
+    # rather than the generic embed default. Re-rendering without it would
+    # strip the "on behalf of <server>" footer off the card at the first edit
+    # and, in a guild with no accent configured, change its colour too.
+    accent = await resolve_dm_accent(db_path, guild)
+    guild_name = guild_display_name(guild)
+    icon_url = guild_icon_url(guild)
+
+    def _still_wants_it(uid: int) -> bool:
+        """Do the two member-level gates that sent this card still hold?
+
+        The sweep is a second path writing to the same message, so it has to
+        honour the same preferences the send did — a member who mutes economy
+        DMs at noon, or who loses the opt-in role, has said what they want,
+        and "the edit is silent anyway" is not the member's call to make.
+        """
+        with open_db(db_path) as conn:
+            if get_notify_muted(conn, guild_id, uid):
+                return False
+        if not settings.game_role_id:
+            return False
+        member = guild.get_member(uid) if guild else None
+        return member is not None and any(
+            r.id == settings.game_role_id for r in member.roles
+        )
 
     edited = 0
     for row in rows:
         user_id = int(row["user_id"])
+
+        if not await asyncio.to_thread(_still_wants_it, user_id):
+            def _opted_out(uid: int = user_id):
+                with open_db(db_path) as conn:
+                    forget_card(conn, guild_id, uid, local_day=local_day)
+            await asyncio.to_thread(_opted_out)
+            continue
 
         def _render(r: sqlite3.Row = row):
             with open_db(db_path) as conn:
@@ -397,6 +449,9 @@ async def refresh_guild_cards(
             )
             continue
 
+        brand_dm_embed(
+            embed, guild_name=guild_name, guild_icon_url=icon_url, color=accent
+        )
         signature = card_signature(embed)
         if signature == str(row["signature"]) and not final:
             # Nothing the member can see has moved. Skip the API call, and
@@ -418,7 +473,7 @@ async def refresh_guild_cards(
             # someone who just threw the old one away.
             def _forget(uid: int = user_id):
                 with open_db(db_path) as conn:
-                    forget_card(conn, guild_id, uid)
+                    forget_card(conn, guild_id, uid, local_day=local_day)
             await asyncio.to_thread(_forget)
             continue
         except discord.Forbidden:
@@ -428,7 +483,7 @@ async def refresh_guild_cards(
             )
             def _forget_forbidden(uid: int = user_id):
                 with open_db(db_path) as conn:
-                    forget_card(conn, guild_id, uid)
+                    forget_card(conn, guild_id, uid, local_day=local_day)
             await asyncio.to_thread(_forget_forbidden)
             continue
         except discord.HTTPException:
@@ -442,7 +497,10 @@ async def refresh_guild_cards(
 
         def _mark(uid: int = user_id, sig: str = signature, fin: bool = final):
             with open_db(db_path) as conn:
-                mark_card(conn, guild_id, uid, signature=sig, final=fin, now_ts=now_ts)
+                mark_card(
+                    conn, guild_id, uid, local_day=local_day,
+                    signature=sig, final=fin, now_ts=now_ts,
+                )
         await asyncio.to_thread(_mark)
 
     return edited

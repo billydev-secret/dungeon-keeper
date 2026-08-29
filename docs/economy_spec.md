@@ -138,6 +138,23 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
       refresh is one PATCH with no fetch and no cached DM channel. At ~130 logins/day
       across the three live guilds the absolute worst case is ~2k edits/day; in
       practice the signature skip and the finish rule cut that to a few hundred.
+    - **The refresh re-brands.** `deliver_econ_dm` stamps the attribution
+      footer and the DM accent (`resolve_dm_accent`, default `DM_PRIMARY`) on
+      the way out, so the refresh applies the same `brand_dm_embed` — a
+      re-render from scratch would otherwise drop the "on behalf of &lt;server&gt;"
+      footer at the first edit, and in a guild with no accent configured change
+      the card's colour as well.
+    - **The member's gates are re-checked every pass**, not just at send: the
+      `econ_notify_prefs` mute and the `game_role_id` opt-in. Muting economy
+      DMs or losing the role at noon forgets the card, because the sweep is a
+      second path writing to the same message and "the edit is silent anyway"
+      isn't the member's call to have made for them.
+    - **Day-scoped writes.** The sweep takes its `local_day` once and then does
+      Discord I/O per member, so `mark_card` / `forget_card` are scoped by it:
+      if the day rolls mid-pass and that member logs in again, `record_card`
+      has already replaced their row, and an unscoped write would stamp
+      yesterday's signature (possibly `final`) onto a card sent minutes ago and
+      freeze it for the day.
     - **Only a real DM is recorded.** `deliver_econ_dm` (the delivery core behind
       `notify_member`) reports its *surface* rather than a bool, and `card_handle`
       stores a handle only for `surface == "dm"`. A muted member, a member without
