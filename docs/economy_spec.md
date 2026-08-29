@@ -107,7 +107,68 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`). The
   layout is built by `economy/quest_digest.py` (pure; unit-tested) and packed into
   ≤1024-char embed fields (`… (cont.)` on overflow). Members without the role earn the
-  same rewards with no DM.
+  same rewards with no DM. The embed itself is assembled by
+  `services/login_card_service.build_login_embed`, shared with the hourly refresh
+  below so the send path and the refresh cannot drift into two renderings.
+  - **Live updates (2026-08-29).** The DM is no longer a snapshot: the hourly
+    economy tick re-renders it **in place** as progress lands
+    (`login_card_service.refresh_guild_cards`, last pass in `run_tick`). Per-guild
+    dial `login_card_live_updates` (Economy → Settings), default **on**; off leaves
+    the DM exactly as written that morning.
+    - **Silent by design.** Discord raises no notification for an edit, and the
+      feature never posts a second message. Chosen deliberately over a nudge: the
+      card is there to check, not to interrupt. A member who deletes the DM is
+      **not** re-sent one — the row is dropped instead, since a repost would notify
+      precisely the person who threw it away.
+    - **Finished quests stay on the card**, ticked (`digest_sections(include_done=True)`,
+      ✅ bullet + full bar + a "Done" blurb, no channel link). Without this the card
+      *empties* as a member succeeds — `digest_sections` drops `state == "done"` — so
+      whoever did the most would end the day looking at a bare streak line. The
+      claimable status line moved ✅ → 🎁 so one glyph doesn't mean both "you did it"
+      and "you still have to press a button". Board order is preserved, so a quest
+      ticks in place rather than reshuffling the list under the reader.
+    - **Stop conditions:** every *personal* (daily/weekly) quest done → one last
+      render, row marked `final`; community/monthly goals are guild-wide counters
+      that never reach done for one member, so they can't hold a card open (they
+      freeze at the last render). A row whose `local_day` isn't today is dropped,
+      never edited. A 404 forgets the card; a 5xx leaves the row for the next hour.
+    - **Cost control:** the rendered card is hashed (`card_signature`) and an
+      unchanged card costs **zero** API calls — the same trick as `core/sticky.py`.
+      Edits go through `get_partial_messageable(...).get_partial_message(...)`, so a
+      refresh is one PATCH with no fetch and no cached DM channel. At ~130 logins/day
+      across the three live guilds the absolute worst case is ~2k edits/day; in
+      practice the signature skip and the finish rule cut that to a few hundred.
+    - **The refresh re-brands.** `deliver_econ_dm` stamps the attribution
+      footer and the DM accent (`resolve_dm_accent`, default `DM_PRIMARY`) on
+      the way out, so the refresh applies the same `brand_dm_embed` — a
+      re-render from scratch would otherwise drop the "on behalf of &lt;server&gt;"
+      footer at the first edit, and in a guild with no accent configured change
+      the card's colour as well.
+    - **The member's gates are re-checked every pass**, not just at send: the
+      `econ_notify_prefs` mute and the `game_role_id` opt-in. Muting economy
+      DMs or losing the role at noon forgets the card, because the sweep is a
+      second path writing to the same message and "the edit is silent anyway"
+      isn't the member's call to have made for them.
+    - **Day-scoped writes.** The sweep takes its `local_day` once and then does
+      Discord I/O per member, so `mark_card` / `forget_card` are scoped by it:
+      if the day rolls mid-pass and that member logs in again, `record_card`
+      has already replaced their row, and an unscoped write would stamp
+      yesterday's signature (possibly `final`) onto a card sent minutes ago and
+      freeze it for the day.
+    - **Only a real DM is recorded.** `deliver_econ_dm` (the delivery core behind
+      `notify_member`) reports its *surface* rather than a bool, and `card_handle`
+      stores a handle only for `surface == "dm"`. A muted member, a member without
+      the opt-in role, and one with closed DMs all report `dropped` with no message —
+      the old bool said `True` for all three. The `bank` surface is refused outright:
+      that fallback is a deliberately different, wellness-free embed, and editing it
+      with the private render would publish a member's wellness section publicly.
+    - **Re-derived vs frozen.** Only the seven `LoginOutcome` scalars ride on the
+      card row (`econ_logins` keeps just `paid`; milestone/grace/reset/shield are
+      one-shot). The quest board, the movers and the wellness blurb are all re-read
+      each pass — so pausing wellness at noon really does take the section off the
+      card at 1pm. No rendered prose is stored, and the wellness text never lands in
+      the table. State: `econ_login_digest_cards` (migration 190, one row per member
+      per guild, registered in `docs/data_register.md`).
   - **Movers data:** community progress is stored only as a cumulative `current`, so the
     day roll (`economy_loop.run_guild_day_roll`) snapshots each community quest's total
     into `econ_community_progress_snapshots` (keyed `(quest_id, day)`, taken before any

@@ -71,6 +71,13 @@ from bot_modules.services.message_xp_service import (
     award_message_xp,
     award_reaction_given_xp,
 )
+from bot_modules.services.login_card_service import (
+    all_personal_done,
+    build_login_embed,
+    card_handle,
+    card_signature,
+    record_card,
+)
 from bot_modules.services.sentiment_service import score_text
 from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
 from bot_modules.services.wellness_enforcement import wellness_on_message
@@ -87,7 +94,6 @@ from bot_modules.core.utils import (
     jump_url,
 )
 from bot_modules.core.xp_system import count_xp_events, log_role_event, record_member_activity
-from bot_modules.economy import quest_digest
 from bot_modules.economy.logic import (
     is_economy_manager,
     local_day_for,
@@ -105,7 +111,7 @@ from bot_modules.services.economy_service import (
     LoginOutcome,
     create_qotd,
     load_econ_settings,
-    notify_member,
+    deliver_econ_dm,
     process_login,
     qotd_for_message,
     try_award_qotd,
@@ -1157,7 +1163,7 @@ class EventsCog(commands.Cog):
         hop_channel_id = parent_id or channel_id
 
         def _econ_work() -> (
-            tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None]
+            tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None, str]
             | None
         ):
             with self.bot.ctx.open_db() as conn:
@@ -1363,15 +1369,21 @@ class EventsCog(commands.Cog):
                 wellness_value = wellness_login_digest_value(
                     conn, guild_id, user_id
                 )
-                return settings, outcome, prior_streak, quests_out, gains, wellness_value
+                return (
+                    settings, outcome, prior_streak, quests_out, gains,
+                    wellness_value, today,
+                )
 
         result = await asyncio.to_thread(_econ_work)
         if result is None:
             return
-        settings, outcome, prior_streak, quests_out, gains, wellness_value = result
+        (
+            settings, outcome, prior_streak, quests_out, gains,
+            wellness_value, today_local,
+        ) = result
 
         # Two individual opt-ins, one DM: the digest itself requires the
-        # opt-in economy game role (notify_member's gate); the wellness
+        # opt-in economy game role (deliver_econ_dm's gate); the wellness
         # part additionally requires the member's own notifications_pref to
         # include DMs (enforced inside login_digest_value). Wellness content
         # only ever rides this economy morning message — there is no
@@ -1385,11 +1397,17 @@ class EventsCog(commands.Cog):
         # That also retires the wellness-scrubbed second render: the only
         # thing it existed for was the public fallback.
         accent = await safe_resolve_accent(self.bot.ctx, message.guild, log_label="events", default=DEFAULT_ACCENT_COLOR)
-        embed = self._econ_login_embed(
+        embed = build_login_embed(
             settings, outcome, prior_streak, quests_out, gains, accent,
             wellness_value=wellness_value,
         )
-        await notify_member(
+        # deliver_econ_dm rather than notify_member: this card is edited in
+        # place all day, so it needs the Message back — and it needs to know
+        # the message really is a DM. A muted member, one without the opt-in
+        # game role, and one with closed DMs all report "dropped" with no
+        # message, so no handle is stored and the hourly sweep never chases a
+        # card that was never sent.
+        delivery = await deliver_econ_dm(
             self.bot,
             self.bot.ctx.db_path,
             guild_id,
@@ -1398,70 +1416,31 @@ class EventsCog(commands.Cog):
             require_game_role=True,
             public_fallback=False,
         )
+        handle = card_handle(delivery)
+        if handle is None or not settings.login_card_live_updates:
+            return
+        dm_channel_id, message_id = handle
+        # Already finished everything at first activity (it happens — the
+        # message that triggered the login can complete the last quest), so
+        # this render is also the last one.
+        final = all_personal_done(quests_out)
+        signature = card_signature(embed)
 
-    @staticmethod
-    def _econ_login_embed(
-        settings: EconSettings,
-        outcome: LoginOutcome,
-        prior_streak: int,
-        quests_out: list[dict],
-        gains: list[dict],
-        accent: discord.Color,
-        *,
-        wellness_value: str | None = None,
-    ) -> discord.Embed:
-        """Daily digest DM: streak update + a fun little quest checklist."""
-        embed = discord.Embed(
-            title=f"{settings.currency_emoji} Daily Streak",
-            color=accent,
-        )
-        unit = settings.currency_name if outcome.paid == 1 else settings.currency_plural
-        streak_line = f"Day **{outcome.streak}** checked in"
-        if outcome.paid > 0:
-            streak_line += f" — {settings.currency_emoji} **+{outcome.paid:,}** {unit}"
-        embed.description = f"{streak_line}."
-        if outcome.milestone > 0:
-            unit_m = settings.currency_name if outcome.milestone == 1 else settings.currency_plural
-            embed.add_field(
-                name=f"🏆 Day {outcome.streak} Milestone!",
-                value=f"Bonus {settings.currency_emoji} **{outcome.milestone:,}** {unit_m}",
-                inline=False,
-            )
-        if outcome.grace_consumed or outcome.shield_consumed:
-            # One combined callout — a 3-day gap consumes grace AND the
-            # shield, and two separate "saved" fields would read as a glitch.
-            if outcome.shield_consumed and outcome.grace_consumed:
-                saved = (
-                    "Two missed days covered — the free grace day plus your "
-                    "🛡️ shield (now used up)"
+        def _record() -> None:
+            with self.bot.ctx.open_db() as conn:
+                record_card(
+                    conn, guild_id, user_id,
+                    local_day=today_local,
+                    dm_channel_id=dm_channel_id,
+                    message_id=message_id,
+                    signature=signature,
+                    outcome=outcome,
+                    prior_streak=prior_streak,
+                    final=final,
+                    now_ts=time.time(),
                 )
-            elif outcome.shield_consumed:
-                saved = "Your 🛡️ shield covered a missed day (now used up)"
-            else:
-                saved = "We covered a missed day"
-            value = f"{saved} — your streak lives on at day **{outcome.streak}**."
-            if outcome.shield_consumed and settings.price_streak_shield > 0:
-                value += " Grab a fresh shield in `/bank shop`."
-            embed.add_field(name="🛟 Streak Saved", value=value, inline=False)
-        if outcome.reset and prior_streak >= 3:
-            embed.add_field(
-                name="🔁 Streak Reset",
-                value=(
-                    f"Your **{prior_streak}**-day streak ended. Starting fresh "
-                    f"at day **{outcome.streak}**."
-                ),
-                inline=False,
-            )
-        # Wellness streak (opted-in members only) sits above the quest
-        # sections so a long quest list can't bury it.
-        if wellness_value:
-            embed.add_field(name="🌿 Wellness", value=wellness_value, inline=False)
-        # Every open quest, grouped by cadence, plus yesterday's movers — the
-        # digest formatting (aligned bars, blurbs, channel links, ≤1024-char
-        # field packing) lives in quest_digest so it's unit-tested there.
-        for name, value in quest_digest.digest_sections(quests_out, gains):
-            embed.add_field(name=name, value=value, inline=False)
-        return embed
+
+        await asyncio.to_thread(_record)
 
     async def _fetch_reaction_message(
         self, payload: discord.RawReactionActionEvent

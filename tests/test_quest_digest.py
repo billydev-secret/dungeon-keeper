@@ -75,7 +75,7 @@ def test_counted_block_uses_progress_meter():
 
 def test_block_falls_back_to_cadence_blurb_without_description():
     block = quest_block({"title": "Mystery", "qtype": "daily", "state": "claimable"})
-    assert "✅ Ready to claim!" in block
+    assert "🎁 Ready to claim!" in block
     assert "resets tomorrow" in block  # daily fallback blurb
 
 
@@ -85,6 +85,62 @@ def test_long_description_is_clipped():
     )
     assert "…" in block
     assert len(block) < 400
+
+
+def test_done_block_ticks_off_with_a_full_bar():
+    """A finished quest reads as an achievement, not as a job still to do.
+
+    The login card is edited in place all day, so a completed quest stays on
+    it — with the bar filled, the tick as its bullet, and none of the "go do
+    this in #channel" framing that only makes sense while it is open.
+    """
+    block = quest_block(
+        {
+            "title": "Talk It Out",
+            "qtype": "daily",
+            "state": "done",
+            "progress_current": 10,
+            "progress_target": 10,
+            "description": "Chat after midnight.",
+            "trigger_channel_id": 42,
+        }
+    )
+    lines = block.split("\n")
+    assert lines[0] == "✅ **Talk It Out**"
+    assert "10 / 10" in lines[1]
+    assert lines[2] == "_Done — nice work._"
+    # No channel link: inviting someone to go earn a quest they already earned
+    # is worse than saying nothing.
+    assert "<#42>" not in block
+
+
+def test_done_block_clamps_an_overshot_bar():
+    """Progress keeps counting past the target; a 12 / 10 bar looks like a bug."""
+    block = quest_block(
+        {
+            "title": "Chatterbox",
+            "qtype": "daily",
+            "state": "done",
+            "progress_current": 12,
+            "progress_target": 10,
+        }
+    )
+    assert "10 / 10" in block
+    assert "12" not in block
+
+
+def test_done_block_without_a_target_is_just_a_ticked_line():
+    block = quest_block({"title": "Early Bird", "qtype": "daily", "state": "done"})
+    assert block == "✅ **Early Bird**\n_Done — nice work._"
+
+
+def test_done_tick_is_not_the_claimable_glyph():
+    """One glyph for "you did it" and "you still have to press a button" would
+    make a member skip a payout they earned."""
+    done = quest_block({"title": "A", "qtype": "daily", "state": "done"})
+    claimable = quest_block({"title": "A", "qtype": "daily", "state": "claimable"})
+    assert done.splitlines()[0].startswith("✅")
+    assert "✅" not in claimable
 
 
 # ── digest_sections ───────────────────────────────────────────────────
@@ -160,3 +216,39 @@ def test_weekly_community_goals_sort_before_the_monthly_goal():
     assert headings.index("🌍 Community Goals") < headings.index(
         "🗓️ Monthly Quests"
     )
+
+
+def test_sections_drop_done_quests_by_default():
+    """The default rendering is unchanged — only the login card opts in."""
+    quests = [
+        {"title": "Open", "qtype": "daily", "state": "claimable"},
+        {"title": "Finished", "qtype": "daily", "state": "done"},
+    ]
+    body = "".join(v for _, v in digest_sections(quests, gains=[]))
+    assert "Open" in body
+    assert "Finished" not in body
+
+
+def test_include_done_keeps_finished_quests_in_board_order():
+    """Finishing a quest ticks it in place; it must not jump up or down the
+    list, because the member is reading the same card all day."""
+    quests = [
+        {"title": "First", "qtype": "daily", "state": "done"},
+        {"title": "Second", "qtype": "daily", "state": "claimable"},
+        {"title": "Third", "qtype": "daily", "state": "done"},
+    ]
+    body = "".join(v for _, v in digest_sections(quests, gains=[], include_done=True))
+    assert body.index("First") < body.index("Second") < body.index("Third")
+
+
+def test_include_done_keeps_a_fully_cleared_card_from_emptying():
+    """The bug this option exists to stop: the members who did the most would
+    otherwise watch their card shrink to nothing."""
+    quests = [
+        {"title": "All", "qtype": "daily", "state": "done"},
+        {"title": "Gone", "qtype": "weekly", "state": "done"},
+    ]
+    assert digest_sections(quests, gains=[]) == []
+    kept = digest_sections(quests, gains=[], include_done=True)
+    body = "".join(v for _, v in kept)
+    assert "All" in body and "Gone" in body

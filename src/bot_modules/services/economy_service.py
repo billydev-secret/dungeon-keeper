@@ -63,6 +63,14 @@ class EconSettings:
     # holders only; everyone else still gets the in-channel reaction + reply.
     # 0 (default) = nobody has opted in, so the recurring DMs go to nobody.
     game_role_id: int = 0
+    # Keep the morning login digest DM current instead of leaving it a
+    # snapshot: an hourly pass re-renders the card in place as quest progress
+    # lands, and stops once the member has cleared their personal quests.
+    # Edits are silent — Discord raises no notification for them — so this
+    # never adds a ping, and it never posts a second message. Off makes the
+    # card a one-shot snapshot again (it is still sent); it does not disable
+    # the digest itself, which is what game_role_id above governs.
+    login_card_live_updates: bool = True
     # The QOTD role — one dial doing two jobs. ``/qotd post`` pings it, AND
     # any message from a mod that tags it registers as that day's question,
     # so a mod can just ask in their own words instead of running a command.
@@ -418,6 +426,7 @@ DEFAULT_ECON_SETTINGS = EconSettings()
 _BOOL_KEYS = [
     "enabled",
     "transfers_enabled",
+    "login_card_live_updates",
     "raffle_enabled",
     "mod_perk_comp",
     # Not a SHOP_TOGGLE_PERKS entry: that tuple drives the shop's own list of
@@ -1391,7 +1400,35 @@ def member_is_booster(bot: discord.Client, guild_id: int, user_id: int) -> bool:
     return member is not None and member.premium_since is not None
 
 
-async def notify_member(
+@dataclass(frozen=True)
+class DmDelivery:
+    """What happened to one economy notification, and *where* it landed.
+
+    ``notify_member`` collapses this to a bool for its ~20 callers, none of
+    which care. The login digest does care: it edits its message in place all
+    day, so it needs the ``discord.Message`` back — and it needs to know the
+    message is a DM rather than the public bank-channel fallback, because that
+    fallback is a deliberately different embed (the DM form carries the
+    wellness section, which must never be posted publicly). Editing the wrong
+    surface would be a privacy leak, so the surface is recorded explicitly
+    rather than inferred from a truthy return.
+
+    ``dropped`` is the trap this type exists to close: a muted member, a member
+    without the opt-in game role, and a failed DM with the public fallback
+    switched off all count as *handled* — the old bool said ``True`` and no
+    message existed. Only ``surface == "dm"`` yields a ``message``.
+    """
+
+    surface: str  # "dm" | "bank" | "dropped" | "failed"
+    message: discord.Message | None = None
+
+    @property
+    def delivered(self) -> bool:
+        """The legacy bool: False only when both the DM and the fallback failed."""
+        return self.surface != "failed"
+
+
+async def deliver_econ_dm(
     bot: discord.Client,
     db_path: Path,
     guild_id: int,
@@ -1402,12 +1439,17 @@ async def notify_member(
     require_game_role: bool = False,
     fallback_embed: discord.Embed | None = None,
     public_fallback: bool = True,
-) -> bool:
+) -> DmDelivery:
     """DM an economy notification, falling back to the bank channel.
 
+    The delivery core behind :func:`notify_member`, which is the same thing
+    narrowed to a bool. Callers that need the sent ``discord.Message`` back —
+    only the login digest, which edits its card in place as quest progress
+    lands — call this and check ``surface == "dm"`` before storing a handle.
+
     A muted member (econ_notify_prefs) is silently dropped and counts as
-    delivered. Returns False only when both the DM and the bank-channel
-    fallback fail.
+    delivered. The result is ``failed`` only when both the DM and the
+    bank-channel fallback fail.
 
     ``fallback_embed``, when given, replaces ``embed`` on the public
     bank-channel fallback — for embeds whose DM form carries fields that
@@ -1443,7 +1485,7 @@ async def notify_member(
 
     muted, settings = await asyncio.to_thread(_read)
     if muted:
-        return True
+        return DmDelivery("dropped")
 
     guild = bot.get_guild(guild_id)
     member = guild.get_member(user_id) if guild else None
@@ -1454,7 +1496,7 @@ async def notify_member(
             or member is None
             or not any(r.id == settings.game_role_id for r in member.roles)
         ):
-            return True
+            return DmDelivery("dropped")
 
     if embed is not None:
         # Branded here rather than at the ~20 call sites, so every economy
@@ -1485,18 +1527,19 @@ async def notify_member(
 
     if member is not None:
         try:
-            await member.send(**kwargs)
-            return True
+            sent = await member.send(**kwargs)
         except (discord.Forbidden, discord.HTTPException):
             pass
+        else:
+            return DmDelivery("dm", sent)
 
     if not public_fallback:
-        return True
+        return DmDelivery("dropped")
     if guild is None or not settings.bank_channel_id:
-        return False
+        return DmDelivery("failed")
     channel = guild.get_channel(settings.bank_channel_id)
     if not isinstance(channel, discord.abc.Messageable):
-        return False
+        return DmDelivery("failed")
     mention = f"<@{user_id}>"
     fallback_kwargs: dict = {"content": f"{mention} {content}" if content else mention}
     # This posts into the public bank channel and some callers pass raw
@@ -1511,10 +1554,39 @@ async def notify_member(
     elif embed:
         fallback_kwargs["embed"] = embed
     try:
-        await channel.send(**fallback_kwargs)
-        return True
+        posted = await channel.send(**fallback_kwargs)
     except (discord.Forbidden, discord.HTTPException):
-        return False
+        return DmDelivery("failed")
+    return DmDelivery("bank", posted)
+
+
+async def notify_member(
+    bot: discord.Client,
+    db_path: Path,
+    guild_id: int,
+    user_id: int,
+    *,
+    embed: discord.Embed | None = None,
+    content: str | None = None,
+    require_game_role: bool = False,
+    fallback_embed: discord.Embed | None = None,
+    public_fallback: bool = True,
+) -> bool:
+    """DM an economy notification — :func:`deliver_econ_dm` narrowed to a bool.
+
+    Returns False only when both the DM and the bank-channel fallback fail; a
+    muted or non-opted-in member counts as delivered. Every caller but the
+    login digest wants exactly this, so the delivery policy stays in one place
+    and no call site had to change when the digest needed the message back.
+    """
+    result = await deliver_econ_dm(
+        bot, db_path, guild_id, user_id,
+        embed=embed, content=content,
+        require_game_role=require_game_role,
+        fallback_embed=fallback_embed,
+        public_fallback=public_fallback,
+    )
+    return result.delivered
 
 
 # ── legal-erasure sweep ────────────────────────────────────────────────
@@ -1545,6 +1617,7 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_kind_activity",
     "econ_kind_activity_occ",
     "econ_setup_marks",
+    "econ_login_digest_cards",
     "econ_onboarding_dms",
     "econ_personal_roles",
     "econ_rentals",
