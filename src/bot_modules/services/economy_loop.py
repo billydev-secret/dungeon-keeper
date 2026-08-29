@@ -79,6 +79,7 @@ import discord
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.sticky import StickyPanel
+from bot_modules.core.utils import jump_url
 from bot_modules.economy import live_signal, logic, quests
 from bot_modules.economy.perks import FEATURE_GATED, PERK_LABELS
 from bot_modules.economy.perk_actions import (
@@ -2044,8 +2045,9 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
             from bot_modules.economy.bounty_views import refresh_card_by_id
 
             for notice in bounty_notices:
+                repainted = False
                 try:
-                    await refresh_card_by_id(
+                    repainted = await refresh_card_by_id(
                         bot, guild, notice.card_channel_id,
                         notice.card_message_id, notice.bounty_id,
                     )
@@ -2056,13 +2058,22 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                         "Economy loop: failed to refresh expired bounty card %s.",
                         notice.bounty_id,
                     )
+                # Link the card only when the repaint above actually found it.
+                # A mod who tidied the board channel has already deleted it,
+                # and the fetch failing is the only warning we get — a DM with
+                # a 404 link is worse than one with none.
+                where = (
+                    f"\n{jump_url(notice.guild_id, notice.card_channel_id, notice.card_message_id)}"
+                    if repainted
+                    else ""
+                )
                 for uid in notice.refunded_user_ids:
                     try:
                         await notify_member(
                             bot, db_path, notice.guild_id, uid,
                             content=(
                                 f"The bounty **{notice.title}** expired unawarded, "
-                                "so your stake is back in your wallet."
+                                f"so your stake is back in your wallet.{where}"
                             ),
                         )
                     except asyncio.CancelledError:

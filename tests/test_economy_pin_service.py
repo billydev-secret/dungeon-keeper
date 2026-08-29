@@ -370,3 +370,41 @@ def test_refund_exactly_once_under_replay(db):
         assert get_balance(conn, GUILD, USER) == 100
         refunds = [k for k, _ in _ledger(conn) if k == "pin_sponsor_refund"]
         assert len(refunds) == 1
+
+
+# ── the resolution receipt links the pin ───────────────────────────────
+
+
+def test_live_receipt_links_the_pinned_message(db):
+    # "Enjoy the spotlight" with no link makes the member hunt for their own
+    # pin; the row already holds the ids by the time the DM goes out.
+    from bot_modules.economy.pin_views import pin_resolution_dm_text
+
+    with open_db(db) as conn:
+        _fund(conn, 100)
+        out = submit_pin(conn, SETTINGS, GUILD, USER, MESSAGE)
+        res = go_live(
+            conn, out.submission_id, resolver_id=MOD,
+            pin_channel_id=PIN_CH, pin_message_id=42, now=NOW,
+        )
+        text = pin_resolution_dm_text(SETTINGS, res.live, guild_id=GUILD)
+        link = f"https://discord.com/channels/{GUILD}/{PIN_CH}/42"
+        assert link in text
+        # The link sits above the quoted pin, never appended to it: pin text is
+        # length-validated only and keeps its newlines, so a member ending
+        # mid-code-fence would otherwise swallow the URL into a code block.
+        assert text.index(link) < text.index(MESSAGE)
+
+
+def test_denied_receipt_has_no_link(db):
+    # A denied pin never became a message, so there is nothing to point at.
+    from bot_modules.economy.pin_views import pin_resolution_dm_text
+
+    with open_db(db) as conn:
+        _fund(conn, 100)
+        out = submit_pin(conn, SETTINGS, GUILD, USER, MESSAGE)
+        deny(conn, out.submission_id, resolver_id=MOD)
+        row = get_submission(conn, out.submission_id)
+        text = pin_resolution_dm_text(SETTINGS, row, guild_id=GUILD)
+        assert "discord.com/channels" not in text
+

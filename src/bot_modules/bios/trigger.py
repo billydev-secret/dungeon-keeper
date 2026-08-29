@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.bios.views import PersistentTriggerView
+from bot_modules.core.utils import channel_url, jump_url
 from bot_modules.core.db_utils import (
     delete_config_value,
     get_config_value,
@@ -226,9 +227,9 @@ def resolve_bio_placeholders(
     ref = get_trigger_ref(conn, guild_id)
     if ref is not None:
         cid, mid = ref
-        bio_link = f"https://discord.com/channels/{guild_id}/{cid}/{mid}"
+        bio_link = jump_url(guild_id, cid, mid)
     elif bios_channel_id:
-        bio_link = f"https://discord.com/channels/{guild_id}/{bios_channel_id}"
+        bio_link = channel_url(guild_id, bios_channel_id)
     else:
         bio_link = ""
 

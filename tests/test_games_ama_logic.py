@@ -737,6 +737,22 @@ def test_build_asker_dm_embed_includes_channel_mention():
     assert "anonymous question" in embed.description
 
 
+def test_build_asker_dm_embed_links_the_answer_message():
+    link = "https://discord.com/channels/1/42/99"
+    embed = build_asker_dm_embed("<#42>", answer_url=link)
+    assert embed.description is not None
+    # The room is still named, but the reader can jump straight to the answer
+    # instead of landing at the bottom of the channel.
+    assert "<#42>" in embed.description
+    assert f"[Jump to the answer]({link})" in embed.description
+
+
+def test_build_asker_dm_embed_omits_link_when_absent():
+    embed = build_asker_dm_embed("<#42>", answer_url=None)
+    assert embed.description is not None
+    assert "Jump to the answer" not in embed.description
+
+
 # ── build_recap_embed ────────────────────────────────────────────────
 
 

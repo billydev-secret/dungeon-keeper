@@ -26,6 +26,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.core.sticky import StickyPanel
 from bot_modules.economy.auction_views import (
     _freeze_card,
+    _frozen_card_link,
     build_auction_panel,
     _sticky_check,
     render_auction_card,
@@ -529,3 +530,40 @@ async def test_start_auction_drops_the_panels_stale_no_card_cache(bot, db):
     )
     with open_db(db) as conn:
         assert card_ids(conn, GUILD) == (77, 5555)
+
+
+# ── the post-freeze card link ──────────────────────────────────────────
+
+
+async def test_frozen_card_link_reads_the_id_the_freeze_wrote(bot, db):
+    """The winner's DM must point at the frozen card, not the deleted one.
+
+    ``_freeze_card`` reposts and deletes, so any id the caller snapshotted
+    before it ran is dead. The link has to come from a fresh read.
+    """
+    with open_db(db) as conn:
+        aid = _open(conn)
+        attach_card(conn, aid, 1, 4242)  # the card while bidding was open
+        end_auction_now(conn, GUILD, aid, now=NOW + 60)
+
+    channel = _text_channel(cid=1)
+    bot.get_channel = MagicMock(return_value=channel)
+    bot.get_cog = MagicMock(return_value=None)
+    await _freeze_card(bot, _guild(), aid, 1)
+
+    with open_db(db) as conn:
+        frozen_id = int(get_auction(conn, aid)["message_id"])
+    assert frozen_id != 4242, "the freeze should have reposted"
+
+    link = await _frozen_card_link(bot, GUILD, aid)
+    assert link == f"\nhttps://discord.com/channels/{GUILD}/1/{frozen_id}"
+
+
+async def test_frozen_card_link_is_empty_without_a_card(bot, db):
+    # An auction whose card never posted has nothing to point at; the DM
+    # simply goes out without a link rather than carrying a broken one.
+    with open_db(db) as conn:
+        aid = _open(conn)  # no attach_card
+        end_auction_now(conn, GUILD, aid, now=NOW + 60)
+    assert await _frozen_card_link(bot, GUILD, aid) == ""
+

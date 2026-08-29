@@ -151,7 +151,7 @@ The games cluster by shape; each cluster shares interaction patterns.
 - **Content mode** — `unfiltered` (questions post immediately) or `screened` (host approves via DM before the question appears; rejected questions never post and never pay out quest credit).
 - **Format** — `hot_seat` (one person answers at a time; the seat rotates) or `panel` (ask anyone who has opted into the panel, chosen from a dropdown).
 
-AMA carries a per-question lifecycle (pending → answered / passed / rejected / expired), a screened-mode approval queue, DM notifications to the original asker when their question gets a reply, a retention window for unanswered screened questions, and stale-target guarding: a modal submitted after the hot seat rotated (or after the target left the panel) is rejected with a "please try again" notice.
+AMA carries a per-question lifecycle (pending → answered / passed / rejected / expired), a screened-mode approval queue, DM notifications to the original asker when their question gets a reply (the DM names the channel and carries a jump link to the answered Q&A card, so the asker lands on their own question rather than at the bottom of the channel), a retention window for unanswered screened questions, and stale-target guarding: a modal submitted after the hot seat rotated (or after the target left the panel) is rejected with a "please try again" notice.
 
 ### Pool / pairing / draft games
 

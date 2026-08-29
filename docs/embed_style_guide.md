@@ -368,6 +368,38 @@ What *is* per-guild is the message body.
   economy game role via `AllowedMentions(roles=[Object(id=…)])`), never rely on
   the raw text.
 
+## Pointing at things (ruling 2026-08-28: link the message)
+
+**If you hold a message id, link the message.** A channel-only link drops the
+reader at the *bottom* of the channel, where they still have to find the thing
+you were telling them about — and the busier the channel, the worse it lands.
+`core/utils.jump_url(guild_id, channel_id, message_id)` builds the permalink
+from stored ids; `message.jump_url` is there when you hold the object. Never
+hand-roll `f"https://discord.com/channels/…"` — the point of the helper is that
+the next person can't accidentally omit the message id.
+
+- **A notification that reports something that happened to a specific post
+  carries a link to that post.** "Your question got a reply", "your pin is
+  live", "you won the bounty" — the news is about one message, so the reader
+  should be one tap from it, not from the room it lives in. **A DM with no way
+  back at all is the real failure**; a channel mention beats nothing.
+- **Link the channel when the channel really is the subject.** "Head to
+  <#x> and open a ticket", "the casino has moved", "missing permission to post
+  in <#x>", a voice room you join, a quest that counts activity *anywhere* in a
+  channel — these name a room, and repointing them at some message inside it
+  would be a downgrade. Use `channel_url` / a plain `<#id>` mention and move on.
+- **When the id is missing *or won't keep*, degrade to the channel** rather
+  than dropping the pointer. `bios/trigger.py` is the model for the first:
+  message link when a stored ref exists, channel link when it doesn't. The
+  auction's outbid DM is the model for the second — a **sticky panel is
+  deleted and reposted** as chat moves, so a permalink to a live one is dead
+  within minutes and the room is the only stable pointer. Link a sticky only
+  once it has stopped moving (`_frozen_card_link`, after the freeze).
+- **Both is allowed and often best.** A mention names *where* in words the
+  reader recognises; the link gets them *there*. The no-contact alert
+  (Channel field + Jump field) and the confession-reply DM (which links the
+  reply *and* the original confession) do this.
+
 ## Builder conventions
 
 - Embed construction lives in a **per-feature `embeds.py`** with **pure

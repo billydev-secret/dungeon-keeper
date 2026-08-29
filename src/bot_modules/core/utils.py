@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import discord
 from discord import app_commands
@@ -238,15 +238,32 @@ async def resolve_postable_channel_in_guild(
     return channel
 
 
-def jump_url(guild_id: int, channel_id: int, message_id: int) -> str:
+def jump_url(guild_id: int | Literal["@me"], channel_id: int, message_id: int) -> str:
     """A permalink to one message.
 
     Prefer ``message.jump_url`` when you have the message object; this is for
     callers working from stored ids, which would otherwise have to fetch a
     message purely to read the property off it. A channel-only link loses the
-    message and lands the reader at the bottom of the channel instead.
+    message and lands the reader at the bottom of the channel instead — see
+    the style guide's "Pointing at things" for when that is nonetheless right.
+
+    ``guild_id`` takes the literal ``"@me"`` for a message in a DM, which is
+    the form Discord itself uses. That one string is the whole widening — ids
+    still arrive as ``int``, so a stringified snowflake from the web layer is
+    a type error rather than a link that happens to work.
     """
     return f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+
+
+def channel_url(guild_id: int | Literal["@me"], channel_id: int) -> str:
+    """A deep link to a channel, for when the channel *is* the subject.
+
+    Its sibling ``jump_url`` is the default — see the style guide's "Pointing
+    at things". Reach for this one only where there is no message to land on
+    (a voice room to join, a channel to go start something in), or as the
+    degraded form when a stored message id is missing.
+    """
+    return f"https://discord.com/channels/{guild_id}/{channel_id}"
 
 
 async def resolve_reply_target(message: discord.Message) -> discord.Message | None:

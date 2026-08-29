@@ -15,7 +15,7 @@ import discord
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
-from bot_modules.core.utils import format_guild_for_log
+from bot_modules.core.utils import format_guild_for_log, jump_url
 from bot_modules.services.message_store import (
     DELETE_SOURCE_AUTO_DELETE,
     clear_deleted_flag,
@@ -579,7 +579,7 @@ async def _dm_operator_about_abandoned(
         return
     channel_name = getattr(channel, "name", str(channel.id))
     guild = getattr(channel, "guild", None)
-    link = f"https://discord.com/channels/{getattr(guild, 'id', '@me')}/{channel.id}/{message_id}"
+    link = jump_url(getattr(guild, "id", "@me"), channel.id, message_id)
     text = (
         f"🛑 **Auto-delete gave up** on a message in #{channel_name} after "
         f"{MAX_DELETE_ATTEMPTS} attempts ({_describe_http_error(exc)}).\n"

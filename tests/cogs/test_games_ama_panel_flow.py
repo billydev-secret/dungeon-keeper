@@ -28,6 +28,7 @@ class FakeResponse:
     def __init__(self):
         self.messages: list[tuple] = []
         self.modals: list = []
+        self.edits: list[dict] = []
         self.deferred = False
 
     async def send_message(self, content=None, **kwargs):
@@ -38,6 +39,9 @@ class FakeResponse:
 
     async def defer(self, *args, **kwargs):
         self.deferred = True
+
+    async def edit_message(self, **kwargs):
+        self.edits.append(kwargs)
 
 
 class FakeMessage:
@@ -274,3 +278,67 @@ async def test_ask_records_an_audit_row_pointing_at_the_posted_message(sync_db_p
     assert entry.target_id == panelist.id
     assert entry.message_id == posted_msg_id, "row must point at the posted message"
     assert entry.game_id == game_id
+
+
+# ── ReplyModal: the asker's DM points at the answer ───────────────────
+
+
+async def test_reply_dm_links_the_answered_card(sync_db_path, stub_branding, monkeypatch):
+    """The answer DM must carry a jump link, not just the channel mention.
+
+    The one piece of glue this covers is the cog handing the just-edited Q&A
+    card's ``jump_url`` to the embed builder — the embed's own two branches
+    are unit-tested in ``test_games_ama_logic``.
+    """
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db)
+    cog = AMACog(bot)  # type: ignore[arg-type]
+
+    host = FakeMember(1, "Host")
+    asker = FakeMember(3, "Asker")
+    guild = FakeGuild([host, asker])
+    channel = FakeChannel(guild)
+
+    game_id = await cog.launch(
+        channel=channel, host_id=host.id, host_name=host.display_name,
+        guild_id=99, options={"mode": "unfiltered", "format": "traditional"},
+    )
+    assert game_id is not None
+    payload = await ama_mod.get_game_payload(db, game_id)
+    payload["questions"] = [
+        {"text": "Q?", "asker_id": asker.id, "hot_seat_id": host.id, "status": "approved"}
+    ]
+    await ama_mod.update_game_payload(db, game_id, payload)
+
+    monkeypatch.setattr(
+        ama_mod.no_contact_service, "is_no_contact", lambda *_a, **_kw: False
+    )
+    sent: list = []
+
+    async def _capture_dm(_member, **kwargs):
+        sent.append(kwargs.get("embed"))
+        return True
+
+    monkeypatch.setattr(ama_mod, "send_branded_dm", _capture_dm)
+
+    async def _no_trigger(*_a, **_kw):
+        return None
+
+    from bot_modules.economy import game_rewards
+
+    monkeypatch.setattr(game_rewards, "fire_member_trigger", _no_trigger)
+
+    modal = ama_mod.ReplyModal(
+        game_id, db, question_idx=0, asker_id=asker.id, ama_view=None, question_text="Q?"
+    )
+    modal.reply._value = "Because I like it."
+    inter = FakeInteraction(host, channel, guild, bot)
+    inter.message = FakeMessage(777, guild)
+    inter.message.jump_url = "https://discord.com/channels/900/4242/777"
+    await modal.on_submit(inter)
+
+    assert sent, "the asker got no DM"
+    description = sent[-1].description
+    assert inter.message.jump_url in description
+    assert channel.mention in description
+

@@ -379,7 +379,12 @@ class ReplyModal(discord.ui.Modal, title="Your Reply"):
                 )
             )
             if asker and not blocked_dm and channel is not None and not isinstance(channel, (discord.DMChannel, discord.GroupChannel)):
-                dm_embed = build_asker_dm_embed(channel.mention, color=color)
+                # The card we just edited with the answer — link the message,
+                # not the room, so the asker lands on their own Q&A.
+                answer_link = getattr(interaction.message, "jump_url", None)
+                dm_embed = build_asker_dm_embed(
+                    channel.mention, answer_url=answer_link, color=color
+                )
                 await send_branded_dm(
                     asker,
                     db_path=self.db,

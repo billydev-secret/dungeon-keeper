@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, cast
 import discord
 
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+from bot_modules.core.utils import jump_url
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _coins
 from bot_modules.economy.view_helpers import safe_ephemeral as _safe_ephemeral
@@ -140,10 +141,7 @@ def _jump_url(guild_id: int, entry: BountyBoardEntry) -> str | None:
     """The card's jump link, or None when the card never posted (ids are 0)."""
     if not entry.card_channel_id or not entry.card_message_id:
         return None
-    return (
-        f"https://discord.com/channels/{guild_id}"
-        f"/{entry.card_channel_id}/{entry.card_message_id}"
-    )
+    return jump_url(guild_id, entry.card_channel_id, entry.card_message_id)
 
 
 def build_bounty_hub_embed(
@@ -719,11 +717,14 @@ async def _handle_award(
     # The bounty just left the open list the hub renders.
     await refresh_bounty_hub(bot, guild)
     try:
+        # The card is an ordinary message (only the hub is sticky), so its
+        # link keeps working — the winner can go read what they were paid for.
+        where = f"\n{card.jump_url}" if card is not None else ""
         await notify_member(
             bot, bot.ctx.db_path, guild.id, winner.id,
             content=(
                 f"🏆 You were awarded the bounty **{result.bounty['title']}** — "
-                f"{result.payout:,} coins are in your wallet!"
+                f"{result.payout:,} coins are in your wallet!{where}"
             ),
         )
     except Exception:
@@ -763,11 +764,15 @@ async def _handle_cancel(interaction: discord.Interaction, bounty_id: int) -> No
     await _refresh_card(bot, card, guild, bounty_id)
     # The bounty just left the open list the hub renders.
     await refresh_bounty_hub(bot, guild)
+    where = f"\n{card.jump_url}" if card is not None else ""
     for uid in refunded:
         try:
             await notify_member(
                 bot, bot.ctx.db_path, guild.id, uid,
-                content="A bounty you chipped into was cancelled — your coins are back.",
+                content=(
+                    "A bounty you chipped into was cancelled — your coins are "
+                    f"back.{where}"
+                ),
             )
         except Exception:
             log.debug("econ bounty: failed to DM refunded contributor", exc_info=True)
@@ -782,18 +787,26 @@ async def refresh_card_by_id(
     channel_id: int,
     message_id: int,
     bounty_id: int,
-) -> None:
-    """Fetch a board card by ids and re-render it — used by the expiry sweep."""
+) -> bool:
+    """Fetch a board card by ids and re-render it — used by the expiry sweep.
+
+    Returns whether the card was actually found and repainted. The expiry
+    sweep DMs refunded contributors a link to that card, and a mod who tidied
+    the board channel has already deleted it — so "did the fetch work" is the
+    only signal available that the permalink would 404. False means link
+    nothing rather than send a dead one.
+    """
     if not channel_id or not message_id:
-        return
+        return False
     channel = bot.get_channel(channel_id)
     if not isinstance(channel, discord.abc.Messageable):
-        return
+        return False
     try:
         card = await channel.fetch_message(message_id)
     except discord.HTTPException:
-        return
+        return False
     await _refresh_card(cast("Bot", bot), card, guild, bounty_id)
+    return True
 
 
 async def post_bounty_card(
