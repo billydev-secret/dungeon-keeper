@@ -4228,17 +4228,29 @@ async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
     view = _shop_view(interaction)
     assert isinstance(view, _ShopView)
     assert _shop_embed(interaction).title == "🛍️ Perk Shop"
-    # No second page, so no navigation at all — not a picker with one entry.
+    # No second page, so no navigation at all — not one dead tab, not a
+    # picker with a single entry.
     assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
+    assert not _tabs(view)
+
+
+def _tabs(view):
+    """The shop's navigation buttons: (label, is-the-page-you-are-on)."""
+    return [
+        (b.label, b.disabled)
+        for b in view.children
+        if isinstance(b, discord.ui.Button)
+        and (b.label or "").startswith(("🎁", "✨ Perks"))
+    ]
 
 
 @pytest.mark.asyncio
-async def test_the_picker_jumps_straight_to_any_page(ctx, db):
-    """Two interactions to anywhere, however long the book gets.
+async def test_tabs_jump_straight_to_any_page(ctx, db):
+    """One tap to any page, and the row says where you are.
 
-    Replaced ◀️/▶️, which were one tap to a neighbour but N taps to anywhere —
-    that put the perk ladder two taps behind a stocked store and would only
-    have got worse as a guild added items.
+    The tab you are on is a disabled green chip rather than a live button: it
+    doubles as a "you are here", and a tab that re-renders the page you are
+    already looking at is a round trip for nothing.
     """
     _enable(db)
     for n in range(1, 21):
@@ -4251,44 +4263,52 @@ async def test_the_picker_jumps_straight_to_any_page(ctx, db):
         new=AsyncMock(return_value=True),
     ):
         await _shop(cog, interaction)
-        embed = _shop_embed(interaction)
-        assert embed.footer.text.startswith("Page 1 of 3 · Server Store")
-
-        nav = _page_select(_shop_view(interaction))
-        assert [o.label for o in nav.options] == [
-            "🎁 Server Store · 1–10 of 20",
-            "🎁 Server Store · 11–20 of 20",
-            "✨ Perks & rentals",
+        assert _shop_embed(interaction).footer.text.startswith(
+            "Page 1 of 3 · Server Store"
+        )
+        assert _tabs(_shop_view(interaction)) == [
+            ("🎁 1–10", True), ("🎁 11–20", False), ("✨ Perks", False),
         ]
-        # The current page is the select's default, so it doubles as a
-        # "you are here" in the closed state.
-        assert [o.value for o in nav.options if o.default] == ["0"]
 
-        # Straight from the first store page to the perks — no walking.
+        # Straight from the first store page to the perks — one tap.
+        perks_tab = next(
+            b for b in _shop_view(interaction).children
+            if isinstance(b, discord.ui.Button) and b.label == "✨ Perks"
+        )
         jump = _interaction(_member(member_id=500))
-        nav._values = ["2"]
-        await nav.callback(jump)
+        await perks_tab.callback(jump)
 
     landed = jump.response.edit_message.await_args.kwargs["embed"]
     assert landed.title == "🛍️ Perk Shop"
     assert landed.footer.text.startswith("Page 3 of 3 · Perks")
-    back = _page_select(jump.response.edit_message.await_args.kwargs["view"])
-    assert [o.value for o in back.options if o.default] == ["2"]
+    # The chip moved with us.
+    assert _tabs(jump.response.edit_message.await_args.kwargs["view"]) == [
+        ("🎁 1–10", False), ("🎁 11–20", False), ("✨ Perks", True),
+    ]
 
 
-def _page_select(view):
-    """The shop's navigation picker, whichever page kind is showing."""
+@pytest.mark.asyncio
+async def test_a_store_too_big_for_tabs_falls_back_to_a_picker(ctx, db):
+    """A row holds five buttons; a sixth page must not fall off the end.
+
+    The shape changes, the position and the labels do not — so the fallback is
+    a different control in the same place, not a different design.
+    """
     from bot_modules.cogs.economy_cog import _PageSelect
 
-    return next(c for c in view.children if isinstance(c, _PageSelect))
+    _enable(db)
+    for n in range(1, 46):  # 5 store pages + perks = 6
+        _store_item(db, name=f"Item {n:02d}", price=10 * n)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500))
 
+    await _shop(cog, interaction)
 
-def _view_of(interaction):
-    """The view from whichever response the interaction actually used."""
-    send = interaction.response.send_message
-    if send.await_args is not None:
-        return send.await_args.kwargs["view"]
-    return interaction.response.edit_message.await_args.kwargs["view"]
+    view = _shop_view(interaction)
+    assert not _tabs(view)
+    nav = next(c for c in view.children if isinstance(c, _PageSelect))
+    assert [o.value for o in nav.options if o.default] == ["0"]
+    assert len(nav.options) == 6
 
 
 @pytest.mark.asyncio
@@ -4427,7 +4447,9 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         store = _interaction(_member(member_id=500))
         await _shop(cog, store)
         srows = _rows(_shop_view(store))
-        assert srows == [["Pick something to buy…"], ["Jump to a page…"]]
+        assert srows == [
+            ["Pick something to buy…"], ["🎁 1–10", "🎁 11–20", "✨ Perks"],
+        ]
 
         # The perk page, where eight buttons would otherwise leave a gap the
         # navigation falls into.
@@ -4435,6 +4457,6 @@ async def test_navigation_is_always_its_own_bottom_row(ctx, db):
         await cog.turn_shop_page(perks, 2)
 
     rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
-    assert rows[-1] == ["Jump to a page…"]          # alone on the last row
-    assert len(rows) > 1                            # and not the only row
-    assert all("Jump to a page…" not in r for r in rows[:-1])
+    assert rows[-1] == ["🎁 1–10", "🎁 11–20", "✨ Perks"]   # its own last row
+    assert len(rows) > 1                                    # not the only row
+    assert all("✨ Perks" not in r for r in rows[:-1])

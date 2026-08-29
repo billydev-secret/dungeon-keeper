@@ -52,6 +52,7 @@ from bot_modules.economy.perks import (
 )
 from bot_modules.economy.shop import (
     PAGE_STORE,
+    PageOption,
     build_shop_embed,
     build_store_embed,
     page_note,
@@ -1027,6 +1028,25 @@ class _StoreSelect(discord.ui.Select):
 _NAV_ROW = 4
 
 
+#: Buttons a Discord action row holds. Past this many pages the tabs cannot
+#: fit, and the shop falls back to the select.
+_MAX_TABS = 5
+
+
+def _make_turn(cog: EconomyCog, target: int):
+    """A page-turn callback bound to one destination.
+
+    A factory rather than a closure in the loop below: every tab is built in
+    the same iteration, and a late-bound ``target`` would send them all to the
+    last page.
+    """
+
+    async def _cb(interaction: discord.Interaction) -> None:
+        await cog.turn_shop_page(interaction, target)
+
+    return _cb
+
+
 class _PageSelect(discord.ui.Select):
     """Jump straight to any page of the shop.
 
@@ -1041,7 +1061,7 @@ class _PageSelect(discord.ui.Select):
     closed state and the control doubles as a "you are here".
     """
 
-    def __init__(self, cog: EconomyCog, options: list[tuple[str, str]], page: int):
+    def __init__(self, cog: EconomyCog, options: list[PageOption], page: int):
         self.cog = cog
         super().__init__(
             placeholder="Jump to a page…",
@@ -1050,12 +1070,12 @@ class _PageSelect(discord.ui.Select):
             row=_NAV_ROW,
             options=[
                 discord.SelectOption(
-                    label=label[:100],
-                    description=desc[:100],
+                    label=opt.label[:100],
+                    description=opt.description[:100],
                     value=str(i),
                     default=(i == page),
                 )
-                for i, (label, desc) in enumerate(options)
+                for i, opt in enumerate(options)
             ],
         )
 
@@ -1066,23 +1086,45 @@ class _PageSelect(discord.ui.Select):
 def _add_page_nav(
     view: discord.ui.View,
     cog: EconomyCog,
-    options: list[tuple[str, str]],
+    options: list[PageOption],
     page: int,
 ) -> None:
     """The shop's only navigation, shared by both page kinds.
 
-    Pinned to the last row so it sits under everything else rather than in
-    whatever gap the auto-layout had left — packed loose, the old arrows landed
-    beside 🛡️ Shield and ↩️ Cancel & Refund, putting "Next" exactly where a
-    member is aiming for a refund. Discord drops empty rows, so row 4 renders
-    directly under the last row holding anything.
+    **Tabs** while they fit — one button per page, the current one shown as a
+    disabled green chip so the row doubles as a "you are here" and a tab you
+    are already on cannot cost a round trip. A row holds five buttons, so a
+    guild past that many pages (roughly forty items) falls back to the select
+    rather than losing a page off the end: the shape changes, the position and
+    the labels do not.
 
-    A single-page shop (a guild selling nothing of its own) gets no picker at
-    all and looks exactly as it always did.
+    Pinned to the last row either way, so navigation sits under everything else
+    rather than in whatever gap the auto-layout had left — packed loose, an
+    earlier ◀️/▶️ pair landed beside 🛡️ Shield and ↩️ Cancel & Refund, putting
+    "Next" exactly where a member is aiming for a refund. Discord drops empty
+    rows, so row 4 renders directly under the last row holding anything.
+
+    A single-page shop (a guild selling nothing of its own) gets no navigation
+    at all — not one dead tab — and looks exactly as it always did.
     """
     if len(options) < 2:
         return
-    view.add_item(_PageSelect(cog, options, page))
+    if len(options) > _MAX_TABS:
+        view.add_item(_PageSelect(cog, options, page))
+        return
+    for i, opt in enumerate(options):
+        here = i == page
+        button = discord.ui.Button(
+            label=opt.tab,
+            style=(
+                discord.ButtonStyle.success if here else discord.ButtonStyle.secondary
+            ),
+            disabled=here,
+            row=_NAV_ROW,
+        )
+        if not here:
+            button.callback = _make_turn(cog, i)
+        view.add_item(button)
 
 
 class _StoreView(_MemberScopedView):
@@ -1109,7 +1151,7 @@ class _StoreView(_MemberScopedView):
         store_index: int = 0,
         *,
         page: int = 0,
-        nav: list[tuple[str, str]] | None = None,
+        nav: list[PageOption] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog
@@ -1302,7 +1344,7 @@ class _ShopView(_MemberScopedView):
         refundable: list[dict] | None = None,
         shield_price: int = 0,
         page: int = 0,
-        nav: list[tuple[str, str]] | None = None,
+        nav: list[PageOption] | None = None,
     ) -> None:
         super().__init__(user_id)
         self.cog = cog

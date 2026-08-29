@@ -533,18 +533,23 @@ def test_the_header_stops_calling_everything_a_weekly_rental(db):
 def test_page_options_label_each_page_by_what_is_on_it(db):
     """"Server Store" twice tells nobody which half they are picking.
 
-    So the store's labels carry their span, and the perk page names its
-    contents rather than saying "Perks" — a member should not have to open a
-    page to discover the refund button lives there.
+    Two captions because the shop has two navigation shapes with very different
+    room: ``tab`` is a button, where more than a couple of words wraps on a
+    phone; ``label`` is a select line with a whole row to itself.
     """
     from bot_modules.economy.shop import page_options
 
-    assert page_options(_items(20)) == [
-        ("🎁 Server Store · 1–10 of 20", "What this server sells itself"),
-        ("🎁 Server Store · 11–20 of 20", "What this server sells itself"),
-        ("✨ Perks & rentals", "Name, colour, icon, shield, gifting, refunds"),
+    tabs = [o.tab for o in page_options(_items(20))]
+    assert tabs == ["🎁 1–10", "🎁 11–20", "✨ Perks"]
+    assert [o.label for o in page_options(_items(20))] == [
+        "🎁 Server Store · 1–10 of 20",
+        "🎁 Server Store · 11–20 of 20",
+        "✨ Perks & rentals",
     ]
     # A short final page reports its real span, not a rounded one.
-    assert page_options(_items(12))[1][0] == "🎁 Server Store · 11–12 of 12"
-    # One page is not a book: the caller renders no picker for a single entry.
+    assert page_options(_items(12))[1].tab == "🎁 11–12"
+    # With nothing to tell it apart from, a lone store page drops the span:
+    # "🎁 1–7" is a worse caption than "🎁 Store".
+    assert page_options(_items(7))[0].tab == "🎁 Store"
+    # One page is not a book: the caller renders no navigation for one entry.
     assert len(page_options([])) == 1
