@@ -1490,9 +1490,20 @@ picker that cut at Discord's 25-option ceiling.
 
 The ephemeral shop is now **one flat book of pages** (`shop_pages`): the
 guild's store first at `STORE_PAGE_SIZE = 10` items a page, the perk ladder
-always last, walked with a single wrapping ◀️/▶️ pair (`_add_page_arrows`) and
-numbered across the whole book (`page_note`) so the counter does not restart at
-the store/perk seam. `/bank shop`, `/bank store` and the panel's Open Shop
+always last, navigated by a single **page picker** (`_PageSelect` /
+`_add_page_nav`, pinned to row 4 so it is always its own bottom row) whose
+options come from `page_options` — each labelled by what is on it, with the
+current page as the select's `default` so it doubles as a "you are here". The
+footer counter (`page_note`) runs across the whole book so it does not restart
+at the store/perk seam.
+
+That picker replaced a wrapping ◀️/▶️ pair (2026-08-28, same day): arrows were
+one tap to a neighbour but N taps to anywhere, which left the perk ladder two
+taps behind a stocked store and would only have worsened as a guild added
+items. A picker is two interactions to any page and stays two. Left to
+auto-layout the arrows had also packed in beside 🛡️ Shield and ↩️ Cancel &
+Refund — "Next" where a member is aiming for a refund — which is why the
+navigation row is pinned rather than allowed to float. `/bank shop`, `/bank store` and the panel's Open Shop
 button all call `open_personal_shop` → `_render_shop`, which re-reads on every
 turn — an arrow tap can land minutes later, and a sold-out row shown as buyable
 is a refusal the member discovers by paying. `store_page` and `_render_shop`

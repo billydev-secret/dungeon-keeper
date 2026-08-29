@@ -4228,19 +4228,17 @@ async def test_a_guild_with_no_store_gets_the_shop_it_always_had(ctx, db):
     view = _shop_view(interaction)
     assert isinstance(view, _ShopView)
     assert _shop_embed(interaction).title == "🛍️ Perk Shop"
-    assert not [
-        b for b in view.children
-        if isinstance(b, discord.ui.Button) and b.label in ("◀️ Back", "Next ▶️")
-    ]
+    # No second page, so no navigation at all — not a picker with one entry.
+    assert not [c for c in view.children if isinstance(c, discord.ui.Select)]
 
 
 @pytest.mark.asyncio
-async def test_the_arrows_walk_the_store_into_the_perks(ctx, db):
-    """One flat book: ◀️/▶️ crosses the store/perk seam, and wraps at the ends.
+async def test_the_picker_jumps_straight_to_any_page(ctx, db):
+    """Two interactions to anywhere, however long the book gets.
 
-    Twenty items make three pages — two of store, then the perk ladder — and
-    the page counter runs over the whole book rather than restarting at the
-    seam, which is what would make the shop look like it had lost its place.
+    Replaced ◀️/▶️, which were one tap to a neighbour but N taps to anywhere —
+    that put the perk ladder two taps behind a stocked store and would only
+    have got worse as a guild added items.
     """
     _enable(db)
     for n in range(1, 21):
@@ -4255,29 +4253,34 @@ async def test_the_arrows_walk_the_store_into_the_perks(ctx, db):
         await _shop(cog, interaction)
         embed = _shop_embed(interaction)
         assert embed.footer.text.startswith("Page 1 of 3 · Server Store")
-        select = next(
-            c for c in _shop_view(interaction).children
-            if isinstance(c, discord.ui.Select)
-        )
-        assert [o.label for o in select.options][0] == "Item 01"
 
-        # ▶️ to the second store page, then ▶️ again onto the perks.
-        pages = []
-        turn = interaction
-        for _ in range(3):
-            nxt = next(
-                b for b in _view_of(turn).children
-                if isinstance(b, discord.ui.Button) and b.label == "Next ▶️"
-            )
-            turn = _interaction(_member(member_id=500))
-            await nxt.callback(turn)
-            pages.append(turn.response.edit_message.await_args.kwargs["embed"])
+        nav = _page_select(_shop_view(interaction))
+        assert [o.label for o in nav.options] == [
+            "🎁 Server Store · 1–10 of 20",
+            "🎁 Server Store · 11–20 of 20",
+            "✨ Perks & rentals",
+        ]
+        # The current page is the select's default, so it doubles as a
+        # "you are here" in the closed state.
+        assert [o.value for o in nav.options if o.default] == ["0"]
 
-    assert pages[0].footer.text.startswith("Page 2 of 3 · Server Store")
-    assert pages[1].footer.text.startswith("Page 3 of 3 · Perks")
-    assert pages[1].title == "🛍️ Perk Shop"
-    # Wraps rather than dead-ending.
-    assert pages[2].footer.text.startswith("Page 1 of 3 · Server Store")
+        # Straight from the first store page to the perks — no walking.
+        jump = _interaction(_member(member_id=500))
+        nav._values = ["2"]
+        await nav.callback(jump)
+
+    landed = jump.response.edit_message.await_args.kwargs["embed"]
+    assert landed.title == "🛍️ Perk Shop"
+    assert landed.footer.text.startswith("Page 3 of 3 · Perks")
+    back = _page_select(jump.response.edit_message.await_args.kwargs["view"])
+    assert [o.value for o in back.options if o.default] == ["2"]
+
+
+def _page_select(view):
+    """The shop's navigation picker, whichever page kind is showing."""
+    from bot_modules.cogs.economy_cog import _PageSelect
+
+    return next(c for c in view.children if isinstance(c, _PageSelect))
 
 
 def _view_of(interaction):
@@ -4305,12 +4308,8 @@ async def test_the_perk_page_does_not_repeat_the_store(ctx, db):
         new=AsyncMock(return_value=True),
     ):
         await _shop(cog, interaction)
-        nxt = next(
-            b for b in _shop_view(interaction).children
-            if isinstance(b, discord.ui.Button) and b.label == "Next ▶️"
-        )
         turn = _interaction(_member(member_id=500))
-        await nxt.callback(turn)
+        await cog.turn_shop_page(turn, 1)
 
     embed = turn.response.edit_message.await_args.kwargs["embed"]
     assert "Server Store" not in [f.name for f in embed.fields]
@@ -4401,13 +4400,13 @@ async def test_a_page_turn_past_the_end_of_a_shrunken_shop_clamps(ctx, db):
 
 
 @pytest.mark.asyncio
-async def test_the_arrows_are_always_their_own_bottom_row(ctx, db):
+async def test_navigation_is_always_its_own_bottom_row(ctx, db):
     """Navigation sits in the same place on every page, under everything else.
 
     Asserted on the rendered component rows rather than on ``row=``, because
-    what matters is what Discord draws: left to auto-pack, the pair slotted in
-    beside Shield and Cancel & Refund, putting "Next" where a member is aiming
-    for a refund.
+    what matters is what Discord draws: left to auto-pack, the old arrows
+    slotted in beside Shield and Cancel & Refund, putting "Next" where a
+    member is aiming for a refund.
     """
     _enable(db)
     for n in range(1, 21):
@@ -4416,7 +4415,7 @@ async def test_the_arrows_are_always_their_own_bottom_row(ctx, db):
 
     def _rows(view):
         return [
-            [c.get("label") for c in row["components"]]
+            [c.get("label") or c.get("placeholder") for c in row["components"]]
             for row in view.to_components()
         ]
 
@@ -4424,20 +4423,18 @@ async def test_the_arrows_are_always_their_own_bottom_row(ctx, db):
         "bot_modules.cogs.economy_cog.feature_gate_ok",
         new=AsyncMock(return_value=True),
     ):
-        # A store page: the picker's row, then the arrows on their own.
+        # A store page: the buy picker's row, then navigation on its own.
         store = _interaction(_member(member_id=500))
         await _shop(cog, store)
-        assert _rows(_shop_view(store))[-1] == ["◀️ Back", "Next ▶️"]
+        srows = _rows(_shop_view(store))
+        assert srows == [["Pick something to buy…"], ["Jump to a page…"]]
 
         # The perk page, where eight buttons would otherwise leave a gap the
-        # arrows fall into.
+        # navigation falls into.
         perks = _interaction(_member(member_id=500))
         await cog.turn_shop_page(perks, 2)
 
-    view = perks.response.edit_message.await_args.kwargs["view"]
-    rows = _rows(view)
-    assert rows[-1] == ["◀️ Back", "Next ▶️"]
-    assert len(rows) > 1  # not sharing the perk buttons' row
-    assert not any(
-        "Back" in (label or "") for row in rows[:-1] for label in row
-    )
+    rows = _rows(perks.response.edit_message.await_args.kwargs["view"])
+    assert rows[-1] == ["Jump to a page…"]          # alone on the last row
+    assert len(rows) > 1                            # and not the only row
+    assert all("Jump to a page…" not in r for r in rows[:-1])

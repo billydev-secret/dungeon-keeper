@@ -528,3 +528,23 @@ def test_the_header_stops_calling_everything_a_weekly_rental(db):
     panel = build_shop_embed(_settings(db), set(), None, panel=True, items=_items(2))
     assert "Weekly rentals ·" not in panel.description
     assert panel.footer.text.startswith("Perk prices are per week")
+
+
+def test_page_options_label_each_page_by_what_is_on_it(db):
+    """"Server Store" twice tells nobody which half they are picking.
+
+    So the store's labels carry their span, and the perk page names its
+    contents rather than saying "Perks" — a member should not have to open a
+    page to discover the refund button lives there.
+    """
+    from bot_modules.economy.shop import page_options
+
+    assert page_options(_items(20)) == [
+        ("🎁 Server Store · 1–10 of 20", "What this server sells itself"),
+        ("🎁 Server Store · 11–20 of 20", "What this server sells itself"),
+        ("✨ Perks & rentals", "Name, colour, icon, shield, gifting, refunds"),
+    ]
+    # A short final page reports its real span, not a rounded one.
+    assert page_options(_items(12))[1][0] == "🎁 Server Store · 11–12 of 12"
+    # One page is not a book: the caller renders no picker for a single entry.
+    assert len(page_options([])) == 1

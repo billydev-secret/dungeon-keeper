@@ -178,6 +178,32 @@ def shop_pages(items: list[ItemView] | None) -> list[tuple[str, int]]:
     return pages
 
 
+def page_options(items: list[ItemView] | None) -> list[tuple[str, str]]:
+    """``(label, description)`` per page, for the shop's jump-to picker.
+
+    The store's labels carry their span — "1–10 of 20" — because "Server Store"
+    twice over tells a member nothing about which half they are picking. The
+    perk page names what is on it rather than saying "Perks", so nobody has to
+    open it to find out the refund button lives there.
+    """
+    total = len(items or [])
+    out: list[tuple[str, str]] = []
+    for kind, index in shop_pages(items):
+        if kind == PAGE_STORE:
+            start = index * STORE_PAGE_SIZE + 1
+            end = min(total, (index + 1) * STORE_PAGE_SIZE)
+            out.append((
+                f"🎁 Server Store · {start}–{end} of {total}",
+                "What this server sells itself",
+            ))
+        else:
+            out.append((
+                "✨ Perks & rentals",
+                "Name, colour, icon, shield, gifting, refunds",
+            ))
+    return out
+
+
 def page_note(pages: list[tuple[str, int]], page: int) -> str:
     """The "Page 2 of 3 · Server Store · " prefix, or "" for a one-page shop.
 
