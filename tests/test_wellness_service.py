@@ -3,7 +3,7 @@
 Mirrors the test_activity_graphs.py / test_interaction_graph.py shape: pure
 helpers first, then a migrated SQLite fixture for the CRUD/state functions.
 Targets the uncovered branches called out in the task brief: cap CRUD edges,
-blackout edges (incl. midnight crossing), partner pairing/dissolution,
+blackout edges (incl. midnight crossing),
 weekly summary, streak transitions, notification preference resolution,
 and the multi-table opt-out garbage collection.
 """
@@ -548,7 +548,6 @@ def test_gc_opted_out_users_purges_all_related_tables(db_conn):
     )
     ws.ensure_streak(db_conn, 1, 100, "2026-05-30")
     ws.increment_streak_day(db_conn, 1, 100, "2026-05-31")
-    ws.create_partner_request(db_conn, 1, 100, 200)
     ws.record_away_sent(db_conn, 1, 100, 555, time.time())
     ws.insert_weekly_report(
         db_conn,
@@ -580,19 +579,13 @@ def test_gc_opted_out_users_purges_all_related_tables(db_conn):
         "wellness_slow_mode",
         "wellness_streaks",
         "wellness_streak_history",
-        "wellness_partners",
         "wellness_away_rate_limit",
         "wellness_weekly_reports",
     ]
     for t in tables:
-        if t == "wellness_partners":
-            row = db_conn.execute(
-                f"SELECT 1 FROM {t} WHERE user_a = ? OR user_b = ?", (100, 100)
-            ).fetchone()
-        else:
-            row = db_conn.execute(
-                f"SELECT 1 FROM {t} WHERE user_id = ?", (100,)
-            ).fetchone()
+        row = db_conn.execute(
+            f"SELECT 1 FROM {t} WHERE user_id = ?", (100,)
+        ).fetchone()
         assert row is None, f"row still present in {t}"
 
 
@@ -1073,67 +1066,6 @@ def test_add_exempt_channel_upsert_replaces_label(db_conn):
     ws.add_exempt_channel(db_conn, 1, 555, "second")
     rows = ws.list_exempt_channels(db_conn, 1)
     assert (555, "second") in rows
-
-
-# ── Partners ─────────────────────────────────────────────────────────
-
-
-def test_create_partner_request_self_pair_rejected(db_conn):
-    result = ws.create_partner_request(db_conn, 1, 100, 100)
-    assert result is None
-
-
-def test_create_partner_request_orders_users_consistently(db_conn):
-    p1 = ws.create_partner_request(db_conn, 1, 200, 100)
-    assert p1 is not None
-    # user_a is always the smaller id
-    assert p1.user_a == 100 and p1.user_b == 200
-    # Trying to recreate (regardless of direction) yields None
-    assert ws.create_partner_request(db_conn, 1, 100, 200) is None
-
-
-def test_accept_partner_request_changes_status(db_conn):
-    p = ws.create_partner_request(db_conn, 1, 100, 200)
-    assert p is not None and p.status == "pending"
-    assert ws.accept_partner_request(db_conn, p.id) is True
-    after = ws.get_partnership(db_conn, p.id)
-    assert after is not None and after.status == "accepted"
-    # Re-accepting already-accepted request returns False
-    assert ws.accept_partner_request(db_conn, p.id) is False
-
-
-def test_dissolve_partnership(db_conn):
-    p = ws.create_partner_request(db_conn, 1, 100, 200)
-    assert p is not None
-    assert ws.dissolve_partnership(db_conn, p.id) is True
-    assert ws.get_partnership(db_conn, p.id) is None
-    assert ws.dissolve_partnership(db_conn, p.id) is False
-
-
-def test_list_partnerships_accepted_only_flag(db_conn):
-    p = ws.create_partner_request(db_conn, 1, 100, 200)
-    assert p is not None
-    # Pending → not returned with accepted_only=True
-    assert ws.list_partnerships(db_conn, 1, 100, accepted_only=True) == []
-    # Pending → returned with accepted_only=False
-    assert len(ws.list_partnerships(db_conn, 1, 100, accepted_only=False)) == 1
-    ws.accept_partner_request(db_conn, p.id)
-    assert len(ws.list_partnerships(db_conn, 1, 100, accepted_only=True)) == 1
-
-
-def test_partner_other_method(db_conn):
-    p = ws.create_partner_request(db_conn, 1, 100, 200)
-    assert p is not None
-    assert p.other(100) == 200
-    assert p.other(200) == 100
-
-
-def test_remove_user_partnerships_deletes_both_sides(db_conn):
-    ws.create_partner_request(db_conn, 1, 100, 200)
-    ws.create_partner_request(db_conn, 1, 100, 300)
-    n = ws.remove_user_partnerships(db_conn, 1, 100)
-    assert n == 2
-    assert ws.list_partnerships(db_conn, 1, 100, accepted_only=False) == []
 
 
 # ── Away rate limit + message editor ─────────────────────────────────

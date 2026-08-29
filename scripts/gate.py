@@ -61,8 +61,18 @@ FULL_RUN_FILES = {
 FULL_RUN_PREFIXES = (
     "src/bot_modules/core/",  # app_context, db_utils, xp_system — imported everywhere
     "src/bot_modules/models/",
-    "src/dungeonkeeper/",  # bot entrypoint / bootstrap
 )
+
+# src/dungeonkeeper/ (the bootstrap) is deliberately NOT a full-run prefix.
+#
+# Nearly every feature ship touches __main__.py to register its cog, loop, or
+# persistent view — Member Info, Mahjong, Survivor, Music, Advisor and the
+# no-contact sweep all did — so keeping it in FULL_RUN_PREFIXES made the full
+# suite the *ordinary* price of shipping a feature. Its real failure modes are
+# (a) an import/name error, which ruff+pyright catch on every commit, and
+# (b) a wiring omission, which the tests that read __main__.py assert
+# (see _bootstrap_targets); CI's full run stays the backstop for the rest,
+# exactly as the scoping preamble above says.
 
 # Migrations are the full-run trigger only when an *existing* one is edited.
 #
@@ -158,6 +168,24 @@ def _test_files() -> list[Path]:
     ]
 
 
+def _bootstrap_targets(all_tests: list[Path]) -> set[str]:
+    """Tests that read or import the bootstrap — the mapping for src/dungeonkeeper/.
+
+    A wiring test proves its feature is registered by opening __main__.py (or
+    importing dungeonkeeper), so a content scan finds every such assertion.
+    Both markers are required: "dungeonkeeper" alone also matches logger names
+    and the dungeonkeeper.db filename in ~11 unrelated files.
+    utf-8 explicitly: the remote runner decodes as cp1252 otherwise, and any
+    test file with an em-dash would crash the scan there.
+    """
+    hits: set[str] = set()
+    for p in all_tests:
+        text = p.read_text(encoding="utf-8", errors="ignore")
+        if "dungeonkeeper" in text and "__main__" in text:
+            hits.add(str(p.relative_to(ROOT)))
+    return hits
+
+
 def _matches(test_basename: str, token: str) -> bool:
     # segment match: token must be a whole _-delimited run within the name
     return f"_{token}_" in f"_{test_basename}_"
@@ -185,6 +213,7 @@ def select_tests(changed: list[str], new: set[str] | None = None) -> tuple[list[
 
     all_tests = _test_files()
     targets: set[str] = set()
+    bootstrap_hits: set[str] | None = None  # computed once, on first bootstrap path
     unmapped: list[str] = []
 
     for c in changed:
@@ -197,6 +226,16 @@ def select_tests(changed: list[str], new: set[str] | None = None) -> tuple[list[
         toks = _tokens_for(c)
         if c.startswith("src/web_server/"):
             targets.update(str(p.relative_to(ROOT)) for p in (TESTS / "web").glob("test_*.py"))
+        if c.startswith("src/dungeonkeeper/"):
+            # '__main__' tokens map to nothing; the content scan is the mapping —
+            # and an empty scan must still land in unmapped, not vanish silently.
+            if bootstrap_hits is None:
+                bootstrap_hits = _bootstrap_targets(all_tests)
+            if bootstrap_hits:
+                targets.update(bootstrap_hits)
+            else:
+                unmapped.append(c)
+            continue
         hits = {
             str(p.relative_to(ROOT))
             for p in all_tests

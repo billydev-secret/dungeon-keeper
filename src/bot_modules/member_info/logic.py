@@ -150,8 +150,7 @@ _FEATURE_SPECS: tuple[_FeatureSpec, ...] = (
         out_text="Opted out.",
         unset_text="Not set up.",
         # NOT "Wellness settings": the only member-facing entry point in
-        # Discord is the opt-in wizard (`_SettingsView` in wellness_cog is
-        # defined but never instantiated — dormant, and the spec says so), and
+        # Discord is the opt-in wizard, and
         # it re-asks timezone and enforcement rather than showing what you
         # have. Member settings live on the dashboard's Wellness panel. The
         # label says what the button actually does.

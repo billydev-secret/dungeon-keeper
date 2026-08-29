@@ -331,7 +331,6 @@ def _dm_user(level: str) -> WellnessUser:
         opted_in_at=1.0,
         opted_out_at=None,
         paused_until=None,
-        cooldown_until=None,
         last_nudge_at=None,
     )
 

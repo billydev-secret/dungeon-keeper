@@ -253,7 +253,6 @@ const SECTIONS = [
       { id: "wellness-caps",      label: "Caps",       module: "./panels/wellness-caps.js", help: "help-wellness" },
       { id: "wellness-blackouts", label: "Blackouts",  module: "./panels/wellness-blackouts.js", help: "help-wellness" },
       { id: "wellness-away",      label: "Away",       module: "./panels/wellness-away.js", help: "help-wellness" },
-      { id: "wellness-partners",  label: "Partners",   module: "./panels/wellness-partners.js", help: "help-wellness" },
       { id: "wellness-history",   label: "History",    module: "./panels/wellness-history.js", help: "help-wellness" },
     ],
   },

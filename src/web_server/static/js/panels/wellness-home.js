@@ -55,12 +55,6 @@ export function mount(container) {
         </div>
 
         <div class="card">
-          <div class="stat-label">Partners</div>
-          <div class="stat-value">${d.partners_count}${d.pending_partners_count ? ` <span class="w-pending">(${d.pending_partners_count} pending)</span>` : ""}</div>
-          <a href="#/wellness-partners" class="w-card-link">Manage</a>
-        </div>
-
-        <div class="card">
           <div class="stat-label">Away</div>
           <div class="stat-value">${d.away_enabled ? "On" : "Off"}</div>
           <a href="#/wellness-away" class="w-card-link">Configure</a>

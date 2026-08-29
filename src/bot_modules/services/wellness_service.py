@@ -23,7 +23,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 # ---------------------------------------------------------------------------
 
 # Selectable levels. "cooldown" was removed 2026-07-30: as a *level* it was
-# never enforced (cooldown_until had no reader), so it was Gentle with
+# never enforced (its cooldown_until column had no reader, and migration 189
+# dropped it), so it was Gentle with
 # different copy — a preference the bot didn't keep. Stored legacy rows still
 # behave as before via wellness_enforcement._enforcement_to_action; the value
 # just can't be picked anymore. The COOLDOWN *action* (the breather message on
@@ -32,7 +33,6 @@ ENFORCEMENT_LEVELS: tuple[str, ...] = ("gentle", "slow_mode", "gradual")
 NOTIFICATION_PREFS: tuple[str, ...] = ("ephemeral", "dm", "both")
 CAP_SCOPES: tuple[str, ...] = ("global", "channel", "category", "voice")
 CAP_WINDOWS: tuple[str, ...] = ("hourly", "daily", "weekly")
-PARTNER_STATUSES: tuple[str, ...] = ("pending", "accepted")
 
 DEFAULT_ENFORCEMENT = "gradual"
 DEFAULT_NOTIFICATIONS = "both"
@@ -67,7 +67,16 @@ WEEKEND_MASK = 32 + 64  # Sat+Sun
 
 
 def init_wellness_tables(conn: sqlite3.Connection) -> None:
-    """Create all wellness_* tables. Idempotent — safe to call on every startup."""
+    """Create all wellness_* tables. Idempotent — safe to call on every startup.
+
+    Two legacy columns (wellness_users.cooldown_until,
+    wellness_config.crisis_resource_url) are deliberately still created here
+    even though migration 189 drops them: the web server bootstraps this
+    schema WITHOUT applying migrations (server.py), and a plain
+    ``ALTER TABLE ... DROP COLUMN`` aborts the whole chain on a DB where the
+    column never existed. Every bootstrap path therefore creates them, and
+    189 drops them exactly once, on every path.
+    """
 
     conn.execute(
         """
@@ -85,7 +94,7 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             opted_in_at            REAL,
             opted_out_at           REAL,
             paused_until           REAL,
-            cooldown_until         REAL,
+            cooldown_until         REAL,  -- legacy; migration 189 drops it.
             last_nudge_at          REAL,
             PRIMARY KEY (guild_id, user_id)
         )
@@ -235,28 +244,6 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
 
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS wellness_partners (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id     INTEGER NOT NULL,
-            user_a       INTEGER NOT NULL,
-            user_b       INTEGER NOT NULL,
-            requester_id INTEGER NOT NULL,
-            status       TEXT NOT NULL DEFAULT 'pending',
-            created_at   REAL NOT NULL,
-            accepted_at  REAL,
-            UNIQUE (guild_id, user_a, user_b)
-        )
-        """
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_wellness_partners_a ON wellness_partners (guild_id, user_a)"
-    )
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_wellness_partners_b ON wellness_partners (guild_id, user_b)"
-    )
-
-    conn.execute(
-        """
         CREATE TABLE IF NOT EXISTS wellness_away_rate_limit (
             guild_id     INTEGER NOT NULL,
             user_id      INTEGER NOT NULL,
@@ -307,6 +294,7 @@ def init_wellness_tables(conn: sqlite3.Connection) -> None:
             role_id                INTEGER NOT NULL DEFAULT 0,
             channel_id             INTEGER NOT NULL DEFAULT 0,
             active_list_message_id INTEGER NOT NULL DEFAULT 0,
+            crisis_resource_url    TEXT NOT NULL DEFAULT '',  -- legacy; migration 189 drops it.
             default_enforcement    TEXT NOT NULL DEFAULT 'gradual'
         )
         """
@@ -439,7 +427,6 @@ class WellnessUser:
     opted_in_at: float | None
     opted_out_at: float | None
     paused_until: float | None
-    cooldown_until: float | None
     last_nudge_at: float | None
 
     @classmethod
@@ -458,7 +445,6 @@ class WellnessUser:
             opted_in_at=row["opted_in_at"],
             opted_out_at=row["opted_out_at"],
             paused_until=row["paused_until"],
-            cooldown_until=row["cooldown_until"],
             last_nudge_at=row["last_nudge_at"],
         )
 
@@ -563,8 +549,7 @@ def opt_out_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> None:
         """
         UPDATE wellness_users
            SET opted_out_at = ?,
-               paused_until = NULL,
-               cooldown_until = NULL
+               paused_until = NULL
          WHERE guild_id = ? AND user_id = ?
         """,
         (time.time(), guild_id, user_id),
@@ -711,10 +696,6 @@ def gc_opted_out_users(
             (gid, uid),
         )
         conn.execute(
-            "DELETE FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)",
-            (gid, uid, uid),
-        )
-        conn.execute(
             "DELETE FROM wellness_away_rate_limit WHERE guild_id = ? AND user_id = ?",
             (gid, uid),
         )
@@ -740,8 +721,6 @@ class WellnessConfig:
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> WellnessConfig:
-        # Pre-2026-07-30 DBs carry an orphaned crisis_resource_url column;
-        # SELECT * returns it and from_row simply ignores it.
         return cls(
             guild_id=int(row["guild_id"]),
             role_id=int(row["role_id"]),
@@ -1606,121 +1585,6 @@ def is_channel_exempt(conn: sqlite3.Connection, guild_id: int, channel_id: int) 
         (guild_id, channel_id),
     ).fetchone()
     return row is not None
-
-
-# ---------------------------------------------------------------------------
-# Partners
-# ---------------------------------------------------------------------------
-
-
-def _ordered_pair(a: int, b: int) -> tuple[int, int]:
-    return (a, b) if a < b else (b, a)
-
-
-@dataclass
-class WellnessPartner:
-    id: int
-    guild_id: int
-    user_a: int
-    user_b: int
-    requester_id: int
-    status: str
-    created_at: float
-    accepted_at: float | None
-
-    @classmethod
-    def from_row(cls, row: sqlite3.Row) -> WellnessPartner:
-        return cls(
-            id=int(row["id"]),
-            guild_id=int(row["guild_id"]),
-            user_a=int(row["user_a"]),
-            user_b=int(row["user_b"]),
-            requester_id=int(row["requester_id"]),
-            status=str(row["status"]),
-            created_at=float(row["created_at"]),
-            accepted_at=row["accepted_at"],
-        )
-
-    def other(self, user_id: int) -> int:
-        return self.user_b if user_id == self.user_a else self.user_a
-
-
-def create_partner_request(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    requester_id: int,
-    target_id: int,
-) -> WellnessPartner | None:
-    """Create a pending partner request. Returns None if a request already exists."""
-    if requester_id == target_id:
-        return None
-    a, b = _ordered_pair(requester_id, target_id)
-    existing = conn.execute(
-        "SELECT * FROM wellness_partners WHERE guild_id = ? AND user_a = ? AND user_b = ?",
-        (guild_id, a, b),
-    ).fetchone()
-    if existing:
-        return None
-    conn.execute(
-        """
-        INSERT INTO wellness_partners (guild_id, user_a, user_b, requester_id, status, created_at)
-        VALUES (?, ?, ?, ?, 'pending', ?)
-        """,
-        (guild_id, a, b, requester_id, time.time()),
-    )
-    row = conn.execute(
-        "SELECT * FROM wellness_partners WHERE guild_id = ? AND user_a = ? AND user_b = ?",
-        (guild_id, a, b),
-    ).fetchone()
-    return WellnessPartner.from_row(row) if row else None
-
-
-def accept_partner_request(conn: sqlite3.Connection, partner_id: int) -> bool:
-    cur = conn.execute(
-        "UPDATE wellness_partners SET status = 'accepted', accepted_at = ? WHERE id = ? AND status = 'pending'",
-        (time.time(), partner_id),
-    )
-    return (cur.rowcount or 0) > 0
-
-
-def dissolve_partnership(conn: sqlite3.Connection, partner_id: int) -> bool:
-    cur = conn.execute("DELETE FROM wellness_partners WHERE id = ?", (partner_id,))
-    return (cur.rowcount or 0) > 0
-
-
-def get_partnership(
-    conn: sqlite3.Connection, partner_id: int
-) -> WellnessPartner | None:
-    row = conn.execute(
-        "SELECT * FROM wellness_partners WHERE id = ?", (partner_id,)
-    ).fetchone()
-    return WellnessPartner.from_row(row) if row else None
-
-
-def list_partnerships(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    user_id: int,
-    *,
-    accepted_only: bool = True,
-) -> list[WellnessPartner]:
-    query = "SELECT * FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)"
-    params: list = [guild_id, user_id, user_id]
-    if accepted_only:
-        query += " AND status = 'accepted'"
-    query += " ORDER BY id"
-    rows = conn.execute(query, params).fetchall()
-    return [WellnessPartner.from_row(r) for r in rows]
-
-
-def remove_user_partnerships(
-    conn: sqlite3.Connection, guild_id: int, user_id: int
-) -> int:
-    cur = conn.execute(
-        "DELETE FROM wellness_partners WHERE guild_id = ? AND (user_a = ? OR user_b = ?)",
-        (guild_id, user_id, user_id),
-    )
-    return cur.rowcount or 0
 
 
 # ---------------------------------------------------------------------------

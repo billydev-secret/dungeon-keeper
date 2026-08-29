@@ -7,7 +7,6 @@ Most endpoints require the user to have opted in. We seed with
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,7 +15,6 @@ from bot_modules.services.wellness_service import (
     add_cap,
     add_blackout,
     arm_slow_mode,
-    create_partner_request,
     opt_in_user,
 )
 
@@ -176,53 +174,6 @@ def test_away_returns_state_when_opted_in(authed_client, fake_ctx):
     assert body["opted_in"] is True
     assert body["enabled"] is False
     assert "max_len" in body
-
-
-# ── /partners ────────────────────────────────────────────────────────
-
-
-def test_partners_empty_for_new_user(authed_client):
-    assert authed_client.get("/api/wellness/partners").json() == {"partnerships": []}
-
-
-def test_partners_resolves_other_user_display_name(authed_client, fake_ctx):
-    _opt_in(fake_ctx, user_id=1)
-    _opt_in(fake_ctx, user_id=2)
-    with open_db(fake_ctx.db_path) as conn:
-        create_partner_request(conn, fake_ctx.guild_id, requester_id=1, target_id=2)
-
-    # Attach a guild so display name resolution works
-    other = MagicMock()
-    other.id = 2
-    other.display_name = "Buddy"
-
-    auth_user = MagicMock()
-    auth_user.id = 1
-    auth_user.bot = False
-    auth_user.display_name = "tester"
-    auth_user.guild_permissions = MagicMock(value=0x8)
-    role = MagicMock(id=0, name="@everyone")
-    role.is_default = MagicMock(return_value=True)
-    auth_user.roles = [role]
-
-    guild = MagicMock()
-    guild.id = fake_ctx.guild_id
-    guild.members = [auth_user, other]
-    guild.get_member = MagicMock(
-        side_effect=lambda uid: {1: auth_user, 2: other}.get(int(uid))
-    )
-
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=guild)
-    fake_ctx.bot = bot
-
-    body = authed_client.get("/api/wellness/partners").json()
-    assert len(body["partnerships"]) == 1
-    p = body["partnerships"][0]
-    assert p["other_id"] == 2
-    assert p["other_name"] == "Buddy"
-    assert p["is_requester"] is True
-    assert p["status"] == "pending"
 
 
 # ── /history ─────────────────────────────────────────────────────────
