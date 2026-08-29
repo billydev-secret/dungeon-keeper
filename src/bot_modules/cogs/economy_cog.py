@@ -663,6 +663,29 @@ class _PinSubmitModal(discord.ui.Modal, title="Pin a Message"):
         await self.cog.do_pin_submit(interaction, str(self.text.value))
 
 
+class _SponsorSubmitModal(discord.ui.Modal, title="Sponsor a Question"):
+    """The question a member pays to put forward; a mod reviews it first.
+
+    `/bank sponsor` takes the question as a command argument, but a shop
+    control has nowhere to type one — so the shop collects it here and both
+    paths land in ``do_sponsor_submit``.
+    """
+
+    question: discord.ui.TextInput = discord.ui.TextInput(
+        label="Your question",
+        style=discord.TextStyle.paragraph,
+        max_length=400,
+        placeholder="A mod reviews it before it runs, and your name goes on it.",
+    )
+
+    def __init__(self, cog: EconomyCog) -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.do_sponsor_submit(interaction, str(self.question.value))
+
+
 class _ThemeSubmitModal(discord.ui.Modal, title="Buy a Themed Day"):
     """A theme name plus what people should do with it; a mod reviews both."""
 
@@ -1292,7 +1315,7 @@ class _RefundConfirmView(_MemberScopedView):
 #: because "Pick one…" over a shield and a raffle ticket says nothing.
 _SECTION_PLACEHOLDER = {
     SECTION_COSMETICS: "Rent or customize a perk…",
-    SECTION_SERVER: "Lease a server feature…",
+    SECTION_SERVER: "Pick a server feature…",
     SECTION_GAMES: "Buy a shield or raffle tickets…",
 }
 
@@ -1496,6 +1519,37 @@ class _ShopView(_MemberScopedView):
                 button.callback = self._make_rent_callback("voice_style")
                 held_voice = ""
             actions.append((button, PERK_BLURBS["voice_style"], held_voice))
+        if section == SECTION_SERVER and sponsor_enabled(settings):
+            button = discord.ui.Button(
+                label="💬 Sponsor a question",
+                style=discord.ButtonStyle.primary,
+                custom_id="econ_shop_sponsor",
+            )
+            button.callback = self._make_modal_callback(_SponsorSubmitModal)
+            actions.append((
+                button, "your question as the question of the day", "",
+            ))
+        if section == SECTION_SERVER and pin_enabled(settings):
+            button = discord.ui.Button(
+                label="📌 Pin a message",
+                style=discord.ButtonStyle.primary,
+                custom_id="econ_shop_pin",
+            )
+            button.callback = self._make_modal_callback(_PinSubmitModal)
+            actions.append((button, "your message pinned for a day", ""))
+        if section == SECTION_SERVER and theme_enabled(settings):
+            # Shipped as `/bank theme` only, so the shop never listed it — and
+            # a product a member can only reach by knowing a command's name is
+            # one most of them never find.
+            button = discord.ui.Button(
+                label="🎭 Themed day",
+                style=discord.ButtonStyle.primary,
+                custom_id="econ_shop_theme",
+            )
+            button.callback = self._make_modal_callback(_ThemeSubmitModal)
+            actions.append((
+                button, "name the day's theme — a mod approves it", "",
+            ))
         if section == SECTION_GAMES and raffle_svc.raffle_enabled(settings):
             button = discord.ui.Button(
                 label="🎟️ Tickets",
@@ -1580,6 +1634,20 @@ class _ShopView(_MemberScopedView):
     def _make_shield_callback(self):
         async def _cb(interaction: discord.Interaction) -> None:
             await self.cog.do_buy_shield(interaction, self.settings, self.guild)
+
+        return _cb
+
+    def _make_modal_callback(self, modal_cls):
+        """Open one of the consumables' submit modals.
+
+        A modal has to be the FIRST response to an interaction, so these open
+        it directly rather than routing through the command's enable check —
+        the control only exists when that check already passed, and the
+        modal's own submit handler re-checks before taking any money.
+        """
+
+        async def _cb(interaction: discord.Interaction) -> None:
+            await interaction.response.send_modal(modal_cls(self.cog))
 
         return _cb
 
@@ -2701,14 +2769,16 @@ class EconomyCog(commands.Cog):
 
     # ── sponsor a QOTD ───────────────────────────────────────────────────
 
-    @bank.command(
-        name="sponsor",
-        description="Pay to put your question forward as a question of the day.",
-    )
-    @app_commands.describe(question="Your question — a mod reviews it before it runs")
-    async def bank_sponsor(
+    async def do_sponsor_submit(
         self, interaction: discord.Interaction, question: str
     ) -> None:
+        """Escrow the price, queue the question, post the mod-approval card.
+
+        Shared by `/bank sponsor` and the shop's Server features picker, which
+        collects the question in a modal instead of a command argument. Both
+        re-check the gate: a shop opened before an admin switched sponsoring
+        off would otherwise take the money.
+        """
         assert interaction.guild is not None
         guild = interaction.guild
         member = interaction.user
@@ -2761,28 +2831,6 @@ class EconomyCog(commands.Cog):
 
     # ── pin of the day ───────────────────────────────────────────────────
 
-    @bank.command(
-        name="pin",
-        description="Pay to pin a short message for a day — a mod approves it first.",
-    )
-    async def bank_pin(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        guild = interaction.guild
-        member = interaction.user
-        assert isinstance(member, discord.Member)
-
-        settings = await self._settings_or_refuse(interaction, guild.id)
-        if settings is None:
-            return
-        if not pin_enabled(settings):
-            await interaction.response.send_message(
-                "❌ Pinning a message isn't enabled here.", ephemeral=True
-            )
-            return
-        # A modal must be the FIRST response to the interaction (can't defer
-        # first), so the enable check above runs before we open it.
-        await interaction.response.send_modal(_PinSubmitModal(self))
-
     async def do_pin_submit(
         self, interaction: discord.Interaction, message: str
     ) -> None:
@@ -2828,28 +2876,6 @@ class EconomyCog(commands.Cog):
         )
 
     # ── flash themes ─────────────────────────────────────────────────────
-
-    @bank.command(
-        name="theme",
-        description="Pay to set the theme for a day — a mod approves it first.",
-    )
-    async def bank_theme(self, interaction: discord.Interaction) -> None:
-        assert interaction.guild is not None
-        guild = interaction.guild
-        member = interaction.user
-        assert isinstance(member, discord.Member)
-
-        settings = await self._settings_or_refuse(interaction, guild.id)
-        if settings is None:
-            return
-        if not theme_enabled(settings):
-            await interaction.response.send_message(
-                "❌ Buying a themed day isn't enabled here.", ephemeral=True
-            )
-            return
-        # A modal must be the FIRST response to the interaction (can't defer
-        # first), so the enable check above runs before we open it.
-        await interaction.response.send_modal(_ThemeSubmitModal(self))
 
     async def do_theme_submit(
         self, interaction: discord.Interaction, title: str, blurb: str
