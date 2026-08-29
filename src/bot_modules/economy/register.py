@@ -16,7 +16,7 @@ a ``resolve_name`` callable so it never touches the gateway itself.
 
 The channel lives in the ``econ_`` config (``register_channel_id``); unset (0)
 means the feature is off. ``register_cursor_id`` is the bot-managed drain
-cursor (same bookkeeping pattern as ``leaderboard_message_id``).
+cursor (same bookkeeping pattern as ``guide_message_id``).
 """
 
 from __future__ import annotations

@@ -395,12 +395,6 @@ class EconSettings:
     # button on it.
     guide_channel_id: int = 0
     guide_message_id: int = 0
-    # RETIRED 2026-08-18 by the merge above: zeroed on first boot after it
-    # (EconomyCog._merge_panels_once) and read by nothing. Kept as fields so a
-    # guild whose bot has not restarted yet still loads, and so the one-shot
-    # can see what it has to clean up.
-    leaderboard_channel_id: int = 0
-    leaderboard_message_id: int = 0
     # Same pattern for the persistent perk-shop panel (/bank post-shop;
     # buttons are DynamicItems so they survive restarts).
     shop_channel_id: int = 0
