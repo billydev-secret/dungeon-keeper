@@ -1993,6 +1993,126 @@ def query_nsfw_gender_activity(
     return labels, gender_counts
 
 
+#: Display order for the tagger's vocabulary, and — via each label's *position
+#: in this list* — the palette slot it is drawn in.  Taxonomic rather than by
+#: frequency, so the two chest labels and the two genitalia labels sit next to
+#: their counterpart and a reader can compare them without hunting across the
+#: legend.
+#:
+#: The position is what makes a series' colour stable.  Colouring by the index
+#: within a *result* would repaint half the chart whenever a narrower window or
+#: a channel filter dropped one label out of the middle: BUTTOCKS_EXPOSED moves
+#: from slot 4 to slot 3 and changes hue, having done nothing.  So the emitted
+#: series carries its taxonomy index and the panel colours from that, not from
+#: its own enumeration.
+#:
+#: ANUS_EXPOSED is last because the palette has six slots and this list has
+#: seven entries, so whatever sits at the end is drawn in the overflow neutral.
+#: It is the one label in the vocabulary the detector has never once emitted in
+#: production (0 rows against 682 tagged), which makes it the honest one to put
+#: where the colours run out. If it ever starts appearing, the tail wants
+#: folding into an "Other" band instead — see the note on SERIES_OVERFLOW in
+#: charts.js.
+#:
+#: Mirrors ``nsfw_classifier_service.DEFAULT_LABEL_SET``, which is a frozenset
+#: and so cannot supply an order itself; a drift test pins the two together,
+#: because a new label appended by the detector would otherwise land at the
+#: tail and silently shift every colour after it.  A label missing from here is
+#: still reported (appended, sorted) rather than dropped — the vocabulary is
+#: the detector's, not ours.
+TAG_ORDER = [
+    "FEMALE_BREAST_EXPOSED",
+    "MALE_BREAST_EXPOSED",
+    "FEMALE_GENITALIA_EXPOSED",
+    "MALE_GENITALIA_EXPOSED",
+    "BUTTOCKS_EXPOSED",
+    "SEX_ACT",
+    "ANUS_EXPOSED",
+]
+
+
+def query_nsfw_tag_activity(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    *,
+    utc_offset_hours: float = 0,
+    channel_ids: list[int] | None = None,
+) -> tuple[list[str], dict[str, list[int]]]:
+    """
+    Query tagged-image counts per time bucket, grouped by NudeNet's top label.
+
+    Returns (labels, {top_label: [count_per_bucket]}).
+
+    Unlike :func:`query_nsfw_gender_activity` this does **not** discover NSFW
+    channels and filter to them.  ``nsfw_classifications`` only holds rows for
+    channels the tagger actually ran in — age-gated ones *and* spoiler-required
+    ones, which Discord need not age-gate — so the table is already scoped and
+    re-deriving that scope here would silently drop the second set.
+    *channel_ids* is therefore a caller's narrowing filter, never the boundary.
+
+    Rows with no ``top_label`` are excluded rather than bucketed as 'unknown'.
+    Marqo writes a verdict for every image it sees; NudeNet writes a label only
+    where it ran *and* found something.  An 'unknown' band would therefore be
+    dominated by images outside this report's scope entirely, which is a
+    different fact from "tagged, but nothing qualified".
+
+    Pre-swap rows (``marqo_score IS NULL``, migration 147) are excluded to match
+    ``/api/moderation/nsfw-tags``.  Their *labels* are perfectly good — NudeNet
+    wrote them the same way it does now, so the exclusion is not the
+    two-meanings-of-explicit argument that governs the verdict columns.  It is
+    consistency: the two reports describe the same table side by side and are
+    documented as showing the same labels, so a total that silently disagrees
+    is worse than four dropped rows.  Four, in production, all of them older
+    than any window shorter than 12 months.
+    """
+    now = datetime.now(timezone.utc)
+    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
+    offset_secs = int(utc_offset_hours * 3600)
+
+    bucket_expr = _strftime_expr(
+        resolution, col="created_at", since_ts=since_ts, utc_offset_secs=offset_secs
+    )
+
+    params: list[object] = [guild_id, since_ts]
+    channel_filter = ""
+    if channel_ids:
+        placeholders = ", ".join("?" for _ in channel_ids)
+        channel_filter = f"AND channel_id IN ({placeholders})"
+        params.extend(channel_ids)
+
+    rows = conn.execute(
+        f"""
+        SELECT
+            {bucket_expr} AS bucket,
+            top_label AS label,
+            COUNT(*) AS cnt
+        FROM nsfw_classifications
+        WHERE guild_id = ? AND created_at >= ?
+            AND top_label IS NOT NULL AND top_label != ''
+            AND marqo_score IS NOT NULL
+            {channel_filter}
+        GROUP BY bucket, label
+        """,
+        params,
+    ).fetchall()
+
+    counts_by_label: dict[str, dict[str, int]] = {}
+    for r in rows:
+        lbl = str(r["label"])
+        counts_by_label.setdefault(lbl, {})[str(r["bucket"])] = int(r["cnt"])
+
+    labels = [label for _, label in bucket_sequence]
+    ordered = [t for t in TAG_ORDER if t in counts_by_label]
+    ordered += sorted(t for t in counts_by_label if t not in TAG_ORDER)
+
+    tag_counts: dict[str, list[int]] = {
+        t: [counts_by_label[t].get(key, 0) for key, _ in bucket_sequence]
+        for t in ordered
+    }
+    return labels, tag_counts
+
+
 @_serialized_render
 def render_nsfw_gender_chart(
     labels: list[str],

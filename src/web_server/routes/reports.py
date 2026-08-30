@@ -39,6 +39,7 @@ from web_server.schemas import (
     InviteEffectivenessResponse,
     JoinTimesResponse,
     NsfwGenderResponse,
+    NsfwTagMixResponse,
     OneSidedAttentionResponse,
     QualityScoreResponse,
     RetentionResponse,
@@ -218,6 +219,52 @@ async def nsfw_gender(
             "channel_id": channel_id,
             "include_bots": include_bots,
         },
+        _q,
+    )
+
+
+# ── NSFW tag mix ─────────────────────────────────────────────────────────
+
+
+@router.get("/nsfw-tag-mix", response_model=NsfwTagMixResponse)
+async def nsfw_tag_mix(
+    request: Request,
+    resolution: Literal["day", "week", "month"] = "week",
+    channel_id: str | None = None,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Which labels the tagger is finding, bucketed over time.
+
+    Admin-gated, unlike its gender sibling on the same panel: these rows are a
+    body-part inventory of members' uploads, and /api/moderation/nsfw-tags —
+    the other reader of this table — is admin-only for exactly that reason.
+    Widening it to moderators because it now shares a page would be a real
+    change in who can see what, so the gate travels with the data.
+
+    Scope is whatever the tagger ran over: age-gated channels *and*
+    spoiler-required ones, which Discord need not age-gate. The panel's caption
+    says so — an unqualified "tags over time" would read as server-wide.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    channel_ids = [int(channel_id)] if channel_id else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
+            return reports_data.get_nsfw_tag_mix_data(
+                conn,
+                guild_id,
+                resolution,
+                tz,
+                channel_ids,
+            )
+
+    return await cached_run_query(
+        "nsfw-tag-mix",
+        guild_id,
+        {"resolution": resolution, "channel_id": channel_id},
         _q,
     )
 

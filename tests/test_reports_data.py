@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from pathlib import Path
 
 import pytest
 
@@ -9,7 +10,9 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.interaction_graph import init_interaction_tables, record_interactions
 from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
 from bot_modules.services.channel_rollup import build_resolver
-from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_interaction_series, get_one_sided_attention_data
+from bot_modules.services.activity_graphs import TAG_ORDER
+from bot_modules.services.nsfw_classifier_service import DEFAULT_LABEL_SET
+from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_interaction_series, get_nsfw_tag_mix_data, get_one_sided_attention_data
 from tests.db_template import migrated_db
 
 
@@ -513,3 +516,185 @@ def test_interaction_series_drops_members_whose_every_pair_is_floored(ig_conn):
 
     data = get_interaction_series(ig_conn, guild_id=1)
     assert {n["user_id"] for n in data["nodes"]} == {"1", "2"}
+
+
+# ── NSFW tag mix ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def tag_conn(tmp_path):
+    path = tmp_path / "tags.db"
+    migrated_db(path)
+    with open_db(path) as c:
+        yield c
+
+
+def _classify(conn, message_id: int, label: str | None, *, guild_id: int = 1) -> None:
+    conn.execute(
+        """
+        INSERT INTO nsfw_classifications
+            (message_id, attachment_id, guild_id, channel_id, verdict,
+             marqo_score, top_label, top_score, model, threshold, label_set,
+             inference_ms, bytes, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (message_id, 1, guild_id, 999, 1, 0.9, label, 0.8, "320n", 0.5, "",
+         10, 2048, int(time.time()) - 60),
+    )
+    conn.commit()
+
+
+def test_tag_mix_gives_each_series_a_plain_english_name(tag_conn):
+    _classify(tag_conn, 1, "FEMALE_BREAST_EXPOSED")
+    _classify(tag_conn, 2, "MALE_GENITALIA_EXPOSED")
+
+    data = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)
+
+    names = {s["label"]: s["display"] for s in data["series"]}
+    assert names == {
+        "FEMALE_BREAST_EXPOSED": "Female chest",
+        "MALE_GENITALIA_EXPOSED": "Male genitalia",
+    }
+
+
+def test_tag_mix_names_both_chest_labels_symmetrically(tag_conn):
+    """The spoiler rule treats the two chest labels identically (CHEST_LABELS).
+
+    Calling one a "breast" and the other a "chest" in a report read
+    side-by-side would imply a distinction the code does not make.
+    """
+    _classify(tag_conn, 1, "FEMALE_BREAST_EXPOSED")
+    _classify(tag_conn, 2, "MALE_BREAST_EXPOSED")
+
+    data = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)
+
+    assert [s["display"] for s in data["series"]] == ["Female chest", "Male chest"]
+
+
+def test_tag_mix_titlecases_a_label_it_has_no_name_for(tag_conn):
+    _classify(tag_conn, 1, "ZZ_SOMETHING_NEW")
+
+    data = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)
+
+    assert data["series"][0]["display"] == "Zz something new"
+
+
+def test_tag_mix_assigns_no_colour(tag_conn):
+    """Tags have no inherent colour, so the panel hands them out from the
+    validated categorical palette. A colour here would silently win over it."""
+    _classify(tag_conn, 1, "SEX_ACT")
+
+    data = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)
+
+    assert "color" not in data["series"][0]
+
+
+def test_tag_mix_carries_the_window_label(tag_conn):
+    _classify(tag_conn, 1, "SEX_ACT")
+
+    assert get_nsfw_tag_mix_data(tag_conn, 1, "week", 0.0)["window_label"] == "Last 12 Weeks"
+    assert get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)["window_label"] == "Last 30 Days"
+
+
+def test_tag_mix_with_no_tagged_images_still_describes_its_window(tag_conn):
+    data = get_nsfw_tag_mix_data(tag_conn, 1, "month", 0.0)
+
+    assert data["series"] == []
+    assert len(data["labels"]) == 12
+    assert data["window_label"] == "Last 12 Months"
+
+
+def test_tag_mix_passes_a_channel_filter_through(tag_conn):
+    _classify(tag_conn, 1, "SEX_ACT")
+
+    assert get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0, [999])["series"]
+    assert get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0, [123])["series"] == []
+
+
+def test_tag_mix_colour_slot_survives_a_window_that_drops_a_label(tag_conn):
+    """The whole point of the fixed vocabulary order.
+
+    Colouring by position in the returned array would move BUTTOCKS_EXPOSED
+    every time a narrower window or a channel filter dropped one of the labels
+    that sort before it — repainting a series that did nothing.
+    """
+    _classify(tag_conn, 1, "FEMALE_BREAST_EXPOSED")
+    _classify(tag_conn, 2, "MALE_BREAST_EXPOSED")
+    _classify(tag_conn, 3, "FEMALE_GENITALIA_EXPOSED")
+    _classify(tag_conn, 4, "BUTTOCKS_EXPOSED")
+    full = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)
+    crowded = {s["label"]: s["order"] for s in full["series"]}
+
+    # A window holding only the two outer labels: everything between them is gone.
+    sparse_conn_labels = {"FEMALE_BREAST_EXPOSED", "BUTTOCKS_EXPOSED"}
+    tag_conn.execute(
+        "DELETE FROM nsfw_classifications WHERE top_label NOT IN (?, ?)",
+        tuple(sorted(sparse_conn_labels)),
+    )
+    tag_conn.commit()
+    sparse = {s["label"]: s["order"] for s in
+              get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)["series"]}
+
+    assert sparse["BUTTOCKS_EXPOSED"] == crowded["BUTTOCKS_EXPOSED"]
+    # ...and it is emphatically not the array index it would have had.
+    assert sparse["BUTTOCKS_EXPOSED"] != 1
+
+
+def test_tag_mix_order_matches_the_vocabulary_position(tag_conn):
+    _classify(tag_conn, 1, "FEMALE_BREAST_EXPOSED")
+    _classify(tag_conn, 2, "SEX_ACT")
+
+    orders = {s["label"]: s["order"] for s in
+              get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)["series"]}
+
+    assert orders == {
+        "FEMALE_BREAST_EXPOSED": TAG_ORDER.index("FEMALE_BREAST_EXPOSED"),
+        "SEX_ACT": TAG_ORDER.index("SEX_ACT"),
+    }
+
+
+def test_tag_mix_sends_an_unknown_label_to_the_overflow_slot(tag_conn):
+    _classify(tag_conn, 1, "ZZ_SOMETHING_NEW")
+
+    order = get_nsfw_tag_mix_data(tag_conn, 1, "day", 0.0)["series"][0]["order"]
+
+    assert order == len(TAG_ORDER)
+
+
+def test_tag_vocabulary_matches_the_detector_exactly():
+    """A drift guard, not a tautology.
+
+    TAG_ORDER doubles as the palette map, so a label the detector gains and
+    this list lacks would land in the overflow neutral — and a label removed
+    from the detector would shift every colour after it. MALE_BREAST_EXPOSED
+    was added to the vocabulary once already, with the bare-chest rule.
+    """
+    assert set(TAG_ORDER) == set(DEFAULT_LABEL_SET)
+    assert len(TAG_ORDER) == len(set(TAG_ORDER)), "a label is listed twice"
+
+
+def test_the_palette_overflow_slot_holds_the_label_production_never_sees():
+    """Seven labels, six palette colours: whatever sits last is drawn in the
+    grey overflow neutral.
+
+    That slot is given to ANUS_EXPOSED, the one label the detector has never
+    emitted on this server (0 rows against 682 tagged) — so in practice every
+    label that actually occurs gets a real, validated colour. If that stops
+    being true the tail wants folding into an "Other" band instead, which is
+    what charts.js tells callers past six series to do.
+    """
+    import re
+
+    charts = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "web_server" / "static" / "js" / "charts.js"
+    ).read_text(encoding="utf-8")
+    palette = re.search(r"export const ROLE_COLORS = \[(.*?)\]", charts, re.S)
+    assert palette, "ROLE_COLORS is gone from charts.js"
+    n_colors = len(re.findall(r"#[0-9a-fA-F]{6}", palette.group(1)))
+
+    overflowing = [t for t in TAG_ORDER if TAG_ORDER.index(t) >= n_colors]
+    assert overflowing == ["ANUS_EXPOSED"], (
+        f"{overflowing} would be drawn in the overflow neutral; only the label "
+        f"production never sees belongs there"
+    )

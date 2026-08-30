@@ -217,11 +217,15 @@ All three are validated on read *and* on write, through the same `is_valid_thres
 
 ## Reports
 
-Two admin-gated panels under Moderation → Audit Logs:
+Two admin-gated panels under Moderation → Image Guard, plus one breakdown on a Reports panel:
 
 **Image Tags** (`/api/moderation/nsfw-tags`) — wherever the tagger runs, which since the bare-chest rule is age-gated **and** spoiler-required channels. Volume, verdict split, tag distribution with the mean verdict score per tag, and a 0.1-wide score histogram. Its two headline numbers are the **disagreements**: images the verdict engine called explicit that the tagger saw nothing in (the NudeNet blind spot that prompted the swap), and the reverse.
 
 **Blocked Images** (`/api/moderation/nsfw-blocks`) — every channel. Who, where, which gate, what score, removed or log-only. This is how a false positive gets found and put right.
+
+**NSFW by Tag** (`/api/reports/nsfw-tag-mix`) — the same labels as Image Tags, but bucketed over time rather than summed: day/week/month resolution, one series per label, ordered by a fixed taxonomy. Each series carries its **index in that vocabulary**, and the panel colours from that rather than from its own enumeration of the response — a window or channel filter that drops one label out of the middle would otherwise repaint every series after it. Seven labels against six palette slots means the last one is drawn in the overflow neutral; that slot is given to `ANUS_EXPOSED`, the only label the detector has never emitted in production, so every label that actually occurs gets a validated colour. A test pins the vocabulary against `DEFAULT_LABEL_SET`, because a label added to the detector would otherwise land at the tail and shift colours silently. It is the *second* breakdown of the **NSFW by Gender** panel (Reports → Moderation) rather than a panel of its own, selected by that page's `Breakdown` control.
+
+That placement is the one thing worth stating carefully. The gender half of that panel reads `messages` and is moderator-gated; this half is a body-part inventory of members' uploads and stays **admin-gated**, exactly like the two panels above — "these rows are never surfaced to non-admins in any view" is not weakened by the view moving. A moderator sees the option greyed out rather than hidden, matching how the nav renders an adminOnly entry, and a deep link to the tag view falls back to the gender view instead of rendering a 403. Pre-swap rows (`marqo_score IS NULL`) are excluded here too. Their labels are sound — the two-meanings-of-explicit argument governs the verdict columns, not the vocabulary — but the two reports sit beside each other describing the same table, so matching Image Tags exactly is worth more than the four rows it costs in production. Untagged rows are excluded rather than shown as an "unknown" band: Marqo writes a verdict for every image while NudeNet writes a label only where it ran, so an unknown band would be dominated by images outside the report's scope entirely — a different fact from "tagged, but nothing qualified".
 
 ## Cost
 
@@ -252,4 +256,4 @@ Scope: `needs_labels` tagging a channel Discord does not age-gate, general chat 
 
 `tests/test_post_monitoring.py` — spoiler and SFW block reporting, including the unreadable-image case and a report failure not resurrecting the message. For the bare-chest rule at the gate: a bare male chest deleted despite a clean verdict, a female chest on the same rule, a covered chest left alone, **a classifier that raises deleting rather than escaping** (the fail-open bug), and a raising classifier not aborting the remaining attachments.
 
-`tests/web/test_nsfw_report_routes.py` — both report endpoints plus the legacy Image Guard summary: the disagreement counts, the score histogram's top-bucket fold, pre-swap rows excluded from all three, snowflake-safe string ids, surface filtering, and guild scoping.
+`tests/web/test_nsfw_report_routes.py` — all three report endpoints plus the legacy Image Guard summary: the tag series' bucketing, its exclusion of untagged rows, and **a moderator getting 403 on it while the gender breakdown beside it returns 200**; the disagreement counts, the score histogram's top-bucket fold, pre-swap rows excluded from all three, snowflake-safe string ids, surface filtering, and guild scoping.

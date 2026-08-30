@@ -291,10 +291,17 @@ export function makeBarChart(canvas, { labels, data, title: _title, xLabel, yLab
 // `title` kept in the signature — panels still pass it for their own HTML
 // caption — but charts.js no longer draws it, hence the underscore.
 export function makeStackedBarChart(canvas, { labels, series, title: _title }) {
-  const datasets = series.map((s) => ({
-    label: s.gender,
+  const datasets = series.map((s, i) => ({
+    // `label` as well as `gender`: this started life as the gender chart's
+    // builder, but the same panel now stacks NudeNet's tag vocabulary through
+    // it. Matching makeLineChart's accessor order keeps one series shape
+    // working in both display modes.
+    label: s.gender || s.label,
     data: s.counts,
-    backgroundColor: s.color || GENDER_COLORS[s.gender] || SERIES_OVERFLOW,
+    // Genders have one fixed colour each; an open-ended category list has
+    // none, so it falls through to the validated palette rather than to the
+    // overflow neutral — which would have painted every tag the same grey.
+    backgroundColor: s.color || GENDER_COLORS[s.gender] || seriesColor(i),
     // A 2px gap in the surface colour between stacked segments, matching
     // activity.js. Without it two adjacent segments in a weak-CVD pair share a
     // hard edge with nothing separating them.

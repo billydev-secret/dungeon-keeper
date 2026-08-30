@@ -78,6 +78,30 @@ class NsfwGenderResponse(BaseModel):
     series: list[GenderSeriesSchema]
 
 
+# ── NSFW tag mix ─────────────────────────────────────────────────────────
+
+
+class TagSeriesSchema(BaseModel):
+    #: The detector's own label, e.g. FEMALE_BREAST_EXPOSED. Kept alongside the
+    #: display name so a caller can key off something stable.
+    label: str
+    display: str
+    #: Index in the tagger's fixed vocabulary — the series' palette slot, so a
+    #: label keeps its colour when a window changes which labels are present.
+    order: int
+    counts: list[int]
+
+
+class NsfwTagMixResponse(BaseModel):
+    resolution: str
+    window_label: str
+    labels: list[str]
+    #: No colour field, unlike the gender series: tags have no inherent colour
+    #: and are an open-ended list, so the panel assigns them from the validated
+    #: categorical palette instead.
+    series: list[TagSeriesSchema]
+
+
 # ── Message rate ─────────────────────────────────────────────────────────
 
 

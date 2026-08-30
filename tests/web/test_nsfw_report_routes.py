@@ -11,7 +11,11 @@ from __future__ import annotations
 
 import time
 
+from fastapi.testclient import TestClient
+
 from bot_modules.core.db_utils import open_db
+from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
+from web_server.server import create_app
 from bot_modules.services.nsfw_classifier_service import (
     ACTION_LOGGED,
     ACTION_REMOVED,
@@ -249,3 +253,101 @@ def test_image_guard_metrics_excludes_pre_swap_rows(open_client, fake_ctx):
     assert data["classified"] == 1
     assert data["explicit"] == 1
     assert [row["label"] for row in data["labels"]] == ["SEX_ACT"]
+
+
+# ── /api/reports/nsfw-tag-mix ────────────────────────────────────────────
+#
+# The tag series behind the NSFW report's "By tag" breakdown. It shares a panel
+# with the gender split, which is moderator-gated — so the gate on this one is
+# the thing most worth pinning down: sharing a page must not widen who can read
+# a body-part inventory of members' uploads.
+
+TAG_MIX = "/api/reports/nsfw-tag-mix"
+
+
+def test_tag_mix_buckets_labels_over_time(open_client, fake_ctx):
+    gid = fake_ctx.guild_id
+    _classify(fake_ctx.db_path, gid, message_id=1, score=0.9, verdict=True,
+              label="FEMALE_BREAST_EXPOSED")
+    _classify(fake_ctx.db_path, gid, message_id=2, score=0.9, verdict=True,
+              label="FEMALE_BREAST_EXPOSED")
+    _classify(fake_ctx.db_path, gid, message_id=3, score=0.9, verdict=True,
+              label="BUTTOCKS_EXPOSED")
+
+    data = open_client.get(f"{TAG_MIX}?resolution=day").json()
+
+    by_label = {s["label"]: s for s in data["series"]}
+    assert sum(by_label["FEMALE_BREAST_EXPOSED"]["counts"]) == 2
+    assert sum(by_label["BUTTOCKS_EXPOSED"]["counts"]) == 1
+    assert by_label["FEMALE_BREAST_EXPOSED"]["display"] == "Female chest"
+    # The palette slot travels with the series, so a narrower window cannot
+    # repaint it.
+    assert by_label["FEMALE_BREAST_EXPOSED"]["order"] == 0
+    assert data["window_label"] == "Last 30 Days"
+
+
+def test_tag_mix_skips_images_the_tagger_never_labelled(open_client, fake_ctx):
+    """An explicit-but-untagged image is outside this report's scope, not a
+    zero-label detection — the same distinction the tags report's blind-spot
+    counters exist to make."""
+    gid = fake_ctx.guild_id
+    _classify(fake_ctx.db_path, gid, message_id=1, score=0.95, verdict=True)
+    _classify(fake_ctx.db_path, gid, message_id=2, score=0.9, verdict=True,
+              label="SEX_ACT")
+
+    data = open_client.get(f"{TAG_MIX}?resolution=day").json()
+
+    assert [s["label"] for s in data["series"]] == ["SEX_ACT"]
+
+
+def test_tag_mix_ignores_pre_swap_rows_like_its_sibling_report(open_client, fake_ctx):
+    """Image Tags drops NULL-marqo_score rows; this shows "the same labels", so
+    it must drop them too or the two panels disagree with no explanation."""
+    gid = fake_ctx.guild_id
+    _classify(fake_ctx.db_path, gid, message_id=1, score=0.9, verdict=True,
+              label="BUTTOCKS_EXPOSED")
+    _classify(fake_ctx.db_path, gid, message_id=2, score=None, verdict=True,
+              label="BUTTOCKS_EXPOSED")
+
+    tag_mix = open_client.get(f"{TAG_MIX}?resolution=day").json()
+    tags = open_client.get("/api/moderation/nsfw-tags").json()
+
+    assert sum(tag_mix["series"][0]["counts"]) == 1
+    assert sum(tag_mix["series"][0]["counts"]) == tags["tagged"]
+
+
+def test_tag_mix_empty_on_fresh_db_but_keeps_its_axis(open_client):
+    data = open_client.get(f"{TAG_MIX}?resolution=week").json()
+
+    assert data["series"] == []
+    assert len(data["labels"]) == 12
+
+
+def test_tag_mix_rejects_an_unknown_resolution(open_client):
+    assert open_client.get(f"{TAG_MIX}?resolution=fortnight").status_code == 422
+
+
+def test_tag_mix_is_admin_gated_where_its_panel_is_only_moderator_gated(fake_ctx):
+    """The gender half of the same panel loads for a moderator; this half must not.
+
+    /api/moderation/nsfw-tags is admin-only because these rows describe members'
+    uploads. Putting a second reader of the same table on a moderator-visible
+    page is exactly how that gate would get lost.
+    """
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    client = TestClient(create_app(fake_ctx, auth=auth))
+    cookie = auth.create_session_cookie(
+        user_id=7,
+        username="mod",
+        access_token="token",
+        permission_bits=0x2000,  # MANAGE_MESSAGES → moderator, not admin
+        guild_id=fake_ctx.guild_id,
+        guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
+    )
+    client.cookies.set(SESSION_COOKIE, cookie)
+    try:
+        assert client.get(TAG_MIX).status_code == 403
+        # The sibling breakdown on the same panel stays readable.
+        assert client.get("/api/reports/nsfw-gender").status_code == 200
+    finally:
+        client.close()

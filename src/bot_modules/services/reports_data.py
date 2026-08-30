@@ -21,6 +21,7 @@ from bot_modules.core.bot_exclusion import bot_filter_clause
 from bot_modules.services.channel_rollup import ChannelResolver, build_resolver
 from bot_modules.services.activity_graphs import (
     MIN_BAND_PERIODS,
+    TAG_ORDER,
     OverlayPeriod,
     Resolution,
     overlay_weekday_name,
@@ -29,6 +30,7 @@ from bot_modules.services.activity_graphs import (
     query_message_activity,
     query_message_histogram,
     query_nsfw_gender_activity,
+    query_nsfw_tag_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram_with_breakdown,
     xp_histogram_window_label,
@@ -220,6 +222,92 @@ def get_nsfw_gender_data(
         "resolution": resolution,
         "window_label": _WINDOW_LABELS.get(resolution, resolution),
         "media_only": media_only,
+        "labels": labels,
+        "series": series,
+    }
+
+
+# ---------------------------------------------------------------------------
+# NSFW tag mix
+# ---------------------------------------------------------------------------
+
+
+#: Plain-English names for the detector's vocabulary.  Both chest labels read
+#: as "chest" rather than one "breast" and one "chest": the spoiler rule
+#: (``nsfw_classifier_service.CHEST_LABELS``) treats them identically, and
+#: naming them asymmetrically in a report read side-by-side would suggest a
+#: distinction the code does not make.
+_TAG_DISPLAY: dict[str, str] = {
+    "FEMALE_BREAST_EXPOSED": "Female chest",
+    "MALE_BREAST_EXPOSED": "Male chest",
+    "FEMALE_GENITALIA_EXPOSED": "Female genitalia",
+    "MALE_GENITALIA_EXPOSED": "Male genitalia",
+    "BUTTOCKS_EXPOSED": "Buttocks",
+    "ANUS_EXPOSED": "Anus",
+    "SEX_ACT": "Sex act",
+}
+
+
+def _tag_display(label: str) -> str:
+    """Title-case an unmapped label rather than showing SCREAMING_SNAKE_CASE."""
+    return _TAG_DISPLAY.get(label) or label.replace("_", " ").capitalize()
+
+
+class TagSeries(TypedDict):
+    label: str
+    display: str
+    #: Position in the tagger's fixed vocabulary order, which is the series'
+    #: palette slot. Emitted rather than left to the panel's own enumeration:
+    #: a window that drops one label out of the middle would otherwise repaint
+    #: every series after it.
+    order: int
+    counts: list[int]
+
+
+class NsfwTagMixData(TypedDict):
+    resolution: str
+    window_label: str
+    labels: list[str]
+    series: list[TagSeries]
+
+
+def get_nsfw_tag_mix_data(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    resolution: Resolution,
+    utc_offset_hours: float,
+    channel_ids: list[int] | None = None,
+) -> NsfwTagMixData:
+    """The tag half of the NSFW report: which labels the tagger is finding, over time.
+
+    No colours are assigned here — the validated palette lives in charts.js and
+    duplicating its hexes in Python would let the two drift.  What is emitted
+    instead is each series' ``order``: its index in the fixed vocabulary, which
+    the panel feeds to ``seriesColor``.  That keeps the palette on one side of
+    the wire and the taxonomy on the other, and it is what makes a label's
+    colour survive a change of resolution or channel filter.
+    """
+    labels, tag_counts = query_nsfw_tag_activity(
+        conn,
+        guild_id,
+        resolution,
+        utc_offset_hours=utc_offset_hours,
+        channel_ids=channel_ids,
+    )
+    series: list[TagSeries] = [
+        {
+            "label": t,
+            "display": _tag_display(t),
+            # An unfamiliar label sorts after the known vocabulary and lands in
+            # the overflow neutral, which is the correct signal for one.
+            "order": TAG_ORDER.index(t) if t in TAG_ORDER else len(TAG_ORDER),
+            "counts": c,
+        }
+        for t, c in tag_counts.items()
+    ]
+    return {
+        "resolution": resolution,
+        "window_label": _WINDOW_LABELS.get(resolution, resolution),
         "labels": labels,
         "series": series,
     }
