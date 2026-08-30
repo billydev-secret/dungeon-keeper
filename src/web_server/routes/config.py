@@ -4534,7 +4534,7 @@ async def update_guess_config(
             if body.max_guesses_per_round is not None:
                 set_guess_config_value(conn, guild_id, "guess_max_guesses_per_round", str(max(1, body.max_guesses_per_round)))
             if body.inactivity_ping_hours is not None:
-                set_guess_config_value(conn, guild_id, "guess_inactivity_ping_hours", str(max(0, min(720, body.inactivity_ping_hours))))
+                set_guess_config_value(conn, guild_id, "guess_inactivity_ping_hours", str(max(0, min(168, body.inactivity_ping_hours))))
         return {"ok": True}
 
     return await run_query(_q)

@@ -84,8 +84,8 @@ export function mount(container) {
               "The most guesses one member may make on a single round. Keep it low so nobody can simply try every answer.",
               { min: 1, max: 1000 })}
             ${num("inactivity_ping_hours", "Nudge After Silence (hours)", v.inactivity_ping_hours,
-              "When a round has gone this long with nobody guessing, the Required Role above is pinged once with a link back to it. Each round is nudged at most once. 0 turns the nudge off.",
-              { min: 0, max: 720 })}
+              "When a round has gone this long with nobody guessing, the Required Role above is pinged once with a link back to it. Each round is nudged at most once, and a round nobody has touched for over a week is left alone \u2014 so the nudge always points at something still in play. 0 turns the nudge off. Maximum 168 (one week).",
+              { min: 0, max: 168 })}
           </div>
 
           <div class="card">
@@ -145,7 +145,7 @@ export function mount(container) {
       ["submit_max_per_window", "Submissions Allowed Per Member", 1, 1000],
       ["submit_window_seconds", "Submission Window", 1, 86400],
       ["max_guesses_per_round", "Guesses Per Round, Per Member", 1, 1000],
-      ["inactivity_ping_hours", "Nudge After Silence", 0, 720],
+      ["inactivity_ping_hours", "Nudge After Silence", 0, 168],
     ];
 
     form.addEventListener("submit", async (e) => {

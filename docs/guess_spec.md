@@ -119,7 +119,7 @@ Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather 
 | `guess_channel_id` | unset | Where crops post and modals launch from |
 | `guess_guess_cooldown_seconds` | `60` | Per-user, per-round cooldown between guesses (`0` disables it) |
 | `guess_max_guesses_per_round` | `5` | Per-user, per-round total guess cap |
-| `guess_inactivity_ping_hours` | `0` | Hours a round may sit with no guesses before the Guess role is pinged once about it (`0` disables the nudge). See "Inactivity nudge" below |
+| `guess_inactivity_ping_hours` | `0` | Hours a round may sit with no guesses before the Guess role is pinged once about it (`0` disables the nudge). Bounded at `168` (one week) — the same ceiling the nudge itself applies, so the dial can't be set into a range that would never fire. See "Inactivity nudge" below |
 | `guess_last_nudged_round_id` | unset | Internal state, not an admin dial: the round this guild was last nudged about, so a long-unsolved round is only ever pinged once |
 | `guess_submit_max_per_window` | `5` | Per-user submission rate limit — max submissions per rolling window (in-memory, resets on restart) |
 | `guess_submit_window_seconds` | `3600` | Length of the submission rate-limit window |
@@ -147,13 +147,31 @@ Each tick, per guild:
   would be a bare bump;
 * the candidate is the **oldest** round that is unsolved, not soft-deleted, and
   not `answer_optout`, whose last activity — the round going up, or its newest
-  guess — is at least that many hours old;
+  guess — falls inside a window: at least the dial's hours old, and **no more
+  than `MAX_QUIET_HOURS` (168, one week) old**;
 * a round is nudged **at most once**, however long it stays unsolved. The last
   nudged round id is stored per guild in `guess_last_nudged_round_id` and
   excluded from the next search;
 * the id is recorded only **after** the message posts, so a send that fails
   (missing permissions, deleted channel) retries on the next tick rather than
   silently burning the round.
+
+The **one-week ceiling** (`MAX_QUIET_HOURS`) is what makes "oldest first" safe,
+and it was added on 2026-08-30 after the nudge pinged the role about a round
+abandoned in May: "quiet for **2704 hours**". The dial is a *minimum* silence,
+so with no maximum the search handed the ping to the most ancient unsolved round
+in the guild's history and kept it there. Worse, only one nudged id is
+remembered (`guess_last_nudged_round_id`), so each tick burned exactly one
+ancient round — production had 31 unsolved rounds from May queued ahead of
+everything recent, roughly a month of nudges before the loop would have reached
+a round anyone was still playing. Past the ceiling a round is not stale, it is
+over: it drops out of consideration permanently, which fixes both the ancient
+ping and the backlog walk in one clause. Those old rounds are otherwise left
+alone — they stay in the table, unsolved and unreachable by the nudge.
+
+A dial set above the ceiling would leave the window empty and nudge nothing; the
+panel, the config route and `settings_registry` all cap it at 168 so that state
+can only arise from a value stored under the old 720-hour bound.
 
 The message is plain content, not an embed — a role mention plus a jump link to
 the round, so the link previews. Mentions are allow-listed to that one role.
