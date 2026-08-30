@@ -607,8 +607,9 @@ def list_active_pool_ids(
 def board_sizes(settings: EconSettings) -> dict[str, int]:
     """The guild's configured personal-board size per board cadence.
 
-    Only daily/weekly draw a personal board; monthly is a guild-wide goal now
-    (its ``quest_board_monthly`` setting is inert and no longer read here).
+    Only daily/weekly draw a personal board; monthly is a guild-wide goal now,
+    so it has no board size at all (the old ``quest_board_monthly`` dial was
+    dropped rather than left as a number that changed nothing).
     """
     return {
         "daily": settings.quest_board_daily,

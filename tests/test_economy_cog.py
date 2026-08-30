@@ -2576,7 +2576,6 @@ def test_board_size_zero_round_trips_through_settings(db):
         loaded = load_econ_settings(conn, GUILD_ID)
     assert loaded.quest_board_daily == 0
     assert loaded.quest_board_weekly == 3
-    assert loaded.quest_board_monthly == 2  # untouched → default
 
 
 # ── photo-post event quest ──────────────────────────────────────────────────

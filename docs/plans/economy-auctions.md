@@ -150,9 +150,10 @@ kill-switch flag — the feature is off by absence, like bounties.
 2. **Settle loop — BUILT 2026-07-23.** `EconomyCog._auction_settle_loop`
    (`@tasks.loop(seconds=30)`) closes auctions past `ends_at` per guild and
    announces each, so an auction ends on time with no mod present.
-3. **Dashboard — TODO.** Auctions history panel + the config knobs
-   (`auction_min_bid` / `min_increment` / `soft_close_seconds` /
-   `max_duration_hours` aren't on the Sinks page yet) + the Statistics burn line.
+3. **Dashboard — the four config knobs BUILT 2026-08-29**, under *Live
+   Auctions* on the **Pricing** page (the priced dials left the Sinks page in
+   the shop split). Still TODO: the auctions history panel and the Statistics
+   burn line.
 4. **Docs — BUILT 2026-07-23** (this stage): economy_spec.md §, README slash
    reference, manual.html Help. INDEX.md classification + embed-style conformance
    pass still TODO.

@@ -328,6 +328,12 @@ function render(container, cfg) {
   `;
 }
 
+// Display order for the two lists the shop reads in `sort_order, id` order:
+// the icon catalog (whose picker shows only the first 24, by that order) and
+// the custom items. Bounded so a typo can't sort a row to the far end of the
+// integers — the catalogs are tens of rows, not thousands.
+const SORT_MAX = 9999;
+
 function iconRow(icon) {
   const bust = Date.now();
   const usedBadge = icon.in_use
@@ -348,6 +354,11 @@ function iconRow(icon) {
       <div class="field" style="margin:0;">
         <label>Price Per Week</label>
         <input type="number" data-price min="0" max="${DEFAULT_MAX}" step="1" value="${icon.price}" style="max-width:120px;" aria-label="Price Per Week" />
+      </div>
+      <div class="field" style="margin:0;">
+        <label>Order</label>
+        <input type="number" data-sort min="0" max="${SORT_MAX}" step="1" value="${icon.sort_order}" style="max-width:80px;" aria-label="Order" />
+        <div class="field-hint">Low numbers first; reload to see the new order.</div>
       </div>
       <label style="display:flex;gap:6px;align-items:center;">
         <input type="checkbox" data-enabled${enabledAttr} /> Offer in the shop
@@ -672,6 +683,13 @@ function wireCatalog(container, icons) {
         priceInput.focus();
         return;
       }
+      const sortInput = row.querySelector("[data-sort]");
+      const sortOrder = parseInt(sortInput.value, 10);
+      if (!Number.isFinite(sortOrder) || sortOrder < 0 || sortOrder > SORT_MAX) {
+        showStatus(rowStatus, false, `Order must be a whole number from 0 to ${SORT_MAX}`);
+        sortInput.focus();
+        return;
+      }
       btn.disabled = true;
       try {
         await request("PATCH", `/api/economy/icon-catalog/${id}`, {
@@ -679,6 +697,7 @@ function wireCatalog(container, icons) {
             name: nameInput.value.trim(),
             price,
             enabled: row.querySelector("[data-enabled]").checked,
+            sort_order: sortOrder,
           },
         });
         showStatus(rowStatus, true);
@@ -809,6 +828,32 @@ function itemRow(item, roleName) {
         <input type="number" data-limit min="1" step="1" placeholder="∞"
                value="${item.per_member_limit === null || item.per_member_limit === undefined ? "" : item.per_member_limit}" style="max-width:90px;" aria-label="Max Each" />
       </div>
+      <div class="field" style="margin:0;">
+        <label>Order</label>
+        <input type="number" data-sort min="0" max="${SORT_MAX}" step="1"
+               value="${item.sort_order || 0}" style="max-width:80px;" aria-label="Order" />
+        <div class="field-hint">Low numbers first.</div>
+      </div>
+      <div class="field" style="margin:0;">
+        <label>On Sale From</label>
+        <input type="datetime-local" data-from value="${fromEpoch(item.available_from)}"
+               style="max-width:200px;" aria-label="On Sale From" />
+        <div class="field-hint">Blank: on sale as soon as it is switched on.</div>
+      </div>
+      <div class="field" style="margin:0;">
+        <label>On Sale Until</label>
+        <input type="datetime-local" data-until value="${fromEpoch(item.available_until)}"
+               style="max-width:200px;" aria-label="On Sale Until" />
+        <div class="field-hint">Blank: no end date.</div>
+      </div>
+      <div class="field" style="margin:0;flex:1 1 260px;">
+        <label>Details</label>
+        <textarea data-description rows="2" maxlength="500" aria-label="Details"
+                  style="width:100%;">${esc(item.description || "")}</textarea>
+        <div class="field-hint">Only staff see this — it is copied onto the todo
+          card when someone buys a mod-todo item, so put the delivery instructions
+          here.</div>
+      </div>
       <span class="badge">${esc(ITEM_KINDS[item.kind] || item.kind)}</span>
       <span class="badge">${esc(ITEM_BILLING[item.billing] || item.billing)}</span>
       ${roleChip}${brokenRole}${soldOut}
@@ -824,6 +869,22 @@ function itemRow(item, roleName) {
       </div>
       <span data-row-status></span>
     </div>`;
+}
+
+/** A `datetime-local` value as epoch seconds; blank (or unparseable) as null. */
+function toEpoch(v) {
+  if (!v) return null;
+  const ms = Date.parse(v);
+  return Number.isNaN(ms) ? null : ms / 1000;
+}
+
+/** Epoch seconds as a `datetime-local` value in the admin's own timezone. */
+function fromEpoch(sec) {
+  if (!sec) return "";
+  const d = new Date(sec * 1000);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    + `T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 /** Read the optional whole-number fields back, treating blank as "no limit". */
@@ -897,19 +958,47 @@ function wireShopItems(container) {
         showStatus(rowStatus, false, `Price must be a whole number from 0 to ${DEFAULT_MAX}`);
         return;
       }
+      const sortInput = row.querySelector("[data-sort]");
+      const sortOrder = parseInt(sortInput.value, 10);
+      if (!Number.isFinite(sortOrder) || sortOrder < 0 || sortOrder > SORT_MAX) {
+        showStatus(rowStatus, false, `Order must be a whole number from 0 to ${SORT_MAX}`);
+        sortInput.focus();
+        return;
+      }
+      const availableFrom = toEpoch(row.querySelector("[data-from]").value);
+      const availableUntil = toEpoch(row.querySelector("[data-until]").value);
+      // The service refuses this too (400), but saying it here names the two
+      // boxes instead of surfacing an API message with no field attached.
+      if (availableFrom !== null && availableUntil !== null
+          && availableUntil <= availableFrom) {
+        showStatus(rowStatus, false, "On Sale Until must be after On Sale From");
+        return;
+      }
       btn.disabled = true;
       try {
         const current = (await api("/api/economy/shop-items"))
           .find((i) => String(i.id) === String(id));
         if (!current) throw new Error("That item is gone — reload the page.");
+        // The row is re-read so the fields with no input of their own (what
+        // buying it does, which role it grants) survive the save. Two of the
+        // keys that come back are the server's own — the id, and how many have
+        // sold — and the body model rejects anything it doesn't own, so they
+        // go before it is sent.
+        const body = { ...current };
+        delete body.id;
+        delete body.sold;
         await request("PATCH", `/api/economy/shop-items/${id}`, {
           body: {
-            ...current,
+            ...body,
             name: nameInput.value.trim(),
             blurb: row.querySelector("[data-blurb]").value.trim(),
             price,
+            description: row.querySelector("[data-description]").value.trim(),
             stock: optionalInt(row.querySelector("[data-stock]")),
             per_member_limit: optionalInt(row.querySelector("[data-limit]")),
+            available_from: availableFrom,
+            available_until: availableUntil,
+            sort_order: sortOrder,
             enabled: row.querySelector("[data-enabled]").checked,
             ask_note: row.querySelector("[data-ask-note]").checked,
           },

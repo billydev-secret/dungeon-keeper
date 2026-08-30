@@ -171,6 +171,8 @@ already taken, so the next session starts here rather than from zero:
 - Lapse is **§8 as written**: a text room hides for 14 days with its overwrites
   snapshotted (so re-renting restores the exact guest list) then deletes; a
   voice room deletes at once.
-- The dormant `price_voice_room` key is still unadopted. Decide adopt-or-
-  supersede explicitly when the feature is picked up — a config key whose reader
-  never shipped is a silent no-op.
+- The dormant `price_voice_room` / `price_text_room` keys were **dropped
+  2026-08-29** rather than left to decide later: a config key whose reader never
+  shipped is a silent no-op, and these two were still being priced on the
+  Statistics affordability card. Stage 6 prices itself when it is built. The
+  stored prod rows were left where they are — they load into nothing.
