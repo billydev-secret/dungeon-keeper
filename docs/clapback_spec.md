@@ -80,15 +80,33 @@ alongside the legacy singular `bye_player`.
 
 ### 2.2 Joining mid-game
 
-The submit panel carries a **🙋 Join next round** button for anyone not
-playing. It only queues (`pending_players`); admission happens at the next
-round boundary via `logic.admit_pending_players`, so a live round's matchups
-and answer count never shift underneath it. Admitted players start on **0
-points** and are announced in channel; anyone over `MAX_PLAYERS` is turned
-away out loud rather than silently dropped. Pressing Join during the **last**
-round would otherwise queue someone for a boundary that never arrives, so the
-game end calls `logic.drain_pending_players` and tells them the game is over
-instead of leaving them waiting.
+The submit panel carries a **🙋 Join now** button for anyone not playing, and
+`/games join` routes to the same rules. `logic.admit_player_now` decides which
+of two things happens, from `payload["phase"]`:
+
+- **Answers are open** (`submitting`) → the player is seated in *this* round
+  and the answer modal opens on the same press. Nothing is fixed yet at that
+  point: `create_matchups` is built from the answers dict after the window
+  closes, so a latecomer with an answer in is paired like anyone else. They
+  are announced in channel, because the panel's "Answers In *x*/*N*"
+  denominator is re-read every tick and would otherwise jump for no visible
+  reason.
+- **Anything else** (voting, revealing) → queued into `pending_players` for
+  the round boundary, where `logic.admit_pending_players` folds them in. There
+  is nothing to write mid-vote, and the matchups on screen are already set.
+
+Either way they start on **0 points**, seeded into `scores`, `clapbacks` *and*
+`scores_checkpoint` — the checkpoint is what a crash-resume rolls back to, and
+a joiner missing from it is rolled off the scoreboard. Anyone over
+`MAX_PLAYERS` is turned away out loud rather than silently dropped. Pressing
+Join during the **last** round would otherwise queue someone for a boundary
+that never arrives, so the game end calls `logic.drain_pending_players` and
+tells them the game is over instead of leaving them waiting.
+
+The button queued for the *next* round unconditionally until 2026-08-30. That
+was the safe reading of a harder problem — a live round's matchups must not
+shift — applied to a phase that has no matchups yet, and it made someone
+watching a prompt they had a clapback for sit the round out.
 
 ## 3. Bracketing (`logic.create_matchups`)
 

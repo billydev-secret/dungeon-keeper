@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 from bot_modules.games.utils import game_store
 from .game import QuickdrawGame, game_from_row
 
@@ -83,7 +84,7 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[QuickdrawGame]:
        OR (state = 'ACTIVE'   AND last_action_at   <= ?)
        OR (state = 'RESOLVED' AND resolved_at      <= ?)
         """,
-        (now - 60, now - 600, now - 300),
+        (now - CHALLENGE_RESPONSE_SECONDS, now - 600, now - 300),
     )
     return [game_from_row(r) for r in rows]
 

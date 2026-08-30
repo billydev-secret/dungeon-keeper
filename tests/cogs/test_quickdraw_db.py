@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from bot_modules.services.games_db import GamesDb
 from bot_modules.cogs.quickdraw import db as qdb
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 
 
 @pytest_asyncio.fixture
@@ -156,18 +157,29 @@ async def test_fetch_resolved_games(db):
     assert any(g.id == gid for g in games)
 
 
-async def test_fetch_sweepable_pending(db):
-    gid = await _create(db)
-    # Backdate created_at to look old
+async def _backdate(db, gid, seconds):
     import sqlite3 as _sqlite3
     with _sqlite3.connect(str(db._db_path)) as conn:
         conn.execute(
             "UPDATE quickdraw_games SET created_at = ? WHERE id = ?",
-            (time.time() - 120, gid),
+            (time.time() - seconds, gid),
         )
         conn.commit()
+
+
+async def test_fetch_sweepable_pending(db):
+    gid = await _create(db)
+    await _backdate(db, gid, CHALLENGE_RESPONSE_SECONDS + 60)
     games = await qdb.fetch_sweepable_games(db, time.time())
     assert any(g.id == gid for g in games)
+
+
+async def test_pending_challenge_stays_open_for_the_whole_window(db):
+    """Two minutes in used to be expired — the window is five minutes now."""
+    gid = await _create(db)
+    await _backdate(db, gid, 120)
+    games = await qdb.fetch_sweepable_games(db, time.time())
+    assert not any(g.id == gid for g in games)
 
 
 async def test_fetch_sweepable_active_timeout(db):

@@ -7,12 +7,17 @@ from typing import Awaitable, Callable
 import discord
 
 from bot_modules.core.utils import disable_all_items
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 
 log = logging.getLogger("dungeonkeeper.duels")
 
 
 class ChallengeView(discord.ui.View):
-    """Accept/Decline embed — target only, 60s timeout, NOT persistent."""
+    """Accept/Decline embed — target only, NOT persistent.
+
+    The timeout is :data:`CHALLENGE_RESPONSE_SECONDS`, the same number the
+    card counts down to and the expiry sweep uses.
+    """
 
     def __init__(
         self,
@@ -21,7 +26,7 @@ class ChallengeView(discord.ui.View):
         on_accept: Callable[[discord.Interaction, int], Awaitable[None]],
         on_decline: Callable[[discord.Interaction, int], Awaitable[None]],
     ) -> None:
-        super().__init__(timeout=60)
+        super().__init__(timeout=CHALLENGE_RESPONSE_SECONDS)
         self.game_id = game_id
         self.target_id = target_id
         self._on_accept = on_accept

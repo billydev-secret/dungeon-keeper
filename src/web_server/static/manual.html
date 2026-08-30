@@ -590,7 +590,7 @@
         <tr><td><code>/games play story</code></td><td><strong>Story Builder</strong> — players take turns adding one sentence each to a collaborative story</td></tr>
         <tr><td><code>/games play price</code></td><td><strong>Name Your Price</strong> — secretly bid what you'd charge for a scenario; reveal, then vote Most Reasonable and Most Unhinged</td></tr>
         <tr><td><code>/games play rushmore</code></td><td><strong>Mt. Rushmore Draft</strong> — draft your top-4 of a topic, then the room votes on the best board. Two modes via <code>mode:</code> — snake (turn-by-turn; your turn ping carries the pick button) or blitz (everyone picks at once, fastest fingers keep duplicates). Missed picks get a 60-second backfill window before boards go final</td></tr>
-        <tr><td><code>/games play clapback</code></td><td><strong>Clapback</strong> — head-to-head comedy matchups; the room votes the funnier answer. Points are your vote share (75% of the votes = 75 pts), and sweeping a matchup with 2+ votes is a CLAPBACK for +25. With an odd number of players one player sits the round out — they're told at the start of the round and aren't asked for an answer, and they're paid that round's average score; nobody sits out twice until everyone has sat out once. A 3-player game runs a full round-robin instead. Each vote button shows the answer it votes for, and anyone watching can press <strong>Join next round</strong> to jump in at the next round on 0 points</td></tr>
+        <tr><td><code>/games play clapback</code></td><td><strong>Clapback</strong> — head-to-head comedy matchups; the room votes the funnier answer. Points are your vote share (75% of the votes = 75 pts), and sweeping a matchup with 2+ votes is a CLAPBACK for +25. With an odd number of players one player sits the round out — they're told at the start of the round and aren't asked for an answer, and they're paid that round's average score; nobody sits out twice until everyone has sat out once. A 3-player game runs a full round-robin instead. Each vote button shows the answer it votes for, and anyone watching can press <strong>Join now</strong> to jump straight into the round that's taking answers — the writing box opens on the same press, and you start on 0 points. Press it while a matchup is being voted on and you're in from the next round instead</td></tr>
         <tr><td><code>/games play compliment</code></td><td><strong>Spin the Compliment</strong> — random pairings; everyone compliments their assigned member</td></tr>
         <tr><td><code>/games play legitlibs</code></td><td><strong>LegitLibs</strong> — mad-libs: fill blanks in a template, funniest result wins (classic and Quiplash-style modes). How many can play comes from the template itself — each player fills five to ten of its blanks — so once that many have joined, the lobby tells the next person it's full</td></tr>
       </tbody>
@@ -618,6 +618,10 @@
 
     <h3 id="games-duels">Duels &amp; Group Games</h3>
     <p>Real-time button games built on the same framework — duels are 1-v-1 challenges, group games run an open lobby then eliminate players each round. All <span class="perm perm-all">Everyone</span>.</p>
+
+    <p>A challenge card names the person you called out and gives them <strong>5 minutes</strong> to press
+      Accept or Decline. The card counts down live, so you can both see how long is left; once it runs
+      out the buttons stop working and the challenger can send a fresh one.</p>
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
@@ -1579,12 +1583,14 @@
 
     <p>Adding someone stops contact <strong>both ways</strong>, across every feature that can carry it:
       whispers and whisper replies, AMA questions and the DM you'd get when one is answered,
-      confession replies, Guess Who, Pen Pals matching, voice rooms, DM requests, and Risky Rolls.
+      confession replies, Guess Who, Pen Pals matching, voice rooms, DM requests, Risky Rolls, and
+      the notifications from <code>/bank pay</code> and <code>/bank gift</code>.
       If a feature can pass a message between two people, it is covered.</p>
 
     <p>Some of that is invisible on purpose. In <a href="#games">Risky Rolls</a>, for instance, the
       dice simply never pair the two of you up to ask and answer — there is no error, no missing
-      message, and nothing for either of you to notice.</p>
+      message, and nothing for either of you to notice. If they pay you or gift you a perk, the coins
+      or the perk still arrive, but you are never sent the note naming them.</p>
 
     <h3 id="no-contact-privacy">They are not told, and they cannot tell</h3>
 

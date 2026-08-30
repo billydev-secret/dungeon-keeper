@@ -902,6 +902,56 @@ async def test_public_pay_between_a_no_contact_pair_posts_nothing(ctx, db):
 
 
 @pytest.mark.asyncio
+async def test_private_pay_between_a_no_contact_pair_notifies_nobody(ctx, db):
+    """The gate CLAUDE.md makes a hard rule: the recipient's DM is contact.
+
+    The public receipt has been gated since 2026-08-27, but an ordinary
+    *private* payment still DM'd the recipient the sender's name and memo (and
+    fell back to a post in the bank channel), so the block was reachable
+    straight through. The money still moves and the sender's receipt is the
+    ordinary one, balance and all — there is nothing here he can tell apart
+    from paying anyone else.
+    """
+    from bot_modules.services.no_contact_service import add_pair
+
+    _enable(db)
+    _credit(db, 500, 500)
+    add_pair(db, GUILD_ID, 500, 900, created_by=900)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+
+    with _patch_projection() as (_apply, _revoke, notify):
+        await _pay(cog, interaction, _member(member_id=900, name="Bob"), 40, "hi")
+
+    notify.assert_not_awaited()
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert kwargs["embed"].footer.text == "Your balance: 460"
+    with open_db(db) as conn:
+        assert get_balance(conn, GUILD_ID, 900) == 40
+
+
+@pytest.mark.asyncio
+async def test_gift_between_a_no_contact_pair_notifies_nobody(ctx, db):
+    """Same rule, same shape: the perk lands, the beneficiary isn't told."""
+    from bot_modules.services.no_contact_service import add_pair
+
+    _enable(db)
+    _credit(db, 500, 50)
+    add_pair(db, GUILD_ID, 500, 900, created_by=900)
+    cog = _make_cog(ctx)
+    interaction = _interaction(_member(member_id=500, name="Alice"))
+
+    with _patch_projection() as (_apply, _revoke, notify):
+        await _gift(cog, interaction, _member(member_id=900, name="Bob"))
+
+    notify.assert_not_awaited()
+    rentals = _live_rentals(db)
+    assert len(rentals) == 1
+    assert rentals[0]["user_id"] == 500 and rentals[0]["beneficiary_id"] == 900
+
+
+@pytest.mark.asyncio
 async def test_public_pay_falls_back_quietly_where_the_bot_cannot_post(ctx, db):
     """Same silent downgrade as the no-contact case — that's what makes the
     no-contact case unremarkable."""

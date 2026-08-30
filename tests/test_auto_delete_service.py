@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import discord
 import pytest
@@ -380,17 +381,45 @@ class _StubPartial:
         self._channel.deleted.append(self.id)
 
 
+class _PinsIterator:
+    """What discord.py 2.6+ hands back from ``channel.pins()``."""
+
+    def __init__(self, channel: "_SweepChannel"):
+        self._channel = channel
+        self._ids = iter(sorted(channel.pinned))
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._channel.raise_on_pins is not None:
+            raise self._channel.raise_on_pins
+        try:
+            return SimpleNamespace(id=next(self._ids))
+        except StopIteration:
+            raise StopAsyncIteration from None
+
+
 class _SweepChannel:
     """Minimal channel for driving delete_tracked_messages_older_than."""
 
-    def __init__(self, *, raise_on_bulk=None, raise_on_individual=None):
+    def __init__(self, *, raise_on_bulk=None, raise_on_individual=None,
+                 pinned=(), raise_on_pins=None):
         self.id = 100
         self.name = "flash-channel"
         self.raise_on_bulk = raise_on_bulk
         self.raise_on_individual = raise_on_individual
+        self.pinned: set[int] = set(pinned)
+        self.raise_on_pins = raise_on_pins
+        self.pins_calls = 0
         self.bulk_attempts: list[list[int]] = []
         self.individual_attempts: list[int] = []
         self.deleted: list[int] = []
+
+    def pins(self, **kwargs):
+        del kwargs
+        self.pins_calls += 1
+        return _PinsIterator(self)
 
     def get_partial_message(self, message_id: int):
         return _StubPartial(message_id, self)
@@ -631,3 +660,75 @@ def test_retry_columns_migrated_onto_legacy_table(tmp_path):
             conn, 1, 100, cutoff_ts=9999.0, now_ts=9999.0
         )
     assert [mid for mid, _ in due] == [1001]
+
+
+# ── pinned messages are exempt ───────────────────────────────────────────
+#
+# The queue path used to delete by message id without ever asking whether the
+# message was pinned, while the history scan skipped pinned messages. That
+# split is what deleted a paid Flash Theme card out of #🔥│flash-channel an
+# hour into its 24-hour window (2026-08-29): the channel carries a one-hour
+# auto-delete rule, and the card was tracked at post time like any other bot
+# message.
+
+
+@pytest.mark.asyncio
+async def test_pinned_message_survives_the_sweep_and_stays_tracked(ad_db):
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+        track_auto_delete_message(conn, 1, 100, 1002, 100.0)
+    channel = _SweepChannel(pinned={1001})
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert channel.deleted == [1002]
+    # Kept, not dropped: unpinning it must hand it back to the sweep.
+    with open_db(ad_db) as conn:
+        left = [
+            r["message_id"]
+            for r in conn.execute("SELECT message_id FROM auto_delete_messages")
+        ]
+    assert left == [1001]
+
+
+@pytest.mark.asyncio
+async def test_unpinning_hands_the_message_back_to_the_sweep(ad_db):
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    channel = _SweepChannel(pinned={1001})
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+    assert channel.deleted == []
+
+    channel.pinned.clear()
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+    assert channel.deleted == [1001]
+
+
+@pytest.mark.asyncio
+async def test_unreadable_pins_skip_the_pass_rather_than_delete_blind(ad_db):
+    """Failing closed is the point — the alternative deletes something paid for."""
+    with open_db(ad_db) as conn:
+        track_auto_delete_message(conn, 1, 100, 1001, 100.0)
+    channel = _SweepChannel(raise_on_pins=_http_error(500))
+
+    queued, deleted, failed = await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert (queued, deleted, failed) == (0, 0, 0)
+    assert channel.deleted == []
+    # No attempt charged: the next tick retries at full budget.
+    row = _queue_state(ad_db)
+    assert row is not None and row["attempts"] == 0
+
+
+@pytest.mark.asyncio
+async def test_pins_are_read_once_per_sweep_not_once_per_message(ad_db):
+    with open_db(ad_db) as conn:
+        for mid in range(1001, 1006):
+            track_auto_delete_message(conn, 1, 100, mid, 100.0)
+    channel = _SweepChannel()
+
+    await _sweep(ad_db, channel, now_ts=1_000.0)
+
+    assert channel.pins_calls == 1
+    assert len(channel.deleted) == 5

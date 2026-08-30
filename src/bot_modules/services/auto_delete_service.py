@@ -636,6 +636,26 @@ async def _charge_delete_failure(
         await _dm_operator_about_abandoned(bot, channel, message_id, exc)
 
 
+#: Discord's own per-channel pin cap. Reading them costs one request, which is
+#: why the sweep asks once per pass rather than per message.
+_PIN_FETCH_LIMIT = 50
+
+
+async def _pinned_message_ids(channel: GuildTextLike) -> set[int] | None:
+    """The ids currently pinned in ``channel``, or ``None`` if Discord won't say.
+
+    ``None`` is not an empty set and callers must not treat it as one: a sweep
+    that cannot see the pins has to leave the channel alone rather than delete
+    blind. That is the whole lesson of the paid Flash Theme card this guard
+    exists for — the cost of a skipped pass is a minute's delay, and the cost
+    of a wrong delete is a member's money.
+    """
+    try:
+        return {msg.id async for msg in channel.pins(limit=_PIN_FETCH_LIMIT)}
+    except discord.HTTPException:
+        return None
+
+
 async def delete_tracked_messages_older_than(
     db_path: Path,
     guild_id: int,
@@ -660,6 +680,12 @@ async def delete_tracked_messages_older_than(
     rest of the queue. ``bot`` is only needed to DM the operator when a message
     exhausts its budget; ``now_ts`` pins the clock for the whole sweep and
     exists mainly so tests can drive the backoff schedule.
+
+    **Pinned messages are exempt**, matching what the history scan has always
+    done. This path deletes by bare message id and so used to have no idea a
+    message was pinned; the channel's pins are read once up front and
+    subtracted from every batch instead. They stay queued rather than being
+    dropped, so unpinning hands them straight back to the next sweep.
     """
     now = time.time() if now_ts is None else now_ts
 
@@ -672,10 +698,18 @@ async def delete_tracked_messages_older_than(
     if grand_total == 0:
         return 0, 0, 0
 
+    channel_name = getattr(channel, "name", str(channel.id))
+    pinned_ids = await _pinned_message_ids(channel)
+    if pinned_ids is None:
+        log.warning(
+            "Auto-delete #%s: couldn't read the pins; skipping this pass",
+            channel_name,
+        )
+        return 0, 0, 0
+
     start_time = time.monotonic()
     total_deleted = 0
     total_failed = 0
-    channel_name = getattr(channel, "name", str(channel.id))
 
     log.debug(
         "Auto-delete #%s: starting, %s messages due",
@@ -688,6 +722,13 @@ async def delete_tracked_messages_older_than(
             due = pop_due_auto_delete_message_ids(
                 conn, guild_id, channel.id, cutoff_ts, now_ts=now
             )
+
+        if pinned_ids:
+            # Filtered here rather than in the query: the ids come from
+            # Discord, not the DB. The rows stay put, so the next pass
+            # re-selects them and this filter empties `due`, which is what ends
+            # the drain loop for a channel whose whole backlog is pinned.
+            due = [pair for pair in due if pair[0] not in pinned_ids]
 
         if not due:
             break

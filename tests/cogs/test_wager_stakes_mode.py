@@ -337,7 +337,8 @@ async def test_over_the_cap_is_refused_with_the_real_number(db, sync_db_path):
 
 async def test_accepting_an_expired_challenge_says_it_timed_out(db, sync_db_path):
     """"LMAO that did not let me accept" — a click a second past the 60-second
-    window got "This challenge is no longer active", which reads like a bug."""
+    window got "This challenge is no longer active", which reads like a bug. The
+    window is five minutes now; the copy still has to say what happened."""
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
     gid = await hpdb.create_game(db, GUILD, CH, 1, 2, None, True)
@@ -347,7 +348,7 @@ async def test_accepting_an_expired_challenge_says_it_timed_out(db, sync_db_path
     await cog._handle_accept(interaction, gid)
 
     (text,) = interaction.response.send_message.await_args.args
-    assert "timed out" in text and "60 seconds" in text
+    assert "timed out" in text and "5 minutes" in text
 
 
 async def test_accepting_an_already_declined_challenge_says_so(db, sync_db_path):

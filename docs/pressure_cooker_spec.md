@@ -31,7 +31,7 @@ possible in Discord. Per-guild config (was `/pressure config`) lives on the web 
 - Pair cooldown check (canonicalised both directions): if cooldown is still running, the challenger sees the remaining hours/minutes.
 - If `stakes` is supplied, the text is validated against the same filter rules as nicknames (zero-width strip, length cap, denylist).
 
-On success, a public embed with **Accept** / **Decline** buttons posts in the channel. The buttons only respond to the target; everyone else gets an ephemeral rejection. The challenge embed lasts 60 seconds — if the target doesn't act, the next sweep marks it expired and the buttons disable.
+On success, a public embed with **Accept** / **Decline** buttons posts in the channel. The buttons only respond to the target; everyone else gets an ephemeral rejection. The challenge embed lasts `duels.db.CHALLENGE_RESPONSE_SECONDS` (5 minutes) and shows a live countdown to its own deadline — if the target doesn't act, the next sweep marks it expired and the buttons disable.
 
 ### Playing the game
 
@@ -63,7 +63,7 @@ If the winner doesn't click **Name the loser** within 5 minutes of the bust, the
 
 A sweep runs every 60 seconds and handles three lifecycles:
 
-- **Pending challenges over 60 seconds old** expire — the embed swaps to a "challenge expired" message and the buttons disable.
+- **Pending challenges past `CHALLENGE_RESPONSE_SECONDS` (5 minutes)** expire — the embed swaps to a "challenge expired" message and the buttons disable. The sweep's own cadence is unchanged at 60 seconds, so expiry lands within a minute of the deadline.
 - **Active games idle more than 5 minutes** (no pump in 300 seconds) are abandoned. A cooldown is applied to the pair so the loser can't immediately re-challenge.
 - **Resolved games where the winner hasn't named the loser within 5 minutes** transition to no-nick-set; the result embed updates accordingly.
 

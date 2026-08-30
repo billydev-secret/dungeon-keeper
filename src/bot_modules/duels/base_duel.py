@@ -21,10 +21,12 @@ from typing import Any, Awaitable, Callable
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 
 from . import db as duels_db
+from .db import CHALLENGE_RESPONSE_SECONDS
 from .base_game import BaseGame, _fmt_coins
 from .filters import (
     game_is_nick_stake,
@@ -241,7 +243,16 @@ class BaseDuel(BaseGame):
             inline=False,
         )
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
-        embed.set_footer(text="⏱️ 60 seconds to respond.")
+        # A live countdown, not a sentence stating a number. The old
+        # "60 seconds to respond." footer was still saying 60 a minute later,
+        # and a footer cannot carry a Discord timestamp at all — only the
+        # description and field values render `<t:…:R>`. The card is built
+        # immediately before it is sent, so "now" is the post time.
+        embed.add_field(
+            name="⏱️ Expires",
+            value=f"<t:{now_plus(CHALLENGE_RESPONSE_SECONDS)}:R>",
+            inline=False,
+        )
         return embed
 
     # ── View callbacks ────────────────────────────────────────────────────────
@@ -253,7 +264,8 @@ class BaseDuel(BaseGame):
     _STALE_CHALLENGE_REASONS = {
         "EXPIRED_PENDING": (
             "⏱️ That challenge timed out before you pressed — challenges expire "
-            "60 seconds after they're posted. Ask them to send another one."
+            f"{CHALLENGE_RESPONSE_SECONDS // 60} minutes after they're posted. "
+            "Ask them to send another one."
         ),
         "DECLINED": "❌ That challenge was already declined.",
         "ACTIVE": "▶️ That challenge has already been accepted — the game is running.",

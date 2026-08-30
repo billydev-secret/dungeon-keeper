@@ -46,6 +46,7 @@ from bot_modules.games_clapback.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
     admit_pending_players,
+    admit_player_now,
     calculate_bye_award,
     drain_pending_players,
     pick_round_bye,
@@ -343,51 +344,81 @@ class ClapbackSubmitView(discord.ui.View):
             return
         if interaction.user.id not in players:
             await interaction.response.send_message(
-                "You're not in this game. Join next round!", ephemeral=True,
+                "You're not in this game — hit **Join now**!", ephemeral=True,
             )
             return
         modal = ClapbackAnswerModal(self.game_id, self.round_num, self.db, self.cog)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(
-        label="🙋 Join next round", style=discord.ButtonStyle.secondary,
+        label="🙋 Join now", style=discord.ButtonStyle.secondary,
+        # custom_id kept from when this button said "Join next round", so the
+        # panels of games already running across a restart keep routing.
         custom_id="ql_join_midgame",
     )
-    async def join_next(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Queue a latecomer for the next round.
+    async def join_now(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Put a latecomer straight into the round that's taking answers.
 
         The roster used to be sealed at start, so a game running on odd
         numbers could not be evened out and people tried another bot's `&add`
-        at it. Admission happens at the round boundary (see `_run_game`), not
-        here, so a live round's matchups and answer count never move.
+        at it. Then it queued them for the *next* round — safe, but it made
+        someone watching a prompt they had a clapback for sit the round out.
+        Matchups are built from the answers dict once the window closes, so
+        there was never anything to protect: `admit_player_now` seats them and
+        the modal opens on the same press.
+
+        Off the submit phase it still queues (nothing can be written mid-vote),
+        and the reply says which of the two happened.
         """
         uid = interaction.user.id
-        payload = await get_game_payload(self.db, self.game_id)
-        if uid in payload.get("players", []):
-            await interaction.response.send_message(
-                "You're already in this game.", ephemeral=True,
+        verdict = ""
+        round_num = self.round_num
+
+        def _join(p):
+            nonlocal verdict, round_num
+            verdict = admit_player_now(p, uid, MAX_PLAYERS)
+            round_num = int(p.get("current_round") or self.round_num)
+
+        await modify_payload(self.db, self.game_id, _join)
+
+        if verdict == "joined":
+            log.info(
+                "%s joined game %s mid-round", interaction.user.display_name, self.game_id
             )
-            return
-        if uid in payload.get("pending_players", []):
-            await interaction.response.send_message(
-                "You're already queued — you'll be in from the next round.",
-                ephemeral=True,
+            await interaction.response.send_modal(
+                ClapbackAnswerModal(self.game_id, round_num, self.db, self.cog)
             )
+            # The room sees the answer counter jump; say why. Best-effort — the
+            # player is already in and writing, so a failed post is cosmetic.
+            channel = interaction.channel
+            if channel is not None and not isinstance(
+                channel, (discord.ForumChannel, discord.CategoryChannel)
+            ):
+                try:
+                    await channel.send(
+                        f"🙋 {interaction.user.mention} jumped in — they're playing "
+                        f"this round, starting on 0 points."
+                    )
+                except discord.HTTPException:
+                    log.debug("clapback: couldn't announce a mid-round join", exc_info=True)
             return
 
-        def _queue(p):
-            queued = p.setdefault("pending_players", [])
-            if uid not in queued:
-                queued.append(uid)
-
-        await modify_payload(self.db, self.game_id, _queue)
-        log.info("%s queued to join game %s mid-game", interaction.user.display_name, self.game_id)
-        await interaction.response.send_message(
-            "🙋 You're queued for the **next** round — this round's matchups are "
-            "already set, so you'll start on 0 points. If this turns out to be "
-            "the last round, you'll be told and can join the next game.",
-            ephemeral=True,
-        )
+        text = {
+            "already-in": "You're already in this game — hit **Submit**.",
+            "full": (
+                f"🙅 This game is full at {MAX_PLAYERS} players. Jump into the "
+                f"next one!"
+            ),
+            "queued": (
+                "🙋 Answers are closed for this round, so you're in from the "
+                "**next** one — you'll start on 0 points. If this turns out to "
+                "be the last round, you'll be told and can join the next game."
+            ),
+            "already-queued": (
+                "You're already queued — you'll be in from the next round."
+            ),
+        }.get(verdict, "Couldn't add you to this game.")
+        await interaction.response.send_message(text, ephemeral=True)
 
 
 class ClapbackVoteView(discord.ui.View):
@@ -920,10 +951,13 @@ class ClapbackCog(commands.Cog):
         # The benched player is left out of the ping, the answer count and the
         # submit gate: being asked for an answer that will never be shown is
         # what made sitting out read as a bug rather than a rotation.
-        players = [
-            uid for uid in payload["players"]
-            if bye_player is None or str(uid) != str(bye_player)
-        ]
+        def _expected(roster) -> list:
+            return [
+                uid for uid in roster
+                if bye_player is None or str(uid) != str(bye_player)
+            ]
+
+        players = _expected(payload["players"])
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
@@ -970,6 +1004,7 @@ class ClapbackCog(commands.Cog):
 
         elapsed = 0
         last_count = 0
+        last_expected = len(players)
         last_edit_at = -5  # triggers first timer update at elapsed=1
         while elapsed < timer_secs:
             if self._is_cancelled(game_id):
@@ -983,24 +1018,29 @@ class ClapbackCog(commands.Cog):
 
             p = await get_game_payload(self.db, game_id)
             count = len(p.get("answers", {}))
-            count_changed = count != last_count
+            # Re-read every tick: Join now seats a latecomer mid-window, so the
+            # denominator is not the roster this phase started with. Reading it
+            # once is what would make "3/2" show up, and would end the window
+            # early the moment the original players were all in.
+            expected = len(_expected(p.get("players", players)))
+            count_changed = (count, expected) != (last_count, last_expected)
             timer_due = (elapsed - last_edit_at) >= 5
 
             if count_changed or timer_due:
                 if count_changed:
-                    last_count = count
+                    last_count, last_expected = count, expected
                 last_edit_at = elapsed
                 remaining = max(0, timer_secs - elapsed)
                 mins, secs = divmod(remaining, 60)
                 timer_val = f"⏰ {mins}:{secs:02d}" if mins else f"⏰ {secs}s"
                 embed.set_field_at(0, name="Timer", value=timer_val, inline=True)
-                embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
+                embed.set_field_at(1, name="Answers In", value=f"{count}/{expected}", inline=True)
                 try:
                     await msg.edit(embed=embed)
                 except discord.HTTPException:
                     pass
 
-            if count >= len(players):
+            if count >= expected:
                 break
 
         self._submit_events.pop(game_id, None)
@@ -1011,8 +1051,9 @@ class ClapbackCog(commands.Cog):
         try:
             p = await get_game_payload(self.db, game_id)
             count = len(p.get("answers", {}))
+            expected = len(_expected(p.get("players", players)))
             embed.set_field_at(0, name="Timer", value="⏱️ Closed", inline=True)
-            embed.set_field_at(1, name="Answers In", value=f"{count}/{len(players)}", inline=True)
+            embed.set_field_at(1, name="Answers In", value=f"{count}/{expected}", inline=True)
             await msg.edit(embed=embed, view=view)
         except discord.HTTPException:
             pass
@@ -1252,24 +1293,39 @@ class ClapbackCog(commands.Cog):
     # ── Mid-game join / leave (dispatched from /games join, /games leave) ──
 
     async def mid_game_join(self, channel, game_id: str, member):
-        """Add *member* to a running game. The submit phase re-reads the
-        roster each round, so they play from the next round on."""
+        """Add *member* to a running game, through the Join now rules.
+
+        Shares :func:`admit_player_now` with the button rather than appending
+        to the roster itself, so `/games join` lands the player in the same
+        place the button would — this round if answers are open, the next one
+        otherwise — and says which. It used to append unconditionally and
+        report "from the next round" either way, which was wrong in both
+        directions, and it seeded neither the checkpoint nor the player cap.
+        """
         uid = member.id
-        state: dict = {}
+        verdict = ""
 
         def _add(payload):
-            players = payload.setdefault("players", [])
-            if uid in players:
-                state["already"] = True
-                return
-            players.append(uid)
-            payload.setdefault("scores", {}).setdefault(str(uid), 0)
-            payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
+            nonlocal verdict
+            verdict = admit_player_now(payload, uid, MAX_PLAYERS)
 
         await modify_payload(self.db, game_id, _add)
-        if state.get("already"):
-            return False, f"**{member.display_name}** is already in this game."
-        return True, f"{ICON} **{member.display_name}** joined Clapback — they'll play from the next round!"
+        name = member.display_name
+        if verdict == "joined":
+            return True, (
+                f"{ICON} **{name}** joined Clapback — they're in this round, "
+                f"starting on 0 points!"
+            )
+        if verdict == "queued":
+            return True, (
+                f"{ICON} **{name}** joined Clapback — they'll play from the "
+                f"next round!"
+            )
+        if verdict == "already-queued":
+            return False, f"**{name}** is already queued for the next round."
+        if verdict == "full":
+            return False, f"Clapback is full at {MAX_PLAYERS} players."
+        return False, f"**{name}** is already in this game."
 
     async def mid_game_leave(self, channel, game_id: str, member):
         """Remove *member* from a running game. Their score stays on the board."""

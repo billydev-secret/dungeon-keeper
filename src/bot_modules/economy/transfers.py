@@ -13,9 +13,15 @@ to pass ``None`` — and a test asserts exactly that.
 **A public receipt can be silently downgraded.** :func:`receipt_is_public` is
 the single place the downgrade rule lives; see its docstring for why the two
 reasons it downgrades are deliberately indistinguishable.
+
+**A no-contact pair is never notified.** :func:`pay_disclosure` folds that in
+beside the receipt rule, so one call answers both halves of "who gets told
+about this payment" and neither half can be wired up without the other.
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass
 
 import discord
 
@@ -41,6 +47,46 @@ def receipt_is_public(requested: bool, *, blocked: bool, can_post: bool) -> bool
     nothing happened; the cog logs it.
     """
     return requested and not blocked and can_post
+
+
+@dataclass(frozen=True)
+class PayDisclosure:
+    """Who is told about a payment: the channel, and the recipient."""
+
+    public_receipt: bool
+    notify_recipient: bool
+
+
+def pay_disclosure(
+    requested_public: bool, *, blocked: bool, can_post: bool
+) -> PayDisclosure:
+    """Both disclosure decisions a payment makes, from one no-contact read.
+
+    ``notify_recipient`` is the half that was missing: the public receipt has
+    been gated since 2026-08-27, but the recipient's DM (which falls back to a
+    post in the bank channel) went out regardless, so a member on the other
+    party's no-contact list could reach them with a 1-coin payment and a memo.
+    That is exactly the "reaching her through the bot" the list exists to stop,
+    and CLAUDE.md makes gating it a hard rule rather than a preference.
+
+    **The money still moves.** That is the shape the other no-contact gates
+    already take — Guess Who writes the guess, a blocked whisper reply writes
+    its row — because running the ordinary path is what makes the refusal
+    unobservable. The sender gets a genuine ephemeral receipt with a balance
+    that really did go down, so there is nothing to probe. Refusing the
+    transfer instead would leave his balance intact, and one look at ``/bank``
+    would tell him he had been blocked.
+
+    What the recipient gets is coins with no notification attached: no name,
+    no memo, nothing authored by him. The same call answers for ``/bank gift``,
+    which has no public receipt and asks only about ``notify_recipient``.
+    """
+    return PayDisclosure(
+        public_receipt=receipt_is_public(
+            requested_public, blocked=blocked, can_post=can_post
+        ),
+        notify_recipient=not blocked,
+    )
 
 
 def build_payment_receipt(

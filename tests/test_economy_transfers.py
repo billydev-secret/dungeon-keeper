@@ -12,7 +12,11 @@ from types import SimpleNamespace
 import discord
 import pytest
 
-from bot_modules.economy.transfers import build_payment_receipt, receipt_is_public
+from bot_modules.economy.transfers import (
+    build_payment_receipt,
+    pay_disclosure,
+    receipt_is_public,
+)
 
 ACCENT = discord.Color(0x5865F2)
 
@@ -118,3 +122,28 @@ def test_receipt_is_public_downgrades_on_either_reason(
     requested, blocked, can_post, expected
 ):
     assert receipt_is_public(requested, blocked=blocked, can_post=can_post) is expected
+
+
+# ── the recipient's notification ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "requested,blocked,can_post,public,notify",
+    [
+        pytest.param(False, False, True, False, True, id="ordinary-private-pay"),
+        pytest.param(True, False, True, True, True, id="ordinary-public-pay"),
+        # The defect: a blocked pair used to be gated on the receipt only, and
+        # the recipient's DM went out carrying the sender's name and memo.
+        pytest.param(False, True, True, False, False, id="blocked-private-pay"),
+        pytest.param(True, True, True, False, False, id="blocked-public-pay"),
+        # A channel the bot can't speak in withholds the receipt and nothing
+        # else — the recipient is still told about their own money.
+        pytest.param(True, False, False, False, True, id="cannot-post-here"),
+    ],
+)
+def test_pay_disclosure_gates_the_notification_on_no_contact_alone(
+    requested, blocked, can_post, public, notify
+):
+    d = pay_disclosure(requested, blocked=blocked, can_post=can_post)
+    assert d.public_receipt is public
+    assert d.notify_recipient is notify

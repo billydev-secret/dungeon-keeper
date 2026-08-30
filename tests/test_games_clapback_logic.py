@@ -34,6 +34,7 @@ from bot_modules.games_clapback.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
     admit_pending_players,
+    admit_player_now,
     calculate_bye_award,
     calculate_matchup_score,
     drain_pending_players,
@@ -1352,3 +1353,62 @@ def test_drain_pending_players_is_a_no_op_on_an_empty_queue():
     payload = {"players": [1, 2]}
     assert drain_pending_players(payload) == []
     assert payload["pending_players"] == []
+
+
+# ── admit_player_now: joining the round that is already open ─────────────
+#
+# Queueing a latecomer for the *next* round meant sitting out the one they
+# were watching. Matchups are built from the answers dict after the submit
+# window closes, so anyone who gets an answer in before then can simply be
+# paired — there is nothing to keep them out of.
+
+
+def test_admit_player_now_seats_them_in_the_open_round():
+    payload = {"phase": "submitting", "players": [1, 2], "scores": {"1": 4}}
+
+    assert admit_player_now(payload, 3, 10) == "joined"
+
+    assert payload["players"] == [1, 2, 3]
+    # Seeded on every board a scored round touches, checkpoint included —
+    # otherwise a crash-resume rolls them off the scoreboard.
+    assert payload["scores"]["3"] == 0
+    assert payload["scores_checkpoint"]["3"] == 0
+    assert payload["clapbacks"]["3"] == 0
+    # An existing score is never reset by a stray press.
+    assert payload["scores"]["1"] == 4
+
+
+def test_admit_player_now_leaves_someone_already_playing_alone():
+    payload = {"phase": "submitting", "players": [1, 2], "scores": {"2": 7}}
+
+    assert admit_player_now(payload, 2, 10) == "already-in"
+
+    assert payload["players"] == [1, 2]
+    assert payload["scores"]["2"] == 7
+
+
+def test_admit_player_now_turns_them_away_at_the_cap():
+    payload = {"phase": "submitting", "players": [1, 2, 3]}
+
+    assert admit_player_now(payload, 4, 3) == "full"
+
+    assert payload["players"] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("phase", ["voting", "revealing"])
+def test_admit_player_now_falls_back_to_the_queue_once_answers_close(phase):
+    """Mid-vote there is nothing to write: the matchups are already set."""
+    payload = {"phase": phase, "players": [1, 2]}
+
+    assert admit_player_now(payload, 3, 10) == "queued"
+
+    assert payload["players"] == [1, 2]
+    assert payload["pending_players"] == [3]
+
+
+def test_admit_player_now_recognises_a_second_press_while_queued():
+    payload = {"phase": "voting", "players": [1, 2], "pending_players": [3]}
+
+    assert admit_player_now(payload, 3, 10) == "already-queued"
+
+    assert payload["pending_players"] == [3]

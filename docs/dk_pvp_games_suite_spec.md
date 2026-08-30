@@ -146,8 +146,12 @@ state changes through `_db_set_state`, never call their db module's `set_game_st
 
 **Challenge (duel):** `/games <game> challenge @user [stakes] [wager]` posts an embed pinging the
 target with `✅ Accept` / `❌ Decline`. The target **must accept** before the game starts.
-A pending challenge is swept to `EXPIRED_PENDING` **60 seconds** after it was created (the
-challenge embed footer says "60 seconds to respond").
+A pending challenge is swept to `EXPIRED_PENDING` after
+`duels.db.CHALLENGE_RESPONSE_SECONDS` (**5 minutes**), and the card carries a live
+`<t:…:R>` countdown to that moment rather than a footer stating a number. One constant
+feeds all four places that have to agree — the `ChallengeView` timeout, the countdown,
+the late-presser copy, and the `state = 'PENDING'` cutoff in each game's
+`fetch_sweepable_games`. It was 60 seconds hard-coded in each of them until 2026-08-30.
 
 **Lobby (group):** `/games <game> start [stakes] [wager]` posts a join lobby with `✋ Join`,
 `🚪 Leave`, `▶️ Start` (host only), `🚫 Cancel` (host only). The host starts once
