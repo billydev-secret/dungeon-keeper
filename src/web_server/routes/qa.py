@@ -47,6 +47,9 @@ class SettingsBody(BaseModel):
     channel_id: int = Field(ge=0)
     reward: int = Field(ge=0, le=10_000)
     daily_cap: int = Field(ge=0, le=1_000)
+    # Minutes a passed card lingers before the sweep tidies it away; 0 = never.
+    # Capped at a week — beyond that "keep them" is what 0 is for.
+    linger_minutes: int = Field(default=10, ge=0, le=10_080)
 
 
 # ── serialization ─────────────────────────────────────────────────────
@@ -125,6 +128,7 @@ def _settings_dict(settings: qa_service.QASettings) -> dict:
         "channel_id": str(settings.channel_id),
         "reward": settings.reward,
         "daily_cap": settings.daily_cap,
+        "linger_minutes": settings.linger_minutes,
     }
 
 
@@ -163,6 +167,7 @@ async def put_settings(
                     "channel_id": body.channel_id,
                     "reward": body.reward,
                     "daily_cap": body.daily_cap,
+                    "linger_minutes": body.linger_minutes,
                 },
             )
             return qa_service.load_qa_settings(conn, guild_id)

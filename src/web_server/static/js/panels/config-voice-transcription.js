@@ -43,7 +43,8 @@ function modelsWidget(models) {
       <div class="field-hint">
         Each model is downloaded once onto the machine running Dungeon Keeper and
         then runs entirely offline — no audio ever leaves the server. A model has to
-        read <em>Downloaded</em> before you can choose it above. Downloading base.en
+        read <em>Downloaded</em> before transcription can be turned on with it —
+        saving is refused until then. Downloading base.en
         pulls about 150&nbsp;megabytes and can take a minute on a slow host.
       </div>
     </div>`;

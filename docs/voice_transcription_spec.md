@@ -42,7 +42,7 @@ Per-guild, dashboard-only (admin permission), backed by the API:
 
 Routes (`src/web_server/routes/config.py`):
 
-- `PUT /config/voice-transcription` — upsert the guild config; unknown model names fall back to the default.
+- `PUT /config/voice-transcription` — upsert the guild config; unknown model names fall back to the default. Turning the feature **on** with a model that isn't in the local cache is rejected (400) — models load offline, so an un-downloaded one would fail silently on every voice message. Saving with `enabled=false` is never blocked (a wiped cache must not trap an admin), and the check is skipped entirely when faster-whisper isn't installed.
 - `POST /config/voice-transcription/download` — download a model into the local cache (blocking network fetch run off the loop; no-op if already cached). This is the dashboard's model-download widget.
 - The `voice_transcription` section of the config payload reports `enabled`, `model_name`, `channel_ids`, faster-whisper `available`, and per-model `cached` status.
 

@@ -2395,3 +2395,82 @@ def test_dms_post_panel_is_not_refused_on_account_of_itself(authed_client, fake_
     )
     assert resp.status_code == 200
     assert resp.json()["warning"] is None
+
+
+# ── Voice transcription: the model has to be downloaded first ──────────
+#
+# The panel promises "a model has to read Downloaded", and the bot loads models
+# offline (local_files_only) — an un-downloaded one raises on every voice
+# message and the failure is swallowed into the log. So the promise is enforced
+# on the way in rather than discovered later as silence.
+
+
+def _vt_env(monkeypatch, *, available=True, cached=True):
+    monkeypatch.setattr("web_server.routes.config._vt_is_available", lambda: available)
+    monkeypatch.setattr(
+        "web_server.routes.config._vt_model_is_cached", lambda name: cached
+    )
+
+
+def _vt_saved(fake_ctx):
+    from bot_modules.services.voice_transcription_service import get_config
+
+    with open_db(fake_ctx.db_path) as conn:
+        return get_config(conn, fake_ctx.guild_id)
+
+
+def test_voice_transcription_refuses_to_enable_an_undownloaded_model(
+    authed_client, fake_ctx, monkeypatch
+):
+    _vt_env(monkeypatch, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 400
+    assert "download" in resp.json()["detail"].lower()
+    assert _vt_saved(fake_ctx) is None  # nothing written
+
+
+def test_voice_transcription_enables_a_downloaded_model(
+    authed_client, fake_ctx, monkeypatch
+):
+    _vt_env(monkeypatch, cached=True)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "tiny.en", "channel_ids": ["5000"]},
+    )
+    assert resp.status_code == 200
+    saved = _vt_saved(fake_ctx)
+    assert saved is not None
+    assert saved.enabled is True
+    assert saved.model_name == "tiny.en"
+
+
+def test_voice_transcription_can_always_be_turned_off(
+    authed_client, fake_ctx, monkeypatch
+):
+    """A wiped model cache must not trap an admin in a setting they can't
+    switch off — the gate only guards turning transcription on."""
+    _vt_env(monkeypatch, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": False, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 200
+    saved = _vt_saved(fake_ctx)
+    assert saved is not None and saved.enabled is False
+
+
+def test_voice_transcription_gate_is_skipped_without_faster_whisper(
+    authed_client, fake_ctx, monkeypatch
+):
+    """Nothing is cached when the package is missing; the panel already says
+    nothing gets transcribed, so saving still works."""
+    _vt_env(monkeypatch, available=False, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 200
+    assert _vt_saved(fake_ctx).enabled is True
