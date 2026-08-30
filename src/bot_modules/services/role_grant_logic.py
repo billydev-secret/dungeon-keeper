@@ -19,6 +19,9 @@ primitives and render the refusal themselves.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 #: The grant may proceed — no prerequisite, or it's satisfied, or an admin
 #: is overriding.
 GATE_OK = "ok"
@@ -63,3 +66,28 @@ def prerequisite_gate(
     if not target_has_required:
         return GATE_MISSING_PREREQUISITE
     return GATE_OK
+
+
+def prerequisites_for_role(
+    grant_roles: Mapping[str, Mapping[str, Any]], role_id: int
+) -> tuple[int, ...]:
+    """Every *Role Required First* that guards handing out *role_id*.
+
+    A self-service route to a role — a role-menu button, not ``/grant`` — has
+    to consult this, or the prerequisite is a gate with an open door beside it:
+    the menu path never looked at the grant config at all, so publishing a
+    button for a gated role (the verification-gated Member role is the
+    production case) handed it to anyone who clicked.
+
+    Keyed by role id rather than grant name, because the role id is what a menu
+    option holds. Two grants may point at the same role with different
+    prerequisites; all of them come back (sorted, deduped) and the caller must
+    clear every one — for an access gate the stricter reading is the safe one.
+    Empty when the role isn't a grant role, or its grant has no prerequisite.
+    """
+    found = {
+        int(cfg.get("required_role_id") or 0)
+        for cfg in grant_roles.values()
+        if int(cfg.get("role_id") or 0) == role_id
+    }
+    return tuple(sorted(rid for rid in found if rid > 0))

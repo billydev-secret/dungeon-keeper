@@ -48,15 +48,22 @@ class Role:
 class Ctx:
     """Just enough AppContext for the interaction path."""
 
-    def __init__(self, db_path, mod_channel_id=0):
+    def __init__(self, db_path, mod_channel_id=0, grant_roles=None, is_admin=False):
         self.db_path = db_path
         self._mod_channel_id = mod_channel_id
+        self._grant_roles = grant_roles or {}
+        self._is_admin = is_admin
 
     def open_db(self):
         return open_db(self.db_path)
 
     def guild_config(self, _guild_id):
-        return SimpleNamespace(mod_channel_id=self._mod_channel_id)
+        return SimpleNamespace(
+            mod_channel_id=self._mod_channel_id, grant_roles=self._grant_roles
+        )
+
+    def is_admin(self, _interaction):
+        return self._is_admin
 
 
 class Guild:
@@ -275,6 +282,43 @@ async def test_elevated_override_still_grants_a_dangerous_role(db_path):
     )
 
     assert member.add_roles.await_args.args == (red,)
+
+
+# ── grant prerequisites on the click path ───────────────────────────
+# A menu button is a second door to a role /grant gates. The wiring assertion:
+# the click path consults the grant config at all (the decision table itself is
+# tests/test_role_grant_logic.py::test_prerequisites_for_role).
+
+_GATED = {"denizen": {"role_id": 11, "required_role_id": 99}}
+
+
+async def test_menu_click_honours_a_grant_prerequisite(db_path):
+    ctx = Ctx(db_path, grant_roles=_GATED)
+    verified = Role(position=9, id=99, name="Verified")
+    guild = Guild([Role(position=5, id=11, name="Member"), verified])
+    member = make_member()  # unverified
+    mid = seed_menu(db_path)
+    interaction = make_interaction(ctx, guild, member)
+
+    await handle_menu_interaction(interaction, mid, clicked_role_id=11)
+
+    member.add_roles.assert_not_awaited()
+    assert "**@Verified**" in _sent_text(interaction)
+
+
+async def test_menu_click_passes_once_the_prerequisite_is_held(db_path):
+    ctx = Ctx(db_path, grant_roles=_GATED)
+    verified = Role(position=9, id=99, name="Verified")
+    target = Role(position=5, id=11, name="Member")
+    guild = Guild([target, verified])
+    member = make_member(verified)
+    mid = seed_menu(db_path)
+
+    await handle_menu_interaction(
+        make_interaction(ctx, guild, member), mid, clicked_role_id=11
+    )
+
+    assert member.add_roles.await_args.args == (target,)
 
 
 async def test_dangerous_role_can_still_be_shed(db_path):

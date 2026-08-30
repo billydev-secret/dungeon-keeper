@@ -426,7 +426,7 @@ class XpCog(commands.Cog):
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=xp_settings,
             db_path=ctx.db_path,
-            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
         )
 
         await interaction.response.send_message(

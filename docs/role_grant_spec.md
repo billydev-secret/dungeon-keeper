@@ -78,7 +78,7 @@ On success the bot adds the role (audit-log reason "Granted by {user} via slash 
 
 **Announcement** — if the grant has an `announce_channel_id` and a non-empty `grant_message`, the template is posted to that channel. Placeholders: `{member}`, `{member_name}`, `{role}`, `{role_name}`, `{actor}`.
 
-**Audit log** — if the grant has a `log_channel_id`, a green embed ("{member} was granted {role} by {granter}.", mentions suppressed) is posted there.
+**Audit log** — if the grant has a `log_channel_id`, a green embed ("{member} was granted {role} by {granter}.", mentions suppressed) is posted there. **Grants only**: nothing posts there when the role is later removed (removals reach the `role_events` table via `on_member_update`, and the dashboard's Grant Audit report). The panel hint used to promise "given or taken away" and was corrected 2026-08-29.
 
 **Prerequisite role** — a grant may name a `required_role_id`: the target must
 already hold that role to receive this one. The decision is
@@ -93,6 +93,22 @@ itself behind a prerequisite it can no longer satisfy.
 A configured prerequisite whose role has been **deleted** fails *closed* (the
 grant is refused as misconfigured), because the alternative silently disables
 a safety gate the moment someone tidies up a role.
+
+**Self-service menus honour it too** (2026-08-29). A Role Menu button is a
+second door to a role, and until now the menu path never consulted the grant
+config: publishing a button for a gated role handed it out to anyone who
+clicked, silently, with the publish-time validation checking only
+managed/hierarchy/dangerous-permission roles. The click path now asks
+`role_grant_logic.prerequisites_for_role(grant_roles, role_id)` — keyed by role
+id, since that's what a menu option holds, and returning *every* prerequisite
+when two grants point at the same role — and runs each through the same
+`prerequisite_gate`. Refusals are ephemeral ("You need the **@X** role before
+you can pick that"); a deleted prerequisite fails closed and alerts the mods
+once, like the menus' other config-drift failures. Checking on the click rather
+than at publish time is deliberate: it also covers menus published *before* the
+grant was configured. The per-grant *Who Can Hand This Out* allow-list is
+**not** consulted — it answers who may run `/grant` for someone else, which a
+self-service button isn't.
 
 History: settable since migration `021` and exposed on the dashboard as *Role
 Required First*, but `/grant` never passed it to the executor, so from `021`

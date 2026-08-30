@@ -1054,7 +1054,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
 
         # Economy faucets — daily text login + QOTD reward. Optional and fully
@@ -1510,7 +1510,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
             # Reaction quest trigger — `given` is non-None only when the XP
             # dedup admitted a NEW (message, reactor) pair, so the quest
@@ -1583,7 +1583,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
 
         if payload.guild_id:
@@ -1777,7 +1777,7 @@ class EventsCog(commands.Cog):
         # not delay the welcome or greeter ping, and spawning it up here means an
         # exception from that later work can't skip it either (nothing replays a
         # missed refresh). refresh_level_5_cards never raises on its own.
-        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles)
+        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id)
         has_nsfw = nsfw_role_id in after_ids
         if nsfw_role_id > 0 and has_nsfw != (nsfw_role_id in before_ids):
             from bot_modules.services.promotion_review_views import (
