@@ -78,8 +78,10 @@ export function mount(container) {
                 value="${esc((cfg.nick_denylist || []).join(", "))}"
                 style="width:100%;max-width:420px;box-sizing:border-box;" />
               <div class="field-hint">Comma-separated. A nickname or stakes text
-                containing one of these is refused, on top of the slurs the bot always
-                blocks. Capitals are ignored.</div>
+                that uses one of these words is refused, on top of the slurs the bot
+                always blocks. Capitals are ignored, and each entry has to appear as a
+                whole word &mdash; &ldquo;ass&rdquo; won&rsquo;t block
+                &ldquo;class&rdquo;.</div>
             </div>
           </div>
 

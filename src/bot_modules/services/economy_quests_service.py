@@ -609,7 +609,8 @@ def board_sizes(settings: EconSettings) -> dict[str, int]:
 
     Only daily/weekly draw a personal board; monthly is a guild-wide goal now,
     so it has no board size at all (the old ``quest_board_monthly`` dial was
-    dropped rather than left as a number that changed nothing).    """
+    dropped rather than left as a number that changed nothing).
+    """
     return {
         "daily": settings.quest_board_daily,
         "weekly": settings.quest_board_weekly,

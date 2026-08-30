@@ -306,6 +306,64 @@ async def test_menu_click_honours_a_grant_prerequisite(db_path):
     assert "**@Verified**" in _sent_text(interaction)
 
 
+async def test_gated_pick_in_a_selection_does_not_cancel_the_others(db_path):
+    """One gated role must not swallow the rest of a dropdown submission."""
+    ctx = Ctx(db_path, grant_roles=_GATED)
+    verified = Role(position=9, id=99, name="Verified")
+    gated = Role(position=5, id=11, name="Member")
+    blue = Role(position=6, id=22, name="Blue")
+    green = Role(position=7, id=33, name="Green")
+    guild = Guild([gated, blue, green, verified])
+    member = make_member(green)  # holds Green, submits {Member, Blue}
+    mid = seed_menu(db_path, role_ids=(11, 22, 33))
+    interaction = make_interaction(ctx, guild, member)
+
+    await handle_menu_interaction(interaction, mid, selected=[11, 22])
+
+    # Blue lands, Green is shed as the selection asked, only Member is held back.
+    assert member.add_roles.await_args.args == (blue,)
+    assert member.remove_roles.await_args.args == (green,)
+    text = _sent_text(interaction)
+    assert "**@Verified**" in text
+    assert "+Blue" in text and "−Green" in text
+
+
+async def test_gated_pick_alone_still_refuses_everything(db_path):
+    ctx = Ctx(db_path, grant_roles=_GATED)
+    verified = Role(position=9, id=99, name="Verified")
+    gated = Role(position=5, id=11, name="Member")
+    guild = Guild([gated, Role(position=6, id=22, name="Blue"), verified])
+    member = make_member()
+    mid = seed_menu(db_path)
+    interaction = make_interaction(ctx, guild, member)
+
+    await handle_menu_interaction(interaction, mid, selected=[11])
+
+    member.add_roles.assert_not_awaited()
+    member.remove_roles.assert_not_awaited()
+    assert "**@Verified**" in _sent_text(interaction)
+
+
+async def test_deleted_prerequisite_role_still_refuses_the_whole_click(db_path):
+    """Fail closed: an unsatisfiable gate is a broken menu, not one to route around."""
+    mod_channel = MagicMock(spec=discord.TextChannel)
+    mod_channel.send = AsyncMock()
+    ctx = Ctx(db_path, mod_channel_id=800, grant_roles=_GATED)
+    # Role 99 (the prerequisite) has been deleted from the guild.
+    gated = Role(position=5, id=11, name="Member")
+    blue = Role(position=6, id=22, name="Blue")
+    guild = Guild([gated, blue], mod_channel=mod_channel)
+    member = make_member()
+    mid = seed_menu(db_path)
+    interaction = make_interaction(ctx, guild, member)
+
+    await handle_menu_interaction(interaction, mid, selected=[11, 22])
+
+    member.add_roles.assert_not_awaited()
+    assert mod_channel.send.await_count == 1
+    assert "that role is gone" in mod_channel.send.await_args.args[0]
+
+
 async def test_menu_click_passes_once_the_prerequisite_is_held(db_path):
     ctx = Ctx(db_path, grant_roles=_GATED)
     verified = Role(position=9, id=99, name="Verified")

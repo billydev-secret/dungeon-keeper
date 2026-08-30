@@ -257,10 +257,13 @@ chosen nick and to custom stakes)
 
 - Length cap (`max_nick_length`, default 32; `max_stakes_length`, default 200).
 - Per-guild `nick_denylist` (JSON array), plus checks against impersonating admins/mods and
-  duplicating other members' display names. The configured extras are matched as
-  **case-insensitive substrings**, not regexes — they are typed into the "Extra Banned Words"
-  box on each game's dashboard panel, and admin-typed regex punctuation would either raise or
-  silently never match. The built-in `DEFAULT_NICK_DENYLIST` patterns are still regexes.
+  duplicating other members' display names. The configured extras are matched **literally and
+  case-insensitively, as whole words**, not as regexes — they are typed into the "Extra Banned
+  Words" box on each game's dashboard panel, and admin-typed regex punctuation would either
+  raise or silently never match. Each entry is escaped and fenced with word-boundary guards on
+  whichever of its ends is a word character, so `c++` still bans that literal text while a
+  short entry can't swallow the longer words it merely sits inside ("ass" does not block
+  "class"). The built-in `DEFAULT_NICK_DENYLIST` patterns are still regexes.
 
 **Anti-grief**
 

@@ -688,7 +688,7 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/">web dashboard</a></strong>
         <p>Each game's cooldowns, nickname/sentence duration, timers, player counts, how many challenges one person may start in an hour, and channel restrictions are set from the dashboard's <strong>Games</strong> nav section — one panel per game (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs).</p>
-        <p>Each of those panels also carries <strong>Available on This Server</strong> — switch it off and nobody can start that game; anything already running finishes normally. <strong>Extra Banned Words</strong> (comma-separated) adds to the words the bot always refuses in a nickname or in stakes text. <strong>Allowed Channels</strong> is the only channel rule these games have: leave it empty and the game can be played anywhere. The allowed-channel list on Games &rarr; Global Config governs the question-bank party games, not these.</p>
+        <p>Each of those panels also carries <strong>Available on This Server</strong> — switch it off and nobody can start that game; anything already running finishes normally. <strong>Extra Banned Words</strong> (comma-separated) adds to the words the bot always refuses in a nickname or in stakes text; each one is matched as a whole word, so a short entry won&rsquo;t block the longer words that contain it. <strong>Allowed Channels</strong> is the only channel rule these games have: leave it empty and the game can be played anywhere. The allowed-channel list on Games &rarr; Global Config governs the question-bank party games, not these.</p>
       </div>
     </div>
 
@@ -2753,7 +2753,7 @@
       <li><strong>Binding</strong> — the first pick is permanent, one ever per member.</li>
     </ul>
     <p>There are no slash commands — members just click the posted message.</p>
-    <p><strong>Roles that need another role first.</strong> If a role on the menu is also one of your <a href="#roles">Role Grants</a> with a <em>Role Required First</em> — the usual case being Member gated behind your verification role — a member who doesn't hold that role yet is told which role they need, and the button does nothing. The menu can't be used as a way around a gate <code>/grant</code> holds moderators to. If the required role has since been deleted, the click is refused and your mod channel is told once, rather than the gate quietly switching itself off.</p>
+    <p><strong>Roles that need another role first.</strong> If a role on the menu is also one of your <a href="#roles">Role Grants</a> with a <em>Role Required First</em> — the usual case being Member gated behind your verification role — a member who doesn't hold that role yet is told which role they need, and the button does nothing. On a dropdown menu only the gated choice is held back &mdash; the rest of that member's picks still go through. The menu can't be used as a way around a gate <code>/grant</code> holds moderators to. If the required role has since been deleted, the click is refused and your mod channel is told once, rather than the gate quietly switching itself off.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
