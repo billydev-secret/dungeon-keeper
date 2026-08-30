@@ -41,13 +41,15 @@ Managed through the web dashboard's admin API (admin scope required); there is n
 
 - Current rules are returned in the `auto_react` section of `GET /api/config` — one entry per channel with `channel_id`, `emojis` (list), `enabled`, and `tips_enabled`.
 - `PUT /api/config/auto-react/{channel_id}` with body `{"emojis": [...], "enabled": true, "tips_enabled": false}` creates or replaces the channel's rule (upsert; the emoji list is replaced wholesale, not merged). `tips_enabled` defaults to false — turning a channel into a tipping channel is always an explicit act.
-- `DELETE /api/config/auto-react/{channel_id}` removes the rule.
+- `DELETE /api/config/auto-react/{channel_id}` removes the rule **and its tip prices** — the rungs go in the same transaction, so a price can't survive as an orphan with no dashboard surface and be inherited by a rule created later for the same channel.
 
 Emojis are free-form strings — Unicode emoji or full custom-emoji syntax (`<:name:id>`). No validation happens at write time; a bad entry simply fails (with a log warning) when a reaction is attempted.
 
 The **Auto React** panel (Channels & Messages) manages rules: channel picker, comma-separated emoji list, enabled toggle, a tipping toggle, and — when tipping is on — a price field per emoji. The price fields are hidden until tipping is switched on, since they're meaningless otherwise. A rung of 1 is rejected client- and server-side: after the 1-coin minimum rake it would deliver the poster nothing.
 
 Removing an emoji from a rule clears its price, so a dropped emoji can never linger as chargeable.
+
+**Tipping is read at charge time, not stamped on the receipt.** Every tip re-checks that the placement's channel still has a rule and that the rule still has `tips_enabled` — so deleting the rule or unchecking the tipping toggle stops the emoji the bot *already placed* on older posts from charging, not just future ones. Without that check a receipt plus a surviving price would keep an old post a live payment button after an admin believed they had switched tipping off.
 
 ## Stored data
 

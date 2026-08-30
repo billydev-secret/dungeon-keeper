@@ -14,7 +14,7 @@ from typing import Any, cast
 import discord
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.core.settings import AUTO_DELETE_KEYWORDS, AUTO_DELETE_SETTINGS
+from bot_modules.core.settings import AUTO_DELETE_SETTINGS
 from bot_modules.core.utils import format_guild_for_log, jump_url
 from bot_modules.services.message_store import (
     DELETE_SOURCE_AUTO_DELETE,
@@ -828,45 +828,6 @@ def format_duration_seconds(seconds: int) -> str:
             suffix = "" if amount == 1 else "s"
             return f"{amount} {unit_label}{suffix}"
     return f"{seconds} seconds"
-
-
-def parse_duration_seconds(value: str) -> int | None:
-    """Parse duration string into seconds."""
-    text = value.strip().lower()
-    if not text:
-        return None
-    if text in AUTO_DELETE_KEYWORDS.named_intervals:
-        return AUTO_DELETE_KEYWORDS.named_intervals[text]
-
-    total = 0
-    cursor = 0
-    for match in AUTO_DELETE_KEYWORDS.duration_pattern.finditer(text):
-        separator = text[cursor : match.start()]
-        if separator.strip():
-            return None
-
-        amount = int(match.group(1))
-        unit = match.group(2).lower()
-        if unit.startswith("w"):
-            multiplier = 7 * 24 * 60 * 60
-        elif unit.startswith("d"):
-            multiplier = 24 * 60 * 60
-        elif unit.startswith("h"):
-            multiplier = 60 * 60
-        elif unit.startswith("m"):
-            multiplier = 60
-        else:
-            multiplier = 1
-        total += amount * multiplier
-        cursor = match.end()
-
-    if cursor == 0:
-        return None
-
-    if text[cursor:].strip():
-        return None
-
-    return total if total > 0 else None
 
 
 async def process_auto_delete_tick(

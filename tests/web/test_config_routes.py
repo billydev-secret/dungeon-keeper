@@ -616,6 +616,22 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert 3001 not in [r["channel_id"] for r in rules]
 
 
+@pytest.mark.parametrize("payload", [
+    pytest.param({"max_age_seconds": 0, "interval_seconds": 3600}, id="age-zero"),
+    pytest.param({"max_age_seconds": 86400, "interval_seconds": 0}, id="interval-zero"),
+    pytest.param({"max_age_seconds": -1, "interval_seconds": 3600}, id="age-negative"),
+])
+def test_auto_delete_rule_rejects_non_positive_durations(authed_client, fake_ctx, payload):
+    # The panel's own floor is 1 second; without a server-side floor a direct
+    # PUT of 0 makes the rule due every tick with every message eligible.
+    from bot_modules.services.auto_delete_service import list_auto_delete_rules_for_guild
+
+    resp = authed_client.put("/api/config/auto-delete/3003", json=payload)
+    assert resp.status_code == 422
+    rules = list_auto_delete_rules_for_guild(fake_ctx.db_path, fake_ctx.guild_id)
+    assert 3003 not in [r["channel_id"] for r in rules]
+
+
 def test_auto_delete_media_only_round_trips(authed_client, fake_ctx):
     from bot_modules.services.auto_delete_service import list_auto_delete_rules_for_guild
 

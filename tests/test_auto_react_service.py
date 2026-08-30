@@ -114,6 +114,22 @@ def test_remove_rule(sync_db_path):
     assert remove_auto_react_rule(sync_db_path, GUILD, CHANNEL) is False
 
 
+def test_remove_rule_takes_the_tip_prices_with_it(sync_db_path):
+    # A price left behind by a deleted rule is invisible on the dashboard but
+    # still a live amount, so it goes in the same breath as the rule.
+    from bot_modules.services.reaction_tip_service import get_rungs, set_rung
+
+    upsert_auto_react_rule(sync_db_path, GUILD, CHANNEL, ["🔥"], tips_enabled=True)
+    set_rung(sync_db_path, GUILD, CHANNEL, "🔥", 25)
+    set_rung(sync_db_path, GUILD, CHANNEL + 1, "🔥", 25)
+
+    remove_auto_react_rule(sync_db_path, GUILD, CHANNEL)
+
+    assert get_rungs(sync_db_path, GUILD, CHANNEL) == {}
+    # Only this channel's ladder — the neighbour's is untouched.
+    assert get_rungs(sync_db_path, GUILD, CHANNEL + 1) == {"🔥": 25}
+
+
 # --------------------------------------------------------------------------
 # placement receipts
 # --------------------------------------------------------------------------

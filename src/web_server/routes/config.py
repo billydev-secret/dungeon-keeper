@@ -3140,8 +3140,13 @@ async def delete_quote_border(
 
 
 class AutoDeleteRuleUpdate(BaseModel):
-    max_age_seconds: int
-    interval_seconds: int
+    # Both floors are server-side as well as in the panel: a 0 (or negative)
+    # age makes every tracked message eligible and a 0 interval makes the rule
+    # due on every poll tick, so a direct PUT past the panel's own `min=1`
+    # would empty a channel. The panel is the only caller and never sends
+    # anything below 1.
+    max_age_seconds: int = Field(ge=1)
+    interval_seconds: int = Field(ge=1)
     media_only: bool = False
 
 

@@ -36,9 +36,21 @@ def upsert_auto_react_rule(
 
 
 def remove_auto_react_rule(db_path: Path, guild_id: int, channel_id: int) -> bool:
+    """Delete the channel's rule — and the tip prices that belonged to it.
+
+    The ladder goes in the same transaction rather than being left behind: an
+    orphaned price has no dashboard surface (the panel lists rules, not rungs)
+    yet is still a real amount, so a rule re-created later could inherit a
+    price nobody set. This is also what the panel's remove confirmation
+    promises — the emoji stop being tip buttons immediately.
+    """
     with open_db(db_path) as conn:
         cursor = conn.execute(
             "DELETE FROM auto_react_config WHERE guild_id=? AND channel_id=?",
+            (guild_id, channel_id),
+        )
+        conn.execute(
+            "DELETE FROM reaction_tip_rungs WHERE guild_id=? AND channel_id=?",
             (guild_id, channel_id),
         )
         return cursor.rowcount > 0
@@ -125,12 +137,18 @@ def get_placement_with_conn(
     ).fetchone()
 
 
+def get_auto_react_rule_with_conn(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT channel_id, emojis, enabled, tips_enabled FROM auto_react_config "
+        "WHERE guild_id=? AND channel_id=?",
+        (guild_id, channel_id),
+    ).fetchone()
+
+
 def get_auto_react_rule(
     db_path: Path, guild_id: int, channel_id: int
 ) -> sqlite3.Row | None:
     with open_db(db_path) as conn:
-        return conn.execute(
-            "SELECT channel_id, emojis, enabled, tips_enabled FROM auto_react_config "
-            "WHERE guild_id=? AND channel_id=?",
-            (guild_id, channel_id),
-        ).fetchone()
+        return get_auto_react_rule_with_conn(conn, guild_id, channel_id)

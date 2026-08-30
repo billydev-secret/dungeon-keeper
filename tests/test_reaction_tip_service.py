@@ -9,7 +9,11 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.auto_react_service import record_placement
+from bot_modules.services.auto_react_service import (
+    record_placement,
+    remove_auto_react_rule,
+    upsert_auto_react_rule,
+)
 from bot_modules.services.economy_service import apply_credit, get_balance
 from bot_modules.services.reaction_tip_service import (
     MIN_RAKE,
@@ -33,7 +37,14 @@ RUNG = 25
 
 @pytest.fixture
 def tippable(sync_db_path):
-    """A message the bot reacted to, with a 25-coin rung configured."""
+    """A message the bot reacted to, with a 25-coin rung configured.
+
+    The rule itself is part of the fixture because tipping is only live while
+    the channel still has a tipping rule — the charge path checks it.
+    """
+    upsert_auto_react_rule(
+        sync_db_path, GUILD, CHANNEL, [EMOJI], True, tips_enabled=True
+    )
     record_placement(
         sync_db_path,
         guild_id=GUILD,
@@ -305,6 +316,38 @@ def test_message_without_a_placement_is_not_tippable(sync_db_path):
     assert outcome.charged is False
     assert outcome.reason == "not_tippable"
     assert balance(sync_db_path, REACTOR) == 500
+
+
+def test_removing_the_rule_stops_the_emoji_being_tip_buttons(tippable):
+    # The panel promises exactly this on the remove confirmation: the emoji
+    # already sitting on old posts stop charging the moment the rule is gone.
+    fund(tippable, REACTOR, 500)
+    remove_auto_react_rule(tippable, GUILD, CHANNEL)
+
+    outcome = tip(tippable)
+
+    assert outcome.charged is False
+    assert outcome.reason == "tips_off"
+    assert balance(tippable, REACTOR) == 500
+    # …and the ladder goes with the rule, so re-creating it can't inherit
+    # prices nobody set.
+    assert get_rungs(tippable, GUILD, CHANNEL) == {}
+
+
+def test_switching_tipping_off_stops_charging_old_posts(tippable):
+    # Unchecking Tips keeps the rule (and its prices, for when it comes back)
+    # but nothing may be charged while the toggle is off.
+    fund(tippable, REACTOR, 500)
+    upsert_auto_react_rule(
+        tippable, GUILD, CHANNEL, [EMOJI], True, tips_enabled=False
+    )
+
+    outcome = tip(tippable)
+
+    assert outcome.charged is False
+    assert outcome.reason == "tips_off"
+    assert balance(tippable, REACTOR) == 500
+    assert get_rungs(tippable, GUILD, CHANNEL) == {EMOJI: RUNG}
 
 
 def test_rung_from_another_channel_does_not_apply(tippable):

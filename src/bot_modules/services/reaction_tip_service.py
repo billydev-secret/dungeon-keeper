@@ -26,6 +26,7 @@ from pathlib import Path
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.auto_react_service import (
+    get_auto_react_rule_with_conn,
     get_placement_with_conn,
     parse_emojis,
 )
@@ -225,7 +226,16 @@ def apply_tip(
             # so a self-tap can't pad the count the emoji is meant to signal.
             return TipOutcome(reason="self")
 
-        rungs = get_rungs_with_conn(conn, guild_id, int(placement["channel_id"]))
+        channel_id = int(placement["channel_id"])
+        rule = get_auto_react_rule_with_conn(conn, guild_id, channel_id)
+        if rule is None or not int(rule["tips_enabled"]):
+            # Tipping is a live setting, not a stamp on the receipt. Deleting
+            # the rule or unchecking Tips has to stop old posts charging as
+            # well as new ones — otherwise the emoji the bot already placed
+            # stay payment buttons the admin believes they switched off.
+            return TipOutcome(reason="tips_off")
+
+        rungs = get_rungs_with_conn(conn, guild_id, channel_id)
         rung_amount = rungs.get(emoji, 0)
         if rung_amount < 1:
             return TipOutcome(reason="not_a_rung")

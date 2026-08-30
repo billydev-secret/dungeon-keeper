@@ -51,8 +51,12 @@ channel that was already always-on, so there was nothing left to trigger it.
 
 One production channel was pinned at the time, with an autoplay playlist set.
 Removing this means the bot leaves that channel on the normal idle sweep like
-any other; the empty `music_channel_settings` table is left in place rather than
-dropped by migration.
+any other; the `music_channel_settings` table is left in place rather than
+dropped by migration — and it is **not** empty: the pinned channel's row (its
+voice channel, `always_on=1` and the autoplay playlist URL) is still sitting
+there. Nothing in `src/` reads or writes the table any more, so that row is a
+stored preference with no effect and no dashboard surface. It should go with a
+`DROP TABLE` when a migration is next being written for this area.
 
 ### Track-failure fallback (added 2026-07-30)
 
@@ -153,4 +157,4 @@ full bot restart — respawning the JVM alone only picks up `application.yml`.
 
 ## Stored data
 
-No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an empty orphan. All queue state, playback position, and the now-playing card's channel and message ids are in-memory only and don't survive a restart — after a restart the first track change posts a fresh card, and the old one keeps working buttons because the view is persistent.
+No persistent tables. The per-channel 24/7 settings table (`music_channel_settings`) is no longer read or written; it survives as an orphan still holding the one production row from the always-on era (voice channel, `always_on`, autoplay playlist) — stored, never read, and awaiting a `DROP TABLE`. All queue state, playback position, and the now-playing card's channel and message ids are in-memory only and don't survive a restart — after a restart the first track change posts a fresh card, and the old one keeps working buttons because the view is persistent.
