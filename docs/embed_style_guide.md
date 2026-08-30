@@ -368,6 +368,42 @@ What *is* per-guild is the message body.
   economy game role via `AllowedMentions(roles=[Object(id=…)])`), never rely on
   the raw text.
 
+## Naming members in embeds (never `<@id>`)
+
+**Inside an embed, a `<@id>` is not a name — it is a number.** Discord's
+servers do nothing to a mention; the *reading* client resolves it from its own
+member cache, so any viewer who has not seen that user sees a bare id. This has
+been diagnosed and fixed three times now (Whisper `aa7ec8cb`, Casino
+`0ae70448`, Guess) and it always looks the same in the wild: a public card
+showing digits to everyone but the person it names. Mentions in **message
+`content=`** are fine — those *are* resolved server-side, and that's where a
+deliberate ping belongs.
+
+- **Resolve through `services/name_resolver.py`.** `build_name_fn(guild=…,
+  db_path=…, guild_id=…, user_ids=…)` returns a sync `NameFn`; the chain is
+  live member cache → `known_users.display_name` → `known_users.username` →
+  `<@id>`. The cache leads (with `intents.members` on it is complete and
+  nickname-fresh); the table covers the one case it structurally cannot,
+  members who have **left**. Names come back markdown-escaped.
+- **Build once, reuse.** `build_name_fn` only queries for ids the member cache
+  misses, so a roster of present members costs no I/O — but it is async, so a
+  long-lived view prefetches once at mount and the sync builders close over the
+  result, rather than re-resolving per render.
+- **Builders take a `name_fn`, defaulting to `mention`.** The default keeps an
+  un-wired caller rendering instead of crashing — which is exactly why the
+  wiring needs its own guard: pair the builder table with an **AST test that
+  every render site passes a resolver** (`tests/test_casino_embeds.py`,
+  `tests/test_guess_embeds.py` are the two models; a new builder adds a
+  `pytest.param` row, not a new file).
+- **Mod-facing embeds keep the id *alongside* the name** — `Name (`id`)` — so a
+  moderator retains something copyable. Member-facing cards get the name alone.
+- **The one exception: a no-contact pair.** Where a surface would name two
+  people the no-contact list keeps apart, degrade to a plain `User <id>` for
+  both. The bot naming them together in its own voice manufactures exactly the
+  association the list exists to prevent, and a mention there is worse than a
+  number, not better. Pin that branch with a test, or the next
+  resolve-the-ids sweep will quietly undo it. → `no_contact_spec.md`
+
 ## Pointing at things (ruling 2026-08-28: link the message)
 
 **If you hold a message id, link the message.** A channel-only link drops the

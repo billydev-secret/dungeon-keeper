@@ -209,6 +209,15 @@ The gate enforces the floor: a **new** `logic.py` / `store.py` / `service.py` /
   you do want a ping, allow-list exactly the role or user intended.
   → `embed_style_guide.md` § Mentions, pings & user-supplied text
 
+- **Naming a member in an embed? Resolve it — `<@id>` renders as a number.**
+  An embed mention is resolved by the *reading* client from its own cache, so
+  anyone who hasn't seen that user gets bare digits. Use
+  `services/name_resolver.build_name_fn` (member cache → `known_users` →
+  `<@id>`, markdown-escaped), have builders take a `name_fn`, and guard the
+  wiring with a test. Content mentions are fine; a no-contact pair degrades to
+  a plain `User <id>` on purpose.
+  → `embed_style_guide.md` § Naming members in embeds
+
 - **Hold a message id? Link the message, not the channel.** A channel-only
   link lands the reader at the bottom of the channel; build permalinks with
   `core/utils.jump_url`, never a hand-rolled URL. Link the channel only when

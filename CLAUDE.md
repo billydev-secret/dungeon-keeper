@@ -212,7 +212,14 @@ SQLite-backed. Tests in `tests/`.
   AppContext, or a db_path; pass `default=DEFAULT_ACCENT_COLOR` if you need a
   non-optional `Color`. Never call `resolve_accent_color` directly: it raises,
   and a repo-wide test fails the suite if you do. Keep red/green/etc. only
-  where the color is semantic. Fuller conventions for bot embeds/panels
+  where the color is semantic.
+- **A member named inside an embed is resolved, never a `<@id>`** — an embed
+  mention is resolved by the *reading* client from its own cache, so it renders
+  as a bare number to anyone who hasn't seen that user. Use
+  `services/name_resolver.build_name_fn`; builders take a `name_fn` and a test
+  guards that every render site passes one. Mentions in message `content=` are
+  fine. A **no-contact pair degrades to a plain `User <id>` on purpose** — don't
+  sweep it. Fuller conventions for bot embeds/panels
   (section spacing, monospace tables, persistent views, ping allow-listing)
   live in `docs/embed_style_guide.md`.
 - **Dashboard route ids are the bare feature name** (`pen-pals`, `role-menus`)
