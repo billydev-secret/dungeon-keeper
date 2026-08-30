@@ -52,7 +52,7 @@ function render(container, grants, channels, roles) {
           <div class="field">
             <label>Log Channel</label>
             <span data-picker="log_channel_id" data-grant="${esc(name)}"></span>
-            <div class="field-hint">A private record of every time this role is given or taken away. "(disabled)" keeps no record.</div>
+            <div class="field-hint">A private record of every time a moderator hands this role out with <code>/grant</code>. Roles taken away later are not posted here. "(disabled)" keeps no record.</div>
           </div>
           <div class="field">
             <label>Announcement Channel</label>
@@ -125,7 +125,7 @@ function render(container, grants, channels, roles) {
         <div class="field">
           <label>Log Channel</label>
           <span data-picker="log_channel_id" data-grant="__new__"></span>
-          <div class="field-hint">A private record of every time this role is given or taken away. "(disabled)" keeps no record.</div>
+          <div class="field-hint">A private record of every time a moderator hands this role out with <code>/grant</code>. Roles taken away later are not posted here. "(disabled)" keeps no record.</div>
         </div>
         <div class="field">
           <label>Announcement Channel</label>

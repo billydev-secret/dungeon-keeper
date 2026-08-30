@@ -34,6 +34,12 @@ from bot_modules.role_menus.logic import (
     resolve_click,
     resolve_selection,
 )
+from bot_modules.services.role_grant_logic import (
+    GATE_MISSING_PREREQUISITE,
+    GATE_OK,
+    prerequisite_gate,
+    prerequisites_for_role,
+)
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -351,6 +357,58 @@ def _error_text(code: str, menu: dict) -> str:
     return MSG_BROKEN
 
 
+async def _clears_grant_prerequisites(
+    interaction: discord.Interaction,
+    ctx: "AppContext",
+    guild: discord.Guild,
+    member: discord.Member,
+    menu: dict,
+    outcome: Outcome,
+) -> bool:
+    """False (having replied) when a role being added is a grant role whose
+    *Role Required First* the member doesn't hold.
+
+    A menu button is a second door to a role that ``/grant`` gates — and the
+    gate is the point (the production case is Member behind verification).
+    Nothing stops a mod publishing a menu for a gated role, so the check has to
+    live here, on the click, where it also survives a grant configured *after*
+    the menu was published. Same rules as ``/grant``: fails closed when the
+    required role has been deleted, and admins override.
+    """
+    grant_roles = ctx.guild_config(guild.id).grant_roles
+    if not grant_roles:
+        return True
+    actor_is_admin = ctx.is_admin(interaction)
+    for rid in outcome.adds:
+        for req_id in prerequisites_for_role(grant_roles, rid):
+            req_role = guild.get_role(req_id)
+            verdict = prerequisite_gate(
+                required_role_id=req_id,
+                required_role_exists=req_role is not None,
+                target_has_required=req_role is not None and req_role in member.roles,
+                actor_is_admin=actor_is_admin,
+            )
+            if verdict == GATE_OK:
+                continue
+            if verdict == GATE_MISSING_PREREQUISITE and req_role is not None:
+                await _reply(
+                    interaction,
+                    f"You need the **@{req_role.name}** role before you can pick that.",
+                )
+                return False
+            # Prerequisite role deleted: refuse rather than wave everyone
+            # through, and tell the mods their gate is unsatisfiable.
+            await _reply(interaction, MSG_BROKEN)
+            await _alert_mods_once(
+                ctx,
+                guild,
+                menu,
+                f"a choice needs role id {req_id} first, and that role is gone",
+            )
+            return False
+    return True
+
+
 async def _apply_outcome(
     interaction: discord.Interaction,
     ctx: "AppContext",
@@ -364,6 +422,11 @@ async def _apply_outcome(
     if bot_member is None or not bot_member.guild_permissions.manage_roles:
         await _reply(interaction, MSG_BROKEN)
         await _alert_mods_once(ctx, guild, menu, "I'm missing the Manage Roles permission")
+        return
+
+    if outcome.adds and not await _clears_grant_prerequisites(
+        interaction, ctx, guild, member, menu, outcome
+    ):
         return
 
     add_roles: list[discord.Role] = []

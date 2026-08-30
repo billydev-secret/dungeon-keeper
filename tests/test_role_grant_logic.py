@@ -15,7 +15,16 @@ from bot_modules.services.role_grant_logic import (
     GATE_OK,
     GATE_PREREQUISITE_DELETED,
     prerequisite_gate,
+    prerequisites_for_role,
 )
+
+# The production shape: Member is gated behind verification, NSFW is a grant
+# with no prerequisite, and one grant is parked on "(none)" (role_id 0).
+_GRANTS = {
+    "denizen": {"role_id": 100, "required_role_id": 900},
+    "nsfw": {"role_id": 200, "required_role_id": 0},
+    "kink": {"role_id": 0, "required_role_id": 0},
+}
 
 
 @pytest.mark.parametrize(
@@ -52,6 +61,34 @@ def test_prerequisite_gate(required_role_id, exists, held, is_admin, expected):
         )
         == expected
     )
+
+
+@pytest.mark.parametrize(
+    ("grants", "role_id", "expected"),
+    [
+        # The bypass this closes: a role menu published for the gated role.
+        pytest.param(_GRANTS, 100, (900,), id="gated-grant-role"),
+        pytest.param(_GRANTS, 200, (), id="grant-role-without-prerequisite"),
+        pytest.param(_GRANTS, 300, (), id="role-that-is-not-a-grant"),
+        # "(none)" stores role_id 0; a menu can't hold role 0, but nothing
+        # should ever match on it either.
+        pytest.param(_GRANTS, 0, (), id="unset-grant-never-matches"),
+        pytest.param({}, 100, (), id="no-grants-configured"),
+        # Two grants on one role: both prerequisites have to be cleared.
+        pytest.param(
+            {
+                "a": {"role_id": 100, "required_role_id": 900},
+                "b": {"role_id": 100, "required_role_id": 800},
+                "c": {"role_id": 100, "required_role_id": 900},
+            },
+            100,
+            (800, 900),
+            id="two-grants-one-role-deduped",
+        ),
+    ],
+)
+def test_prerequisites_for_role(grants, role_id, expected):
+    assert prerequisites_for_role(grants, role_id) == expected
 
 
 def test_missing_prerequisite_implies_the_role_exists():

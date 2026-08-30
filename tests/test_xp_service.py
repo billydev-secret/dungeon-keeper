@@ -165,12 +165,28 @@ def test_each_decision_reachable(overrides, expected):
     assert should_grant_level_role(**{**_GRANT_OK, **overrides}) is expected
 
 
-def test_nsfw_grant_role_id_reads_role_id():
-    assert nsfw_grant_role_id({"nsfw": {"role_id": 555}}) == 555
-
-
-def test_nsfw_grant_role_id_defaults_to_zero_when_unset():
-    assert nsfw_grant_role_id({}) == 0
+@pytest.mark.parametrize(
+    ("grant_roles", "configured", "expected"),
+    [
+        # The legacy path: a grant whose internal key happens to be "nsfw".
+        pytest.param({"nsfw": {"role_id": 555}}, 0, 555, id="legacy-grant-key"),
+        pytest.param({}, 0, 0, id="nothing-configured"),
+        # The dashboard's Promotion Review Grant Role wins when set — the fix
+        # for a guild whose grant is named anything else ("spicy", "adult"),
+        # or that has no grants at all, where the field silently vanished.
+        pytest.param({}, 777, 777, id="dashboard-role-with-no-grants"),
+        pytest.param(
+            {"spicy": {"role_id": 555}}, 777, 777, id="dashboard-role-custom-key"
+        ),
+        pytest.param(
+            {"nsfw": {"role_id": 555}}, 777, 777, id="dashboard-role-overrides-grant"
+        ),
+        # "(none)" on the picker stores 0, which must not shadow the fallback.
+        pytest.param({"nsfw": {"role_id": 555}}, 0, 555, id="picker-none-falls-back"),
+    ],
+)
+def test_nsfw_grant_role_id(grant_roles, configured, expected):
+    assert nsfw_grant_role_id(grant_roles, configured) == expected
 
 
 # ── handle_level_progress: deliver owed levels + persist the mark ─────────
@@ -688,6 +704,7 @@ async def test_recheck_loop_posts_due_member_and_clears_the_row(tmp_path):
     cfg.level_5_role_id = 0
     cfg.xp_settings = DEFAULT_XP_SETTINGS
     cfg.grant_roles = {}
+    cfg.promotion_review_grant_role_id = 0
 
     channel = AsyncMock()
     with (

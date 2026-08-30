@@ -347,7 +347,7 @@ def main() -> None:
             level_5_log_channel_id=cfg.level_5_log_channel_id,
             settings=cfg.xp_settings,
             db_path=db_path,
-            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+            nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
         )
 
     bot.startup_task_factories.append(

@@ -506,6 +506,12 @@ SUBJECT_ID_COLUMNS = frozenset(
         "beneficiary_id", "blocked_user_id", "challenger_id", "claimed_by",
         "claimer_id", "completed_by", "created_by", "creator_id", "done_by",
         "editor_id",
+        # grant_role_permissions (and its dead prod-only predecessor
+        # give_role_permissions) name a member as "entity_id" alongside an
+        # entity_type of 'user' or 'role' — a role id can never collide with a
+        # member id, so matching on it is safe and it is the only way those
+        # keeper allow-lists reach an access export at all.
+        "entity_id",
         "extra_questioner_id", "from_user_id", "guessed_id", "guessed_user_id",
         "guesser_id", "high_bidder_id", "highest_user", "holder_id", "host_id",
         "invitee_id", "inviter_id", "last_winner_id", "loser_id", "lowest_user",

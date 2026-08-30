@@ -77,7 +77,7 @@ export function mountSettings(container) {
             <div class="field">
               <label>Promotion Review Grant Role</label>
               <div data-picker="promotion_review_grant_role_id"></div>
-              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. Choose "(none)" and the Grant button has nothing to give. Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
+              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. This is also the role the Level 5 card's <strong>Spicy access</strong> line reports on. Choose "(none)" and the Grant button has nothing to give (the Spicy access line then falls back to a grant named <code>nsfw</code>, and is left off the card if there isn't one). Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
             </div>
             <div class="field">
               <label>Promotion Review Ping Role</label>

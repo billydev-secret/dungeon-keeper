@@ -63,13 +63,17 @@ the bare `AllowedMentions(roles=[...])` form still serializes
 - **Level 5 card refresh:** the Level 5 card's **Spicy access** field is the one
   live element on an otherwise at-promotion snapshot. `xp_level_5_cards`
   (migration 141) stores where each card was posted, and the `on_member_update`
-  role diff in `events_cog` re-renders just that field whenever the NSFW grant
-  role (`grant_roles["nsfw"]`) is added or removed — so the card tracks access
-  granted by `/grant` or by a hand-added role, neither of which it could see
-  before. **Two independent settings:** the field reports `grant_roles["nsfw"]`,
-  while the Grant button hands out `promotion_review_grant_role_id`. The button
-  therefore refreshes the card only when those are the same role; set to a
-  different role it grants successfully and the field correctly doesn't move.
+  role diff in `events_cog` re-renders just that field whenever the spicy-access
+  role is added or removed — so the card tracks access granted by `/grant` or by
+  a hand-added role, neither of which it could see before. **Which role that
+  is** (`xp_service.nsfw_grant_role_id`, 2026-08-29): the dashboard's
+  **Promotion Review Grant Role** (`promotion_review_grant_role_id`, XP &
+  Leveling panel) when set — the role the button hands out is by definition the
+  access being reviewed, so button and field now move together — falling back to
+  the grant whose internal key is literally `nsfw`, and 0 (field omitted) when
+  neither exists. Before that the field read `grant_roles["nsfw"]` *only*: no
+  dashboard control designated that key, so an admin who renamed the grant, or a
+  second guild that never had one, lost the field and its refreshes silently.
   Deliberately a separate table from `promotion_review_cards`: a Level 5 card
   never resolves, so it would squat that table's one-open-card-per-member slot
   forever. Cards whose message *or* channel has been deleted are forgotten (a

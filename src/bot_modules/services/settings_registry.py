@@ -73,13 +73,23 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 # write would succeed, and nothing whatsoever would change. Worse than
 # refusing.
 #
-#   nsfw/denizen/veteran_role_id — superseded by the `grant_roles` table
-#                                  (see advisor_actions.validate_grant_role_change)
+#   nsfw/denizen/veteran_*       — the whole legacy per-grant config block
+#                                  (role, log channel, announce channel,
+#                                  message), superseded by the `grant_roles`
+#                                  table (see
+#                                  advisor_actions.validate_grant_role_change).
+#                                  Their only remaining reader is the one-shot
+#                                  db_utils.migrate_grant_roles, which
+#                                  early-returns for any guild that already has
+#                                  grant_roles rows — i.e. every live guild.
 #   veil_*                       — Veil was renamed to Guess in migration 020
-DEAD_KEYS: frozenset[str] = frozenset({
-    "nsfw_role_id",
-    "denizen_role_id",
-    "veteran_role_id",
+_LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
+    f"{grant}_{suffix}"
+    for grant in ("nsfw", "denizen", "veteran")
+    for suffix in ("role_id", "log_channel_id", "announce_channel_id", "grant_message")
+)
+
+DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     "veil_role_id",
     "veil_channel_id",
 })

@@ -172,6 +172,25 @@ def test_no_dead_key_is_in_the_registry():
     assert not (set(sr.SETTINGS_BY_KEY) & sr.DEAD_KEYS)
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "denizen_role_id", "nsfw_role_id", "veteran_role_id",
+        "denizen_log_channel_id", "nsfw_log_channel_id", "veteran_log_channel_id",
+        "denizen_announce_channel_id", "nsfw_announce_channel_id",
+        "veteran_announce_channel_id",
+        "denizen_grant_message", "nsfw_grant_message", "veteran_grant_message",
+    ],
+)
+def test_the_whole_legacy_grant_config_block_is_documented_dead(key):
+    """Live servers still hold all four keys per legacy grant (role, log
+    channel, announce channel, message) at guild_id 0. Only the *_role_id
+    third of them used to be listed, so a future pass could have added a
+    "Denizen Log Channel" setting that wrote a row nothing reads — the
+    grant's real config has lived in the `grant_roles` table since."""
+    assert key in sr.DEAD_KEYS
+
+
 def test_check_registry_rejects_a_dead_key(monkeypatch):
     monkeypatch.setattr(sr, "FEATURES", (
         sr.Feature(slug="a", label="A", panel="p", blurb="b",

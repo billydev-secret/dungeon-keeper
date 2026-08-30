@@ -523,6 +523,29 @@ def test_export_finds_the_subject_on_either_side_of_a_pair_table(db):
     assert data["counts"]["invite_edges"] == 1
 
 
+def test_export_finds_a_member_on_a_grant_keeper_allow_list(db):
+    """`grant_role_permissions` names the members allowed to hand out a grant
+    in an `entity_id` column (entity_type 'user'); a legacy `give_role_permissions`
+    with the same shape is still sitting on live servers. Both were invisible
+    to the export until `entity_id` was a recognised subject column — a keeper
+    list is personal data about the keeper."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO grant_role_permissions "
+            "(guild_id, grant_name, entity_type, entity_id) VALUES (?, 'nsfw', 'user', ?)",
+            (GUILD, USER),
+        )
+        # A role entry on the same list is not a member and must not be
+        # mistaken for one.
+        conn.execute(
+            "INSERT INTO grant_role_permissions "
+            "(guild_id, grant_name, entity_type, entity_id) VALUES (?, 'nsfw', 'role', ?)",
+            (GUILD, 4242),
+        )
+        data = export_user_data(conn, GUILD, USER)
+    assert data["counts"]["grant_role_permissions"] == 1
+
+
 def test_export_covers_every_table_the_purge_deletes(db):
     """The load-bearing property: an access export that misses a table the
     erasure path knows about is an incomplete answer to a statutory request.
