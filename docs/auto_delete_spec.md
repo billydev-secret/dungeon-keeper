@@ -40,12 +40,21 @@ The startup scan walks channel history rather than the queue, so a delete it fai
 
 ### Startup catch-up
 
-When the bot boots, every rule runs a one-shot pass over its channel's recent history. Anything past the `max_age` cutoff is deleted; anything younger is queued so the next live sweep can age it out. **Pinned messages are skipped during the startup pass.** A media-only rule additionally skips text-only messages on both the delete and the queue paths. The live sweep doesn't re-check pin state — see Non-goals.
+When the bot boots, every rule runs a one-shot pass over its channel's recent history. Anything past the `max_age` cutoff is deleted; anything younger is queued so the next live sweep can age it out. **Pinned messages are skipped during the startup pass.** A media-only rule additionally skips text-only messages on both the delete and the queue paths. The live sweep skips pins too — see Pinned messages.
+
+### Pinned messages
+
+**A pinned message is never deleted, by either path.** The startup scan has always had this — it walks `Message` objects and skips `message.pinned` — but the live sweep deletes by bare message id and so had no idea. It was written up as a non-goal with a mod policy attached ("don't pin in auto-delete channels"), and that held right up until a feature started pinning things people had paid for: a purchased Flash Theme card is posted and pinned into `#🔥│flash-channel` for a 24-hour run, and that channel carries a one-hour rule, so the sweep took the card down 3,630 seconds after it went up (2026-08-29).
+
+So the sweep now reads the channel's pins **once per pass** — one request, capped at Discord's own 50-pin limit — and subtracts those ids from every batch. Two consequences worth stating:
+
+- **Pinned messages stay queued rather than being dropped.** Unpinning hands the message straight back to the next sweep, which is what the mod who unpins it expects. The filter runs against the ids coming back from `pop_due_auto_delete_message_ids` rather than inside the query, since the pinned set comes from Discord and not the DB; the rows staying put is also what ends the drain loop when a channel's whole backlog is pinned.
+- **A pass that cannot read the pins deletes nothing.** `_pinned_message_ids` returns `None` (not an empty set) when Discord refuses, and the sweep returns early without charging anyone an attempt. The cost is a minute's delay; the cost of guessing the other way is a member's money.
 
 ## Permissions
 
 - **User-side**: dashboard admin only.
-- **Bot-side**: **Manage Messages** in every channel with a rule. **Read Message History** is required for the startup catch-up to walk channel history.
+- **Bot-side**: **Manage Messages** in every channel with a rule. **Read Message History** is required for the startup catch-up to walk channel history, and for the live sweep to read a channel's pins.
 
 ## User-visible errors
 
@@ -56,7 +65,7 @@ None. Auto-delete has no member-facing surface, so members never see error messa
 - **No slash command.** Configuration is admin-only by design.
 - **No upper bound or sanity range on the configured values.** The API enforces only the same floor the panel does — age and interval must both be at least 1 second, rejected with a 422 below that, since a 0 makes the rule due every tick with every tracked message eligible. Above that floor it accepts whatever it's sent, so an aggressively short (but positive) age is still an admin's own choice.
 - **No edit-tracking.** A message's age is its creation time. Editing doesn't reset the timer.
-- **No "preserve pins" toggle in the live sweep.** Pin a message after the queue picks it up and it'll still get deleted on the next tick. Mod policy: don't pin in auto-delete channels.
+- **No "preserve pins" *toggle*.** Pins are exempt unconditionally (see Pinned messages); there is no per-rule switch to make a sweep delete them anyway.
 - **No per-author exclusion.** Bot messages age out the same as member messages.
 - **No in-Discord failure surface for mods.** Failures retry on a bounded schedule (see The sweep) and a give-up DMs the bot operator, but nothing is posted in-channel and no dashboard panel lists stuck messages — `SELECT * FROM auto_delete_messages WHERE attempts >= 6` is the report.
 - **No audit log of what was deleted.** The deletion is destructive — there's no "what was here" recovery.
