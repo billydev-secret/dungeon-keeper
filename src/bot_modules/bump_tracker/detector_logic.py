@@ -98,6 +98,35 @@ def message_text(message: Any) -> str:
     return "\n".join(parts).lower()
 
 
+def should_detect(cfg: Any, channel_id: int) -> bool:
+    """Whether a bot message in ``channel_id`` is eligible for auto-detection.
+
+    Deliberately independent of the guild's ``enabled`` flag. That flag is the
+    dashboard's "Send Bump Reminders" switch, whose own hint promises bumps are
+    still recorded while it is off — it governs pings and the live widget, not
+    whether a bump happened. Detection stays locked to the reminder channel:
+    that is the only channel the feature ever watches, so a listing bot posting
+    elsewhere is never seen, and an unset channel means nothing to detect.
+    """
+    if cfg is None:
+        return False
+    if not cfg["channel_id"]:
+        return False
+    return channel_id == cfg["channel_id"]
+
+
+def should_post_widget(cfg: Any) -> bool:
+    """Whether the live status widget may be posted or edited for this guild.
+
+    Follows the reminders switch, matching what the background loop already
+    does (``WHERE enabled = 1 AND channel_id != 0``) so that turning reminders
+    off really does stop the channel from being written to.
+    """
+    if cfg is None:
+        return False
+    return bool(cfg["enabled"]) and bool(cfg["channel_id"])
+
+
 def classify(
     text: str,
     *,

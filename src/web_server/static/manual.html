@@ -2591,9 +2591,11 @@
 
     <p>The reminder channel, ping role, tracked sites, and auto-detection rules are configured on the <strong>Bump Tracker</strong> panel in the <a href="/">web dashboard</a>.</p>
 
+    <p>Turning <strong>Send Bump Reminders</strong> off does not stop bumps being recorded — they still go in from <code>/bump log</code> and from detection. What stops is the ping and the live status widget; the reminder channel goes quiet until you switch reminders back on.</p>
+
     <p>Each site's <strong>Detection</strong> settings decide how a bump is spotted automatically:</p>
     <ul>
-      <li><strong>Bot ID</strong> — the listing bot's user ID. Set it and bumps are recorded without anyone running <code>/bump log</code>.</li>
+      <li><strong>Bot ID</strong> — the listing bot's user ID. Set it and bumps are recorded without anyone running <code>/bump log</code>. Only the reminder channel is watched, so the listing bot's confirmation has to land there.</li>
       <li><strong>Text when bumped</strong> — only count messages containing this phrase (e.g. <code>Bump done!</code>). Leave blank to count any message from that bot.</li>
       <li><strong>Text when refused</strong> — a phrase that marks a <em>rejected</em> bump, such as <code>already bumped recently</code>. Messages matching it are ignored rather than resetting the timer.</li>
     </ul>

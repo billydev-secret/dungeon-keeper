@@ -25,16 +25,16 @@ An embed titled "Bump Tracker" listing each site as either `✅ Ready to bump!` 
 A site with no logged bump counts as ready.
 
 ### `/bump log`
-Validates the site name against the guild's configured sites, upserts the bump timestamp (clearing the notified flag), confirms ephemerally, then refreshes the widget in place (if a channel is configured).
+Validates the site name against the guild's configured sites, upserts the bump timestamp (clearing the notified flag), confirms ephemerally, then refreshes the widget in place — only when the guild is enabled *and* has a channel (`should_post_widget`). With reminders switched off the bump is still recorded and nothing is written to the channel.
 
 ### `/bump status`
 Renders the same widget embed ephemerally to the invoker. No writes.
 
 ### Auto-detection
-Sites may carry a detector: a listing bot's user ID, an optional success pattern (`detector_pattern`) and an optional failure pattern (`failure_pattern`). When any bot posts in the configured channel, the message is matched against each detector site — author must equal `detector_bot_id`, then the message text is classified (`bump_tracker/detector_logic.py`):
+Sites may carry a detector: a listing bot's user ID, an optional success pattern (`detector_pattern`) and an optional failure pattern (`failure_pattern`). Eligibility is `should_detect`: the message must be in the configured channel, which is the only channel watched — but **not** gated on `enabled`, because the panel's switch promises bumps keep being recorded while reminders are off. The message is then matched against each detector site — author must equal `detector_bot_id`, then the message text is classified (`bump_tracker/detector_logic.py`):
 
 1. If `failure_pattern` is set and appears in the text, the message is a **refused** bump. It is logged server-side and otherwise ignored — no bump recorded, no widget refresh, cooldown keeps running off the last real bump.
-2. Otherwise, if `detector_pattern` is empty **or** appears in the text, it is a **successful** bump: logged automatically and the widget force-resent to the bottom of the channel.
+2. Otherwise, if `detector_pattern` is empty **or** appears in the text, it is a **successful** bump: logged automatically, and the widget force-resent to the bottom of the channel when reminders are on.
 3. Otherwise the site does not claim the message, and the next detector site is tried.
 
 The failure check runs first because refusals routinely echo the success wording ("you can bump again…"), and because every guild configured before this existed uses an empty `detector_pattern`, which matches anything the bot posts.
@@ -74,7 +74,7 @@ shows each site's live status and counts down to the next one becoming ready.
 
 - **Channel** — where pings and the widget are posted; the feature is inactive until set.
 - **Role** — pinged when a site becomes ready (optional).
-- **Enabled** — master toggle (default on).
+- **Enabled** ("Send Bump Reminders") — governs the pings and the live widget only (default on). Recording continues either way: `/bump log` and auto-detection both keep writing bump rows while it is off, which is what the panel hint says and what the loop, the manual path and the detector now all agree on.
 - **Per site**: name, cooldown in seconds, and a **Detection** cell holding the optional detector bot ID, "Text when bumped" (`detector_pattern`) and "Text when refused" (`failure_pattern`).
 
 Until 2026-07-28 the panel sent `detector_pattern: ""` on every site save, so it
