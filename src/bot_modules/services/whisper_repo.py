@@ -20,6 +20,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_launcher_message_id": "0",
     "whisper_cooldown_seconds": "30",
     "whisper_hourly_cap_per_target": "5",
+    "whisper_guesses_per_whisper": "3",
 }
 
 
@@ -35,6 +36,7 @@ def get_whisper_config(conn: sqlite3.Connection, guild_id: int) -> WhisperConfig
         launcher_message_id=int(_get("whisper_launcher_message_id") or 0),
         cooldown_seconds=int(_get("whisper_cooldown_seconds") or 30),
         hourly_cap_per_target=int(_get("whisper_hourly_cap_per_target") or 5),
+        guesses_per_whisper=int(_get("whisper_guesses_per_whisper") or 3),
     )
 
 
@@ -76,14 +78,22 @@ def insert_whisper(
     sender_id: int,
     target_id: int,
     message: str,
+    guesses_left: int = 3,
 ) -> int:
+    """Store a whisper, seeding its guess allowance.
+
+    ``guesses_left`` is written per whisper rather than read at guess time, so
+    a mid-flight change to the guild's dial can never take a guess away from
+    someone who was already promised it.
+    """
     cur = conn.execute(
         """
         INSERT INTO whispers
-            (guild_id, sender_id, target_id, message, created_at)
-        VALUES (?, ?, ?, ?, ?)
+            (guild_id, sender_id, target_id, message, created_at, guesses_left)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (guild_id, sender_id, target_id, message, time.time()),
+        (guild_id, sender_id, target_id, message, time.time(),
+         max(1, int(guesses_left))),
     )
     return cur.lastrowid  # type: ignore[return-value]
 

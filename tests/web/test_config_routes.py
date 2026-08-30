@@ -904,6 +904,57 @@ def test_update_pen_pals_config_normalizes_bad_room_visibility(authed_client, fa
     assert pp["room_visibility"] == "mods"
 
 
+def test_get_config_pen_pals_round_schedule_defaults(authed_client):
+    """The scheduled round's day and hour are dials now, not a hard-coded 8am
+    Eastern — so the panel has to be able to read them back."""
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["auto_round_dow"] == -1  # every day
+    assert pp["auto_round_hour"] == 12
+
+
+def test_update_pen_pals_config_persists_the_round_schedule(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "auto_round_dow": 3, "auto_round_hour": 8},
+    )
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert (pp["auto_round_dow"], pp["auto_round_hour"]) == (3, 8)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"auto_round_dow": 7}, id="dow-too-high"),
+        pytest.param({"auto_round_dow": -2}, id="dow-too-low"),
+        pytest.param({"auto_round_hour": 24}, id="hour-out-of-day"),
+        pytest.param({"auto_round_hour": -1}, id="hour-negative"),
+    ],
+)
+def test_update_pen_pals_config_rejects_an_impossible_round_time(
+    authed_client, fake_ctx, body
+):
+    resp = authed_client.put(
+        "/api/config/pen-pals", json={"enabled": True, **body},
+    )
+    assert resp.status_code == 400
+
+
+def test_update_pen_pals_config_leaves_the_round_schedule_alone_when_omitted(
+    authed_client, fake_ctx
+):
+    """A save from a page that doesn't carry the two fields (an older cached
+    panel) must not silently reset the admin's chosen round time."""
+    authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "auto_round_dow": 5, "auto_round_hour": 9},
+    )
+    resp = authed_client.put("/api/config/pen-pals", json={"enabled": True})
+    assert resp.status_code == 200
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert (pp["auto_round_dow"], pp["auto_round_hour"]) == (5, 9)
+
+
 def test_get_config_pen_pals_intro_message_defaults_to_empty(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
@@ -1100,6 +1151,33 @@ def test_update_whisper_persists_fields(authed_client, fake_ctx):
     assert cfg.channel_id == 7000
     assert cfg.role_id == 8000
     assert cfg.log_channel_id == 9000
+
+
+@pytest.mark.parametrize(
+    ("sent", "stored"),
+    [
+        pytest.param(5, 5, id="raised"),
+        pytest.param(1, 1, id="floor"),
+        pytest.param(0, 1, id="zero-clamps-to-one"),
+        pytest.param(99, 10, id="clamped-to-ten"),
+    ],
+)
+def test_update_whisper_persists_the_guess_cap(authed_client, fake_ctx, sent, stored):
+    """The recipient's guess allowance was fixed at three by the schema with no
+    control anywhere; it's a dial now, clamped to a playable range."""
+    resp = authed_client.put(
+        "/api/config/whisper", json={"guesses_per_whisper": sent},
+    )
+    assert resp.status_code == 200
+    assert authed_client.get("/api/config").json()["whisper"][
+        "guesses_per_whisper"
+    ] == stored
+
+
+def test_get_config_whisper_guess_cap_defaults_to_three(authed_client):
+    assert authed_client.get("/api/config").json()["whisper"][
+        "guesses_per_whisper"
+    ] == 3
 
 
 # ── /config/dms ──────────────────────────────────────────────────────

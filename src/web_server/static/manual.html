@@ -844,7 +844,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Inbox actions</strong>
-        <p>When a whisper arrives in your DM you'll see buttons to <strong>Guess</strong> the sender (limited attempts), <strong>Share</strong> it to the public feed, <strong>Hide</strong> it from your main inbox, <strong>Reply</strong> anonymously, or <strong>Report</strong> it to moderators. Identities are always logged for moderators even though senders appear anonymous to recipients.</p>
+        <p>When a whisper arrives in your DM you'll see buttons to <strong>Guess</strong> the sender (the DM tells you how many tries you get &mdash; three by default, set per server on the Whisper panel), <strong>Share</strong> it to the public feed, <strong>Hide</strong> it from your main inbox, <strong>Reply</strong> anonymously, or <strong>Report</strong> it to moderators. Identities are always logged for moderators even though senders appear anonymous to recipients.</p>
       </div>
     </div>
 
@@ -894,7 +894,7 @@
     <p>The server's <strong>Pairing Mode</strong>, set on the dashboard, decides when:</p>
     <ul>
       <li><strong>Instant</strong> — you're matched straight away if someone eligible is already waiting; otherwise you sit in the pool and are matched the moment the next person joins.</li>
-      <li><strong>Once a day</strong> — never matches on join. Everyone who joins queues up, and the whole pool is paired in one batch at 8:00 AM Eastern.</li>
+      <li><strong>Scheduled</strong> — never matches on join. Everyone who joins queues up, and the whole pool is paired in one batch at the day and hour the server picks, in the server's own time. You're told that time when you join the pool.</li>
     </ul>
 
     <h4>Who you won't be matched with</h4>
@@ -928,10 +928,10 @@
         <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool and stay out — works while you're waiting <em>or</em> mid-chat, and holds until you join again. Doesn't end a chat you're already in</td></tr>
         <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting, matched, or taking a break — and when your session ends</td></tr>
         <tr><td><code>/penpals block</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private panel to pick members Pen Pals should never match you with (or unblock them) — one block is enough, the other person is never told, and it doesn't end a chat you're already in</td></tr>
-        <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one (limited swaps per session)</td></tr>
+        <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one. The pinned message at the top of your chat says how many swaps you get &mdash; the server sets that number, and it's three unless they've changed it</td></tr>
         <tr><td><code>/penpals end</code></td><td><span class="perm perm-all">Everyone</span></td><td>End your current session early and close the shared channel</td></tr>
         <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool — both must already have joined the pool and not have left it, so force-pairing never overrides opt-in</td></tr>
-        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, once a day at 8am Eastern in Once-a-day mode)</td></tr>
+        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, at the scheduled round time in Scheduled mode)</td></tr>
       </tbody>
     </table>
 
@@ -939,7 +939,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/#/pen-pals">web dashboard</a></strong>
-        <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
+        <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Scheduled</em> to queue everyone and pair the whole pool in a single batch instead. <strong>Scheduled Round</strong> sets when that batch goes out — every day or one weekday, and the hour, read in your server's own time (the offset on Config → Server → Global). Members are quoted that time when they join the pool and on the signup panel. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
         <p><strong>Pool Activity</strong>, below the settings, is the log of who joined or left the matching pool and why — signed up, matched, chat ended, left the server, or left out for never posting. It exists because the pool itself only shows who is waiting <em>right now</em>: a pool that has quietly stopped moving looks exactly like one nobody has ever joined, which is how a five-day stall went unnoticed. If matching seems to have stopped, read this list first.</p>
       </div>
     </div>
@@ -989,6 +989,7 @@
 
     <h4>The endgame</h4>
     <p>The last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot.</p>
+    <p class="note">The Accord and the wipeout rules are still being built, so they aren&rsquo;t playable yet and the season settings page doesn&rsquo;t offer dials for them &mdash; the settings you can see there are all ones the bot actually plays by.</p>
 
     <h4>Commands</h4>
     <ul>

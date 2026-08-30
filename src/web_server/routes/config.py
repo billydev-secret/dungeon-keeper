@@ -155,11 +155,15 @@ from bot_modules.starboard.filters import validate_emoji as _starboard_validate_
 from bot_modules.cogs.pen_pals_cog import (
     DEFAULT_MATCH_MODE as _PP_DEFAULT_MATCH_MODE,
     DEFAULT_ROOM_VISIBILITY as _PP_DEFAULT_ROOM_VISIBILITY,
+    DEFAULT_ROUND_DOW as _PP_DEFAULT_ROUND_DOW,
+    DEFAULT_ROUND_HOUR as _PP_DEFAULT_ROUND_HOUR,
     _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_opt_outs as _pp_get_opt_outs,
     _get_pool as _pp_get_pool,
     _normalize_match_mode as _pp_normalize_match_mode,
+    _round_dow as _pp_round_dow,
+    _round_hour as _pp_round_hour,
     _normalize_room_visibility as _pp_normalize_room_visibility,
     _recent_pool_events as _pp_recent_pool_events,
     _set_admin_separations as _pp_set_admin_separations,
@@ -540,6 +544,7 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "log_channel_id": str(wc.log_channel_id),
         "cooldown_seconds": wc.cooldown_seconds,
         "hourly_cap_per_target": wc.hourly_cap_per_target,
+        "guesses_per_whisper": wc.guesses_per_whisper,
     }
 
 
@@ -934,6 +939,8 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "room_visibility": _PP_DEFAULT_ROOM_VISIBILITY,
             "intro_message": "",
             "match_mode": _PP_DEFAULT_MATCH_MODE,
+            "auto_round_dow": _PP_DEFAULT_ROUND_DOW,
+            "auto_round_hour": _PP_DEFAULT_ROUND_HOUR,
             "pool_size": pool_size,
             "session_seconds": 86400,
             "match_cooldown_seconds": 2592000,
@@ -957,6 +964,10 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "match_mode": _pp_normalize_match_mode(
             cfg["match_mode"] if "match_mode" in cfg.keys() else None
         ),
+        # The scheduled round's day (-1 = every day) and hour, in guild-local
+        # time — dead columns until 2026-08-29, now the dial the round reads.
+        "auto_round_dow": _pp_round_dow(cfg),
+        "auto_round_hour": _pp_round_hour(cfg),
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
         "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
@@ -3416,6 +3427,10 @@ class PenPalsConfigUpdate(BaseModel):
     room_visibility: str = _PP_DEFAULT_ROOM_VISIBILITY
     intro_message: str = ""
     match_mode: str = _PP_DEFAULT_MATCH_MODE
+    # Optional so a client that doesn't send them (an older cached panel)
+    # leaves the stored schedule alone instead of resetting it.
+    auto_round_dow: int | None = None
+    auto_round_hour: int | None = None
 
 
 # Pen Pals settings are moderator-level, unlike the rest of this module's
@@ -3434,6 +3449,10 @@ async def update_pen_pals_config(
     intro_message = body.intro_message.strip()
     if len(intro_message) > 1000:
         raise HTTPException(400, "Message must be 1000 characters or fewer")
+    if body.auto_round_dow is not None and not -1 <= body.auto_round_dow <= 6:
+        raise HTTPException(400, "auto_round_dow must be -1 (every day) or 0-6")
+    if body.auto_round_hour is not None and not 0 <= body.auto_round_hour <= 23:
+        raise HTTPException(400, "auto_round_hour must be an hour from 0 to 23")
 
     def _q() -> tuple[int, int]:
         with ctx.open_db() as conn:
@@ -3452,6 +3471,16 @@ async def update_pen_pals_config(
                 room_visibility=_pp_normalize_room_visibility(body.room_visibility),
                 intro_message=intro_message,
                 match_mode=_pp_normalize_match_mode(body.match_mode),
+                auto_round_dow=(
+                    body.auto_round_dow if body.auto_round_dow is not None
+                    else _pp_round_dow(existing) if existing is not None
+                    else _PP_DEFAULT_ROUND_DOW
+                ),
+                auto_round_hour=(
+                    body.auto_round_hour if body.auto_round_hour is not None
+                    else _pp_round_hour(existing) if existing is not None
+                    else _PP_DEFAULT_ROUND_HOUR
+                ),
             )
             return old_channel_id, old_message_id
 
@@ -4408,6 +4437,7 @@ class WhisperConfigUpdate(BaseModel):
     log_channel_id: str | None = None
     cooldown_seconds: int | None = None
     hourly_cap_per_target: int | None = None
+    guesses_per_whisper: int | None = None
 
 
 @router.put("/config/whisper")
@@ -4437,6 +4467,13 @@ async def update_whisper_config(
             if body.hourly_cap_per_target is not None:
                 set_whisper_config_value(
                     conn, guild_id, "whisper_hourly_cap_per_target", str(max(1, body.hourly_cap_per_target))
+                )
+            if body.guesses_per_whisper is not None:
+                # At least one guess: a whisper nobody can guess at is a
+                # different game, and the game is the point.
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_guesses_per_whisper",
+                    str(min(10, max(1, body.guesses_per_whisper))),
                 )
         return {"ok": True}
 

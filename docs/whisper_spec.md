@@ -1,6 +1,6 @@
 # Whisper — Feature Spec
 
-An anonymous-message-with-guessing game. Members opt in to a per-guild role, then send anonymous DMs to other opted-in members. The recipient sees the message immediately and gets **three guesses** to identify the sender. A public feed channel hosts a persistent launcher (Send / My Inbox / My Sent) and announces whispers without spoiling content. Whispers can be replied to once, shared to the feed, deleted by the recipient, or — once correctly guessed — exposed.
+An anonymous-message-with-guessing game. Members opt in to a per-guild role, then send anonymous DMs to other opted-in members. The recipient sees the message immediately and gets a configurable number of guesses (**three** by default) to identify the sender. A public feed channel hosts a persistent launcher (Send / My Inbox / My Sent) and announces whispers without spoiling content. Whispers can be replied to once, shared to the feed, deleted by the recipient, or — once correctly guessed — exposed.
 
 ## Commands
 
@@ -58,7 +58,7 @@ No ping is lost by this: embed mentions never notified anyone in the first
 place, and the feed posts already send with `AllowedMentions.none()`.
 
 ### Guessing
-The target gets **three guesses**. The guess picker lists every opted-in member except the target, same paginated + filterable shape as the send picker. Guess consumption is atomic — two clicks racing on the same whisper can both pass pre-checks but only one will succeed; the other sees "This whisper was solved by another tab."
+The target gets `whisper_guesses_per_whisper` guesses (default **3**, dashboard dial, clamped 1-10). The allowance is stamped on the whisper row at send time, so moving the dial only affects whispers sent afterwards — nobody loses a guess they were already promised. *Amended 2026-08-29*: the count came from the `whispers.guesses_left` schema default with no control anywhere, unlike the sibling Guess Who game's tunable cap. The guess picker lists every opted-in member except the target, same paginated + filterable shape as the send picker. Guess consumption is atomic — two clicks racing on the same whisper can both pass pre-checks but only one will succeed; the other sees "This whisper was solved by another tab."
 
 - **Correct**: the target sees "You solved it!"; a feed message announces "✅ {target} solved the whisper!" with an **Expose** button.
 - **Wrong, with guesses left**: "Wrong! N guesses left."
@@ -128,6 +128,8 @@ Per-guild keys an admin sets via the dashboard:
 - **Whisper opt-in role** — the role gating both send and receive. Required.
 - **Feed channel** — where the launcher and announcements live. Required.
 - **Mod-log channel** — optional; when set, sends/replies/reports also fan out here as embeds. Reports persist to the audit log regardless.
+- **Guesses per whisper** (`whisper_guesses_per_whisper`, default 3, 1-10) — the recipient's allowance, stamped on each whisper when it is sent.
+- **Rate limits** — `whisper_cooldown_seconds` (default 30) and `whisper_hourly_cap_per_target` (default 5).
 
 The launcher's current message id is bot-managed and not user-editable.
 

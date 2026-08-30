@@ -72,7 +72,7 @@ pre-verification pages; this file is the internal reference and covers both.
 | 🎲│risky-rolls | `/roll`-driven Q&A. Safeword: Kiwi 🥝. |
 | 🫦│spicy-games | NSFW party games and prompts. |
 | 🤐│confessions | Anonymous posts via the bot; logged for admin review. |
-| 🤫│whisper | `/whisper` anonymous messages; recipient gets 3 guesses to unmask. |
+| 🤫│whisper | `/whisper` anonymous messages; recipient gets 3 guesses (dashboard dial) to unmask. |
 | 🙋‍♂️│ama | Ask-me-anything hot seat. |
 | 🫦│spicy-interests *(forum)* | NSFW discussion forum, thread-tagged for consent. |
 

@@ -32,6 +32,10 @@ old hardcoded default— drives behavior.
   unenforced preference (CLAUDE.md: "Never ship a preference or toggle that
   isn't enforced"). Left alone — not worth removing the dead column either,
   out of scope for this sweep.
+- *Amended 2026-08-29:* the `GuildConfig.max_attachments` field, its load and
+  its upsert round-trip were removed, so no Python object pretends to carry a
+  cap. The column itself stays (no migration) — live rows are untouched and
+  nothing reads them.
 
 ### 3. Guess — flood cap + per-round guess cap
 - `src/bot_modules/cogs/guess_cog.py`: `_SUBMIT_WINDOW_S` (3600) /

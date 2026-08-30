@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -44,7 +44,7 @@ import discord
 import pytest
 
 from bot_modules.cogs import pen_pals_cog as pp
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, set_config_value
 from tests.fakes import FakeGuild, FakeMember, FakeRole, FakeUser, fake_interaction
 from bot_modules.core import branding
 
@@ -65,6 +65,8 @@ def _configure(
     room_visibility: str = pp.DEFAULT_ROOM_VISIBILITY,
     intro_message: str = "",
     match_mode: str = pp.DEFAULT_MATCH_MODE,
+    auto_round_dow: int = pp.DEFAULT_ROUND_DOW,
+    auto_round_hour: int = pp.DEFAULT_ROUND_HOUR,
     guild_id: int = GUILD_ID,
 ) -> None:
     with open_db(db_path) as conn:
@@ -80,6 +82,8 @@ def _configure(
             room_visibility=room_visibility,
             intro_message=intro_message,
             match_mode=match_mode,
+            auto_round_dow=auto_round_dow,
+            auto_round_hour=auto_round_hour,
         )
 
 
@@ -962,7 +966,7 @@ async def test_handle_join_scheduled_mode_never_matches_on_join(sync_db_path, mo
     do_pair.assert_not_awaited()
     assert set(_pool_ids(sync_db_path)) == {1, 2}
     msg = interaction.response.send_message.await_args.args[0]
-    assert "once a day at 8:00 AM Eastern" in msg
+    assert "once a day at 12:00 PM server time" in msg
 
 
 # ── _pick_partner / _eligible_pool ────────────────────────────────────
@@ -1604,13 +1608,26 @@ async def test_panel_ids_are_zero_without_config(sync_db_path):
 def test_panel_embed_instant_mode_describes_matching_on_the_spot():
     embed = pp._build_panel_embed(3, mode="instant")
     assert "matched on the spot" in embed.description
-    assert "8:00 AM Eastern" not in embed.description
+    assert "server time" not in embed.description
 
 
-def test_panel_embed_scheduled_mode_describes_daily_round():
-    embed = pp._build_panel_embed(3, mode="scheduled")
-    assert "8:00 AM Eastern" in embed.description
+def test_panel_embed_scheduled_mode_quotes_the_configured_round_time():
+    embed = pp._build_panel_embed(
+        3, mode="scheduled", schedule_label=pp._round_time_label(
+            {"auto_round_hour": 8, "auto_round_dow": -1}
+        ),
+    )
+    assert "8:00 AM server time" in embed.description
     assert "matched on the spot" not in embed.description
+
+
+def test_panel_embed_scheduled_mode_names_a_weekly_round_day():
+    embed = pp._build_panel_embed(
+        3, mode="scheduled", schedule_label=pp._round_time_label(
+            {"auto_round_hour": 17, "auto_round_dow": 3}
+        ),
+    )
+    assert "Thursdays at 5:00 PM server time" in embed.description
 
 
 # ── _tick pool sweep ──────────────────────────────────────────────────
@@ -1667,34 +1684,87 @@ async def test_tick_skips_sweep_for_disabled_guild(sync_db_path, monkeypatch):
 # ── _scheduled_round_due ────────────────────────────────────────────
 
 
+def _utc(y: int, m: int, d: int, h: int, mi: int = 0) -> float:
+    return datetime(y, m, d, h, mi, tzinfo=timezone.utc).timestamp()
+
+
 def _et(y: int, m: int, d: int, h: int, mi: int = 0) -> float:
-    return datetime(y, m, d, h, mi, tzinfo=pp._SCHEDULED_MATCH_TZ).timestamp()
+    """A wall-clock time in the test guild's zone (UTC-4 in July)."""
+    return _utc(y, m, d, h + 4, mi)
 
 
-def test_scheduled_round_not_due_before_8am_local():
+def test_scheduled_round_not_due_before_the_configured_hour():
+    cfg = {"last_auto_round_at": 0, "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 7, 59), 0.0) is False
+
+
+def test_scheduled_round_due_on_the_hour_if_never_run():
+    cfg = {"last_auto_round_at": 0, "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 8, 0), 0.0) is True
+
+
+def test_scheduled_round_uses_the_guilds_own_clock():
+    """8am for a UTC-7 guild is 15:00 UTC — not 8am UTC, and not 8am Eastern."""
+    cfg = {"last_auto_round_at": 0, "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 14, 30), -7.0) is False
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 15, 0), -7.0) is True
+
+
+def test_scheduled_round_defaults_to_noon_when_no_hour_is_stored():
     cfg = {"last_auto_round_at": 0}
-    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 7, 59)) is False
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 11, 59), 0.0) is False
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 12, 0), 0.0) is True
 
 
-def test_scheduled_round_due_at_8am_if_never_run():
-    cfg = {"last_auto_round_at": 0}
-    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 8, 0)) is True
+def test_scheduled_round_only_fires_on_the_configured_weekday():
+    """dow 3 = Thursday; 2026-07-24 is a Friday, 2026-07-23 a Thursday."""
+    cfg = {"last_auto_round_at": 0, "auto_round_hour": 8, "auto_round_dow": 3}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 9, 0), 0.0) is False
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 23, 9, 0), 0.0) is True
+
+
+def test_scheduled_round_dow_minus_one_means_every_day():
+    cfg = {"last_auto_round_at": 0, "auto_round_hour": 8, "auto_round_dow": -1}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 9, 0), 0.0) is True
 
 
 def test_scheduled_round_not_due_again_same_local_day():
-    cfg = {"last_auto_round_at": _et(2026, 7, 24, 8, 3)}
-    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 14, 0)) is False
+    cfg = {"last_auto_round_at": _utc(2026, 7, 24, 8, 3), "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 14, 0), 0.0) is False
 
 
 def test_scheduled_round_due_again_the_next_local_day():
-    cfg = {"last_auto_round_at": _et(2026, 7, 24, 8, 3)}
-    assert pp._scheduled_round_due(cfg, _et(2026, 7, 25, 8, 1)) is True
+    cfg = {"last_auto_round_at": _utc(2026, 7, 24, 8, 3), "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 25, 8, 1), 0.0) is True
 
 
-def test_scheduled_round_catches_up_after_bot_downtime_past_8am():
-    """A round missed at 8am (e.g. the bot was offline) still runs later that day."""
-    cfg = {"last_auto_round_at": _et(2026, 7, 23, 8, 5)}
-    assert pp._scheduled_round_due(cfg, _et(2026, 7, 24, 20, 0)) is True
+def test_scheduled_round_catches_up_after_bot_downtime():
+    """A round missed at the hour (e.g. the bot was offline) still runs later
+    that local day."""
+    cfg = {"last_auto_round_at": _utc(2026, 7, 23, 8, 5), "auto_round_hour": 8}
+    assert pp._scheduled_round_due(cfg, _utc(2026, 7, 24, 20, 0), 0.0) is True
+
+
+@pytest.mark.parametrize(
+    ("cfg", "expected"),
+    [
+        pytest.param({}, "12:00 PM server time", id="default-noon"),
+        pytest.param({"auto_round_hour": 0}, "12:00 AM server time", id="midnight"),
+        pytest.param({"auto_round_hour": 8}, "8:00 AM server time", id="morning"),
+        pytest.param({"auto_round_hour": 13}, "1:00 PM server time", id="afternoon"),
+        pytest.param(
+            {"auto_round_hour": 8, "auto_round_dow": 0},
+            "Mondays at 8:00 AM server time", id="weekly",
+        ),
+    ],
+)
+def test_round_time_label(cfg, expected):
+    assert pp._round_time_label(cfg) == expected
+
+
+def test_queued_message_quotes_the_configured_round_time():
+    msg = pp._queued_msg_scheduled({"auto_round_hour": 8, "auto_round_dow": 6})
+    assert "Sundays at 8:00 AM server time" in msg
 
 
 # ── _tick scheduled-mode round ────────────────────────────────────────
@@ -1753,6 +1823,48 @@ async def test_tick_scheduled_round_runs_even_with_fewer_than_two_pending(sync_d
 
     await pp._tick(MagicMock(), sync_db_path)
 
+    do_round.assert_awaited_once()
+
+
+async def test_tick_scheduled_round_follows_the_configured_hour_and_guild_tz(
+    sync_db_path, monkeypatch
+):
+    """The round used to fire at a hard-coded 8am Eastern for every server.
+
+    With the hour set to 6 and the guild seven hours behind UTC, 12:00 UTC is
+    5am there (too early) and 13:00 UTC is 6am (the round runs).
+    """
+    _configure(sync_db_path, match_mode="scheduled", auto_round_hour=6)
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "tz_offset_hours", "-7", GUILD_ID)
+    do_round = AsyncMock(return_value=(1, 0))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    monkeypatch.setattr(pp.time, "time", lambda: _utc(2026, 7, 24, 12, 0))
+    await pp._tick(MagicMock(), sync_db_path)
+    do_round.assert_not_awaited()
+
+    monkeypatch.setattr(pp.time, "time", lambda: _utc(2026, 7, 24, 13, 0))
+    await pp._tick(MagicMock(), sync_db_path)
+    assert do_round.await_args.args[2] == GUILD_ID
+
+
+async def test_tick_scheduled_round_skips_a_day_that_is_not_the_configured_one(
+    sync_db_path, monkeypatch
+):
+    """dow 0 = Mondays only; 2026-07-24 is a Friday."""
+    _configure(
+        sync_db_path, match_mode="scheduled", auto_round_hour=6, auto_round_dow=0,
+    )
+    do_round = AsyncMock(return_value=(1, 0))
+    monkeypatch.setattr(pp, "_do_round", do_round)
+
+    monkeypatch.setattr(pp.time, "time", lambda: _utc(2026, 7, 24, 9, 0))
+    await pp._tick(MagicMock(), sync_db_path)
+    do_round.assert_not_awaited()
+
+    monkeypatch.setattr(pp.time, "time", lambda: _utc(2026, 7, 27, 9, 0))
+    await pp._tick(MagicMock(), sync_db_path)
     do_round.assert_awaited_once()
 
 
@@ -3244,3 +3356,27 @@ async def test_leave_from_a_dm_button_by_an_ex_member_writes_nothing(sync_db_pat
     assert "not in that server anymore" in msg
     with open_db(sync_db_path) as conn:
         assert not pp._is_opted_out(conn, GUILD_ID, 1)
+
+
+# ── _intro_commands_value ───────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("max_swaps", "expected"),
+    [
+        pytest.param(3, "swap the prompt (3 max)", id="default"),
+        pytest.param(1, "swap the prompt (1 max)", id="one"),
+        pytest.param(7, "swap the prompt (7 max)", id="raised"),
+    ],
+)
+def test_intro_commands_value_quotes_the_configured_swap_cap(max_swaps, expected):
+    """The pinned intro used to hard-code "(3 max)" whatever the dial said."""
+    value = pp._intro_commands_value(max_swaps)
+    assert expected in value
+    assert "/penpals end" in value
+
+
+def test_intro_commands_value_drops_the_swap_line_at_zero():
+    value = pp._intro_commands_value(0)
+    assert "new-question" not in value
+    assert "/penpals end" in value

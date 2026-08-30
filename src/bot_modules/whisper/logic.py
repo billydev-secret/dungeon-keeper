@@ -215,17 +215,21 @@ def format_hourly_cap_message(cap: int) -> str:
     )
 
 
-def format_send_dm_body(*, guild_name: str, message: str) -> str:
+def format_send_dm_body(
+    *, guild_name: str, message: str, guesses: int = 3
+) -> str:
     """Initial DM body delivered to a whisper's target.
 
-    Stays in one place so the "3 guesses" copy doesn't drift between the
-    initial DM and any future reformat.
+    Stays in one place so the guess-count copy doesn't drift between the
+    initial DM and any future reformat. ``guesses`` is the guild's configured
+    allowance — it was hard-coded at three until 2026-08-29.
     """
     body = safe_codefence_content(message.strip())
+    plural = "guess" if guesses == 1 else "guesses"
     return (
         f"\U0001f4ec You got a Whisper from someone in **{guild_name}**.\n"
-        f"You have **3 guesses** to figure out who sent it — wrong guesses "
-        f"are gone forever.\n"
+        f"You have **{guesses} {plural}** to figure out who sent it — wrong "
+        f"guesses are gone forever.\n"
         f"```{body}```"
     )
 

@@ -173,6 +173,12 @@ def test_update_config_persists_sparsely(db):
         pytest.param({"strikes": True}, id="bool-not-int"),
         pytest.param({"ghost_streak": 1}, id="int-not-bool"),
         pytest.param({"slate_hour": 24}, id="hour-out-of-day"),
+        # Tier 2 rules (wipeout/annul, double-pick escalation, the Accord) are
+        # unbuilt, so their dials are not settings yet — storing one would be a
+        # silent no-op an admin can't tell from an enforced rule.
+        pytest.param({"wipeout_annul_through_week": 13}, id="unbuilt-wipeout"),
+        pytest.param({"double_pick_min_alive": 5}, id="unbuilt-double-pick-min"),
+        pytest.param({"accord_max_alive": 6}, id="unbuilt-accord"),
     ],
 )
 def test_validate_config_rejects(updates):

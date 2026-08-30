@@ -76,12 +76,16 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 #   nsfw/denizen/veteran_role_id — superseded by the `grant_roles` table
 #                                  (see advisor_actions.validate_grant_role_change)
 #   veil_*                       — Veil was renamed to Guess in migration 020
+#   guess_inactivity_ping_hours  — the Guess Who "nudge a quiet round" loop was
+#                                  never built; a value is stored on one live
+#                                  server and no code has ever read it
 DEAD_KEYS: frozenset[str] = frozenset({
     "nsfw_role_id",
     "denizen_role_id",
     "veteran_role_id",
     "veil_role_id",
     "veil_channel_id",
+    "guess_inactivity_ping_hours",
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -394,8 +398,6 @@ FEATURES: tuple[Feature, ...] = (
             _role("guess_role_id", "Role pinged for new rounds"),
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
-            _num("guess_inactivity_ping_hours", "Hours of silence before a nudge",
-                 minimum=0, maximum=720),
         ),
     ),
     Feature(

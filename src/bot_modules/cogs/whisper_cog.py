@@ -119,11 +119,12 @@ def _do_insert_whisper(
     sender_id: int,
     target_id: int,
     message: str,
+    guesses_left: int = 3,
 ) -> int:
     with open_db(db_path) as conn:
         return insert_whisper(
             conn, guild_id=guild_id, sender_id=sender_id,
-            target_id=target_id, message=message,
+            target_id=target_id, message=message, guesses_left=guesses_left,
         )
 
 
@@ -1809,7 +1810,7 @@ class WhisperSendComposeModal(discord.ui.Modal, title="Send Anonymous Whisper"):
         style=discord.TextStyle.long,
         required=True,
         max_length=MAX_MESSAGE_LENGTH,
-        placeholder="They get 3 guesses to figure out it was you.",
+        placeholder="They get a few guesses to figure out it was you.",
     )
 
     def __init__(self, cog: WhisperCog, target_id: int) -> None:
@@ -2549,6 +2550,7 @@ class WhisperCog(commands.Cog):
             sender_id=interaction.user.id,
             target_id=target.id,
             message=message.strip(),
+            guesses_left=cfg.guesses_per_whisper,
         )
 
         dm_msg = await send_branded_dm(
@@ -2558,6 +2560,7 @@ class WhisperCog(commands.Cog):
             embed=discord.Embed(
                 description=format_send_dm_body(
                     guild_name=interaction.guild.name, message=message,
+                    guesses=cfg.guesses_per_whisper,
                 )
             ),
             view=WhisperDmView(self.bot, whisper_id),
