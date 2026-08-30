@@ -83,6 +83,49 @@ def admit_pending_players(
     return roster, admitted, turned_away
 
 
+def admit_player_now(payload: dict, uid: Any, max_players: int) -> str:
+    """Seat a latecomer in the round that is *taking answers right now*.
+
+    Returns one of ``joined`` / ``already-in`` / ``full`` / ``queued`` /
+    ``already-queued``, and mutates ``payload`` to match.
+
+    :func:`admit_pending_players` holds latecomers to the round boundary, which
+    is the right rule once a round has matchups — those are fixed, and moving
+    them under a live vote would be a mess. During the *submit* phase there is
+    nothing fixed yet: :func:`create_matchups` is built from the answers dict
+    after the window closes, so anyone who gets an answer in is simply paired
+    like everyone else. Making them watch a round they could have played was a
+    rule inherited from the harder case.
+
+    Off the submit phase this falls back to the queue, so one button covers
+    both and the caller can say which happened rather than promising "next
+    round" when the player is already in this one.
+
+    ``scores_checkpoint`` is seeded alongside ``scores``: the checkpoint is
+    what a crash-resume rolls back to, and a joiner missing from it would be
+    rolled off the scoreboard entirely.
+    """
+    players = payload.setdefault("players", [])
+    if any(str(p) == str(uid) for p in players):
+        return "already-in"
+
+    if payload.get("phase") != "submitting":
+        queued = payload.setdefault("pending_players", [])
+        if any(str(q) == str(uid) for q in queued):
+            return "already-queued"
+        queued.append(uid)
+        return "queued"
+
+    if len(players) >= max_players:
+        return "full"
+
+    players.append(uid)
+    payload.setdefault("scores", {}).setdefault(str(uid), 0)
+    payload.setdefault("scores_checkpoint", {}).setdefault(str(uid), 0)
+    payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
+    return "joined"
+
+
 def drain_pending_players(payload: dict) -> list[Any]:
     """Empty the join queue and return whoever was still waiting in it.
 
