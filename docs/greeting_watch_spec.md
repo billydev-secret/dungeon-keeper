@@ -72,7 +72,7 @@ attributed and so reads as unanswered — the practical soft edge of the feature
 |---|---|---|
 | Enable greeting watch | `greeting_watch_enabled` | Master on/off. |
 | Watched channels | `greeting_watch_channel_ids` | CSV of channel ids — your "main chat". Empty = nothing watched. |
-| Notify (DM) these members | `greeting_watch_notify_user_ids` | CSV of member ids — everyone listed gets the DM. Empty = no DM sent. Falls back to the legacy single `greeting_watch_notify_user_id` if the CSV is unset. |
+| Notify (DM) these members | `greeting_watch_notify_user_ids` | CSV of member ids — everyone listed gets the DM. Empty = no DM sent. Falls back to the legacy single `greeting_watch_notify_user_id` when the CSV holds no ids; saving the list blanks that legacy key, so clearing the list really does stop the DMs rather than resurrecting the old single subscriber. |
 | Unanswered window (minutes) | `greeting_watch_window_minutes` | Wait before flagging (default 10). |
 | Extra greeting words | `greeting_watch_extra_words` | CSV of server-specific greetings ("henlo, good yawn"). Normalized on save (trim/lowercase/dedupe); matched at message start, case-insensitive, alongside the built-ins. Empty = built-ins only. |
 

@@ -13,6 +13,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, TypedDict
 
+from bot_modules.core.db_utils import get_config_value
+
 log = logging.getLogger("dungeonkeeper.moderation")
 
 # ---------------------------------------------------------------------------
@@ -475,6 +477,18 @@ def get_jail_history(
 # ---------------------------------------------------------------------------
 # Ticket DB operations
 # ---------------------------------------------------------------------------
+
+
+def ticket_notify_on_create_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
+    """Whether staff get a DM when a member opens a ticket.
+
+    The dashboard writes ``ticket_notify_on_create`` against the guild it is
+    switched to, so the read has to name that guild: a guild_id-less read only
+    ever sees the legacy ``guild_id = 0`` row, and on a server that has none the
+    toggle could be turned off in the panel and never take effect.
+    """
+    raw = get_config_value(conn, "ticket_notify_on_create", "1", guild_id)
+    return (raw or "").strip() != "0"
 
 
 def create_ticket(

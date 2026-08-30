@@ -493,6 +493,32 @@ def test_update_spoiler_channels(authed_client, fake_ctx):
     assert ids == {1001, 1002}
 
 
+def test_update_spoiler_empty_list_really_switches_it_off(authed_client, fake_ctx):
+    """"Leave empty to switch this off" — the legacy guild-0 bucket no panel can
+    reach must not come back and re-enforce a stale list."""
+    from bot_modules.core.db_utils import add_config_id, get_config_id_set
+
+    with open_db(fake_ctx.db_path) as conn:
+        add_config_id(conn, "spoiler_required_channels", 9001, 0)
+        add_config_id(conn, "spoiler_required_channels", 9002, 0)
+
+    resp = authed_client.put(
+        "/api/config/spoiler", json={"spoiler_required_channels": []}
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        # The enforcing read (app_context) uses the legacy fallback for the
+        # home guild; it must now come back empty.
+        assert get_config_id_set(
+            conn, "spoiler_required_channels", fake_ctx.guild_id
+        ) == set()
+    assert fake_ctx.guild_config(fake_ctx.guild_id).spoiler_required_channels == frozenset()
+
+    section = authed_client.get("/api/config").json()["spoiler"]
+    assert section["spoiler_required_channels"] == []
+
+
 # ── PUT /api/config/nsfw-classifier ──────────────────────────────────
 
 
@@ -1273,16 +1299,44 @@ def test_get_config_whisper_guess_cap_defaults_to_three(authed_client):
 def test_update_dms_persists_channels(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/config/dms",
-        json={"request_channel_id": "1100", "audit_channel_id": "1200"},
+        json={"audit_channel_id": "1200"},
     )
     assert resp.status_code == 200
 
-    from bot_modules.services.dm_perms_service import (
-        load_audit_channels,
-        load_request_channels,
-    )
-    assert load_request_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1100
+    from bot_modules.services.dm_perms_service import load_audit_channels
     assert load_audit_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1200
+
+
+def test_update_dms_persists_request_limits(authed_client, fake_ctx):
+    """The expiry window and the pending cap are dials, not constants — what the
+    panel saves is what the request flow enforces."""
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"request_expiry_hours": 48, "max_pending_requests": 2},
+    )
+    assert resp.status_code == 200
+
+    limits = get_request_limits(fake_ctx.db_path, fake_ctx.guild_id)
+    assert limits == {"expiry_hours": 48, "max_pending": 2}
+
+    section = authed_client.get("/api/config").json()["dms"]
+    assert section["request_expiry_hours"] == 48
+    assert section["max_pending_requests"] == 2
+
+
+def test_update_dms_clamps_absurd_request_limits(authed_client, fake_ctx):
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"request_expiry_hours": 0, "max_pending_requests": 9999},
+    )
+    assert resp.status_code == 200
+
+    limits = get_request_limits(fake_ctx.db_path, fake_ctx.guild_id)
+    assert limits == {"expiry_hours": 1, "max_pending": 50}
 
 
 def test_update_dms_persists_mode_roles(authed_client, fake_ctx):
@@ -2343,6 +2397,34 @@ def test_greeting_watch_extra_words_roundtrip_and_bot_side_read(
 
     cfg = fake_ctx.guild_config(fake_ctx.guild_id)
     assert cfg.greeting_watch_extra_words == ("henlo", "good yawn", "o7")
+
+
+def test_greeting_watch_notify_list_can_actually_be_cleared(authed_client, fake_ctx):
+    """"Leave it empty and nothing is sent" has to be true even on a guild that
+    still carries the pre-multi single-subscriber key: both the DM loop and the
+    panel fall back to it when the CSV is empty, so saving an empty list has to
+    retire it."""
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.services.greeting_watch_loop import _load_settings
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(
+            conn, "greeting_watch_notify_user_id", "424242", fake_ctx.guild_id
+        )
+
+    resp = authed_client.put(
+        "/api/config/greeting-watch", json={"notify_user_ids": ""}
+    )
+    assert resp.status_code == 200
+
+    section = authed_client.get("/api/config").json()["greeting_watch"]
+    assert section["notify_user_ids"] == []
+
+    cfg = fake_ctx.guild_config(fake_ctx.guild_id)
+    assert not cfg.greeting_watch_notify_user_ids
+    # The DM loop reads the DB directly rather than the cached snapshot.
+    _, _, notify_ids = _load_settings(fake_ctx.db_path, fake_ctx.guild_id)
+    assert notify_ids == []
 
 
 def test_greeting_watch_extra_words_empty_string_clears(authed_client, fake_ctx):

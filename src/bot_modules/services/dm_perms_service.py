@@ -12,7 +12,7 @@ import discord
 
 from bot_modules.core.branding import apply_section_spacing
 from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_config_value, open_db, set_config_value
 
 ROLE_DM_OPEN = "DMs: Open"
 ROLE_DM_ASK = "DMs: Ask"
@@ -351,53 +351,153 @@ def count_pending_for_requester(
 
 
 def expire_stale_pending_requests(
-    db_path: Path, *, max_age_seconds: int
+    db_path: Path, *, max_age_seconds: int | None = None
 ) -> list[dict[str, Any]]:
-    """Mark pending requests older than ``max_age_seconds`` as expired.
+    """Mark pending requests past their guild's expiry window as expired.
+
+    Each guild sets its own window on the dashboard, so the sweep walks the
+    guilds that actually have pending rows and applies each one's dial.
+    ``max_age_seconds`` overrides every dial (used by tests).
 
     Returns the rows that were just expired (for audit-log emission).
     """
-    cutoff = time.time() - max_age_seconds
+    now = time.time()
+    expired: list[dict[str, Any]] = []
     with open_db(db_path) as conn:
-        rows = conn.execute(
-            "SELECT guild_id, requester_id, target_id, request_type, message_id "
-            "FROM dm_requests WHERE status = 'pending' AND created_at < ?",
-            (cutoff,),
-        ).fetchall()
-        if rows:
+        guild_ids = [
+            int(r["guild_id"])
+            for r in conn.execute(
+                "SELECT DISTINCT guild_id FROM dm_requests WHERE status = 'pending'"
+            ).fetchall()
+        ]
+        for guild_id in guild_ids:
+            age = (
+                max_age_seconds
+                if max_age_seconds is not None
+                else get_request_limits_with_conn(conn, guild_id)["expiry_hours"] * 3600
+            )
+            cutoff = now - age
+            rows = conn.execute(
+                "SELECT guild_id, requester_id, target_id, request_type, message_id "
+                "FROM dm_requests "
+                "WHERE guild_id = ? AND status = 'pending' AND created_at < ?",
+                (guild_id, cutoff),
+            ).fetchall()
+            if not rows:
+                continue
             conn.execute(
                 "UPDATE dm_requests SET status = 'expired' "
-                "WHERE status = 'pending' AND created_at < ?",
-                (cutoff,),
+                "WHERE guild_id = ? AND status = 'pending' AND created_at < ?",
+                (guild_id, cutoff),
             )
-    return [
-        {
-            "guild_id": int(r["guild_id"]),
-            "requester_id": int(r["requester_id"]),
-            "target_id": int(r["target_id"]),
-            "request_type": normalize_request_type(r["request_type"]),
-            "message_id": r["message_id"],
+            expired.extend(
+                {
+                    "guild_id": int(r["guild_id"]),
+                    "requester_id": int(r["requester_id"]),
+                    "target_id": int(r["target_id"]),
+                    "request_type": normalize_request_type(r["request_type"]),
+                    "message_id": r["message_id"],
+                }
+                for r in rows
+            )
+    return expired
+
+
+# ---------------------------------------------------------------------------
+# Request lifecycle limits (per guild, set on the dashboard)
+# ---------------------------------------------------------------------------
+
+DEFAULT_REQUEST_EXPIRY_HOURS = 24
+DEFAULT_MAX_PENDING_PER_REQUESTER = 5
+#: A request nobody answers should not outlive the reason it was sent; a month
+#: is already generous. The floor is one hour so a dial can't cancel requests
+#: the moment they're made.
+MIN_REQUEST_EXPIRY_HOURS = 1
+MAX_REQUEST_EXPIRY_HOURS = 720
+MIN_MAX_PENDING = 1
+MAX_MAX_PENDING = 50
+
+
+def _clamped_int(raw: str | None, *, default: int, low: int, high: int) -> int:
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(low, min(high, value))
+
+
+def get_request_limits_with_conn(
+    conn: sqlite3.Connection, guild_id: int
+) -> dict[str, int]:
+    """This guild's DM-request expiry window (hours) and pending-request cap."""
+    try:
+        conn.execute("SELECT 1 FROM config LIMIT 1")
+    except sqlite3.Error:
+        # A caller may query before the config table exists (bare test DB).
+        return {
+            "expiry_hours": DEFAULT_REQUEST_EXPIRY_HOURS,
+            "max_pending": DEFAULT_MAX_PENDING_PER_REQUESTER,
         }
-        for r in rows
-    ]
+    return {
+        "expiry_hours": _clamped_int(
+            get_config_value(
+                conn,
+                "dm_request_expiry_hours",
+                str(DEFAULT_REQUEST_EXPIRY_HOURS),
+                guild_id,
+            ),
+            default=DEFAULT_REQUEST_EXPIRY_HOURS,
+            low=MIN_REQUEST_EXPIRY_HOURS,
+            high=MAX_REQUEST_EXPIRY_HOURS,
+        ),
+        "max_pending": _clamped_int(
+            get_config_value(
+                conn,
+                "dm_request_max_pending",
+                str(DEFAULT_MAX_PENDING_PER_REQUESTER),
+                guild_id,
+            ),
+            default=DEFAULT_MAX_PENDING_PER_REQUESTER,
+            low=MIN_MAX_PENDING,
+            high=MAX_MAX_PENDING,
+        ),
+    }
 
 
-# ---------------------------------------------------------------------------
-# Request channels
-# ---------------------------------------------------------------------------
-
-def load_request_channels(db_path: Path) -> dict[int, int]:
+def get_request_limits(db_path: Path, guild_id: int) -> dict[str, int]:
     with open_db(db_path) as conn:
-        rows = conn.execute("SELECT guild_id, channel_id FROM dm_request_channels").fetchall()
-    return {int(r["guild_id"]): int(r["channel_id"]) for r in rows}
+        return get_request_limits_with_conn(conn, guild_id)
 
 
-def set_request_channel(db_path: Path, guild_id: int, channel_id: int) -> None:
-    with open_db(db_path) as conn:
-        conn.execute("""
-            INSERT INTO dm_request_channels (guild_id, channel_id) VALUES (?, ?)
-            ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id
-        """, (guild_id, channel_id))
+def set_request_limits(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    expiry_hours: int | None = None,
+    max_pending: int | None = None,
+) -> None:
+    """Store either dial, clamped to the range the panel advertises."""
+    if expiry_hours is not None:
+        value = _clamped_int(
+            str(expiry_hours),
+            default=DEFAULT_REQUEST_EXPIRY_HOURS,
+            low=MIN_REQUEST_EXPIRY_HOURS,
+            high=MAX_REQUEST_EXPIRY_HOURS,
+        )
+        set_config_value(conn, "dm_request_expiry_hours", str(value), guild_id)
+    if max_pending is not None:
+        value = _clamped_int(
+            str(max_pending),
+            default=DEFAULT_MAX_PENDING_PER_REQUESTER,
+            low=MIN_MAX_PENDING,
+            high=MAX_MAX_PENDING,
+        )
+        set_config_value(conn, "dm_request_max_pending", str(value), guild_id)
+
+
+def request_expiry_label(hours: int) -> str:
+    """The member-facing wording for the expiry window ("24 hours")."""
+    return "1 hour" if hours == 1 else f"{hours} hours"
 
 
 # ---------------------------------------------------------------------------
@@ -438,9 +538,6 @@ def load_panel_settings(db_path: Path) -> dict[int, dict[str, Optional[int]]]:
 
 def get_dms_config_with_conn(conn: sqlite3.Connection, guild_id: int) -> dict[str, int]:
     """Return all DM-perms config fields for one guild using an existing connection."""
-    req = conn.execute(
-        "SELECT channel_id FROM dm_request_channels WHERE guild_id = ?", (guild_id,)
-    ).fetchone()
     aud = conn.execute(
         "SELECT channel_id FROM dm_audit_channels WHERE guild_id = ?", (guild_id,)
     ).fetchone()
@@ -449,14 +546,16 @@ def get_dms_config_with_conn(conn: sqlite3.Connection, guild_id: int) -> dict[st
         (guild_id,),
     ).fetchone()
     mode_roles = get_dm_mode_role_ids_with_conn(conn, guild_id)
+    limits = get_request_limits_with_conn(conn, guild_id)
     return {
-        "request_channel_id": int(req["channel_id"]) if req else 0,
         "audit_channel_id": int(aud["channel_id"]) if aud else 0,
         "panel_channel_id": int(pan["panel_channel_id"]) if pan and pan["panel_channel_id"] else 0,
         "panel_message_id": int(pan["panel_message_id"]) if pan and pan["panel_message_id"] else 0,
         "open_role_id": mode_roles["open"],
         "ask_role_id": mode_roles["ask"],
         "closed_role_id": mode_roles["closed"],
+        "request_expiry_hours": limits["expiry_hours"],
+        "max_pending_requests": limits["max_pending"],
     }
 
 

@@ -83,6 +83,8 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 #                                  early-returns for any guild that already has
 #                                  grant_roles rows — i.e. every live guild.
 #   veil_*                       — Veil was renamed to Guess in migration 020
+#   ticket_panel_channel_id,     — the live panel record moved to the
+#   ticket_panel_message_id        `ticket_panels` table in migration 023
 #   guess_inactivity_ping_hours  — the Guess Who "nudge a quiet round" loop was
 #                                  never built; a value is stored on one live
 #                                  server and no code has ever read it
@@ -96,6 +98,8 @@ DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     "veil_role_id",
     "veil_channel_id",
     "guess_inactivity_ping_hours",
+    "ticket_panel_channel_id",
+    "ticket_panel_message_id",
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -302,11 +306,13 @@ FEATURES: tuple[Feature, ...] = (
         slug="rules_watch",
         label="Rules watch",
         panel="Config → Rules watch",
-        blurb="Points members at the server guide when they ask a rules question.",
+        blurb="Screens public messages for rule breaks and queues the flags for a moderator.",
         enable_key="rules_watch_enabled",
         settings=(
             _flag("rules_watch_enabled", "Rules watch on", required=True),
-            _ch("server_guide_channel_id", "Server guide channel", required=True),
+            _ch("rules_watch_channel_id", "Immediate alert channel",
+                help="Optional — only the most serious flags are posted here as "
+                     "they happen; everything else waits in the web review queue."),
         ),
     ),
     Feature(
@@ -347,7 +353,6 @@ FEATURES: tuple[Feature, ...] = (
         panel="Config → Tickets",
         blurb="Gives members a button that opens a private ticket channel for staff.",
         settings=(
-            _ch("ticket_panel_channel_id", "Ticket panel channel", required=True),
             _num("ticket_category_id", "Ticket category", required=True, writable=False,
                  help="A category, not a text channel — set it from the panel."),
             _ch("transcript_channel_id", "Transcript archive channel",

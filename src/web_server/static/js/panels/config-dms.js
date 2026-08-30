@@ -45,7 +45,7 @@ export function mount(container) {
     h2.textContent = "DM Permissions";
     const sub = document.createElement("div");
     sub.className = "subtitle";
-    sub.textContent = "Let members say who may message them privately, and give moderators a place to review requests";
+    sub.textContent = "Let members say who may message them privately, and keep moderators a record of every change";
     header.appendChild(h2);
     header.appendChild(sub);
     panel.appendChild(header);
@@ -64,18 +64,7 @@ export function mount(container) {
 
     const channelCard = card(form, "Channels");
 
-    const reqSlot = document.createElement("span");
-    channelCard.appendChild(field(
-      "Request Channel",
-      reqSlot,
-      "Where a pending DM request is posted so your moderators can approve or decline it. Choose \"(none)\" and requests go nowhere, so nobody can approve them.",
-    ));
     // Snowflakes stay strings; "0" is the saved value meaning "not set".
-    const reqPicker = mountChannelPicker(
-      reqSlot, channels, String(d.request_channel_id || "0"),
-      { emptyValue: "0", emptyLabel: "(none)", label: "Request Channel" },
-    );
-
     const auditSlot = document.createElement("span");
     channelCard.appendChild(field(
       "Audit Channel",
@@ -112,6 +101,33 @@ export function mount(container) {
       rolePickers[mode] = mountRolePicker(slot, roles, d[mode + "_role_id"] || "0", { label });
     }
 
+    // ── Request limits ───────────────────────────────────────────────
+    const limitsCard = card(form, "Requests");
+
+    const expiryInput = document.createElement("input");
+    expiryInput.type = "number";
+    expiryInput.min = "1";
+    expiryInput.max = "720";
+    expiryInput.step = "1";
+    expiryInput.value = String(d.request_expiry_hours ?? 24);
+    limitsCard.appendChild(field(
+      "Requests Expire After (hours)",
+      expiryInput,
+      "How long a request waits for an answer before it lapses. The member is told this figure when they send the request, and again when it lapses. 1 to 720 hours.",
+    ));
+
+    const pendingInput = document.createElement("input");
+    pendingInput.type = "number";
+    pendingInput.min = "1";
+    pendingInput.max = "50";
+    pendingInput.step = "1";
+    pendingInput.value = String(d.max_pending_requests ?? 5);
+    limitsCard.appendChild(field(
+      "Requests One Member May Have Waiting",
+      pendingInput,
+      "How many unanswered requests one member can have out at once, so nobody can prompt half the server in a sitting. 1 to 50.",
+    ));
+
     const saveRow = document.createElement("div");
     saveRow.style.cssText = "display:flex; gap:8px; align-items:center;";
     const saveBtn = document.createElement("button");
@@ -129,11 +145,12 @@ export function mount(container) {
       e.preventDefault();
       try {
         await apiPut("/api/config/dms", {
-          request_channel_id: reqPicker.getValue() || "0",
           audit_channel_id: auditPicker.getValue() || "0",
           open_role_id: rolePickers.open.getValue() || "0",
           ask_role_id: rolePickers.ask.getValue() || "0",
           closed_role_id: rolePickers.closed.getValue() || "0",
+          request_expiry_hours: Number(expiryInput.value) || 24,
+          max_pending_requests: Number(pendingInput.value) || 5,
         });
         showStatus(saveStatus, true);
       } catch (err) {
