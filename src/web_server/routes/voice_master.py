@@ -18,6 +18,7 @@ from bot_modules.voice_master.logic import (
     build_force_transfer_summary,
 )
 from bot_modules.services.voice_master_service import (
+    SAVEABLE_FIELD_KEYS,
     add_name_blocklist,
     delete_active_channel,
     delete_profile,
@@ -165,7 +166,8 @@ async def set_config(
     # should_save_profile_field's callers). "access" is the single room-access
     # dial; the old "locked"/"hidden"/"spectator" tokens were never sent and
     # never read, and accepting them only let a save wipe the real fields.
-    valid_fields = {"name", "limit", "access", "trusted", "blocked"}
+    # Read from the service so this list cannot drift from the panel's again.
+    valid_fields = set(SAVEABLE_FIELD_KEYS)
     chosen = {f.lower() for f in payload.saveable_fields}
     if not chosen.issubset(valid_fields):
         raise HTTPException(400, f"Unknown fields: {chosen - valid_fields}")
