@@ -71,9 +71,10 @@ export function mount(container) {
       gameType: "risky_roll",
       gameName: "Risky Rolls",
       bare: true,
-      statusLabel: "Include in Scheduled Games",
-      statusHint: "When off, a scheduled Risky Rolls round is skipped when its time"
-        + " comes round. Members can still open a round themselves with /risky start.",
+      statusLabel: "Available on This Server",
+      statusHint: "When off, /risky start refuses to open a round and a scheduled"
+        + " Risky Rolls round is skipped when its time comes round. Rounds already"
+        + " running finish normally.",
     });
 
     const form = container.querySelector("[data-form]");

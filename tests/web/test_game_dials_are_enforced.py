@@ -282,13 +282,21 @@ STARTABLE = {
     "story": "games_story_cog.py",
     "fantasies": "games_fantasies_cog.py",
     "legitlibs": "games_legitlibs/__init__.py",
+    # Risky Rolls keeps its own settings panel, but it is in the availability
+    # list like every other game, so /risky start has to honour the switch too.
+    "risky_roll": "risky_roll_cog.py",
 }
 
 
 @pytest.mark.parametrize("game_type", sorted(STARTABLE))
 def test_every_toggleable_game_gates_its_own_start(game_type: str) -> None:
     src = (_COGS / STARTABLE[game_type]).read_text(encoding="utf-8")
-    assert f'check_game_enabled(self.db, "{game_type}"' in src, (
+    # The cogs reach their GamesDb differently — most hold `self.db`, Risky
+    # Rolls builds one from the app context — so match the call, not the handle.
+    called = re.search(
+        r'check_game_enabled\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', src
+    )
+    assert called, (
         f"{STARTABLE[game_type]} never checks the per-guild enable switch, so "
         f"turning {game_type} off on the dashboard would change nothing"
     )
@@ -312,14 +320,12 @@ def test_the_config_api_knows_every_game_it_can_switch_off() -> None:
     assert not unreachable, (
         f"these games cannot be switched off from the dashboard at all: {unreachable}"
     )
-    # Every schedulable type either is addressable or is a display variant of
-    # one that is (ffa_banner shares ffa's switch), or it is a game configured
-    # from its own panel rather than the shared games config.
+    # Every schedulable type is either addressable itself or a display variant
+    # of one that is (ffa_banner shares ffa's switch).
     from bot_modules.games.constants import SCHEDULE_BASE_GAME_TYPE
 
-    own_panel = {"risky_roll"}
     for gt in SCHEDULABLE_GAME_TYPES:
         base = SCHEDULE_BASE_GAME_TYPE.get(gt, gt)
-        assert base in ALL_GAME_TYPES or base in own_panel, (
+        assert base in ALL_GAME_TYPES, (
             f"scheduled launches of {gt} check an enable switch nothing can set"
         )

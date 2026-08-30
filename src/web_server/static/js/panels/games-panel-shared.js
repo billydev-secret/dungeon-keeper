@@ -79,8 +79,12 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
       '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
       "<span>" + esc(statusLabel || "Available on This Server") + "</span></label>" +
+      // Not "commands stay hidden": nothing hides them. A disabled game's
+      // command stays registered and refuses with a message, which is what a
+      // member actually sees.
       '<div class="field-hint">' + (statusHint ? esc(statusHint) : "When off, " + esc(gameName) +
-        " won't start and its commands stay hidden. Existing rounds finish normally.") +
+        " won't start — its command refuses and scheduled rounds are skipped." +
+        " Existing rounds finish normally.") +
       "</div></div>" +
       optFieldsHtml +
       '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +

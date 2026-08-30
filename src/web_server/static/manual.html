@@ -697,7 +697,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/risky start</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels — including <strong>Include in Scheduled Games</strong>, which skips scheduled rounds when it is off (members can still open one by hand).</span>
+      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels — including <strong>Available on This Server</strong> — switch it off and <code>/risky start</code> refuses and scheduled rounds are skipped, while a round already running finishes normally.</span>
       <div class="cmd-params">
         Both start commands take optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
       </div>

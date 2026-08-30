@@ -316,16 +316,21 @@ def test_a_switch_is_labelled_for_everything_that_reads_it(panel: str):
     """"Include in Scheduled Games" is only honest while the scheduler is the
     switch's *only* reader. LegitLibs' start command started consulting it on
     2026-08-29, so an admin unticking that box to keep LegitLibs out of the
-    schedule was silently killing /games play legitlibs for every member. Its
-    panel now says "Available on This Server", the same words the Global Config
-    list uses for the same row. Risky Rolls' start command still ignores the
-    switch, so its panel keeps the narrower label."""
+    schedule was silently killing /games play legitlibs for every member. Risky
+    Rolls had the mirror-image bug: the Global Config list already said
+    "Available on This Server" while /risky start ignored the switch entirely.
+    Both gate their start command now, so both panels use the Global Config
+    wording — and if a later change drops a gate, this pins the label back."""
     game_type, cog_path = _ENABLE_TOGGLE_PANELS[panel]
     src = (_PANELS / panel).read_text(encoding="utf-8")
     cog = (_COGS / cog_path).read_text(encoding="utf-8")
     assert f'gameType: "{game_type}"' in src, f"{panel}: no enable toggle"
 
-    gates_its_command = f'check_game_enabled(self.db, "{game_type}"' in cog
+    # Cogs reach their GamesDb differently — most hold `self.db`, Risky Rolls
+    # builds one from the app context — so match the call, not the handle.
+    gates_its_command = bool(re.search(
+        r'check_game_enabled\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', cog
+    ))
     if gates_its_command:
         assert "Include in Scheduled Games" not in src, (
             f"{panel} calls the switch scheduler-only, but {cog_path} refuses the "

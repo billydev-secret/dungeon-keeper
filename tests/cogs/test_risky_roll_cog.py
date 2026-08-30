@@ -1,7 +1,7 @@
-"""Cog-level: /risky start channel game cap."""
+"""Cog-level: /risky start channel game cap and the per-guild enable switch."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -33,6 +33,47 @@ def _clear_risky_state():
     yield
     rr_state.active_games.clear()
     rr_state.max_games_per_channel.clear()
+
+
+@pytest.fixture(autouse=True)
+def _game_enabled():
+    """Every guard below sits behind the enable switch, so hold it on.
+
+    The switch itself is exercised by the test right underneath.
+    """
+    with patch(
+        "bot_modules.cogs.risky_roll_cog.check_game_enabled",
+        AsyncMock(return_value=True),
+    ) as gate:
+        yield gate
+
+
+@pytest.mark.asyncio
+async def test_start_refused_when_the_game_is_switched_off():
+    """Games -> Global Config lists risky_roll under "Available on This Server",
+    whose hint promises the command refuses when it is off. It used to be read
+    only by the scheduler, so an admin who unticked it watched members go on
+    opening rounds by hand."""
+    guild = FakeGuild(id=GUILD_ID)
+    guild.me = MagicMock()  # type: ignore[attr-defined]
+    channel = _make_channel()
+    guild.channels[channel.id] = channel
+
+    interaction = fake_interaction(user=FakeMember(id=1001), guild=guild, channel=channel)
+
+    cog = _make_cog()
+    with patch(
+        "bot_modules.cogs.risky_roll_cog.check_game_enabled",
+        AsyncMock(return_value=False),
+    ):
+        await cog._start_game(
+            interaction, auto_close_players=None, auto_close_minutes=None,
+            ping=False, skip_min_game_time=True,
+        )
+
+    msg = interaction.response.send_message.call_args.args[0]
+    assert "switched off" in msg
+    assert not rr_state.active_games
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.games.utils.game_manager import check_game_enabled
 from bot_modules.services.feature_roles import RISKY_PING
+from bot_modules.services.games_db import GamesDb
 from bot_modules.services.risky_roll import state as rr_state
 from bot_modules.services.risky_roll.formatters import (
     build_embed,
@@ -171,6 +173,19 @@ class RiskyRollCog(commands.Cog):
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
                 "❌ This command can only be used in a server channel.", ephemeral=True
+            )
+            return
+
+        # The Games Global Config availability list promises that switching a
+        # game off refuses its command as well as skipping its scheduled
+        # rounds. risky_roll is in that list, so honour it here rather than
+        # letting the switch mean something narrower for this one game.
+        if not await check_game_enabled(
+            GamesDb(self.bot.ctx.db_path), "risky_roll", interaction.guild.id
+        ):
+            await interaction.response.send_message(
+                "Risky Rolls is currently switched off on this server.",
+                ephemeral=True,
             )
             return
 

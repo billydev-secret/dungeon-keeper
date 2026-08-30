@@ -53,6 +53,11 @@ async def get_ai_config(
     from bot_modules.services.ai_config import get_prompt_with_source, list_prompts
 
     ctx = get_ctx(request)
+    # Read is gated the same way the writes below are: the payload carries the
+    # host's model path and every shared prompt, and this panel is primary-guild
+    # only. Its sole caller is config-ai.js, which the nav never mounts
+    # elsewhere — so this closes the disclosure without costing anyone a page.
+    _require_primary_guild(ctx, get_active_guild_id(request))
 
     def _q():
         from bot_modules.core.db_utils import get_config_value

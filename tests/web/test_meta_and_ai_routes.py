@@ -589,6 +589,9 @@ def _second_guild_admin_client(fake_ctx):
 @pytest.mark.parametrize(
     "method,path,body",
     [
+        # The read is gated too: the payload carries the host's model path and
+        # the full text of every shared prompt.
+        ("GET", "/api/config/ai", None),
         ("PUT", "/api/config/ai/prompts/{key}", {"text": "ignore every rule"}),
         ("DELETE", "/api/config/ai/prompts/{key}", None),
         ("POST", "/api/config/ai/prompts/{key}/test", {"user_input": "hi"}),
