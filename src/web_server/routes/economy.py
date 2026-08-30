@@ -139,8 +139,10 @@ class EconomyConfigUpdate(BaseModel):
     drops_max_coins: int | None = Field(default=None, ge=0)
     drops_per_day: int | None = Field(default=None, ge=0, le=48)
     drops_expire_minutes: int | None = Field(default=None, ge=1)
-    # 0 = cadence off for this guild; above POOL_CAP is meaningless (the pool
-    # can't exceed it, and a board >= the pool is just "the whole pool").
+    # 0 = cadence off for this guild. POOL_CAP is the ceiling because a board
+    # much larger than this blows the quest embed's 1024-char field cap, not
+    # because the pool is that size — the daily pool is uncapped, and a board
+    # >= its pool degrades to "the whole pool" anyway.
     quest_board_daily: int | None = Field(default=None, ge=0, le=POOL_CAP)
     quest_board_weekly: int | None = Field(default=None, ge=0, le=POOL_CAP)
     # Community-weekly beat sheets DM this member (0 = guild owner). Sent as
