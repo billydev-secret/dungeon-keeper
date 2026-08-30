@@ -213,6 +213,41 @@ def test_update_welcome_channel(authed_client, fake_ctx):
     assert val == "5001"
 
 
+def test_update_welcome_greeter_arrival_message(authed_client, fake_ctx):
+    """The greeter arrival line is editable, and an empty box means 'post
+    nothing' — it must survive as an empty string, not snap back to default."""
+    from bot_modules.core.db_utils import get_config_value
+
+    resp = authed_client.put(
+        "/api/config/welcome",
+        json={"greeter_arrival_message": "{member_name} just walked in"},
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_config_value(
+            conn, "greeter_arrival_message", "", fake_ctx.guild_id
+        ) == "{member_name} just walked in"
+
+    assert authed_client.put(
+        "/api/config/welcome", json={"greeter_arrival_message": ""}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_config_value(
+            conn, "greeter_arrival_message", "unset", fake_ctx.guild_id
+        ) == ""
+
+    body = authed_client.get("/api/config").json()["welcome"]
+    assert body["greeter_arrival_message"] == ""
+
+
+def test_get_config_welcome_defaults_the_arrival_line(authed_client):
+    """An untouched guild still reads back the historical @here line."""
+    from bot_modules.services.welcome_service import DEFAULT_ARRIVAL_MESSAGE
+
+    body = authed_client.get("/api/config").json()["welcome"]
+    assert body["greeter_arrival_message"] == DEFAULT_ARRIVAL_MESSAGE
+
+
 def test_update_welcome_invalidates_guild_config_cache(authed_client, fake_ctx):
     """Prime the per-guild cache, edit welcome via the API, confirm the next
     read reflects the edit (cache was dropped)."""
@@ -812,6 +847,42 @@ def test_update_birthday_persists_channel_and_message(authed_client, fake_ctx):
 def test_update_birthday_rejects_empty_message(authed_client):
     resp = authed_client.put(
         "/api/config/birthday", json={"birthday_message": "   "}
+    )
+    assert resp.status_code == 400
+
+
+def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
+    """The announce hour was a code constant; it is a per-guild dial now."""
+    from bot_modules.services.birthday_service import announce_hour
+
+    # Untouched guild reads back the historical 09:00.
+    assert authed_client.get("/api/config").json()["birthday"][
+        "birthday_announce_hour"
+    ] == 9
+
+    resp = authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": 18}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        # The loop reads it through the same helper.
+        assert announce_hour(conn, fake_ctx.guild_id) == 18
+    assert authed_client.get("/api/config").json()["birthday"][
+        "birthday_announce_hour"
+    ] == 18
+
+    # Midnight is a real choice, not "unset".
+    assert authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": 0}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert announce_hour(conn, fake_ctx.guild_id) == 0
+
+
+@pytest.mark.parametrize("hour", [-1, 24, 99])
+def test_update_birthday_rejects_an_impossible_hour(authed_client, hour):
+    resp = authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": hour}
     )
     assert resp.status_code == 400
 

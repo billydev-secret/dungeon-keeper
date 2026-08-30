@@ -104,6 +104,42 @@ def test_intake_feature_is_registered():
     assert "intake_channel_id" in sr.writable_keys(is_admin=False)
 
 
+def test_bios_requires_the_wizard_category_too():
+    """Regression: BiosConfig.configured needs channel AND wizard category, but
+    the registry listed only the channel — so gap detection called a bios setup
+    "configured" that the wizard would refuse to start."""
+    f = sr.FEATURES_BY_SLUG["starboard_bios"]
+    required = {s.key for s in f.required_settings()}
+    assert {"bios_channel_id", "bios_wizard_category_id"} <= required
+    # A stored 0 (the panel's "unset" value) must not read as configured.
+    assert sr.get_setting("bios_wizard_category_id").is_set("0") is False
+
+
+def test_inactive_sweep_entry_does_not_claim_to_be_the_prune_feature():
+    """The KV registry describes the *sweep*. Auto-Remove Role (Inactive) is a
+    separate panel backed by its own table, which this registry can't see —
+    naming this entry "prune" made the two read as one feature."""
+    f = sr.FEATURES_BY_SLUG["inactivity"]
+    assert "prune" not in f.label.lower()
+    assert "prune" not in f.blurb.lower()
+    assert {s.key for s in f.settings} == {
+        "inactive_auto_sweep",
+        "inactive_channel_id",
+        "inactive_role_id",
+        "inactive_threshold_days",
+        "inactive_sweep_cap",
+    }
+
+
+def test_birthday_announce_hour_is_registered_and_bounded():
+    f = sr.FEATURES_BY_SLUG["birthdays"]
+    hour = next(s for s in f.settings if s.key == "birthday_announce_hour")
+    assert (hour.minimum, hour.maximum) == (0, 23)
+    # Midnight is a real choice; the default is 09:00.
+    assert hour.is_set("0") is True
+    assert hour.is_set("9") is False
+
+
 # ── lookups ─────────────────────────────────────────────────────────────────
 
 

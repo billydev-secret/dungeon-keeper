@@ -32,6 +32,10 @@ from bot_modules.core.db_utils import (
     set_config_value,
     upsert_grant_role,
 )
+from bot_modules.services.birthday_service import (
+    ANNOUNCE_HOUR_KEY,
+    announce_hour as _announce_hour,
+)
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import pools_metrics
@@ -451,6 +455,8 @@ def _birthday_section(conn, guild_id: int) -> dict:
             conn, "birthday_message_2", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
         "birthday_pin_2": _bool_val(conn, "birthday_pin_2", guild_id=guild_id),
+        # Guild-local hour the announcement goes out (0–23).
+        "birthday_announce_hour": _announce_hour(conn, guild_id),
     }
 
 
@@ -1101,6 +1107,7 @@ def _privacy_section(conn, guild_id: int) -> dict:
 
 def _welcome_section(conn, guild_id: int) -> dict:
     from bot_modules.services.welcome_service import (
+        DEFAULT_ARRIVAL_MESSAGE,
         DEFAULT_LEAVE_MESSAGE,
         DEFAULT_WELCOME_MESSAGE,
     )
@@ -1130,6 +1137,12 @@ def _welcome_section(conn, guild_id: int) -> dict:
             ),
             "greeter_role_id": _id_str(conn, "greeter_role_id", guild_id),
             "greeter_chat_channel_id": _id_str(conn, "greeter_chat_channel_id", guild_id),
+            "greeter_arrival_message": _str_val(
+                conn,
+                "greeter_arrival_message",
+                DEFAULT_ARRIVAL_MESSAGE,
+                guild_id=guild_id,
+            ),
             "server_guide_channel_id": _id_str(conn, "server_guide_channel_id", guild_id),
             "join_leave_log_channel_id": _id_str(
                 conn,
@@ -1491,6 +1504,7 @@ class WelcomeConfigUpdate(BaseModel):
     leave_message: str | None = None
     greeter_role_id: str | None = None
     greeter_chat_channel_id: str | None = None
+    greeter_arrival_message: str | None = None
     server_guide_channel_id: str | None = None
     join_leave_log_channel_id: str | None = None
 
@@ -1514,6 +1528,9 @@ async def update_welcome(
         "leave_message": "leave_message",
         "greeter_role_id": "greeter_role_id",
         "greeter_chat_channel_id": "greeter_chat_channel_id",
+        # Stored verbatim, blank included: an empty line is the "post nothing"
+        # setting, so it must not be coerced back to the default.
+        "greeter_arrival_message": "greeter_arrival_message",
         "server_guide_channel_id": "server_guide_channel_id",
         "join_leave_log_channel_id": "join_leave_log_channel_id",
     }
@@ -3983,6 +4000,7 @@ class BirthdayConfigUpdate(BaseModel):
     birthday_channel_id_2: str | None = None
     birthday_message_2: str | None = None
     birthday_pin_2: bool | None = None
+    birthday_announce_hour: int | None = None
 
 
 _BIRTHDAY_FIELDS = {
@@ -4015,6 +4033,13 @@ async def update_birthday(
                 if not msg2:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message_2", msg2, guild_id)
+            if body.birthday_announce_hour is not None:
+                hour = int(body.birthday_announce_hour)
+                if not 0 <= hour <= 23:
+                    raise HTTPException(400, "Announce hour must be between 0 and 23")
+                set_config_value(
+                    conn, ANNOUNCE_HOUR_KEY, str(hour), guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)

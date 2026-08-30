@@ -218,13 +218,30 @@ Two fixes, one per drift:
   KV keys `intake_*`); its step editor and procedure reference blocks stay
   panel-only via `extra_panel_only`.
 
+### Two naming/coverage corrections (2026-08-30)
+
+- The `inactivity` entry was labelled **"Inactivity prune"** while carrying the
+  *sweep* keys (`inactive_*`). The real prune feature — the `config-prune`
+  panel, "Auto-Remove Role (Inactive)", stored in the `inactivity_prune_rules`
+  table — has no entry, and the registry is KV-only, so it can't get one
+  without teaching gap detection to read feature tables. The label now says
+  **"Inactive sweep"**, so the two overlapping features no longer read as one
+  and the prune name isn't spent on the wrong panel. (`advisor_context` still
+  exposes the prune rule read-only under its own `inactivity_prune` slug.)
+- The bios entry listed `bios_channel_id` alone, but `BiosConfig.configured`
+  needs `bios_wizard_category_id` too — so a half-wired bios setup was
+  classified *configured* while the wizard would refuse to start. The category
+  is now a `required` setting on that entry (panel-only, like the other
+  category dials).
+
 ## Follow-ups
 
 - The registry covers 17 features / 62 settings out of ~240 live config keys,
   a good number of which are dead rows like the above rather than real gaps.
   Extending it is additive and safe (the import-time check enforces the rules).
-- Other feature-table settings (Economy, Voice Master dials, Starboard) are
-  readable but still panel-only. `grant_roles` is now the worked example for
+- Other feature-table settings (Economy, Voice Master dials, Starboard, and
+  the inactivity **prune** rule) are readable but still panel-only, and being
+  row-backed they are invisible to gap detection. `grant_roles` is now the worked example for
   making one writable: a validate/apply pair plus a `target` value.
 - `support_access_enabled` is live and grants dashboard access to support. Left
   panel-only deliberately — it's an access grant to an outside party, closer to

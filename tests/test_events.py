@@ -17,6 +17,7 @@ from discord import app_commands
 from bot_modules.cogs.events_cog import EventsCog, _collect_backfill_channels, _on_tree_error
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.xp_system import DEFAULT_XP_SETTINGS
+from bot_modules.services.welcome_service import DEFAULT_ARRIVAL_MESSAGE
 from bot_modules.economy.logic import local_day_for
 from bot_modules.services.economy_quests_service import create_quest, set_quest_active
 from bot_modules.services.economy_service import (
@@ -600,6 +601,7 @@ class _StubGuildConfig:
         welcome_trigger: str = "join",
         unverified_role_id: int = 0,
         greeter_chat_channel_id: int = 0,
+        greeter_arrival_message: str = DEFAULT_ARRIVAL_MESSAGE,
         leave_channel_id: int = 0,
         leave_message: str = "",
         spoiler_required_channels: Any = None,
@@ -626,6 +628,7 @@ class _StubGuildConfig:
         self.welcome_trigger = welcome_trigger
         self.unverified_role_id = unverified_role_id
         self.greeter_chat_channel_id = greeter_chat_channel_id
+        self.greeter_arrival_message = greeter_arrival_message
         self.leave_channel_id = leave_channel_id
         self.leave_message = leave_message
         self.spoiler_required_channels = (
@@ -897,6 +900,59 @@ async def test_on_member_join_sends_greeter_ping():
         await cog.on_member_join(member)
 
     greeter_channel.send.assert_awaited_once_with("@here - <@500> has arrived")
+
+
+async def test_on_member_join_honours_a_custom_arrival_line():
+    """The line is a per-guild dial now — copy and ping come from config."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            greeter_chat_channel_id=77,
+            greeter_arrival_message="{member_name} just walked in",
+        ),
+    )
+    bot.ctx = ctx
+    cog = EventsCog(bot)
+
+    greeter_channel = MagicMock(spec=discord.TextChannel)
+    greeter_channel.send = AsyncMock()
+    member = _make_member(member_id=500)
+    member.guild.get_channel = MagicMock(return_value=greeter_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    sent = greeter_channel.send.await_args.args[0]
+    assert "@here" not in sent
+    assert sent == f"{member.display_name} just walked in"
+
+
+async def test_on_member_join_posts_nothing_when_arrival_line_cleared():
+    """An empty arrival line is the off switch, not an empty message."""
+    bot = _make_bot()
+    ctx = _make_ctx()
+    ctx.guild_config = MagicMock(
+        return_value=_StubGuildConfig(
+            greeter_chat_channel_id=77, greeter_arrival_message="",
+        ),
+    )
+    bot.ctx = ctx
+    cog = EventsCog(bot)
+
+    greeter_channel = MagicMock(spec=discord.TextChannel)
+    greeter_channel.send = AsyncMock()
+    member = _make_member(member_id=500)
+    member.guild.get_channel = MagicMock(return_value=greeter_channel)
+
+    with ExitStack() as stack:
+        for p in _patch_join_deps():
+            stack.enter_context(p)
+        await cog.on_member_join(member)
+
+    greeter_channel.send.assert_not_awaited()
 
 
 def _role(role_id: int, name: str) -> MagicMock:
