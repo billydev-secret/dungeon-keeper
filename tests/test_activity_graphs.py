@@ -29,6 +29,8 @@ from bot_modules.services.activity_graphs import (
     overlay_labels,
     overlay_period_cap,
     overlay_period_start,
+    overlay_stride_days,
+    overlay_weekday_name,
     query_activity_overlay,
     query_dropoff_profiles,
     query_greeter_response_times,
@@ -869,18 +871,40 @@ def test_percentile_edges():
 
 
 @pytest.mark.parametrize(
-    "period,mode,expected",
+    "period,mode,same_weekday,expected",
     [
-        ("week", "messages", 26),
+        ("week", "messages", False, 26),
         # 90 days of raw retention is 12 whole weeks, which is why the panel
         # offers 26 weeks in messages mode only.
-        ("week", "xp", 12),
-        ("day", "messages", 90),
-        ("day", "xp", 90),
+        ("week", "xp", False, 12),
+        ("day", "messages", False, 90),
+        ("day", "xp", False, 90),
+        # Same-weekday days step a week apart, so they are capped like weeks
+        # rather than like days: 26 back in messages, and in XP only as far as
+        # raw retention reaches — 12 x 7 = 84 days fits inside 90, 13 does not.
+        ("day", "messages", True, 26),
+        ("day", "xp", True, 12),
+        # A week is already every seventh day; the flag changes nothing there.
+        ("week", "xp", True, 12),
     ],
 )
-def test_overlay_period_cap(period, mode, expected):
-    assert overlay_period_cap(period, mode) == expected
+def test_overlay_period_cap(period, mode, same_weekday, expected):
+    assert overlay_period_cap(period, mode, same_weekday) == expected
+
+
+@pytest.mark.parametrize(
+    "period,same_weekday,expected",
+    [("day", False, 1), ("day", True, 7), ("week", False, 7), ("week", True, 7)],
+)
+def test_overlay_stride_days(period, same_weekday, expected):
+    assert overlay_stride_days(period, same_weekday) == expected
+
+
+def test_overlay_weekday_name_reads_the_guild_clock():
+    """18:00 Saturday in a UTC-7 guild is already Sunday in UTC."""
+    now = datetime(2026, 8, 30, 1, 0, tzinfo=timezone.utc)  # Sunday 01:00 UTC
+    assert overlay_weekday_name(now, 0.0) == "Sunday"
+    assert overlay_weekday_name(now, -7.0) == "Saturday"
 
 
 def _seed_weeks(conn, tz, counts_by_week, hour_of_week=0):
@@ -1007,3 +1031,116 @@ def test_overlay_unclamped_when_no_rollup_boundary(db_conn):
         db_conn, 10, "week", mode="xp", compare_periods=12, utc_offset_hours=0.0
     )
     assert res.clamped is False
+
+
+# ── same-weekday day overlay ──────────────────────────────────────────
+
+
+def _seed_days(conn, tz, counts_by_day, hour_of_day=0):
+    """Seed `counts_by_day[k]` messages at `hour_of_day` of the day k back."""
+    start = overlay_period_start(datetime.now(timezone.utc), tz, "day")
+    mid = 1
+    rows = []
+    for days_back, count in counts_by_day.items():
+        ts = start - days_back * 86400 + hour_of_day * 3600 + 1800
+        for _ in range(count):
+            rows.append((mid, 100, 7, ts))
+            mid += 1
+    _seed_processed(conn, rows=rows)
+    return start
+
+
+def test_overlay_same_weekday_samples_every_seventh_day(db_conn):
+    """The band is built from 7/14/21 days back, not from 1..21.
+
+    The six days between each sample carry ten times the traffic; if any of
+    them reached the band the median would be nowhere near 2.
+    """
+    counts = {d: (2 if d % 7 == 0 else 20) for d in range(1, 22)}
+    _seed_days(db_conn, 0.0, counts)
+
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=3,
+        same_weekday=True, utc_offset_hours=0.0,
+    )
+
+    assert res.same_weekday is True
+    assert res.periods_sampled == 3
+    assert res.band_low[0] == 2.0
+    assert res.band_mid[0] == 2.0
+    assert res.band_high[0] == 2.0
+
+
+def test_overlay_every_day_basis_still_sees_the_days_between(db_conn):
+    """The contrast case: the same fixture read day-by-day is mostly 20s."""
+    counts = {d: (2 if d % 7 == 0 else 20) for d in range(1, 22)}
+    _seed_days(db_conn, 0.0, counts)
+
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=21,
+        same_weekday=False, utc_offset_hours=0.0,
+    )
+
+    assert res.same_weekday is False
+    assert res.periods_sampled == 21
+    assert res.band_mid[0] == 20.0
+
+
+def test_overlay_same_weekday_keeps_the_local_hour(db_conn):
+    """Hour-of-day still divides by the day, not by the seven-day stride."""
+    _seed_days(db_conn, -7.0, {7: 1, 14: 1, 21: 1}, hour_of_day=23)
+
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=3,
+        same_weekday=True, utc_offset_hours=-7.0,
+    )
+
+    assert res.periods_sampled == 3
+    assert res.band_mid[23] == 1.0
+    assert res.band_mid[0] == 0.0
+
+
+def test_overlay_same_weekday_is_ignored_for_the_week_period(db_conn):
+    """A week is already every seventh day — the flag must not widen it."""
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3, 3: 2, 4: 1})
+
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4,
+        same_weekday=True, utc_offset_hours=0.0,
+    )
+
+    assert res.same_weekday is False
+    assert res.periods_sampled == 4
+    assert res.band_mid[0] == 2.5
+
+
+def test_overlay_same_weekday_xp_clamps_in_whole_strides(db_conn, monkeypatch):
+    """The retention clamp counts same-weekdays, not days.
+
+    A boundary 70 days back leaves exactly 10 same-weekdays reachable; asking
+    for 26 must shorten to those rather than to 70.
+    """
+    from bot_modules.services import xp_rollup_service
+
+    start = overlay_period_start(datetime.now(timezone.utc), 0.0, "day")
+    boundary_ts = start - 70 * 86400
+    monkeypatch.setattr(
+        xp_rollup_service,
+        "read_boundary",
+        lambda conn, **kw: (xp_rollup_service.utc_day(boundary_ts), boundary_ts),
+    )
+    # One event in every reachable same-weekday, plus one just past the
+    # boundary that the clamp must exclude.
+    _seed_xp(db_conn, rows=[
+        (7, "text", 3.0, start - d * 7 * 86400 + 1800) for d in range(1, 11)
+    ] + [(7, "text", 999.0, start - 77 * 86400 + 1800)])
+
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="xp", compare_periods=26,
+        same_weekday=True, utc_offset_hours=0.0,
+    )
+
+    assert res.clamped is True
+    assert res.periods_requested == 26
+    assert res.periods_sampled == 10
+    assert res.band_mid[0] == 3.0

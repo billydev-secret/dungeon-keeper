@@ -8,7 +8,7 @@ computation endpoints get a smoke-only test (200 + valid JSON).
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -135,6 +135,60 @@ def test_activity_overlay_clamps_compare_periods_by_mode(
     )
     assert resp.status_code == 200
     assert resp.json()["periods_sampled"] == expected_sampled
+
+
+@pytest.mark.parametrize(
+    "mode,expected_sampled",
+    [
+        # A same-weekday day steps a week at a time, so it clamps exactly like
+        # the weekly overlay above: 12 in XP, all 20 seeded in messages.
+        ("xp", 12),
+        ("messages", 20),
+    ],
+)
+def test_activity_same_weekday_clamps_compare_periods_by_mode(
+    open_client, fake_ctx, mode, expected_sampled
+):
+    invalidate_report_cache()
+    # The weekly fixture is seeded a whole number of weeks back from the start
+    # of this week, which is also a whole number of weeks back from today.
+    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    resp = open_client.get(
+        f"/api/reports/activity?resolution=day_overlay&mode={mode}"
+        "&compare_periods=26&same_weekday=true&include_bots=true"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["periods_sampled"] == expected_sampled
+
+
+def test_activity_same_weekday_names_the_weekday(open_client, fake_ctx):
+    """The caption and the band say which weekday, not just "day"."""
+    invalidate_report_cache()
+    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    resp = open_client.get(
+        "/api/reports/activity?resolution=day_overlay&mode=messages"
+        "&compare_periods=8&same_weekday=true&include_bots=true"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    # Derived from the offset the response itself reports rather than from
+    # UTC: a fixture guild on a negative offset would otherwise make this pass
+    # or fail depending on the hour the suite happens to run at.
+    offset = float((data["tz_label"] or "UTC").removeprefix("UTC") or 0)
+    today = (datetime.now(timezone.utc) + timedelta(hours=offset)).strftime("%A")
+    assert data["window_label"] == f"Today vs Last 8 {today}s"
+    assert data["band_label"] == f"Typical {today}"
+
+
+def test_activity_every_day_basis_keeps_the_generic_label(open_client, fake_ctx):
+    invalidate_report_cache()
+    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    resp = open_client.get(
+        "/api/reports/activity?resolution=day_overlay&mode=messages"
+        "&compare_periods=28&include_bots=true"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["band_label"] == "Typical day"
 
 
 # ── quality-score ─────────────────────────────────────────────────────

@@ -30,6 +30,17 @@ const OVERLAY = {
     presets: [7, 14, 28, 90],
     fallback: 28,
     caps: { messages: 90, xp: 90 },
+    // The second basis for the same picker: sample every seventh day back
+    // instead of every day, so a Tuesday is read against Tuesdays. Weekday
+    // seasonality dominates a server's rhythm — a weekday drawn against a band
+    // with weekends in it mostly tells you about the weekend. Stepping a week
+    // at a time gives it a week overlay's reach, and a week overlay's caps.
+    weekday: {
+      unit: "same weekdays",
+      presets: [4, 8, 12, 26],
+      fallback: 8,
+      caps: { messages: 26, xp: 12 },
+    },
   },
   week_overlay: {
     unit: "weeks",
@@ -40,6 +51,18 @@ const OVERLAY = {
 };
 
 const isOverlay = (res) => Object.prototype.hasOwnProperty.call(OVERLAY, res);
+
+// The compare picker carries two things — how far back, and which days count —
+// in one control rather than a window select beside a "same weekday" tick that
+// only means anything for one of the two resolutions. Option values are
+// `basis:n`; `all` is every period, `weekday` only days sharing today's.
+const BASIS_ALL = "all";
+const BASIS_WEEKDAY = "weekday";
+
+function parseCompare(value) {
+  const [basis, n] = String(value || "").split(":");
+  return { basis: basis === BASIS_WEEKDAY ? BASIS_WEEKDAY : BASIS_ALL, n: Number(n) || 0 };
+}
 
 // Two identities, not N: collapsing history into one envelope means this chart
 // never needs a twelve-step ramp. Amber is the subject, teal the comparison —
@@ -143,21 +166,47 @@ export function mount(container, initialParams) {
     compareField.hidden = !cfg;
     if (!cfg) return;
 
-    const cap = cfg.caps[modeEl.value] ?? Infinity;
-    const previous = Number(compareEl.value) || cfg.fallback;
+    const bases = [
+      { key: BASIS_ALL, group: "Every day", spec: cfg },
+      ...(cfg.weekday ? [{ key: BASIS_WEEKDAY, group: "Same weekday", spec: cfg.weekday }] : []),
+    ];
+    // Group headings only earn their place when there is a choice to make;
+    // week_overlay has one basis, so its options stay a flat list.
+    const grouped = bases.length > 1;
+    const previous = parseCompare(compareEl.value);
+
     compareEl.replaceChildren();
-    for (const n of cfg.presets) {
-      const opt = document.createElement("option");
-      opt.value = String(n);
-      opt.textContent = `Last ${n} ${cfg.unit}`;
-      if (n > cap) {
-        opt.disabled = true;
-        opt.textContent += " — messages only";
+    for (const { key, group, spec } of bases) {
+      const cap = spec.caps[modeEl.value] ?? Infinity;
+      const host = grouped ? document.createElement("optgroup") : compareEl;
+      if (grouped) host.label = group;
+      for (const n of spec.presets) {
+        const opt = document.createElement("option");
+        opt.value = `${key}:${n}`;
+        opt.textContent = `Last ${n} ${spec.unit}`;
+        if (n > cap) {
+          opt.disabled = true;
+          opt.textContent += " — messages only";
+        }
+        host.appendChild(opt);
       }
-      compareEl.appendChild(opt);
+      if (grouped) compareEl.appendChild(host);
     }
-    const wanted = previous <= cap ? previous : cfg.fallback;
-    compareEl.value = String(Math.min(wanted, cap));
+
+    // Keep the reader's basis across a mode change, only pulling the window in
+    // when this mode cannot reach that far. The value has to be one of the
+    // options just built and not a disabled one: assigning a select a value it
+    // has no option for silently blanks it, and a blank picker sitting over a
+    // chart drawn to the server's default is the worst of both.
+    const chosen = bases.find((b) => b.key === previous.basis) || bases[0];
+    const cap = chosen.spec.caps[modeEl.value] ?? Infinity;
+    const usable = chosen.spec.presets.filter((n) => n <= cap);
+    const wanted = usable.includes(previous.n)
+      ? previous.n
+      : usable.includes(chosen.spec.fallback)
+        ? chosen.spec.fallback
+        : usable[usable.length - 1] ?? chosen.spec.presets[0];
+    compareEl.value = `${chosen.key}:${wanted}`;
   }
 
   resEl.value  = initialParams.resolution || "day";
@@ -250,7 +299,11 @@ export function mount(container, initialParams) {
     };
     // Deliberately not deep-linked: the window is a per-look question, not
     // part of the view's identity, and it defaults fresh every time.
-    if (isOverlay(resEl.value)) params.compare_periods = compareEl.value;
+    if (isOverlay(resEl.value)) {
+      const { basis, n } = parseCompare(compareEl.value);
+      params.compare_periods = n;
+      if (basis === BASIS_WEEKDAY) params.same_weekday = "true";
+    }
     if (userFS.getValue()) params.user_id = userFS.getValue();
     if (chanFS.getValue()) params.channel_id = chanFS.getValue();
     if (excludedIds().length) params.exclude_channel_ids = excludedIds().join(",");
@@ -379,7 +432,9 @@ export function mount(container, initialParams) {
 
     const isWeek = data.resolution === "week_overlay";
     const subject = isWeek ? "This week" : "Today";
-    const typical = isWeek ? "Typical week" : "Typical day";
+    // The server names the band, because only it knows the guild-local weekday
+    // a same-weekday comparison is drawn against ("Typical Tuesday").
+    const typical = data.band_label || (isWeek ? "Typical week" : "Typical day");
 
     const hasBand = (data.band_mid || []).length > 0;
     const lived = data.counts.filter((c) => c !== null && c !== undefined).length;

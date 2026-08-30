@@ -386,7 +386,11 @@ export async function mount(container, params = {}) {
   header.appendChild(tools);
   panel.appendChild(header);
 
-  panel.appendChild(buildAskBox());
+  // Only on the assistant's own help page. It used to sit above every one of
+  // the 53 help pages, so the same ask box preceded the content on each of
+  // them; the reference pages are now reference, and the ask box lives on the
+  // page named for it (third in the Help nav).
+  if (meta.brand === "assistant") panel.appendChild(buildAskBox());
 
   const body = document.createElement("div");
   body.className = "dk-help";

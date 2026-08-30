@@ -701,8 +701,32 @@ MIN_BAND_PERIODS = 3
 # this stops changing shape, and the request gets slower for nothing.
 OVERLAY_MAX_PERIODS: dict[str, int] = {"day": 90, "week": 26}
 
+# A same-weekday day overlay steps a week at a time, so it reaches back as far
+# as the weekly overlay does and is capped like that rather than like a day.
+OVERLAY_SAME_WEEKDAY_MAX = 26
 
-def overlay_period_cap(period: OverlayPeriod, mode: str) -> int:
+# Full weekday names, Sunday-first to match _DOW_LABELS. Spelled out rather
+# than taken from strftime("%A"), which follows the process locale.
+_DOW_FULL = [
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+]
+
+
+def overlay_stride_days(period: OverlayPeriod, same_weekday: bool = False) -> int:
+    """Days between one sampled period and the one before it.
+
+    Ordinarily a period's own length. A same-weekday day overlay samples every
+    seventh day instead, which is the whole point of it: a Tuesday read against
+    a mixed bag of weekend days says more about the weekend than about Tuesday.
+    """
+    if same_weekday and period == "day":
+        return 7
+    return _OVERLAY_PERIOD_SECS[period] // 86400
+
+
+def overlay_period_cap(
+    period: OverlayPeriod, mode: str, same_weekday: bool = False
+) -> int:
     """Largest N this period and mode can answer honestly.
 
     XP is bounded by raw retention because the overlay cannot union the daily
@@ -710,12 +734,29 @@ def overlay_period_cap(period: OverlayPeriod, mode: str) -> int:
     retention *policy* rather than from what ``xp_events`` happens to hold
     today: prod has not run the pruner yet, so a cap measured off the live
     table would silently shrink the first time it does.
+
+    Reach is measured in days *spanned*, not periods, so "the last 12 Tuesdays"
+    (84 days) is answerable on XP where "the last 13" (91 days) is not.
     """
-    hard = OVERLAY_MAX_PERIODS[period]
+    if same_weekday and period == "day":
+        hard = OVERLAY_SAME_WEEKDAY_MAX
+    else:
+        hard = OVERLAY_MAX_PERIODS[period]
     if mode != "xp":
         return hard
-    period_days = _OVERLAY_PERIOD_SECS[period] // 86400
-    return max(1, min(hard, XP_HISTOGRAM_WINDOW_DAYS // period_days))
+    stride_days = overlay_stride_days(period, same_weekday)
+    return max(1, min(hard, XP_HISTOGRAM_WINDOW_DAYS // stride_days))
+
+
+def overlay_weekday_name(now: datetime, utc_offset_hours: float) -> str:
+    """The guild-local weekday *now* falls on, e.g. ``"Tuesday"``.
+
+    Read off the guild's own clock, not UTC: at 18:00 on a Saturday in a UTC-7
+    guild it is already Sunday in UTC, and a band labelled "Sundays" drawn over
+    Saturday data is the exact misread this view exists to prevent.
+    """
+    local = now + timedelta(hours=utc_offset_hours)
+    return _DOW_FULL[(local.weekday() + 1) % 7]
 
 
 def overlay_period_start(
@@ -774,6 +815,8 @@ class OverlayResult:
     periods_sampled: int
     #: True when the window was shortened to stay inside XP raw retention.
     clamped: bool
+    #: True when the band sampled only days sharing today's weekday.
+    same_weekday: bool = False
 
     @property
     def has_band(self) -> bool:
@@ -787,6 +830,7 @@ def query_activity_overlay(
     *,
     mode: Literal["messages", "xp"] = "messages",
     compare_periods: int = 12,
+    same_weekday: bool = False,
     user_id: int | None = None,
     channel_id: int | None = None,
     exclude_user_ids: set[int] | None = None,
@@ -807,14 +851,26 @@ def query_activity_overlay(
     So the window is clamped to the retention boundary instead, exactly as the
     hour-of-day/day-of-week XP histograms already are, and ``clamped`` says it
     happened so the caption can be honest rather than quietly short.
+
+    ``same_weekday`` (day overlay only) samples every *seventh* day back from
+    today rather than every day, so a Tuesday is read against Tuesdays. Weekday
+    seasonality dominates a server's rhythm, and a band mixing weekends into a
+    weekday's history mostly measures the weekend.
     """
     period_secs = _OVERLAY_PERIOD_SECS[period]
     n_buckets = period_secs // 3600
     now = datetime.now(timezone.utc)
     current_start = overlay_period_start(now, utc_offset_hours, period)
 
+    # The gap between one sampled period and the previous one. It is only ever
+    # wider than the period itself for the same-weekday day view, where each
+    # step skips the six days in between - so the period index divides by the
+    # stride while the hour within a period still divides by the period.
+    same_weekday = bool(same_weekday) and period == "day"
+    step_secs = overlay_stride_days(period, same_weekday) * 86400
+
     periods = max(1, int(compare_periods))
-    since_ts = current_start - periods * period_secs
+    since_ts = current_start - periods * step_secs
 
     clamped = False
     if mode == "xp":
@@ -822,17 +878,24 @@ def query_activity_overlay(
         if boundary is not None:
             _, boundary_ts = boundary
             if since_ts < boundary_ts:
-                periods = max(0, int((current_start - boundary_ts) // period_secs))
-                since_ts = current_start - periods * period_secs
+                periods = max(0, int((current_start - boundary_ts) // step_secs))
+                since_ts = current_start - periods * step_secs
                 clamped = True
 
     since_i = int(since_ts)
     elapsed = f"(CAST(created_at AS INTEGER) - {since_i})"
-    idx_expr = f"CAST({elapsed} / {period_secs} AS INTEGER)"
-    hour_expr = f"CAST(({elapsed} % {period_secs}) / 3600 AS INTEGER)"
+    idx_expr = f"CAST({elapsed} / {step_secs} AS INTEGER)"
+    hour_expr = f"CAST(({elapsed} % {step_secs}) / 3600 AS INTEGER)"
 
     params: list[object] = [guild_id, since_ts]
     where = "guild_id = ? AND created_at >= ?"
+    if step_secs != period_secs:
+        # `since_ts` is a local midnight a whole number of weeks back, so each
+        # stride block opens on today's weekday: keeping only the block's first
+        # `period_secs` keeps that day and drops the six behind it. Filtered in
+        # SQL rather than in the loop below so six days out of seven are never
+        # read at all.
+        where += f" AND {elapsed} % {step_secs} < {period_secs}"
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)
@@ -897,6 +960,7 @@ def query_activity_overlay(
         periods_requested=max(1, int(compare_periods)),
         periods_sampled=len(sampled),
         clamped=clamped,
+        same_weekday=same_weekday,
     )
 
 
