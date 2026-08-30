@@ -1,6 +1,7 @@
 import { api, apiPut } from "../api.js";
 import { confirmDialog } from "../ui.js";
 import { auditPanel, badge, el, jumpAnchor, tsColumn } from "../audit-helpers.js";
+import { selectValueOrAdd } from "../config-helpers.js";
 
 const RETENTION_OPTIONS = [
   { value: "30", label: "30 days" },
@@ -35,6 +36,12 @@ function extraSummary(extra) {
   return parts.length ? parts.join(", ") : "—";
 }
 
+// The route accepts 0-3650 while this list offers five windows, so a value
+// set anywhere else has no option here and would blank the control.
+function setRetention(sel, days) {
+  selectValueOrAdd(sel, days, (v) => (v === "0" ? "Keep forever" : `${v} days`));
+}
+
 function buildRetentionControl() {
   const sel = el("select");
   for (const opt of RETENTION_OPTIONS) {
@@ -46,7 +53,7 @@ function buildRetentionControl() {
   const wrap = el("label", null, "Keep for ", sel, " ", status);
 
   api("/api/moderation/anon-audit/retention")
-    .then((d) => { sel.value = String(d.retention_days); current = d.retention_days; })
+    .then((d) => { setRetention(sel, d.retention_days); current = d.retention_days; })
     .catch((err) => { status.textContent = err.message; });
 
   // The value the control held before this change, so a shortening can be
@@ -70,14 +77,14 @@ function buildRetentionControl() {
           danger: true,
         },
       );
-      if (!ok) { sel.value = String(current); return; }
+      if (!ok) { setRetention(sel, current); return; }
     }
     status.textContent = "Saving…";
     try {
       const d = await apiPut("/api/moderation/anon-audit/retention", {
         retention_days: Number(sel.value),
       });
-      sel.value = String(d.retention_days);
+      setRetention(sel, d.retention_days);
       current = d.retention_days;
       status.textContent = d.retention_days === 0 ? "Purging disabled" : "Saved";
     } catch (err) {

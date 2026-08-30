@@ -1,7 +1,7 @@
 import { api, apiPost, esc, fmtTs } from "../api.js";
 import {
   apiPut, apiDelete, showStatus, guardForm,
-  loadChannels, loadRoles, channelSelect, roleSelect,
+  loadChannels, loadRoles, channelSelect, roleSelect, selectValueOrAdd,
 } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
@@ -300,13 +300,26 @@ function startEdit(root, row) {
   root.querySelector('[data-action="save"]').textContent = "Save Changes";
   root.querySelector('[data-action="cancel-edit"]').style.display = "";
   root.querySelector('[data-ctrl="game"]').value = row.game_type;
-  root.querySelector('[data-ctrl="channel"]').value = String(row.channel_id);
+  // The selects are built from the *current* channel and role lists, so a
+  // schedule pointing at something deleted in Discord has no option to land
+  // on: the channel select (allowNone: false, no "(none)" row) would read ""
+  // and the role select would fall to "0". save() posts every column, so
+  // opening a schedule to change its time would quietly move where it posts.
+  selectValueOrAdd(
+    root.querySelector('[data-ctrl="channel"]'),
+    row.channel_id,
+    (v) => `\u26a0 Missing channel (id ${v})`,
+  );
   root.querySelector('[data-ctrl="recurrence"]').value = row.recurrence;
   root.querySelector('[data-ctrl="time"]').value = fmtTime(row.time_of_day);
   root.querySelector('[data-ctrl="date"]').value = row.start_date || "";
   root.querySelector('[data-ctrl="announce"]').checked = !!row.announce;
   root.querySelector('[data-region="role-field"]').style.display = row.announce ? "" : "none";
-  root.querySelector('[data-ctrl="role"]').value = row.announce_role_id ? String(row.announce_role_id) : "0";
+  selectValueOrAdd(
+    root.querySelector('[data-ctrl="role"]'),
+    row.announce_role_id ? String(row.announce_role_id) : "0",
+    (v) => `\u26a0 Missing role (id ${v})`,
+  );
   const days = new Set((row.recur_days || []).map(String));
   root.querySelectorAll('[data-weekday]').forEach((el) => {
     el.checked = days.has(el.getAttribute("data-weekday"));
