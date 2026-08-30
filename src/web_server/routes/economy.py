@@ -143,7 +143,6 @@ class EconomyConfigUpdate(BaseModel):
     # can't exceed it, and a board >= the pool is just "the whole pool").
     quest_board_daily: int | None = Field(default=None, ge=0, le=POOL_CAP)
     quest_board_weekly: int | None = Field(default=None, ge=0, le=POOL_CAP)
-    quest_board_monthly: int | None = Field(default=None, ge=0, le=POOL_CAP)
     # Community-weekly beat sheets DM this member (0 = guild owner). Sent as
     # a string from the panel so the snowflake survives JS number precision.
     community_host_user_id: int | None = Field(default=None, ge=0)
@@ -175,8 +174,6 @@ class EconomyConfigUpdate(BaseModel):
     price_emoji_animated: int | None = Field(default=None, ge=0)
     emoji_sponsor_slots: int | None = Field(default=None, ge=0)
     emoji_sponsor_expire_days: int | None = Field(default=None, ge=0)
-    price_text_room: int | None = Field(default=None, ge=0)
-    price_voice_room: int | None = Field(default=None, ge=0)
     raffle_enabled: bool | None = None
     price_raffle_ticket: int | None = Field(default=None, ge=0)
     raffle_max_tickets: int | None = Field(default=None, ge=0)
@@ -203,6 +200,20 @@ class EconomyConfigUpdate(BaseModel):
     # Clamped in the service too (1..168); bounded here so the dashboard
     # refuses the absurd value rather than silently clamping it.
     theme_hours: int | None = Field(default=None, ge=1, le=168)
+    # Live auctions. The service floors each of these itself (a 0 min bid
+    # would let someone win for nothing), so the bounds here say the same
+    # thing out loud rather than letting the panel offer a value that is
+    # silently clamped. The duration ceiling is a guard-rail on what a mod may
+    # set per auction, so it is bounded well above the 168h (one week) default
+    # but not left open.
+    auction_min_bid: int | None = Field(default=None, ge=1)
+    auction_min_increment: int | None = Field(default=None, ge=1)
+    auction_soft_close_seconds: int | None = Field(default=None, ge=0, le=3600)
+    auction_max_duration_hours: int | None = Field(default=None, ge=1, le=720)
+    # How long a custom-item order waits on staff before it auto-refunds; 0
+    # leaves orders queued forever (the sibling of the QOTD/pin/theme/emoji
+    # review windows above, and missing from this whitelist until now).
+    shop_item_expire_days: int | None = Field(default=None, ge=0)
     bounty_min_stake: int | None = Field(default=None, ge=0)
     bounty_max_open: int | None = Field(default=None, ge=0)
     bounty_expire_days: int | None = Field(default=None, ge=0)

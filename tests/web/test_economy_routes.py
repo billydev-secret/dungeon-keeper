@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db
@@ -187,6 +189,74 @@ def test_put_qotd_sponsor_price_roundtrips(authed_client, fake_ctx):
     assert cfg.qotd_sponsor_expire_days == 10
 
 
+def test_put_auction_dials_roundtrip(authed_client, fake_ctx):
+    """Audit finding 67: the four live-auction guard-rails are enforced by the
+    auction service but were absent from the whitelist, so the only way to move
+    them was a hand-written row in the config table."""
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "auction_min_bid": 25,
+            "auction_min_increment": 10,
+            "auction_soft_close_seconds": 600,
+            "auction_max_duration_hours": 72,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.auction_min_bid == 25
+    assert cfg.auction_min_increment == 10
+    assert cfg.auction_soft_close_seconds == 600
+    assert cfg.auction_max_duration_hours == 72
+
+
+@pytest.mark.parametrize(
+    ("payload"),
+    [
+        pytest.param({"auction_min_bid": 0}, id="min-bid-of-zero"),
+        pytest.param({"auction_min_increment": 0}, id="raise-of-zero"),
+        pytest.param({"auction_soft_close_seconds": 3601}, id="anti-snipe-over-an-hour"),
+        pytest.param({"auction_max_duration_hours": 0}, id="zero-length-auction"),
+        pytest.param({"auction_max_duration_hours": 721}, id="auction-over-a-month"),
+    ],
+)
+def test_put_refuses_an_auction_dial_the_service_would_clamp(authed_client, payload):
+    """The service floors these itself; the panel must refuse rather than let an
+    admin save a number that is silently ignored."""
+    assert authed_client.put("/api/economy/config", json=payload).status_code == 422
+
+
+def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx):
+    """Audit finding 68: the custom-item order sweep read this hourly, but every
+    sibling review window was editable and this one was not."""
+    resp = authed_client.put(
+        "/api/economy/config", json={"shop_item_expire_days": 5}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.shop_item_expire_days == 5
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        pytest.param("price_text_room", id="text-room-price"),
+        pytest.param("price_voice_room", id="voice-room-price"),
+        pytest.param("quest_board_monthly", id="monthly-board-size"),
+    ],
+)
+def test_put_refuses_the_dropped_dials(authed_client, dropped):
+    """Findings 44 and 57: private rooms were never built and monthly became a
+    single guild-wide goal, so these three bought and sized nothing. The
+    whitelist kept accepting them, which is how a stored value went on looking
+    like a live setting."""
+    assert authed_client.put(
+        "/api/economy/config", json={dropped: 5}
+    ).status_code == 422
+
+
 def test_put_partial_leaves_other_fields_unset(authed_client, fake_ctx):
     """Only the sent key is written — empty icon URL is settable, and the rest
     of the settings are not persisted."""
@@ -317,8 +387,10 @@ def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
     # curated colours arrived (todo #76) — the hints track the spec defaults.
     assert hints["price_role_preset"] == 80
     assert hints["price_role_gradient"] == 240
-    assert hints["price_text_room"] == 200
-    assert hints["price_voice_room"] == 200
+    # The two private-room prices used to be hinted here for a stage that was
+    # never built — a suggestion for something nobody could ever buy.
+    assert "price_text_room" not in hints
+    assert "price_voice_room" not in hints
 
 
 def test_metrics_requires_admin(fake_ctx):

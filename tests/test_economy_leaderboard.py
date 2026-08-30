@@ -402,7 +402,7 @@ def test_embed_quest_board_summarizes_per_cadence():
         QuestLine("weekly", "Solo weekly", reward=30, reward_xp=0),
         QuestLine("monthly", "Big month", reward=100, reward_xp=0),
     ]
-    settings = EconSettings(quest_board_daily=3, quest_board_monthly=0)
+    settings = EconSettings(quest_board_daily=3)
     embed = build_leaderboard_embed(
         settings, LeaderboardData([], [], quests), _names({}), now_ts=NOW
     )
@@ -411,7 +411,8 @@ def test_embed_quest_board_summarizes_per_cadence():
     assert "`Daily    3 yours · pool 14` 🪙 5–40 each" in board
     # A pool smaller than the configured size clamps to the pool.
     assert "`Weekly   1 yours · pool 1 ` 🪙 30 each" in board
-    # A cadence sized 0 is off for this guild — no line at all.
+    # Monthly has no board size at all: it became one guild-wide goal, so even
+    # a hand-built monthly quest line can never summarise as a personal draw.
     assert "Monthly" not in board
     # No individual titles leak into the summary.
     assert "Quest 0" not in board and "Solo weekly" not in board

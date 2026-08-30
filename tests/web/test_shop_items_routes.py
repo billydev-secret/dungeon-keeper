@@ -127,6 +127,71 @@ def test_patch_edits_in_place(authed_client):
     assert resp.json()["price"] == 250
 
 
+def test_the_editor_can_patch_the_window_description_and_order(authed_client):
+    """The Shop & Perks row editor now owns all four (audit finding 69).
+
+    It PATCHes the row it just read back, so the body is the GET shape minus
+    the two server-owned keys (``id``, ``sold``) the body model doesn't accept.
+    The window, the staff-facing description and the display order all have to
+    survive that round trip, or the new inputs would save nothing.
+    """
+    created = authed_client.post("/api/economy/shop-items", json=_item_body()).json()
+    sent = {k: v for k, v in created.items() if k not in ("id", "sold")}
+    edited = authed_client.patch(
+        f"/api/economy/shop-items/{created['id']}",
+        json={
+            **sent,
+            "description": "Posted by hand in #announcements.",
+            "available_from": 1_800_000_000.0,
+            "available_until": 1_800_600_000.0,
+            "sort_order": 3,
+        },
+    )
+    assert edited.status_code == 200
+    row = edited.json()
+    assert row["description"] == "Posted by hand in #announcements."
+    assert row["available_from"] == 1_800_000_000.0
+    assert row["available_until"] == 1_800_600_000.0
+    assert row["sort_order"] == 3
+
+
+def test_the_editor_reorders_the_list(authed_client):
+    """Display order is real: items list ``ORDER BY sort_order, id``."""
+    first = authed_client.post(
+        "/api/economy/shop-items", json=_item_body(name="Alpha", sort_order=9)
+    ).json()
+    authed_client.post(
+        "/api/economy/shop-items", json=_item_body(name="Beta", sort_order=1)
+    )
+    assert [i["name"] for i in authed_client.get("/api/economy/shop-items").json()] == [
+        "Beta", "Alpha",
+    ]
+    resp = authed_client.patch(
+        f"/api/economy/shop-items/{first['id']}",
+        json={**_item_body(name="Alpha"), "sort_order": 0},
+    )
+    assert resp.status_code == 200
+    assert [i["name"] for i in authed_client.get("/api/economy/shop-items").json()] == [
+        "Alpha", "Beta",
+    ]
+
+
+@pytest.mark.parametrize("server_owned", ["id", "sold"])
+def test_a_server_owned_key_is_refused(authed_client, server_owned):
+    """Why the row editor strips two keys off the row it read back.
+
+    ``id`` and ``sold`` come out of the GET but are not the editor's to set, and
+    the body model forbids extras — so a body that simply echoes the row 422s,
+    which is what the Save button used to do on every item.
+    """
+    created = authed_client.post("/api/economy/shop-items", json=_item_body()).json()
+    resp = authed_client.patch(
+        f"/api/economy/shop-items/{created['id']}",
+        json={**_item_body(), server_owned: created[server_owned]},
+    )
+    assert resp.status_code == 422
+
+
 def test_patching_a_missing_item_is_a_404(authed_client):
     resp = authed_client.patch("/api/economy/shop-items/999", json=_item_body())
     assert resp.status_code == 404
