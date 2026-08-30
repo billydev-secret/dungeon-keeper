@@ -33,8 +33,8 @@ defense in depth. The accepted cost: moderators no longer get the read-only
 settings view the merges provided.
 
 Roughly thirty other features keep their settings under **Config**, grouped by
-theme (Server, Roles, Members, Moderation & Safety, Channels & Messages, Voice,
-AI & Maintenance).
+theme (Server, Roles, New Members, Members, Moderation & Safety, Channels &
+Messages, Voice, AI & Maintenance).
 
 The user-facing statement of the same rule is the **Where a Setting Lives**
 subsection of `manual.html` §27 Configuration Reference (help page
@@ -45,15 +45,69 @@ subsection of `manual.html` §27 Configuration Reference (help page
 | Section | Gate | Contents |
 |---|---|---|
 | Dashboard | everyone | Home, Quick Reference |
-| Reports | moderator | Moderation / General / Engagement / Social Graph / Greeter / Bot Usage / Member Lists |
-| Moderation | moderator | Queues (todo, jails, tickets, warnings, policy tickets, rules watch, message search, no-contact) + Audit Logs |
-| Config | moderator (most pages admin-only, shown locked) | Themed config headings |
+| Reports | moderator | Moderation / Activity / Engagement / Social Graph / Greeter / Member Lists |
+| Moderation | moderator | Queues & Workflows / Image Guard / Audit Logs |
+| Config | moderator (most pages admin-only, shown locked) | Server / Roles / New Members / Members / Moderation & Safety / Channels & Messages / Voice / AI & Maintenance |
 | Economy | admin **or** the economy-manager role | Operations / Earning / Spending / Wagering |
 | Wellness | opted-in members, plus manage-server/admin | Member-facing wellness surface |
 | Games | admin **or** the game-host role | Operations / Live Games / Question Banks |
 | Social | moderator | Guess Who, Whisper, Pen Pals, Confessions (admin-only) |
 | Help | everyone | Generated from `help-sections.js` |
-| Dev | admin | Live log, system stats, QA tracker, owner tools |
+| Dev | admin | Live log, system stats, QA tracker (+ guide page), command & panel usage, owner tools |
+
+**IA3 (2026-08-29)** — the regroup that landed with the merged-page splits,
+decided in `docs/plans/dashboard-config-ia.md`:
+
+* Reports: "General" → **Activity** (the one heading that named nothing) and
+  DAU/MAU joined its volume-metric siblings there; NSFW by Gender moved to
+  the Moderation heading beside Sentiment & Tone (content analytics, not an
+  engagement metric). The one-item adminOnly "Bot Usage" heading retired —
+  Command & Panel Usage now lives under **Dev**, its actual audience.
+* Moderation: the eight bare items gained the **Queues & Workflows** heading
+  this doc already used for them; Image Guard's two diagnostic reports left
+  Audit Logs for their own **Image Guard** heading; Grant Audit leads Audit
+  Logs (the one entry a moderator can open no longer sits under nine locked
+  rows). Audit↔config `related:` links are bidirectional across all sibling
+  pairs.
+* Config: new **New Members** heading carries the whole newcomer job in
+  order — Welcome & Leave, Intake Cards, Auto-Role, Discord Onboarding,
+  Greeting Watch (from three headings before).
+* Games → Operations gained Event Echo, the one game-night page that lived
+  outside Games.
+* Labels: "Auto React" → "Auto-React"; Home's item label "Dashboard" →
+  "Home" (the IA2 Bank fix, applied to the same collision here);
+  the inactive pair reads as a parallel pair — "Inactive Role Removal" /
+  "Inactive Kick Sweep"; "Blocked Images"/"Image Tags" → "Image Guard
+  Blocks"/"Image Guard Tags"; "Anonymous Features" → "Anonymity Audit";
+  "Moderation" → "Moderation & Privacy" (it holds `message_storage_level`,
+  the biggest privacy dial). Every old label survives as a search keyword.
+
+## Naming: label-vs-id drift
+
+Ids are frozen (deep links, `help:` mappings and usage telemetry key off
+them); labels move freely. This table records the drift so future sessions
+stop re-deriving it — and are not tempted to "fix" an id. The merged-page
+splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
+`intake-report`, `birthday-calendar` all match their labels again).
+
+| id | label today |
+|---|---|
+| `retention` | Activity Drops |
+| `config-spoiler` | Image Guard |
+| `config-needle` | Auto-Thread |
+| `config-prune` | Inactive Role Removal |
+| `config-inactive` | Inactive Kick Sweep |
+| `config-quote-border` | Quote Tool |
+| `config-moderation` | Moderation & Privacy |
+| `nsfw-blocks` | Image Guard Blocks |
+| `nsfw-tags` | Image Guard Tags |
+| `anon-audit` | Anonymity Audit |
+| `economy-sinks` | Shop & Perks |
+| `economy-bank-manager` | Bank |
+| `mod-todo` | Todo List |
+| `config-advisor` | AI Assistant |
+| `config-ai` | AI Models |
+| `usage-telemetry` | Command & Panel Usage |
 
 **Games** was a 23-item flat list until 2026-08; it now has three subgroups:
 
@@ -61,7 +115,8 @@ subsection of `manual.html` §27 Configuration Reference (help page
 * **Live Games** — one page of dials per game that runs live in a channel
   (LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
   (Group), Chicken, Musical Chairs, Photo Challenge — which had been a
-  top-level section with a single item under the same gate).
+  top-level section with a single item under the same gate — plus Survivor
+  and Meadow Mahjong, added after the IA1 write-up).
 * **Question Banks** — the nine prompt banks (WYR, NHIE, Most Likely To,
   Rushmore, Price, Clapback, AMA, FFA, Traditional ToD).
 
