@@ -136,8 +136,8 @@ const SECTIONS = [
     // Docs / Role Menus / Chat Revive are fully moderator-level features.
     groups: [
       { heading: "Server", items: [
-        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true, help: "help-config" },
-        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
+        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true, help: "help-config", keywords: "timezone offset bypass roles mod notification channel bot allowlist greeter role" },
+        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true, keywords: "accent color embed color avatar nickname bot name assistant name casino name" },
         { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true, help: "help-announcements" },
         { id: "config-bump-tracker", label: "Bump Tracker",    module: "./panels/config-bump-tracker.js", adminOnly: true, keywords: "bump disboard listing sites reminders" },
       ]},
@@ -246,7 +246,7 @@ const SECTIONS = [
       // is QOTD's paid queue, so each sits under its own feature rather than
       // being hoisted into a queues-only group.
       { heading: "Earning", items: [
-        { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers", help: "help-economy" },
+        { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers daily streak login message rewards bonus earn", help: "help-economy" },
         { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", keywords: "community goals settle progress payout", help: "help-economy" },
         { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", keywords: "quest sign-off queue approve deny pending", help: "help-economy" },
         { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
@@ -274,7 +274,7 @@ const SECTIONS = [
       // Staking coins on an outcome — the house takes a cut, so these are
       // sinks too, but they are run and tuned as games.
       { heading: "Wagering", items: [
-        { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
+        { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack roulette keno dice mines baccarat war race", help: "help-casino", related: ["config-pools"] },
         // Keywords lean market-specific: "pools" alone also matches confession
         // pools and the pen-pals pool.
         { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
@@ -315,7 +315,7 @@ const SECTIONS = [
       ]},
       // One page per game: the dials for a game that runs live in a channel.
       { heading: "Live Games", items: [
-        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
+        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
         { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
         { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
         { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
@@ -660,7 +660,7 @@ if (skipLinkEl) {
 })();
 
 // ── Nav filter ──────────────────────────────────────────────────────
-// dataset.search on each item = section + subgroup + label + keywords.
+// dataset.search on each item = section + subgroup + label + id + keywords.
 // Every whitespace-separated query token must match (AND), so
 // "games config" narrows instead of widening.
 
@@ -755,7 +755,10 @@ function palettePageResults(tokens) {
   for (const p of ALL_PAGES) {
     const sec = PAGE_TO_SECTION[p.id];
     const label = (p.label || "").toLowerCase();
-    const hay = `${sec ? sec.label : ""} ${p.label} ${p.keywords || ""}`.toLowerCase();
+    // The id is part of the haystack: ids appear in deep links, docs and
+    // telemetry, and where label and id have drifted ("shop-approvals" is
+    // labelled "Approvals") the id is the term people actually hold.
+    const hay = `${sec ? sec.label : ""} ${p.label} ${p.id} ${p.keywords || ""}`.toLowerCase();
     if (!tokens.every((t) => hay.includes(t))) continue;
     out.push({
       label: p.label,
@@ -1148,7 +1151,7 @@ function renderNav(activeId) {
     // Top-level items (rendered before any subgroup), alphabetized by label
     for (const item of byLabel(sec.items)) {
       const el = makeNavItem(item, activeId, { icon, sectionId: sec.id });
-      el.dataset.search = `${sec.label} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
+      el.dataset.search = `${sec.label} ${item.label} ${item.id} ${item.keywords || ""}`.trim().toLowerCase();
       sidebarItemsEl.appendChild(el);
       children.push(el);
     }
@@ -1187,7 +1190,7 @@ function renderNav(activeId) {
         for (const item of byLabel(g.items)) {
           const el = makeNavItem(item, activeId, { isSubitem: true, icon, sectionId: sec.id });
           el.dataset.search =
-            `${sec.label} ${g.heading} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
+            `${sec.label} ${g.heading} ${item.label} ${item.id} ${item.keywords || ""}`.trim().toLowerCase();
           if (!subgroupActive) el.classList.add("subgroup-hidden");
           sidebarItemsEl.appendChild(el);
           children.push(el);
