@@ -10,18 +10,22 @@ from bot_modules.todo.board_logic import (
     CHORE_OPEN,
     EMPTY_BODY,
     EMPTY_CHORES,
+    EMPTY_APPROVALS,
     EMPTY_SIGNOFFS,
+    MAX_APPROVAL_ROWS,
     MAX_BOARD_ROWS,
     MAX_CHORE_ROWS,
     MAX_SIGNOFF_ROWS,
     ORDER_MARKER,
     RECURRING_MARKER,
     STREAK_MARKER,
+    APPROVAL_HEADING,
     CHORE_HEADING,
     EMPTY_BOARD,
     MIN_TASK_ROWS,
     SIGNOFF_HEADING,
     TASK_HEADING,
+    approval_signature,
     board_content_signature,
     board_signature,
     chore_signature,
@@ -35,6 +39,7 @@ from bot_modules.todo.board_logic import (
     render_board_footer,
     render_footer,
     render_rows,
+    render_approval_rows,
     render_signoff_rows,
     signoff_signature,
     task_row_budget,
@@ -885,3 +890,161 @@ def test_the_signoff_signature_ignores_the_unrendered_sentinel_row():
 def test_a_claim_below_the_window_still_moves_the_footer():
     rows = [_claim(n) for n in range(MAX_SIGNOFF_ROWS)]
     assert signoff_signature(rows, 6) != signoff_signature(rows, 7)
+
+
+# ── paid requests ─────────────────────────────────────────────────────
+#
+# The three paid-submission queues (a themed day, a sponsored question, a pin)
+# used to post their approval cards into the economy's bank channel, which in
+# the main guild is a member-facing explainer. They are on the board now, in
+# one section, for the same reason the sign-offs are.
+
+
+def _approval(sub_id, summary="Cursed Cooking", *, kind="theme", price=300,
+              who="Alex"):
+    return {
+        "kind": kind,
+        "id": sub_id,
+        "user_id": 600 + sub_id,
+        "price": price,
+        "summary": summary,
+        "requester_name": who,
+    }
+
+
+def test_an_approval_row_names_the_member_the_request_and_the_price():
+    body = render_approval_rows([_approval(1)], currency_emoji="🪙")
+    assert "**Alex**" in body
+    assert "Cursed Cooking" in body
+    assert "🪙 300" in body
+
+
+def test_an_approval_row_says_which_queue_it_came_from():
+    """One section over three products, so a mod must be able to tell a pin
+    from a themed day before they open it."""
+    body = render_approval_rows(
+        [_approval(1, kind="theme"), _approval(2, "Raid at eight", kind="pin")]
+    )
+    assert "Theme" in body
+    assert "Pin" in body
+
+
+def test_an_approval_row_carries_no_id():
+    assert "#" not in render_approval_rows([_approval(14)])
+
+
+def test_an_approval_price_is_thousands_separated():
+    assert "🪙 12,500" in render_approval_rows([_approval(1, price=12500)])
+
+
+def test_an_approval_uses_the_guilds_own_currency_emoji():
+    assert "💎 300" in render_approval_rows([_approval(1)], currency_emoji="💎")
+
+
+def test_a_requester_who_left_is_never_a_raw_id():
+    body = render_approval_rows([_approval(1, who="")])
+    assert "someone" in body
+    assert "601" not in body
+
+
+def test_a_long_request_is_clipped():
+    body = render_approval_rows([_approval(1, "x" * 200)])
+    assert "…" in body
+    assert len(body) < 140
+
+
+def test_approvals_keep_their_given_order():
+    body = render_approval_rows([_approval(1, "First"), _approval(2, "Second")])
+    assert body.index("First") < body.index("Second")
+
+
+def test_approval_overflow_defers_to_the_dashboard():
+    rows = [_approval(n, f"Request {n}") for n in range(MAX_APPROVAL_ROWS + 3)]
+    body = render_approval_rows(rows, total=len(rows))
+    assert body.count("\n") == MAX_APPROVAL_ROWS + 1  # rows + the overflow note
+    assert "**3** more" in body
+
+
+def test_no_approvals_reads_as_clear():
+    assert render_approval_rows([]) == EMPTY_APPROVALS
+    assert render_approval_rows([_approval(1)], limit=0) == EMPTY_APPROVALS
+
+
+# ── the paid-requests section on the combined board ───────────────────
+
+
+def test_approvals_sit_under_the_signoffs_and_above_the_chores():
+    body = render_board(
+        [_chore(1, "QOTD")],
+        [_row(1, "fix the bot")],
+        signoff_rows=[_claim(1)],
+        approval_rows=[_approval(1)],
+    )
+    assert body.index(SIGNOFF_HEADING) < body.index(APPROVAL_HEADING)
+    assert body.index(APPROVAL_HEADING) < body.index(CHORE_HEADING)
+
+
+def test_the_approval_section_is_omitted_when_empty():
+    body = render_board([], [_row(1, "fix the bot")])
+    assert APPROVAL_HEADING not in body
+
+
+def test_approvals_alone_still_render_a_board():
+    body = render_board([], [], approval_rows=[_approval(1)])
+    assert APPROVAL_HEADING in body
+    assert body != EMPTY_BOARD
+
+
+def test_approvals_never_starve_the_task_list():
+    approvals = [_approval(n) for n in range(MAX_APPROVAL_ROWS + 5)]
+    claims = [_claim(n) for n in range(MAX_SIGNOFF_ROWS + 5)]
+    chores = [_chore(n, f"Chore {n}", todo_id=n) for n in range(MAX_CHORE_ROWS)]
+    tasks = [_row(n, f"Task {n}") for n in range(MAX_BOARD_ROWS)]
+    body = render_board(
+        chores, tasks, signoff_rows=claims, approval_rows=approvals
+    )
+    for n in range(MIN_TASK_ROWS):
+        assert f"Task {n}" in body
+
+
+def test_the_approval_section_takes_a_bounded_slice():
+    rows = [_approval(n, f"Request {n}") for n in range(MAX_APPROVAL_ROWS + 4)]
+    body = render_board([], [], approval_rows=rows, approval_total=len(rows))
+    assert f"Request {MAX_APPROVAL_ROWS}" not in body
+    assert "**4** more" in body
+
+
+def test_the_footer_counts_waiting_paid_requests():
+    assert "1 paid request waiting" in render_board_footer([], 3, 0, 1)
+    assert "2 paid requests waiting" in render_board_footer([], 3, 0, 2)
+
+
+def test_the_footer_drops_the_approval_half_when_none_wait():
+    assert "paid request" not in render_board_footer([], 3, 1, 0)
+
+
+# ── the paid-requests signature ───────────────────────────────────────
+
+
+def test_a_new_paid_request_repaints_the_board():
+    before = board_content_signature([], [], 0, approval_rows=[], approval_total=0)
+    after = board_content_signature(
+        [], [], 0, approval_rows=[_approval(1)], approval_total=1
+    )
+    assert before != after
+
+
+def test_a_resolved_paid_request_repaints_the_board():
+    before = board_content_signature(
+        [], [], 0, approval_rows=[_approval(1), _approval(2)], approval_total=2
+    )
+    after = board_content_signature(
+        [], [], 0, approval_rows=[_approval(1)], approval_total=1
+    )
+    assert before != after
+
+
+def test_a_renamed_requester_repaints_the_board():
+    assert approval_signature([_approval(1, who="Alex")]) != approval_signature(
+        [_approval(1, who="Alexandra")]
+    )

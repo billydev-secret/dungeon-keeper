@@ -1,31 +1,45 @@
-import { api, esc } from "../api.js";
+import { api } from "../api.js";
 import { filterSelect } from "../filter-select.js";
 import { renderEmpty, renderError, renderLoading } from "../states.js";
 import { rangePicker } from "../report-helpers.js";
-import { renderSortableTable } from "../table.js";
 import {
-  ROLE_COLORS, seriesColor,
-  CHART_SURFACE, CHART_TEXT, CHART_GRID, CHART_BAR, CHART_ACCENT,
+  ROLE_COLORS,
+  GRAPH_CLUSTERS, GRAPH_EDGE, SERIES_OVERFLOW,
+  CHART_SURFACE, CHART_TEXT, CHART_GRID, CHART_ACCENT,
 } from "../charts.js";
 
 // Force-directed network graph rendered on a <canvas>. Restored 2026-08-26
 // after being removed in 5b4cd71d ("same endpoint as Interactions") — true of
-// the endpoint, but Interactions renders it as two tables and a bar chart and
-// shows none of the network metrics the endpoint returns. The backend was
-// never touched, so this is the panel coming back, not a feature being rebuilt.
+// the endpoint, but Interactions renders it as two tables and a bar chart.
+// Redesigned 2026-08-29 into a single full-height stage: the canvas takes all
+// remaining viewport, controls collapse into a chip bar (with the numeric
+// tuning knobs behind one popover), and the community chips overlaid on the
+// canvas are both the legend and the cluster filter. The scorecard, bridge
+// and cluster tables, cross-cluster heatmap and isolates list were dropped
+// with it — one big connection web, nothing competing. The endpoint still
+// serves all of that; only this surface changed.
 //
-// Colour discipline, which this file predates: the canvas keeps a dark surface
-// like every other chart on the dashboard, and takes its colours from the ONE
-// shared chart palette in charts.js rather than the private copy it used to
-// carry. Everything drawn as HTML around it — tables, legend, isolates, cluster
-// filter, heatmap — uses theme tokens instead, so the page still reads in a
-// light theme.
+// Colour discipline: everything comes from the ONE shared palette in
+// charts.js — cluster fills from GRAPH_CLUSTERS (the documented network-graph
+// extension of ROLE_COLORS; see charts.js for the validation), edges from
+// GRAPH_EDGE at weight-scaled alpha, focus/hover accents from CHART_ACCENT.
+// The dashboard is dark-only, and the canvas keeps the same dark surface as
+// every other chart.
 const BG        = CHART_SURFACE;
 const NODE_2ND  = ROLE_COLORS[1];
-const FOCUS_CLR = CHART_ACCENT;
-const EDGE_CLR  = _alpha(CHART_BAR, 0.25);
 const TEXT_CLR  = CHART_TEXT;
 const HIGHLIGHT = CHART_ACCENT;
+
+// Edges fade with weight so strong ties read and weak ones recede — a flat
+// alpha was the "greyed over" regression this replaced. Range chosen so the
+// weakest edge is still findable and the strongest never occludes a node.
+const EDGE_ALPHA_MIN = 0.14;
+const EDGE_ALPHA_MAX = 0.55;
+
+// The most prominent nodes keep standing labels; everything else labels on
+// hover (the node and its neighbours). Labelling all 40 every frame was the
+// other half of the grey haze.
+const LABELLED_NODES = 10;
 
 /** `#rrggbb` at the given alpha — canvas takes no CSS colour functions. */
 function _alpha(hex, a) {
@@ -33,85 +47,82 @@ function _alpha(hex, a) {
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
 }
 
-// Cluster colour is a grouping cue, not a legend-matched series, but the
-// palette's own rule holds: past six slots adjacent classes blur whatever you
-// pick, so the tail folds into the overflow neutral rather than inventing
-// hues. On both live servers Louvain finds eight clusters and the two beyond
-// the sixth hold two members each — the Clusters filter isolates them.
+// Cluster colour is a grouping cue, not a legend-matched series: communities
+// sit apart on the canvas, so GRAPH_CLUSTERS' eight validated slots cover
+// everything Louvain finds on both live servers. Past eight the tail still
+// folds to the overflow neutral rather than inventing hues.
 function clusterColor(id) {
-  // seriesColor, not a hand-rolled modulo: past the palette it folds to the
-  // overflow neutral instead of silently handing cluster 7 cluster 1's hue.
-  return seriesColor(Number(id) || 0);
+  return GRAPH_CLUSTERS[Number(id) || 0] || SERIES_OVERFLOW;
 }
 
 export function mount(container, initialParams) {
+  // initialParams comes straight off the location hash, and the numeric ones
+  // are interpolated into innerHTML below — coerce them so a crafted link
+  // can't put markup into a value attribute.
+  const num = (v, dflt) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : dflt;
+  };
+  const p0 = {
+    min_pct:      num(initialParams.min_pct, 5),
+    layers:       num(initialParams.layers, 2),
+    limit:        num(initialParams.limit, 40),
+    max_per_node: num(initialParams.max_per_node, 3),
+    spread:       num(initialParams.spread, 1.0),
+    resolution:   num(initialParams.resolution, 1.2),
+  };
   container.innerHTML = `
-    <div class="panel" style="display:flex; flex-direction:column; min-height:calc(100vh - 40px);">
+    <div class="panel graph-stage">
       <header>
         <h2>Connection Graph</h2>
         <div class="subtitle">Visual network of who interacts with whom</div>
       </header>
 
-      <details class="panel-about">
-        <summary>About these metrics</summary>
-        <div class="note">
-          <strong>Clustering</strong> is how much people form tight friend groups (target 0.25–0.55).
-          <strong>Density</strong> is the fraction of all possible connections that exist.
-          <strong>Reciprocity</strong> is how often interactions go both ways.
-          <strong>Small-world</strong> is clustering ÷ density — >3 means tight local groups with short global paths.
-          <strong>Avg path</strong> is the average hops between any two people.
-          <strong>Bridge users</strong> connect otherwise separate groups.
-        </div>
-      </details>
-
-      <div data-scorecard class="home-grid mb-10"></div>
-
-      <div class="controls graph-controls">
-        <label>Layout
-          <select data-control="layout">
-            <option value="force">Force-directed</option>
-            <option value="community">Community clusters</option>
-            <option value="radial">Radial</option>
-            <option value="circular">Circular</option>
-            <option value="hierarchical">Hierarchical</option>
-          </select>
-        </label>
-        <label data-slot="period"></label>
-        <span class="ctrl-field">Focus Member <span data-slot="member" style="display:inline-block;vertical-align:middle;"></span></span>
-        <label>Min Edge %
-          <input type="number" data-control="min_pct" min="0" max="100" value="${initialParams.min_pct || 5}" title="Hide connections weaker than this share of a member's interactions" />
-        </label>
-        <label>Layers
-          <input type="number" data-control="layers" min="1" max="5" value="${initialParams.layers || 2}" title="How many hops out from the focused member to include" />
-        </label>
-        <label>Max Nodes
-          <input type="number" data-control="limit" min="5" max="100" value="${initialParams.limit || 40}" />
-        </label>
-        <label>Spread
-          <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${initialParams.spread || 1.0}" style="width:80px;" />
-        </label>
-        <label title="Higher values break large clusters apart; lower values merge them. Applied server-side.">Granularity
-          <input type="range" data-control="resolution" min="0.5" max="3.0" step="0.1" value="${initialParams.resolution || 1.2}" style="width:80px;" />
-          <span data-resolution-val style="font-size:11px;color:var(--ink-mute);margin-left:4px;">${initialParams.resolution || 1.2}</span>
-        </label>
-        <label>Max Edges Per Node
-          <input type="number" data-control="max_per_node" min="0" max="20" value="${initialParams.max_per_node || 3}" title="Most connections to draw per person (0 = no limit)" />
-        </label>
-        <label>Clusters
-          <span data-slot="cluster-filter" style="display:inline-block;vertical-align:middle;"></span>
-        </label>
+      <div class="graph-chipbar">
+        <select data-control="layout" aria-label="Layout">
+          <option value="force">Force-directed</option>
+          <option value="community">Community clusters</option>
+          <option value="radial">Radial</option>
+          <option value="circular">Circular</option>
+          <option value="hierarchical">Hierarchical</option>
+        </select>
+        <span data-slot="period"></span>
+        <span data-slot="member"></span>
+        <details class="graph-tuning" data-tuning>
+          <summary>Tuning</summary>
+          <div class="graph-tuning-pop">
+            <label>Min edge %
+              <input type="number" data-control="min_pct" min="0" max="100" value="${p0.min_pct}" title="Hide connections weaker than this share of a member's interactions" />
+            </label>
+            <label>Layers
+              <input type="number" data-control="layers" min="1" max="5" value="${p0.layers}" title="How many hops out from the focused member to include" />
+            </label>
+            <label>Max nodes
+              <input type="number" data-control="limit" min="5" max="100" value="${p0.limit}" />
+            </label>
+            <label>Max edges per node
+              <input type="number" data-control="max_per_node" min="0" max="20" value="${p0.max_per_node}" title="Most connections to draw per person (0 = no limit)" />
+            </label>
+            <label>Spread
+              <input type="range" data-control="spread" min="0.5" max="3" step="0.1" value="${p0.spread}" />
+            </label>
+            <label title="Higher values break large clusters apart; lower values merge them. Applied server-side.">Granularity
+              <span class="graph-tuning-range">
+                <input type="range" data-control="resolution" min="0.5" max="3.0" step="0.1" value="${p0.resolution}" />
+                <span data-resolution-val>${p0.resolution}</span>
+              </span>
+            </label>
+          </div>
+        </details>
       </div>
-      <div data-graph-wrap style="position:relative; height:60vh; min-height:300px; min-width:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
+
+      <div data-graph-wrap style="position:relative; flex:1; min-height:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
         <canvas data-graph></canvas>
-        <div data-graph-msg hidden style="position:absolute;inset:0;z-index:4;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;background:color-mix(in srgb, var(--bg-card) 88%, transparent);"></div>
+        <div data-graph-msg class="graph-msg" hidden></div>
         <button data-fullscreen class="btn btn-icon" title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:color-mix(in srgb, var(--bg-floor) 60%, transparent);">⛶</button>
+        <div data-cluster-chips class="graph-clusterbar" role="group" aria-label="Communities — click a chip to hide or show that group"></div>
+        <div class="graph-hint">drag · ctrl+scroll zooms · size = interactions · colour = friend group</div>
       </div>
-      <div data-legend style="margin-top:4px; font-size:11px; color:var(--ink-mute);">
-        Drag nodes · Ctrl+scroll to zoom · Drag the background to pan · Node size = interactions · Edge width = weight · Node color = detected community (past the sixth cluster they share one neutral — use the Clusters filter to isolate a small one)
-      </div>
-      <div class="mt-8" data-isolates></div>
-      <div data-metrics-tables class="home-grid mt-14"></div>
-      <div class="mt-14" data-heatmap></div>
     </div>
   `;
 
@@ -134,10 +145,7 @@ export function mount(container, initialParams) {
   const resolutionValEl = container.querySelector('[data-resolution-val]');
   const maxPerNodeEl  = container.querySelector('[data-control="max_per_node"]');
   const fullscreenBtn = container.querySelector('[data-fullscreen]');
-  const scorecardEl   = container.querySelector("[data-scorecard]");
-  const metricsTablesEl = container.querySelector("[data-metrics-tables]");
-  const heatmapEl     = container.querySelector("[data-heatmap]");
-  const clusterFilterSlot = container.querySelector('[data-slot="cluster-filter"]');
+  const clusterChipsEl = container.querySelector("[data-cluster-chips]");
   const wrap          = container.querySelector("[data-graph-wrap]");
   // The canvas is created once and never replaced — loading/empty/error states
   // render as an overlay on top of it, so the mouse listeners bound below stay
@@ -165,12 +173,9 @@ export function mount(container, initialParams) {
     emptyLabel: "(no focus member)",
   });
   container.querySelector('[data-slot="member"]').appendChild(memberFS.el);
-  const isolatesEl = container.querySelector("[data-isolates]");
-  let allMembers = [];
 
   // Load member list
   api("/api/meta/members", {}).then((members) => {
-    allMembers = members;
     const opts = members.map((m) => ({
       id: m.id,
       label: (m.display_name || m.name) + (m.left_server ? " (left)" : ""),
@@ -205,6 +210,9 @@ export function mount(container, initialParams) {
   let focusId = null;
   let secondLevelIds = new Set();
   let spreadMult = parseFloat(spreadEl.value) || 1.0;
+  // Node indices that keep a standing label — the LABELLED_NODES most active,
+  // recomputed whenever the node set changes.
+  let labelledIdx = new Set();
 
   function resize() {
     const rect = wrap.getBoundingClientRect();
@@ -356,45 +364,13 @@ export function mount(container, initialParams) {
   let commCenters = {};   // community id → {x, y}
 
   function detectCommunities() {
-    // Build weighted adjacency by node index
-    const adj = {};
-    for (let i = 0; i < nodes.length; i++) adj[i] = [];
-    for (const e of edges) {
-      adj[e.source].push({ nb: e.target, w: e.weight });
-      adj[e.target].push({ nb: e.source, w: e.weight });
-    }
-    // Each node starts in its own community
-    const label = {};
-    for (let i = 0; i < nodes.length; i++) label[i] = i;
-
-    const order = Array.from({ length: nodes.length }, (_, i) => i);
-    for (let iter = 0; iter < 50; iter++) {
-      // Shuffle
-      for (let i = order.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [order[i], order[j]] = [order[j], order[i]];
-      }
-      let changed = false;
-      for (const nid of order) {
-        if (!adj[nid].length) continue;
-        const votes = {};
-        for (const { nb, w } of adj[nid]) {
-          votes[label[nb]] = (votes[label[nb]] || 0) + w;
-        }
-        let bestLabel = label[nid], bestW = -1;
-        for (const [lbl, w] of Object.entries(votes)) {
-          if (w > bestW) { bestW = w; bestLabel = parseInt(lbl); }
-        }
-        if (bestLabel !== label[nid]) { label[nid] = bestLabel; changed = true; }
-      }
-      if (!changed) break;
-    }
-    // Renumber 0, 1, 2, ...
-    const unique = [...new Set(Object.values(label))].sort((a, b) => a - b);
-    const remap = {};
-    unique.forEach((v, i) => remap[v] = i);
+    // The server's Louvain assignment (cluster_id, tunable via the
+    // Granularity knob) is the ONE partition this panel speaks: the chips,
+    // the node fills and this layout's grouping all read it. The client-side
+    // label propagation this replaced computed its own partition, so the
+    // default layout could disagree with the chip legend sitting next to it.
     communityOf = {};
-    for (let i = 0; i < nodes.length; i++) communityOf[i] = remap[label[i]];
+    for (let i = 0; i < nodes.length; i++) communityOf[i] = nodes[i].cluster_id ?? 0;
   }
 
   function miniForceLayout(indices, subEdges, cx, cy, radius) {
@@ -594,15 +570,32 @@ export function mount(container, initialParams) {
     ctx2d.translate(panX, panY);
     ctx2d.scale(scale, scale);
 
-    // Edges
+    // Hover context: the hovered node's neighbourhood stays at full strength
+    // while everything else recedes, so a crowded graph answers "who does
+    // this person talk to" without a click.
+    const hovIdx = hovered ? hovered._idx : -1;
+    const hovNbrs = new Set();
+    if (hovIdx >= 0) {
+      for (const e of edges) {
+        if (e.source === hovIdx) hovNbrs.add(e.target);
+        else if (e.target === hovIdx) hovNbrs.add(e.source);
+      }
+    }
+
+    // Edges — drawn under the nodes, with weight carrying opacity as well as
+    // width so strong ties read and weak ones recede.
     const maxWeight = edges.reduce((m, e) => Math.max(m, e.weight), 1);
     const useCurves = currentLayout === "circular";
     const cxC = W / 2, cyC = H / 2;
     for (const e of edges) {
       const a = nodes[e.source], b = nodes[e.target];
-      const hovEdge = hovered && (e.source === hovered._idx || e.target === hovered._idx);
-      ctx2d.strokeStyle = hovEdge ? "rgba(235,69,158,0.6)" : EDGE_CLR;
-      ctx2d.lineWidth = Math.max(0.5, (e.weight / maxWeight) * 5);
+      const hovEdge = hovIdx >= 0 && (e.source === hovIdx || e.target === hovIdx);
+      const wFrac = e.weight / maxWeight;
+      const fade = hovIdx >= 0 && !hovEdge ? 0.35 : 1;
+      ctx2d.strokeStyle = hovEdge
+        ? _alpha(CHART_ACCENT, 0.85)
+        : _alpha(GRAPH_EDGE, (EDGE_ALPHA_MIN + wFrac * (EDGE_ALPHA_MAX - EDGE_ALPHA_MIN)) * fade);
+      ctx2d.lineWidth = Math.max(0.6, wFrac * 4);
       ctx2d.beginPath();
       ctx2d.moveTo(a.x, a.y);
       if (useCurves) {
@@ -618,28 +611,52 @@ export function mount(container, initialParams) {
     // Nodes
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
-      const isHov = hovered && hovered._idx === i;
-      // Default to API-provided cluster for consistent coloring across layouts.
+      const isHov = hovIdx === i;
+      // Fill is ALWAYS the server cluster — the community chips are the
+      // legend, so node colour and chip colour must read the same partition
+      // in every layout. The focused member and the hovered node keep their
+      // cluster fill and wear an accent RING instead: the accent is a
+      // marker, not an identity, and a fill swap would impersonate cluster 5
+      // exactly (CHART_ACCENT is GRAPH_CLUSTERS[4]). Outer focus rings keep
+      // their moss fill — depth outranks community while focused.
+      const isFocus = focusId && n.id === focusId;
       let color = clusterColor(n.cluster_id ?? 0);
-      if (currentLayout === "community" && communityOf[i] !== undefined) {
-        color = clusterColor(communityOf[i]);
-      } else if (focusId && n.id === focusId) {
-        color = FOCUS_CLR;
-      } else if (secondLevelIds.has(n.id)) {
-        color = NODE_2ND;
-      }
-      if (isHov) color = HIGHLIGHT;
+      if (!isFocus && secondLevelIds.has(n.id)) color = NODE_2ND;
+
+      const dimmed = hovIdx >= 0 && !isHov && !hovNbrs.has(i);
+      ctx2d.globalAlpha = dimmed ? 0.35 : 1;
 
       ctx2d.beginPath();
       ctx2d.arc(n.x, n.y, n.r, 0, Math.PI * 2);
       ctx2d.fillStyle = color;
       ctx2d.fill();
+      // Ring: accent when marked (focus or hover), surface-colour otherwise
+      // — the surface ring keeps overlapping nodes countable, and it is the
+      // secondary encoding the extended palette's CVD floor band requires.
+      if (isFocus || isHov) {
+        ctx2d.strokeStyle = HIGHLIGHT;
+        ctx2d.lineWidth = 2.5;
+      } else {
+        ctx2d.strokeStyle = BG;
+        ctx2d.lineWidth = 2;
+      }
+      ctx2d.stroke();
 
-      const fontSize = Math.max(9, Math.min(12, n.r * 0.9));
-      ctx2d.font = `${fontSize}px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
-      ctx2d.fillStyle = TEXT_CLR;
-      ctx2d.textAlign = "center";
-      ctx2d.fillText(n.name, n.x, n.y - n.r - 4);
+      // Standing labels only for the most prominent nodes (plus the focus
+      // member); the rest label on hover, node and neighbours together.
+      const labelled = labelledIdx.has(i) || isHov || hovNbrs.has(i) || isFocus;
+      if (labelled) {
+        const fontSize = Math.max(10, Math.min(13, n.r * 0.9));
+        ctx2d.font = `500 ${fontSize}px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif`;
+        ctx2d.textAlign = "center";
+        // Halo keeps the name legible where it crosses an edge.
+        ctx2d.strokeStyle = _alpha(BG, 0.85);
+        ctx2d.lineWidth = 3;
+        ctx2d.strokeText(n.name, n.x, n.y - n.r - 5);
+        ctx2d.fillStyle = TEXT_CLR;
+        ctx2d.fillText(n.name, n.x, n.y - n.r - 5);
+      }
+      ctx2d.globalAlpha = 1;
     }
 
     // Tooltip
@@ -653,9 +670,6 @@ export function mount(container, initialParams) {
         `Partners: ${n.unique_partners}  Edges shown: ${connEdges.length}`,
         `Cluster: ${(n.cluster_id ?? 0) + 1}`,
       ];
-      if (currentLayout === "community" && communityOf[n._idx] !== undefined) {
-        lines.push(`Layout group: ${communityOf[n._idx] + 1}`);
-      }
       const pad = 6;
       ctx2d.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
       const boxW = Math.max(...lines.map((l) => ctx2d.measureText(l).width)) + pad * 2;
@@ -833,205 +847,41 @@ export function mount(container, initialParams) {
     return { nodes: filteredNodes, pairs: filteredPairs };
   }
 
-  // ── Metrics rendering ─────────────────────────────────────────────────
+  // ── Community chips ───────────────────────────────────────────────────
 
-  // Semantic, so these stay red/amber/green rather than joining the
-  // categorical palette — and they come from the theme, not a private copy.
-  const BADGE_COLORS = {
-    critical:   "var(--red)",
-    needs_work: "var(--yellow)",
-    healthy:    "var(--green)",
-    excellent:  "var(--gold-solid)",
-    unknown:    "var(--ink-mute)",
-  };
+  // The coloured chips overlaid on the canvas are the legend AND the cluster
+  // filter in one control: each chip carries its community's fill, and
+  // clicking it hides or shows that group. Hidden communities keep their
+  // chip (hollow, muted) so the way back is always visible.
+  let clusterList = [];
 
-  function renderScorecard(m) {
-    if (!m) { scorecardEl.innerHTML = ""; return; }
-    const badge = m.badge || "unknown";
-    const badgeColor = BADGE_COLORS[badge] || BADGE_COLORS.unknown;
-    scorecardEl.innerHTML = `
-      <div class="home-card">
-        <div class="home-card-label">Clustering
-          <span style="display:inline-block;margin-left:6px;padding:1px 7px;border-radius:10px;background:${badgeColor};color:var(--bg-floor);font-size:10px;font-weight:600;text-transform:uppercase;">${esc(badge.replace("_", " "))}</span>
-        </div>
-        <div class="home-card-big">${m.clustering_coefficient}</div>
-        <div class="home-card-sub">Friend-group tightness (target 0.25–0.55)</div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Density</div>
-        <div class="home-card-big">${m.network_density}</div>
-        <div class="home-card-sub">Connections / possible (0–1)</div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Reciprocity</div>
-        <div class="home-card-big">${m.reciprocity}</div>
-        <div class="home-card-sub">Two-way conversation rate (&gt;0.35)</div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Small-world</div>
-        <div class="home-card-big">${m.small_world_quotient}</div>
-        <div class="home-card-sub">Clustering ÷ density (target &gt;3)</div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Avg path</div>
-        <div class="home-card-big">${m.avg_path_length}</div>
-        <div class="home-card-sub">Hops between any two people (&lt;3)</div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Bridge users</div>
-        <div class="home-card-big">${m.bridge_count}</div>
-        <div class="home-card-sub">${m.isolates} isolates · ${m.node_count} nodes</div>
-      </div>
-    `;
-  }
-
-  function renderMetricsTables(m) {
-    if (!m) { metricsTablesEl.innerHTML = ""; return; }
-    const clusterRows = (m.clusters || []).map((c, i) => {
+  function renderClusterChips(clusters) {
+    clusterList = clusters || [];
+    if (!clusterList.length) {
+      clusterChipsEl.innerHTML = "";
+      return;
+    }
+    clusterChipsEl.innerHTML = clusterList.map((c, i) => {
       const color = clusterColor(c.id);
       const hidden = hiddenClusters.has(c.id);
-      return `
-        <tr data-cluster-row="${c.id}" style="cursor:pointer;${hidden ? "opacity:0.4;" : ""}" title="Click to ${hidden ? "show" : "hide"} this cluster">
-          <td><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};margin-right:6px;vertical-align:middle;"></span>Cluster ${i + 1}</td>
-          <td>${c.size}</td>
-          <td style="color:var(--ink-mute);font-size:11px;">${hidden ? "hidden" : "visible"}</td>
-        </tr>
-      `;
-    }).join("") || `<tr><td colspan="3" style="color:var(--ink-mute);">No clusters detected</td></tr>`;
-
-    metricsTablesEl.innerHTML = `
-      <div class="home-card">
-        <div class="home-card-label">Top bridge users</div>
-        <div data-bridge-table></div>
-      </div>
-      <div class="home-card">
-        <div class="home-card-label">Detected clusters</div>
-        <table class="data-table">
-          <thead><tr><th>Cluster</th><th>Size</th><th></th></tr></thead>
-          <tbody>${clusterRows}</tbody>
-        </table>
-      </div>
-    `;
-
-    // Bridge users go through the shared table: the names come from the guild,
-    // so its escaping owns them, and betweenness is worth sorting on. The
-    // cluster table stays hand-rolled — every row is a toggle for the graph
-    // filter, which is behaviour renderSortableTable has no notion of.
-    renderSortableTable(metricsTablesEl.querySelector("[data-bridge-table]"), {
-      columns: [
-        { key: "rank", label: "#" },
-        { key: "user_label", label: "User" },
-        { key: "betweenness", label: "Betweenness", cls: "num",
-          format: (v) => `${v}%` },
-      ],
-      data: (m.bridge_users || []).map((b, i) => ({
-        rank: i + 1,
-        user_label: b.user_name || b.user_id,
-        betweenness: b.betweenness,
-      })),
-      defaultSort: "betweenness",
-      emptyMsg: "No bridge users detected.",
-    });
-
-    metricsTablesEl.querySelectorAll("[data-cluster-row]").forEach((row) => {
-      row.addEventListener("click", () => {
-        const cid = parseInt(row.dataset.clusterRow);
+      return `<button type="button" class="graph-cluster-chip${hidden ? " is-hidden" : ""}"
+        data-cluster-toggle="${c.id}"
+        title="Cluster ${i + 1} — ${c.size} member${c.size === 1 ? "" : "s"}. Click to ${hidden ? "show" : "hide"}."
+        aria-pressed="${!hidden}">
+        <span class="dot" style="${hidden ? `border-color:${color};` : `background:${color};`}"></span>${i + 1}
+      </button>`;
+    }).join("");
+    clusterChipsEl.querySelectorAll("[data-cluster-toggle]").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const cid = parseInt(chip.dataset.clusterToggle);
         if (hiddenClusters.has(cid)) hiddenClusters.delete(cid);
         else hiddenClusters.add(cid);
-        syncClusterFilterChecks();
+        renderClusterChips(clusterList);
+        // Re-rendering replaced the buttons; hand focus back to the one the
+        // keyboard user was on.
+        clusterChipsEl.querySelector(`[data-cluster-toggle="${cid}"]`)?.focus();
         rebuildGraph();
       });
-    });
-  }
-
-  function renderHeatmap(m) {
-    if (!m || !m.cross_cluster_matrix || !m.cross_cluster_matrix.length) {
-      heatmapEl.innerHTML = "";
-      return;
-    }
-    const mat = m.cross_cluster_matrix;
-    const labels = m.cross_cluster_labels || mat.map((_, i) => `Cluster ${i + 1}`);
-    const n = mat.length;
-    // Per-row normalization so each row sums to 1 (show internal vs external share)
-    const rowTotals = mat.map((row) => row.reduce((s, v) => s + v, 0) || 1);
-
-    const cell = 42;
-    const pad = 90;
-    const total = pad + n * cell + 20;
-    const cells = [];
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        const raw = mat[i][j];
-        const frac = raw / rowTotals[i];
-        const alpha = Math.min(1, Math.sqrt(frac));
-        const bg = _alpha(CHART_BAR, Number(alpha.toFixed(3)));
-        const pctLabel = (frac * 100).toFixed(0) + "%";
-        cells.push(`
-          <div title="${esc(labels[i])} → ${esc(labels[j])}: ${raw} interactions (${pctLabel} of ${esc(labels[i])}'s out-edges)"
-               style="position:absolute;left:${pad + j * cell}px;top:${30 + i * cell}px;width:${cell - 1}px;height:${cell - 1}px;background:${bg};color:${alpha > 0.5 ? "var(--bg-floor)" : "var(--ink)"};display:flex;align-items:center;justify-content:center;font-size:10px;">${raw > 0 ? raw : ""}</div>
-        `);
-      }
-    }
-    const colHeaders = labels.map((l, j) => `
-      <div style="position:absolute;left:${pad + j * cell}px;top:0;width:${cell - 1}px;height:28px;display:flex;align-items:flex-end;justify-content:center;font-size:10px;color:var(--ink-mute);">${esc(l)}</div>
-    `).join("");
-    const rowHeaders = labels.map((l, i) => `
-      <div style="position:absolute;left:0;top:${30 + i * cell}px;width:${pad - 6}px;height:${cell - 1}px;display:flex;align-items:center;justify-content:flex-end;padding-right:6px;font-size:11px;color:var(--ink);">${esc(l)}</div>
-    `).join("");
-
-    heatmapEl.innerHTML = `
-      <div class="home-card home-card-wide">
-        <div class="home-card-label">Cross-cluster interactions</div>
-        <!-- The matrix is absolutely positioned at a fixed cell size, so its
-             width is set by the cluster count: both live servers find eight,
-             which is 446px and overflows a phone. It scrolls inside its own
-             box rather than pushing the page sideways. -->
-        <div style="overflow-x:auto;max-width:100%;">
-          <div style="position:relative;height:${total}px;width:${pad + n * cell + 20}px;margin-top:6px;">
-            ${colHeaders}${rowHeaders}${cells.join("")}
-          </div>
-        </div>
-        <div style="margin-top:6px;font-size:11px;color:var(--ink-mute);">Row-normalized: darker = larger share of that cluster's outgoing interactions going to that target cluster. Diagonal shows internal activity.</div>
-      </div>
-    `;
-  }
-
-  function renderClusterFilter(clusters) {
-    if (!clusters || !clusters.length) {
-      clusterFilterSlot.innerHTML = `<span style="color:var(--ink-mute);font-size:11px;">None detected</span>`;
-      return;
-    }
-    const items = clusters.map((c, i) => {
-      const color = clusterColor(c.id);
-      const checked = !hiddenClusters.has(c.id) ? "checked" : "";
-      return `<label style="display:flex;align-items:center;gap:4px;padding:2px 0;">
-        <input type="checkbox" data-cluster-toggle="${c.id}" ${checked} />
-        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};"></span>
-        <span style="font-size:12px;">Cluster ${i + 1}</span>
-      </label>`;
-    }).join("");
-    clusterFilterSlot.innerHTML = `
-      <details style="display:inline-block;position:relative;">
-        <summary style="cursor:pointer;padding:4px 8px;background:var(--bg-card);border-radius:4px;font-size:12px;list-style:none;">
-          ${hiddenClusters.size ? `${clusters.length - hiddenClusters.size}/${clusters.length} shown` : "All shown"}
-        </summary>
-        <div style="position:absolute;z-index:10;top:calc(100% + 4px);left:0;background:var(--bg-card);border:1px solid var(--rule);border-radius:4px;padding:6px 10px;min-width:140px;">${items}</div>
-      </details>
-    `;
-    clusterFilterSlot.querySelectorAll("[data-cluster-toggle]").forEach((cb) => {
-      cb.addEventListener("change", () => {
-        const cid = parseInt(cb.dataset.clusterToggle);
-        if (cb.checked) hiddenClusters.delete(cid);
-        else hiddenClusters.add(cid);
-        rebuildGraph();
-      });
-    });
-  }
-
-  function syncClusterFilterChecks() {
-    clusterFilterSlot.querySelectorAll("[data-cluster-toggle]").forEach((cb) => {
-      const cid = parseInt(cb.dataset.clusterToggle);
-      cb.checked = !hiddenClusters.has(cid);
     });
   }
 
@@ -1040,6 +890,9 @@ export function mount(container, initialParams) {
   let cachedData = null;
 
   async function fetchData() {
+    // include_metrics=1 even though the metric tiles are gone: community
+    // detection runs inside the metrics block server-side, and without it
+    // every node comes back cluster_id 0 (reports_data.get_interaction_graph_data).
     const params = { limit: parseInt(limitEl.value) || 40, include_metrics: 1 };
     const d = parseInt(timescaleEl.value);
     if (!isNaN(d) && d > 0) params.days = d;
@@ -1055,12 +908,8 @@ export function mount(container, initialParams) {
       if (sim) { cancelAnimationFrame(sim); sim = null; }
       nodes = []; edges = [];
       draw();
-      scorecardEl.innerHTML = "";
-      metricsTablesEl.innerHTML = "";
-      heatmapEl.innerHTML = "";
-      isolatesEl.innerHTML = "";
-      renderClusterFilter([]);
-      showMessage(renderError(`Couldn't load the connection graph — ${err.message}. Change a control to try again.`));
+      renderClusterChips([]);
+      showMessage(renderError(`Couldn't load the connection graph — ${err.message}. Change the period, max nodes or granularity to try again.`));
       return;
     }
     const metrics = cachedData.metrics || null;
@@ -1068,10 +917,7 @@ export function mount(container, initialParams) {
     for (const n of cachedData.nodes || []) {
       clusterByUser[n.user_id] = n.cluster_id || 0;
     }
-    renderScorecard(metrics);
-    renderMetricsTables(metrics);
-    renderHeatmap(metrics);
-    renderClusterFilter(metrics ? metrics.clusters : []);
+    renderClusterChips(metrics ? metrics.clusters : []);
     rebuildGraph();
   }
 
@@ -1092,6 +938,11 @@ export function mount(container, initialParams) {
     history.replaceState(null, "", `#/connection-graph?${qs}`);
 
     if (sim) { cancelAnimationFrame(sim); sim = null; }
+    // The node array is about to be replaced; a hover or drag captured
+    // against the old one would point draw()'s neighbourhood fade (and the
+    // physics) at a ghost index.
+    hovered = null;
+    dragged = null;
     spreadMult = parseFloat(spreadEl.value) || 1.0;
 
     const { nodes: fNodes, pairs } = applyFilters(cachedData);
@@ -1102,7 +953,6 @@ export function mount(container, initialParams) {
       nodes = []; edges = [];
       resize();
       draw();
-      isolatesEl.innerHTML = "";
       showMessage(renderEmpty(
         "No connections match these filters. Widen the period, lower Min Edge %, raise Max Nodes, or clear the focus member."
       ));
@@ -1148,6 +998,15 @@ export function mount(container, initialParams) {
       }
     }
 
+    // Standing labels: the most active members by total interactions.
+    labelledIdx = new Set(
+      nodes
+        .map((n, i) => [n.total_outbound + n.total_inbound, i])
+        .sort((a, b) => b[0] - a[0])
+        .slice(0, LABELLED_NODES)
+        .map(([, i]) => i)
+    );
+
     currentLayout = layoutEl.value;
     if (currentLayout === "community") positionCommunity();
     else if (currentLayout === "radial") positionRadial();
@@ -1155,20 +1014,6 @@ export function mount(container, initialParams) {
     else if (currentLayout === "hierarchical") positionHierarchical();
 
     startSim();
-
-    // Show isolates — members with no interactions in the graph
-    if (allMembers.length && cachedData) {
-      const graphIds = new Set(cachedData.nodes.map((n) => n.user_id));
-      const isolates = allMembers.filter((m) => !graphIds.has(m.id));
-      if (isolates.length) {
-        const names = isolates.map((m) => esc(m.display_name || m.name)).join(", ");
-        isolatesEl.innerHTML = `<details><summary style="cursor:pointer; color:var(--ink-mute); font-size:12px;">Isolates \u2014 ${isolates.length} member${isolates.length === 1 ? "" : "s"} with no recorded interactions</summary><div style="margin-top:4px; font-size:12px; color:var(--ink); line-height:1.6;">${names}</div></details>`;
-      } else {
-        isolatesEl.innerHTML = "";
-      }
-    } else {
-      isolatesEl.innerHTML = "";
-    }
   }
 
   // Controls: fetch when data source changes, rebuild when filters change

@@ -29,7 +29,7 @@ from bot_modules.economy.leaderboard import (
     collect_leaderboard_data,
 )
 from bot_modules.economy import quests as quest_rules
-from bot_modules.economy.logic import local_day_for, plan_panel_merge
+from bot_modules.economy.logic import local_day_for
 from bot_modules.economy.view_helpers import (
     unit as _unit,
 )
@@ -106,24 +106,18 @@ from bot_modules.services.economy_auction_service import (
     open_auction_guild_ids,
 )
 from bot_modules.services.sticky_registry import bot_chasing_resident
+from bot_modules.economy.approval_views import refresh_approvals_board
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
-)
-from bot_modules.economy.pin_views import (
-    post_review_card as post_pin_review_card,
 )
 from bot_modules.economy.theme_views import (
     ThemeApproveButton,
     ThemeDenyButton,
 )
-from bot_modules.economy.theme_views import (
-    post_review_card as post_theme_review_card,
-)
 from bot_modules.economy.sponsor_views import (
     SponsorApproveButton,
     SponsorDenyButton,
-    post_review_card,
 )
 from bot_modules.services.economy_bounty_service import (
     MAX_DESC_LEN,
@@ -1582,16 +1576,15 @@ class _ShopView(_MemberScopedView):
                 "🛡️ You're already holding one — it burns by itself when a "
                 "missed day would break your streak." if held else "",
             ))
-        # A picker only earns its row when there is a choice to make: one
-        # product stays the button it was, since a one-option dropdown is two
-        # taps to do what one would.
-        if len(actions) > 1:
+        # Always a picker, even for a single product. A one-option dropdown is
+        # one more tap than a button, but a section that looks structurally
+        # different because of how much its guild happens to sell teaches a
+        # member the shop is inconsistent — and which sections hold one thing
+        # changes with a dashboard toggle, so the shape would move under them.
+        if actions:
             self.add_item(_ActionSelect(
                 actions, _SECTION_PLACEHOLDER.get(section, "Pick one…"),
             ))
-        else:
-            for button, _desc, _reason in actions:
-                self.add_item(button)
         if self.refundable or self.shield_price > 0:
             # One entry point for everything cancellable, rather than a
             # second button per owned row — the picker underneath handles
@@ -2808,19 +2801,13 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # The money is already taken and the row exists; a card failure must
-        # never surface as an error to the member (it's still resolvable from
-        # the dashboard), so this is best-effort inside post_review_card.
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
-        await post_review_card(
-            self.bot,
-            self.bot.ctx,
-            guild,
-            settings,
-            accent,
-            outcome.submission_id,
-            member,
-        )
+        # The request goes on the mods' todo board, not into the bank channel:
+        # it names the member and quotes what they wrote, and the bank channel
+        # in the main guild is a member-facing explainer. The money is already
+        # taken and the row exists, so a failed repaint must never surface as
+        # an error to the member — the board reads the queue live and the next
+        # repaint picks it up regardless.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your question to the mods for review — {outcome.price} "
@@ -2861,12 +2848,10 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Money's taken and the row exists; a card failure must never surface as
-        # an error to the member (it's still resolvable), so it's best-effort.
-        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR)
-        await post_pin_review_card(
-            self.bot, self.bot.ctx, guild, settings, accent, outcome.submission_id, member
-        )
+        # Onto the mods' todo board, not the bank channel — see the sponsored
+        # question above. Pin of the Day has no dashboard queue at all, so
+        # that board section is now its only review surface.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your message to the mods for review — {outcome.price} "
@@ -2880,7 +2865,7 @@ class EconomyCog(commands.Cog):
     async def do_theme_submit(
         self, interaction: discord.Interaction, title: str, blurb: str
     ) -> None:
-        """Escrow the price, queue the theme, and post the mod-approval card."""
+        """Escrow the price, queue the theme, and put it on the mods' board."""
         assert interaction.guild is not None
         guild = interaction.guild
         member = interaction.user
@@ -2907,16 +2892,9 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Money's taken and the row exists; a card failure must never surface
-        # as an error to the member (it's still resolvable), so it's
-        # best-effort.
-        accent = await safe_resolve_accent(
-            self.bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
-        )
-        await post_theme_review_card(
-            self.bot, self.bot.ctx, guild, settings, accent,
-            outcome.submission_id, member,
-        )
+        # Onto the mods' todo board, not the bank channel — see the sponsored
+        # question above.
+        await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
             f"📨 Sent your theme to the mods for review — {outcome.price} {unit} "
@@ -5022,9 +5000,9 @@ class EconomyCog(commands.Cog):
     # for a panel rendering the leaderboard and isn't: the message those ids
     # name is the one that survived the merge, in the channel the panel now
     # calls home, so every guild was already pointing at the right message on
-    # changeover day and no id had to be copied. ``leaderboard_channel_id`` /
-    # ``leaderboard_message_id`` are retired — cleared by the one-shot in
-    # ``_merge_panels_once`` and read by nothing.
+    # changeover day and no id had to be copied. The retired
+    # ``leaderboard_*`` pair, and the boot-time one-shot that cleared it, were
+    # deleted on 2026-08-29 once every guild had restarted past the merge.
 
     _PANEL_FIELDS = {
         "panel": ("guide_channel_id", "guide_message_id"),
@@ -5123,16 +5101,21 @@ class EconomyCog(commands.Cog):
         embed, view = await build_bounty_hub_panel(self.bot, guild)
         return PanelContent(embed=embed, view=view)
 
-    async def post_bounty_panel(self, guild, channel):
+    async def post_bounty_panel(self, guild, channel=None):
         """Place the Bounty Board hub. Entry point for the dashboard's panel
         poster (``panel_registry``); the board's only entry point since
         ``/bounty`` was deleted.
 
-        Refuses any channel but the configured board, because the hub's ids are
-        looked up *through* ``bounty_channel_id`` — a hub somewhere else would
-        be adopted by the restick as though it were in the board channel and
-        then edited into the wrong place. Raising sends the admin to set the
-        board channel first, which is the step that enables bounties at all.
+        Takes its destination from ``bounty_channel_id`` rather than from the
+        caller, because that was always the only answer: the hub's ids are
+        looked up *through* that setting, so a hub anywhere else would be
+        adopted by the restick as though it were in the board channel and then
+        edited into the wrong place. This used to be enforced by refusing every
+        other channel, which left the dashboard drawing a picker beside the
+        Bounty Board Channel setting whose every other answer was an error —
+        the duplication that prompted the 2026-08-29 audit. ``channel`` is
+        accepted and ignored so the route can keep one uniform call shape (see
+        ``_OWN_CHANNEL_METHODS``).
         """
         await self._require_economy_enabled(guild.id)
         settings = await asyncio.to_thread(self._load_settings, guild.id)
@@ -5141,11 +5124,13 @@ class EconomyCog(commands.Cog):
                 "No bounty board channel is set — pick one under Economy → "
                 "Settings before posting the board panel."
             )
-        if int(channel.id) != int(settings.bounty_channel_id):
+        channel = guild.get_channel(int(settings.bounty_channel_id))
+        if not isinstance(channel, discord.TextChannel):
             raise ValueError(
-                "The Bounty Board panel has to go in the bounty board channel "
-                f"(<#{int(settings.bounty_channel_id)}>) — that's the channel "
-                "its cards post to."
+                "The bounty board channel "
+                f"(<#{int(settings.bounty_channel_id)}>) isn't a text channel "
+                "in this server any more — pick a new one under Economy → "
+                "Settings."
             )
         # Two panels that both chase bot posts can't share a channel: there is
         # one bottom slot, they take it from each other on every trigger, and
@@ -5372,90 +5357,6 @@ class EconomyCog(commands.Cog):
         self.bot.add_view(ShopPanelView())
         await self._publish_panel_guilds()
         self._auction_settle_loop.start()
-        self.bot.startup_task_factories.append(self._merge_panels_once)
-
-    # ── the guide/leaderboard changeover (2026-08-18) ─────────────────────
-
-    async def _merge_panels_once(self) -> None:
-        """Retire the old leaderboard message, once, on the first boot after
-        the merge.
-
-        The two panels became one in code; in Discord there are still two
-        messages until something deletes one, and only the running bot can.
-        Hence a startup task rather than a migration: SQL can clear the ids but
-        would leave a live board sitting in a channel nobody updates again.
-
-        Self-clearing rather than flagged — the work is keyed on
-        ``leaderboard_message_id``, which this zeroes, so every later boot
-        plans nothing (``PanelMergePlan.is_noop``) and costs one settings read
-        per guild. Deliberately *not* gated on ``econ_enabled``: a guild that
-        switched its economy off still has the stale message, and skipping it
-        would strand the board there for as long as the economy stayed off.
-
-        Every failure is swallowed per-guild. A missing channel, a message
-        somebody already deleted by hand, or a permission the bot lost all mean
-        the same thing — the board is not there any more — and the ids clear
-        regardless so this cannot retry forever.
-
-        The repaint at the end is not part of the cleanup and runs for every
-        guild, including the ones with nothing to clean: on changeover day the
-        surviving message still *shows* the old guide embed, and without this it
-        would go on showing it until the hourly tick — a guild that only ever
-        had a guide panel has no cleanup to trigger a repaint at all. One edit
-        per configured guild per boot is the standing cost, and ``refresh``
-        no-ops where no panel is posted or the economy is off.
-        """
-        await self.bot.wait_until_ready()
-        for guild in list(self.bot.guilds):
-            try:
-                await self._merge_panels_for_guild(guild)
-                await self.economy_panel.refresh(guild.id, repost_if_missing=False)
-            except Exception:  # noqa: BLE001 — one guild must not stop the rest
-                log.exception(
-                    "econ panel merge: changeover failed for guild %s", guild.id
-                )
-
-    async def _merge_panels_for_guild(self, guild: discord.Guild) -> None:
-        """Apply ``plan_panel_merge`` to one guild. See _merge_panels_once."""
-        settings = await asyncio.to_thread(self._load_settings, guild.id)
-        plan = plan_panel_merge(
-            panel_channel_id=settings.guide_channel_id,
-            panel_message_id=settings.guide_message_id,
-            board_channel_id=settings.leaderboard_channel_id,
-            board_message_id=settings.leaderboard_message_id,
-        )
-        if plan.is_noop:
-            return
-
-        if plan.delete is not None:
-            channel_id, message_id = plan.delete
-            channel = guild.get_channel(channel_id)
-            if isinstance(channel, discord.TextChannel):
-                try:
-                    await channel.get_partial_message(message_id).delete()
-                    log.info(
-                        "econ panel merge: removed the old leaderboard message "
-                        "%s in guild %s", message_id, guild.id,
-                    )
-                except discord.HTTPException:
-                    log.debug(
-                        "econ panel merge: old leaderboard message already gone",
-                        exc_info=True,
-                    )
-
-        updates: dict[str, object] = {}
-        if plan.adopt is not None:
-            # No guide panel to keep, so the board's message *becomes* the
-            # economy panel where it stands rather than being orphaned.
-            updates["guide_channel_id"], updates["guide_message_id"] = plan.adopt
-        if plan.clear:
-            updates["leaderboard_channel_id"] = 0
-            updates["leaderboard_message_id"] = 0
-        await asyncio.to_thread(self._save_settings, guild.id, updates)
-        # The panel's cached ids predate the write on the adopt path; drop them
-        # so the next restick reads what we just stored.
-        self.economy_panel.forget(guild.id)
-        await self._publish_panel_guilds()
 
     # ── the listener's fast path ──────────────────────────────────────────
 

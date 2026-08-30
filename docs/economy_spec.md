@@ -261,16 +261,18 @@ to currency.
   `/bank sponsor <question>`, paying `price_qotd_sponsor` (default 40) to put a
   question in front of the server. **Charged at submit** — a free queue invites
   spam — which makes decline and expiry *refund* paths (ledger kind
-  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it on a
-  persistent Approve/Decline card in the bank channel (DynamicItems
+  `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it from the
+  **todo board's 🧾 Approvals button** (see "Where paid requests are reviewed"
+  below; the buttons behind it are DynamicItems
   `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
   dashboard queue (Economy → QOTD, `require_economy_manager`, which
   also **withdraws** an already-approved question back out of the post queue —
   the service only *resolves* pending rows, so withdrawal is its own path);
   declining opens a reason modal and the reason reaches the member by DM.
-  Resolving from the dashboard re-renders the bank-channel card and DMs the
-  sponsor with the same copy the card buttons use, best-effort: a Discord
-  failure leaves the API 200 with `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
+  Resolving from the dashboard repaints the todo board (and any legacy
+  bank-channel card) and DMs the sponsor with the same copy the buttons use,
+  best-effort: a Discord failure leaves the API 200 with
+  `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
   from when the mod supplies **no** question text; the QOTD card is bylined
   "sponsored by <name>" and `econ_qotd.sponsor_user_id` records them
   (`posted_by` stays the mod who ran the command — different people, both
@@ -292,8 +294,10 @@ to currency.
   `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
   artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
   at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
-  `pending`; a mod Approves/Declines on a bank-channel card
-  (`PinApproveButton`/`PinDenyButton`, persistent). Approve posts + pins a
+  `pending`; a mod Approves/Declines from the todo board's **🧾 Approvals**
+  button (`PinApproveButton`/`PinDenyButton`, persistent). Pin of the Day has
+  **no dashboard queue**, so that board section is its only review surface.
+  Approve posts + pins a
   "Pinned by @X" card in `pin_channel_id` and flips the row to `live` with a
   24h `expires_at` — the Discord post happens *before* the DB move, so a failed
   post refunds (the member is never charged for a pin nobody saw). One live pin
@@ -313,8 +317,9 @@ to currency.
   `economy_submission_store`. `/bank theme` opens a modal (theme name +
   blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
   out / `flash_theme_refund` back) and queued `pending`; a mod
-  Approves/Declines on a bank-channel card (`ThemeApproveButton` /
-  `ThemeDenyButton`, persistent) or from the dashboard's **Approvals** page.
+  Approves/Declines from the todo board's **🧾 Approvals** button
+  (`ThemeApproveButton` / `ThemeDenyButton`, persistent) or from the
+  dashboard's **Approvals** page.
   Two things distinguish it from Pin of the Day, which it otherwise mirrors:
   - **Approve posts nothing.** It moves the row to `approved` and that is all.
     The hourly loop's `run_theme_expiry` promotes the oldest approved row
@@ -345,6 +350,26 @@ to currency.
   holds a pinned announcement only the sweep can take down, and the sweep
   finds its work by reading live rows, so deleting it would strand the pin
   permanently. See `docs/data_register.md`.
+
+  **Where paid requests are reviewed (2026-08-29).** The sponsored question,
+  the pin and the themed day are one job to a moderator, so they are one
+  section and one button on the **mods' todo board** — 🧾 Approvals — rather
+  than three cards in `bank_channel_id`. That channel is the economy's
+  member-facing explainer in the main guild (`🏦│how-it-works`), and a review
+  card names the member and quotes what they submitted, so posting one there
+  published an unreviewed request to the whole server. The queue is
+  `economy_approvals_service.pending_approvals`, a `UNION ALL` over the
+  products in `QUEUES`; the button opens an ephemeral pick-one select and a
+  pick renders **that product's own card embed and buttons**, so nothing a mod
+  reads changed. Gate is `can_manage_economy`, not the board's mod check —
+  every decision moves currency. The persistent DynamicItems stay registered,
+  so cards posted before the move remain clickable; nothing posts new ones.
+  Emoji sponsorship is deliberately excluded (its approval is an upload, not a
+  yes/no, and it has a dashboard queue), and `notify_member`'s public
+  bank-channel fallback for a member with DMs closed is a different mechanism
+  and unchanged. Full shape in `docs/todo_spec.md` § "Paid requests on the
+  board".
+
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
   A sticky **hub panel** (`EconomyCog.bounty_panel`, `build_bounty_hub_panel`)
@@ -366,7 +391,12 @@ to currency.
   `tests/test_economy_bounty_views.py` pins that. The expiry DM builds its link
   from `notice.card_channel_id`/`card_message_id` and simply omits it when
   those are 0 (a bounty whose card never posted). `post_bounty_panel`
-  refuses any channel but the board. Where the hub landed is stored in its own
+  **takes no channel from the caller** — it reads `bounty_channel_id` itself
+  (`_OWN_CHANNEL_METHODS`, alongside Voice Control and the Guess Who prompt),
+  so the dashboard draws no picker for it. It refused every other channel until
+  2026-08-29, which left a picker beside the Bounty Board Channel setting whose
+  only valid answer was that setting: the duplication the channel-settings
+  audit was opened to find. Where the hub landed is stored in its own
   pair (`bounty_panel_channel_id`/`_message_id`): an admin repointing
   `bounty_channel_id` doesn't touch them, so on a mismatch `_bounty_panel_ids`
   reads the hub as unposted — the restick stops chasing a message off the
@@ -862,8 +892,9 @@ on their behalf through the ordinary `claim_quest` state machine:
 
 - **Instant quest:** pays on the spot — ✅ reaction only, no reply or DM.
   Wallet/quest log carries the news, same as every other trigger kind.
-- **Sign-off quest:** files the `pending` claim, posts the bank-channel card, and
-  reacts 📝 — a manager still approves the payout.
+- **Sign-off quest:** files the `pending` claim, repaints the mods' todo board
+  (where it becomes a sign-off row), and reacts 📝 — a manager still approves
+  the payout.
 
 `game_role_id` no longer affects trigger/photo/media quest completions (it
 used to gate an in-channel reply vs. a DM); it still gates other recurring
@@ -1041,7 +1072,7 @@ the xp_events-mirrored kinds is a stage-2 script job, not a migration
 Quests on a privacy-suppressed kind (`quests.ANON_KINDS`: `confession`,
 `confession_reply`, `whisper`, `ama_ask`, `guess_post`, `pen_pal`,
 `pen_pal_complete`) reject `signoff=1` at creation/update: a sign-off
-claim posts a bank-channel card naming the claimant, timing-correlatable against
+claim names the claimant on the mods' todo board, timing-correlatable against
 the anonymous feed. (Community and monthly quests take a kind but already
 forbid sign-off on their own account — tier settlement is automatic — so the
 paths left for these kinds are all silent: the daily/weekly/event auto-claims
@@ -1539,7 +1570,9 @@ ephemeral panel (§7), and **every one is giftable** (sinks round 2, stage 1:
 a gift is the base perk rented with `beneficiary_id` = the friend; the old
 `gift_color` kind and its separate `price_gift_color` retired in migration
 091, which rewrote live rows to `role_color`-with-beneficiary and widened the
-perk CHECK once for the round's later kinds, `voice_style` and `emoji` —
+perk CHECK once for the round's later kinds, `voice_style` and `emoji`; the
+orphaned `econ_price_gift_color` config rows two guilds still carried were
+deleted in migration 191 —
 see `docs/plans/economy-sinks-round-3.md`). **Custom shop items** (2026-08-25)
 open the catalogue to admins — see the row below and
 `docs/plans/economy-shop-items.md` — **fully shipped 2026-08-26**: the
@@ -1589,10 +1622,13 @@ to append their own spacer, which left One-shot, Weekly Raffle, Specials and
 For a Friend hugging whatever was above them.
 
 `_ShopView(section=...)` carries only that section's controls, and renders them
-as a **single `_ActionSelect`** where the section has more than one product —
-scoped to the section, built from the very buttons it replaces, so there is one
-place deciding what a section offers. A lone product keeps its button, since a
-one-option dropdown is two taps to do what one would. Discord cannot grey out a
+as a **single `_ActionSelect`**, scoped to the section and built from the very
+buttons it replaces, so there is one place deciding what a section offers.
+**Always a picker, even for one product** — a one-option dropdown costs a tap
+over a button, but which sections hold a single product changes with a
+dashboard toggle, so letting the shape follow the count moves the furniture
+under a member for reasons they cannot see. (A "lone product keeps its button"
+rule shipped in `3c601c09` and was removed the same day for exactly that.) Discord cannot grey out a
 single option, so an unavailable row (a gated perk, a held shield, an
 already-leased voice room) keeps its place and explains itself when chosen —
 dropping it would make the picker disagree with the table above it — a page holding buttons for rows its
@@ -2040,20 +2076,14 @@ else's odds; `buy_tickets` keeps its documented no-refund policy.
   `econ_guide_channel_id` / `econ_guide_message_id` — the guide's pair, kept
   because the merged panel *is* the guide's old message (same-channel repost
   edits in place, another channel deletes + reposts).
-  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` are **retired**:
-  zeroed on the first boot after the merge by `EconomyCog._merge_panels_once`,
-  and read by nothing.
+  `econ_leaderboard_channel_id` / `econ_leaderboard_message_id` were retired by
+  the merge and **deleted on 2026-08-29** (migration 191), along with the
+  boot-time one-shot that cleared them and the pure `plan_panel_merge` that
+  decided its work. The 2026-08-29 channel-settings audit confirmed every guild
+  had restarted past the changeover — two carried an explicit 0 and the third
+  had no row — so nothing was left for the one-shot to find.
 
-  **The changeover (2026-08-18).** Merging in code leaves two messages in
-  Discord, and only the running bot can remove one — so a startup one-shot
-  does it, per guild, deciding with the pure `plan_panel_merge`
-  (`economy/logic.py`): both posted ⇒ delete the board message and clear its
-  ids, the guide's message staying put and repainting as the panel; guide only
-  ⇒ nothing to do; board only (not a prod shape) ⇒ adopt its ids rather than
-  orphan a live panel. Self-clearing, so every later boot plans nothing; not
-  gated on `econ_enabled`, or a guild that switched its economy off would keep
-  the stale board forever; and the ids clear even when the delete fails, so it
-  cannot retry forever. **Refresh is event-driven:** every economy credit
+  **Refresh is event-driven:** every economy credit
   (`apply_credit`), community-counter bump, and dashboard progress edit
   marks the guild dirty in `economy/live_signal.py` (process-local,
   import-free), and `leaderboard_live_loop` (20 s poll) repaints a dirty

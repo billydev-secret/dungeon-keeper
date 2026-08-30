@@ -75,7 +75,7 @@ const SECTIONS = [
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js", help: "help-network" },
         // Restored 2026-08-26 under its original id, so deep links saved
         // before it was removed in 5b4cd71d still resolve.
-        { id: "connection-graph",     label: "Connection Graph",      module: "./panels/connection-graph.js", help: "help-network", keywords: "network visual map force-directed clusters communities bridge users density reciprocity small-world isolates" },
+        { id: "connection-graph",     label: "Connection Graph",      module: "./panels/connection-graph.js", help: "help-network", keywords: "network visual map web force-directed clusters communities friend groups" },
         { id: "one-sided-attention",  label: "One-Sided Attention",   module: "./panels/one-sided-attention.js" },
       ]},
       { heading: "Greeter", items: [

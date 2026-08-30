@@ -115,7 +115,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         description=(
             "The Bounty Board hub — explains how bounties work, lists the open "
             "ones with their pots, and carries the Post a bounty and Chip in "
-            "buttons. Must go in the bounty board channel set above; it keeps "
+            "buttons. Goes in the bounty board channel set above and keeps "
             "itself at the bottom of it."
         ),
         cog="EconomyCog",

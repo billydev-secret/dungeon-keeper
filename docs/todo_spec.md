@@ -4,11 +4,12 @@ Shared per-guild todo list for the mod team. Tasks arrive from a slash command,
 from a sticky Discord board, from the web dashboard, or from a recurring
 schedule; they all land in the same list, curated from the dashboard.
 
-The list has **one** Discord board, carrying three headed sections: **quest
-sign-offs** waiting on a mod, **today's chores** as a "did we do it today?"
-scoreboard, then **everything else outstanding**. It was two separate boards
-between migrations 166 and 180 — see "Why the split was undone" below — and it
-took over the quest sign-off queue on 2026-08-27.
+The list has **one** Discord board, carrying four headed sections: **quest
+sign-offs** waiting on a mod, **paid requests** waiting on a mod, **today's
+chores** as a "did we do it today?" scoreboard, then **everything else
+outstanding**. It was two separate boards between migrations 166 and 180 — see
+"Why the split was undone" below — and it took over the quest sign-off queue on
+2026-08-27 and the economy's three paid-approval queues on 2026-08-29.
 
 ## Surfaces
 
@@ -18,6 +19,7 @@ took over the quest sign-off queue on 2026-08-27.
 | Board **➕ Add Task** | Button + modal | Moderator | Add a task with optional notes |
 | Board **✅ Complete** | Button + select | Moderator | Tick one or several off — chores first, then tasks |
 | Board **✍️ Sign-Offs** | Button + select | **Economy manager** | Review a pending quest claim and approve or deny it |
+| Board **🧾 Approvals** | Button + select | **Economy manager** | Review a paid request — themed day, sponsored question, pin — and approve or decline it |
 | `GET /api/todos` | Web | Mod | List todos (newest first, capped at 200) + board placement |
 | `POST /api/todos` | Web | Mod | Create a free-form todo as the authenticated user |
 | `POST /api/todos/{id}/complete` | Web | Mod | Mark a todo complete |
@@ -59,15 +61,23 @@ Rejects DMs. Refreshes the board if one is posted.
 
 A single message the bot keeps at the **bottom of a configured channel**.
 
-- **Contents.** Three headed sections — **✍️ Quest sign-offs**, **🔁 Today's
-  chores**, then **📋 Tasks**. Each is omitted entirely when empty, rather than
-  stacking "nothing here" sentences; when all are, the board says so once.
+- **Contents.** Four headed sections — **✍️ Quest sign-offs**, **🧾 Paid
+  requests**, **🔁 Today's chores**, then **📋 Tasks**. Each is omitted entirely
+  when empty, rather than stacking "nothing here" sentences; when all are, the
+  board says so once.
 - **Quest sign-offs.** Pending `econ_quest_claims` rows, oldest first, one line
   each: `**Alex** — Post a selfie · 🪙 500` (the guild's own currency emoji).
   They lead the board because they are the only section where somebody else is
   waiting on the mods rather than the other way round, and they carry **no id**
   — a claim `#14` printed beside a task list whose `#14` is a different row
   invites the wrong one being ticked. See "Sign-offs on the board" below.
+- **Paid requests.** Pending rows from the economy's three paid-submission
+  queues — a themed day, a sponsored question, a pin — merged oldest first, one
+  line each: `**Alex** — 🎨 Theme: Cursed Cooking · 🪙 300`. They sit directly
+  under the sign-offs for the same reason those lead: a member has already
+  spent the coins and is waiting. The queue label is shown because one section
+  covers three products; no id, same rule as above. See "Paid requests on the
+  board" below.
 - **Tasks.** Outstanding tasks only — neither completed nor written off —
   **oldest first**, so the longest-waiting task sits at the top where it nags.
   Each row is `` `#12` `` — the id as a monospace chip — followed by the task
@@ -88,14 +98,15 @@ A single message the bot keeps at the **bottom of a configured channel**.
   handful per guild, and "who did it and when" is the question that board
   answers.
 - **Row budget.** 15 rows across the sections. Sign-offs take up to 5 off the
-  top and chores up to 8, and tasks get the rest, floored at 3 — neither a
-  backlog of claims nor a day of many chores may push the task list off the
+  top, paid requests up to 5, and chores up to 8; tasks get the rest, floored at
+  3 — no backlog of claims, requests or chores may push the task list off the
   board, which is the failure the merge existed to end, just pointing the other
   way. Overflow reads "…and **N** more on the dashboard". Accent from
   `safe_resolve_accent`.
-- **Footer.** `J sign-offs waiting · N of M chores done · K tasks · updates
-  automatically`. Each half is dropped when its section is, rather than reading
-  "0 sign-offs waiting" or "0 of 0 chores done".
+- **Footer.** `J sign-offs waiting · P paid requests waiting · N of M chores
+  done · K tasks · updates automatically`. Each part is dropped when its
+  section is, rather than reading "0 sign-offs waiting" or "0 of 0 chores
+  done".
 - **Staying at the bottom.** A member message in the board's channel arms a 6s
   debounce, then the board is deleted and re-posted (Discord has no reorder
   API). Reuses `economy.guide.should_restick_guide` — bot messages are filtered
@@ -127,8 +138,8 @@ A single message the bot keeps at the **bottom of a configured channel**.
   under a board that lives by delete-and-repost.
 
 The view is a static-`custom_id` persistent view (`todo_board_add`,
-`todo_board_complete`, `todo_board_signoffs`) re-registered in `cog_load`, so
-buttons survive restarts.
+`todo_board_complete`, `todo_board_signoffs`, `todo_board_approvals`)
+re-registered in `cog_load`, so buttons survive restarts.
 
 **One Complete button over both sections.** `board_logic.completable_options`
 puts open chores first, then tasks, and carries a chore forward by its
@@ -169,6 +180,46 @@ this feature:
 - **Where the outcome is announced.** Not here, and never by DM — the register
   channel carries it. See `docs/economy_spec.md` §4 (sign-off quests) for the
   full rule, including the two cases that announce nowhere at all.
+
+### Paid requests on the board
+
+The economy sells three things a moderator has to approve before they happen: a
+**themed day**, a **sponsored question of the day**, and a **pin**. Each used
+to post its own Approve/Decline card into the economy's `bank_channel_id`.
+They moved here on **2026-08-29**, on exactly the sign-off pattern above and
+for exactly the same reason — plus a sharper one: a request names the member
+and quotes what they wrote, so a card in a member-facing channel published an
+unreviewed submission to the whole server.
+
+- **No mirrored rows.** The section reads the three submission tables live,
+  through `economy_approvals_service.pending_approvals` (a `UNION ALL` over the
+  products in `QUEUES`, oldest first, each arm served by its own
+  `(guild_id, state, created_at)` index) and `pending_approval_count` for the
+  footer. Nothing to keep in sync; resolving anywhere removes it; the Complete
+  button structurally cannot offer one.
+- **One section, one button, three queues.** A heading per product would be
+  three headings over nothing most days. The row carries its queue label, the
+  select option carries it again, and **🧾 Approvals** opens one ephemeral
+  pick-one select across all three. Picking a request edits that ephemeral into
+  **that product's own review card** — the same embed builder the bank-channel
+  card used, with that product's own Approve/Decline buttons under it. A
+  request someone else resolved while the picker was open renders as resolved,
+  with no buttons. The select's value is `kind:id`, because the ids are
+  per-table and theme #3 is not pin #3.
+- **Whose permission.** `can_manage_economy`, not `AppContext.is_mod`: every
+  decision moves currency, and a denial refunds it.
+- **Repaints.** Every edge repaints the board — a request submitted, resolved
+  from the board or the dashboard, or expired by the economy's hourly sweep —
+  best-effort through `view_helpers.refresh_todo_board`.
+- **The money is already taken.** These are charged-at-submit queues. Deny and
+  expiry are refund paths, and the exactly-once guarantee lives in
+  `economy_submission_store.refund_once`'s `refunded_at IS NULL` predicate, not
+  in anything this board does.
+- **What did not move.** The **emoji sponsorship** is a fourth paid submission
+  but is not on the board: its approval is an upload, not a yes/no, and it has
+  the dashboard queue Pin of the Day never had. `notify_member`'s public
+  bank-channel fallback for a member with DMs closed is a different mechanism
+  and is unchanged.
 
 ### Today's chores
 
@@ -393,10 +444,10 @@ for a daily and a week for a weekly.
   DM the creator; a due recurring task doesn't ping anyone.
 - **No in-Discord configuration.** Board placement and recurring definitions are
   dashboard-only, per the project's configuration rule.
-- **The sign-off section is a guest, not a feature of this list.** It renders
-  claims the economy owns; this feature stores nothing about them, adds no
-  column, and gains no migration for them. If quest sign-offs ever go away, the
-  section goes with them and the todo list is unchanged.
+- **The sign-off and paid-request sections are guests, not features of this
+  list.** They render rows the economy owns; this feature stores nothing about
+  them, adds no column, and gains no migration for them. If either queue ever
+  goes away, its section goes with it and the todo list is unchanged.
 - **No per-chore reset rule.** The reset is uniform. A per-definition "carry
   over vs. reset" switch was considered and dropped: two rules doubles what a
   streak, a footer, and a missed row each mean, for a distinction a mod team can
@@ -421,12 +472,21 @@ Three tables, all per-guild:
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
   `last_run_at`/`last_status`.
 
-The sign-off section adds **no fourth table and no migration**: it reads
-`econ_quest_claims`, which the economy owns and `docs/data_register.md` already
-covers.
+The sign-off and paid-request sections add **no table and no migration**: they
+read `econ_quest_claims` and the three `econ_*_submissions` tables, which the
+economy owns and `docs/data_register.md` already covers.
 
 ## Notes / history
 
+- **Paid approval requests moved onto the board (2026-08-29).** Flash Themes,
+  the QOTD sponsor and Pin of the Day each posted an Approve/Decline card into
+  `bank_channel_id`, finishing the migration the sign-offs started two days
+  earlier. The trigger was a live "📋 Theme Requested" card — a named member,
+  300 coins, and their unreviewed idea — appearing in `🏦│how-it-works` in
+  front of the whole server. Pin of the Day was the worst affected: it has no
+  dashboard queue, so that public card was its *only* review surface. As with
+  the sign-offs, the persistent Approve/Decline buttons stay registered so
+  older cards remain clickable, and only new posts moved.
 - **Quest sign-offs moved onto the board (2026-08-27).** They used to post one
   Approve/Deny card per claim into the economy's bank channel — which in the
   main guild is `🏦│how-it-works`, a member-facing explainer channel a mod had

@@ -40,6 +40,9 @@ def _bot(*, post_result="ok", cog_present=True):
     cog.post_control_panel = AsyncMock(
         return_value=(message if post_result == "ok" else None)
     )
+    cog.post_bounty_panel = AsyncMock(
+        return_value=(message if post_result == "ok" else None)
+    )
     bot.get_cog.return_value = cog
     return bot, guild, channel
 
@@ -76,6 +79,10 @@ def test_own_channel_panels_are_flagged(authed_client):
     panels = {p["key"]: p for p in authed_client.get("/api/panels").json()["panels"]}
     assert panels["voice-control"]["targets_own_channel"] is True
     assert panels["guess-prompt"]["targets_own_channel"] is True
+    # The Bounty Board joined them on 2026-08-29: it had always refused every
+    # channel but the configured board, so the picker beside the Bounty Board
+    # Channel setting had exactly one valid answer.
+    assert panels["economy-bounty"]["targets_own_channel"] is True
     assert panels["economy-panel"]["targets_own_channel"] is False
 
 
@@ -306,6 +313,81 @@ def _set_control_channel(fake_ctx, channel_id: int) -> None:
             "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
             (fake_ctx.guild_id, "voice_master_control_channel_id", str(channel_id)),
         )
+
+
+def _set_bounty_channel(fake_ctx, channel_id: int) -> None:
+    """The board channel — where the hub posts, and the only place it can."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (?, ?, ?)",
+            (fake_ctx.guild_id, "econ_bounty_channel_id", str(channel_id)),
+        )
+
+
+def test_the_bounty_hub_takes_no_channel_from_the_caller(client_with_bot):
+    """It reads ``bounty_channel_id`` itself, so a channel in the body — from a
+    stale page, or a hand-rolled request — must not reach the cog."""
+    client, bot, *_ = client_with_bot()
+    r = client.post("/api/panels/economy-bounty/post", json={"channel_id": "999"})
+    assert r.status_code == 200, r.text
+    args = bot.get_cog.return_value.post_bounty_panel.await_args.args
+    assert args[1] is None
+
+
+def test_the_bounty_hub_checks_the_board_channels_residents(
+    fake_ctx, client_with_bot
+):
+    """Its destination is the board channel, so that is whose bottom slot the
+    collision guard has to look at.
+
+    It warns rather than blocks, and can only ever warn: the sticky registry
+    resolves the bounty panel's own channel from ``bounty_channel_id`` too, so
+    setting the board channel already counts the hub as resident there — and a
+    panel already in the target channel is never refused on account of who
+    else is there, since refusing would not undo the collision, only lock the
+    admin out of maintaining a panel that is sitting in it right now.
+    """
+    client, bot, guild, channel = client_with_bot()
+    _set_bounty_channel(fake_ctx, 456)
+    _occupy(fake_ctx, 456, key="casino")
+
+    r = client.post("/api/panels/economy-bounty/post", json={})
+    assert r.status_code == 200, r.text
+    assert "casino hub panel" in r.json()["warning"]
+    bot.get_cog.return_value.post_bounty_panel.assert_awaited_once()
+
+
+def test_an_own_channel_panel_is_permission_checked_too(fake_ctx, client_with_bot):
+    """Until 2026-08-29 only caller-picked channels were checked, so the
+    own-channel panels reached the placement unguarded.
+
+    That is the one guard that must not be skipped for a sticky panel: placing
+    it deletes the message it replaces *before* sending the new one, so a
+    channel the bot can't post in leaves the guild with no panel at all and a
+    repost that fails the same way.
+    """
+    client, bot, guild, channel = client_with_bot()
+    _set_bounty_channel(fake_ctx, 456)
+    channel.permissions_for.return_value = MagicMock(
+        view_channel=True, send_messages=True, embed_links=False
+    )
+
+    r = client.post("/api/panels/economy-bounty/post", json={})
+    assert r.status_code == 400
+    assert "Embed Links" in r.json()["detail"]
+    bot.get_cog.return_value.post_bounty_panel.assert_not_awaited()
+
+
+def test_an_unconfigured_own_channel_panel_is_left_to_the_cog(client_with_bot):
+    """Nothing configured is the common case, and the cog's own message names
+    the setting to go and fill in — a permission complaint would not."""
+    client, bot, *_ = client_with_bot()
+
+    r = client.post("/api/panels/economy-bounty/post", json={})
+    assert r.status_code == 200, r.text
+    bot.get_cog.return_value.post_bounty_panel.assert_awaited_once()
 
 
 def test_posting_into_a_bot_chasing_panels_channel_is_refused(

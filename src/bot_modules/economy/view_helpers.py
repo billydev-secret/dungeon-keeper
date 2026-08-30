@@ -48,10 +48,71 @@ def coins(settings: EconSettings, amount: int) -> str:
 safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ view")
 
 
+class EphemeralCard:
+    """Stands in for a review card when the review happened on the todo board.
+
+    The board's Approve/Decline buttons live under an *ephemeral* detail
+    message. That message is real and arrives at a resolver exactly like a
+    channel card would, but an ephemeral message cannot be edited through the
+    channel-message endpoint — only through the interaction that owns it.
+    Wrapping the interaction in the one method every card path calls keeps the
+    resolution code identical either way, instead of sprouting a
+    "which surface am I on?" branch at each of its half-dozen repaints.
+    """
+
+    __slots__ = ("_interaction",)
+
+    def __init__(self, interaction: discord.Interaction) -> None:
+        self._interaction = interaction
+
+    async def edit(self, **kwargs) -> None:
+        await self._interaction.edit_original_response(**kwargs)
+
+
+def review_surface(
+    interaction: discord.Interaction, card: "discord.Message | None"
+) -> "discord.Message | EphemeralCard | None":
+    """The thing to repaint: the channel card, or the board's ephemeral detail.
+
+    ``card`` is whatever the resolver was handed — ``interaction.message`` for
+    a button, or the message the deny modal was opened from. An ephemeral one
+    means the board flow; see :class:`EphemeralCard`.
+    """
+    if card is not None and getattr(card.flags, "ephemeral", False):
+        return EphemeralCard(interaction)
+    return card
+
+
+async def refresh_todo_board(
+    bot: "discord.Client", guild_id: int, *, log_label: str
+) -> None:
+    """Repaint the mods' todo board, where everything waiting on them is listed.
+
+    Called on both edges — a request filed and a request resolved — because
+    the board's own 60s loop only repaints guilds where a recurring chore
+    spawned, so without this a paid request would sit invisible until
+    something else happened to move the board. Best effort in the strongest
+    sense: by the time this runs the money has already moved and the member
+    has already been told, so a Discord hiccup must never surface as a failed
+    submission or a failed refund.
+    """
+    # ``bot`` is annotated as the bare Client because an expiry sweep holds
+    # one; only a commands.Bot carries cogs, which the runtime one always is.
+    get_cog = getattr(bot, "get_cog", None)
+    cog = get_cog("TodoCog") if get_cog is not None else None
+    refresh = getattr(cog, "refresh_board", None)
+    if refresh is None:
+        return
+    try:
+        await refresh(guild_id)
+    except Exception:  # pragma: no cover - defensive
+        log.warning(
+            "%s: failed to repaint the todo board for %s.", log_label, guild_id
+        )
 
 
 async def edit_review_card(
-    card: "discord.Message | None",
+    card: "discord.Message | EphemeralCard | None",
     accent,
     settings: "EconSettings",
     row,
@@ -76,7 +137,7 @@ async def edit_review_card(
 
 
 async def refresh_review_card(
-    card: "discord.Message | None",
+    card: "discord.Message | EphemeralCard | None",
     ctx,
     accent,
     settings: "EconSettings",

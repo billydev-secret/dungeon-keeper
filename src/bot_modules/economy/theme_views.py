@@ -14,6 +14,11 @@ button and onto a sweep that simply tries again next hour.
 
 Every handler is fail-safe: a service error becomes an ephemeral note, never a
 dead button.
+
+Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
+the ephemeral detail view behind the todo board's 🧾 Approvals button (see
+``economy/approval_views.py``); the DynamicItems below stay registered so the
+cards posted into bank channels before the move remain clickable.
 """
 
 from __future__ import annotations
@@ -31,7 +36,12 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _reward_text
-from bot_modules.economy.view_helpers import edit_review_card, refresh_review_card
+from bot_modules.economy.view_helpers import (
+    edit_review_card,
+    refresh_review_card,
+    refresh_todo_board,
+    review_surface,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     load_econ_settings,
@@ -43,7 +53,6 @@ from bot_modules.services.economy_theme_service import (
     get_submission,
     go_live,
     queue_depth,
-    set_submission_card,
     theme_window_seconds,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
@@ -51,7 +60,7 @@ from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from bot_modules.core.app_context import AppContext, Bot
+    from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.economy")
 
@@ -76,7 +85,7 @@ def render_theme_review_embed(
     deny_reason: str | None = None,
     refunded: bool = False,
 ) -> discord.Embed:
-    """The bank-channel approval card for a submission in the given state.
+    """The approval card for a submission in the given state.
 
     ``expired`` is three different endings — a request nobody reviewed in time
     (refunded), a theme that ran its whole window, and one a mod ended early
@@ -299,6 +308,7 @@ class ThemeReviewView(discord.ui.View):
 
 
 _safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ theme")
+_refresh_board = partial(refresh_todo_board, log_label="econ theme")
 
 
 async def _handle_resolution(
@@ -314,7 +324,13 @@ async def _handle_resolution(
     member = interaction.user
     bot = cast("Bot", interaction.client)
     ctx = bot.ctx
-    card = card_message if card_message is not None else interaction.message
+    # An ephemeral card means the todo board's Approvals flow; see
+    # ``view_helpers.review_surface``. Everything downstream repaints the
+    # same way either way.
+    card = review_surface(
+        interaction,
+        card_message if card_message is not None else interaction.message,
+    )
 
     try:
         await interaction.response.defer(ephemeral=True)
@@ -376,6 +392,7 @@ async def _handle_resolution(
 
     await _edit_card(card, accent, settings, fresh)
     await _dm_sponsor(bot, ctx.db_path, guild, settings, fresh)
+    await _refresh_board(bot, guild.id)
     if approve:
         ahead = max(0, depth - 1)
         when = "It runs next time the channel is free." if not ahead else (
@@ -547,11 +564,14 @@ async def announce_theme(
 async def _restamp_card(
     bot: discord.Client, accent: discord.Color, settings: EconSettings, row
 ) -> None:
-    """Re-render the bank-channel card once a queued theme actually goes live.
+    """Re-render a legacy bank-channel card once a queued theme goes live.
 
-    The loop holds no card object — only the ids recorded at submit — so this
-    fetches before editing. Entirely best-effort: the theme is already running
-    and the member already told, so a lost card is cosmetic.
+    Nothing has recorded those ids since the review moved to the todo board
+    (2026-08-29), so this is a no-op for every new submission and exists for
+    the cards posted before it. The loop holds no card object — only the ids
+    on the row — so it fetches before editing. Entirely best-effort: the theme
+    is already running and the member already told, so a lost card is
+    cosmetic.
     """
     channel_id, message_id = int(row["card_channel_id"]), int(row["card_message_id"])
     if not channel_id or not message_id:
@@ -564,58 +584,3 @@ async def _restamp_card(
         await card.edit(embed=_card_embed(accent, settings, row), view=None)
     except discord.HTTPException:
         log.debug("econ theme: failed to restamp card %s", message_id, exc_info=True)
-
-
-async def post_review_card(
-    bot: Bot,
-    ctx: AppContext,
-    guild: discord.Guild,
-    settings: EconSettings,
-    accent: discord.Color,
-    submission_id: int,
-    sponsor: discord.Member,
-) -> None:
-    """Best-effort: post the review card to the bank channel and record its ids.
-
-    The pending row already exists and the member has already paid, so a
-    missing or forbidden bank channel must never raise back to them.
-    """
-    if not settings.bank_channel_id:
-        return
-    channel = guild.get_channel(settings.bank_channel_id)
-    if not isinstance(channel, discord.abc.Messageable):
-        return
-
-    def _read():
-        with ctx.open_db() as conn:
-            return get_submission(conn, submission_id)
-
-    try:
-        row = await asyncio.to_thread(_read)
-        if row is None:
-            return
-        embed = render_theme_review_embed(
-            accent,
-            settings,
-            sponsor_mention=sponsor.mention,
-            title=str(row["title"]),
-            blurb=str(row["blurb"]),
-            price=int(row["price"]),
-            state="pending",
-        )
-        message = await channel.send(embed=embed, view=ThemeReviewView(submission_id))
-    except discord.HTTPException:
-        log.warning("econ theme: failed to post review card for %s", submission_id)
-        return
-    except Exception:
-        log.exception("econ theme: unexpected error posting card %s", submission_id)
-        return
-
-    def _record() -> None:
-        with ctx.open_db() as conn:
-            set_submission_card(conn, submission_id, channel.id, message.id)
-
-    try:
-        await asyncio.to_thread(_record)
-    except Exception:
-        log.debug("econ theme: failed to record card ids", exc_info=True)

@@ -722,12 +722,14 @@ _GRAPH_STUB = {
 def test_connection_graph_populated_fits_on_phone(dashboard, browser):
     """The Connection Graph, *with data*, on a phone.
 
-    Everything wide on this panel lives behind having a graph to draw: a
-    nine-control strip, a six-tile scorecard, the bridge/cluster tables and an
-    8x8 cross-cluster matrix laid out at a fixed cell size. Against the sweep's
-    freshly-migrated DB the panel renders only its "no connections match these
-    filters" overlay, so none of that is visible to the plain sweep — the same
-    blind spot that hid the mod-engagement faults above.
+    The redesigned panel is one full-height canvas with a chip bar above it
+    and community chips overlaid on it, and all of that only exists once
+    there is a graph to draw. Against the sweep's freshly-migrated DB the
+    panel renders only its "no connections match these filters" overlay, so
+    the chip bar's wrap behaviour and the canvas overlays are invisible to
+    the plain sweep — the same blind spot that hid the mod-engagement faults
+    above. The Tuning popover holds the numeric knobs and lives behind a
+    click, so it is opened before the audit.
     """
     import json
 
@@ -743,16 +745,18 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
             ),
         )
         _goto_panel(page, f"{dashboard.base}/#/connection-graph")
-        page.wait_for_selector("[data-metrics-tables] table")
+        page.wait_for_selector("[data-cluster-chips] .graph-cluster-chip")
+        page.click(".graph-tuning > summary")
+        page.wait_for_selector(".graph-tuning-pop input", state="visible")
         _settle(page)
-        clusters = page.eval_on_selector_all(
-            "[data-metrics-tables] [data-cluster-row]", "els => els.length"
+        chips = page.eval_on_selector_all(
+            "[data-cluster-chips] .graph-cluster-chip", "els => els.length"
         )
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
-    assert clusters == 8, (
-        f"expected the 8 stub clusters, got {clusters} — did the "
+    assert chips == 8, (
+        f"expected a chip per stub cluster (8), got {chips} — did the "
         "/api/reports/interaction-graph stub shape drift?"
     )
     _assert_fits(res, "Connection Graph with data")

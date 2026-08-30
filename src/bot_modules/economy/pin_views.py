@@ -13,6 +13,11 @@ for a pin nobody saw. Decline opens a reason modal and refunds.
 
 Every handler is fail-safe — a service error becomes an ephemeral note, never a
 dead button.
+
+Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
+the ephemeral detail view behind the todo board's 🧾 Approvals button (see
+``economy/approval_views.py``); the DynamicItems below stay registered so the
+cards posted into bank channels before the move remain clickable.
 """
 
 from __future__ import annotations
@@ -33,7 +38,6 @@ from bot_modules.services.economy_pin_service import (
     get_submission,
     go_live,
     refund_failed_golive,
-    set_submission_card,
 )
 from bot_modules.services.economy_service import (
     EconSettings,
@@ -46,6 +50,8 @@ from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.view_helpers import (
     edit_review_card,
     refresh_review_card,
+    refresh_todo_board,
+    review_surface,
 )
 
 if TYPE_CHECKING:
@@ -67,7 +73,7 @@ def render_pin_review_embed(
     resolver_id: int | None = None,
     deny_reason: str | None = None,
 ) -> discord.Embed:
-    """The bank-channel approval card for a submission in the given state."""
+    """The approval card for a submission in the given state."""
     if state == "live":
         embed = discord.Embed(title="📌 Pin Approved", color=discord.Color(COLOR_GREEN))
     elif state in ("denied", "expired", "superseded"):
@@ -249,6 +255,7 @@ class PinReviewView(discord.ui.View):
 
 
 _safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ pin")
+_refresh_board = partial(refresh_todo_board, log_label="econ pin")
 
 
 async def _handle_resolution(
@@ -264,7 +271,13 @@ async def _handle_resolution(
     member = interaction.user
     bot = cast("Bot", interaction.client)
     ctx = bot.ctx
-    card = card_message if card_message is not None else interaction.message
+    # An ephemeral card means the todo board's Approvals flow; see
+    # ``view_helpers.review_surface``. Everything downstream repaints the
+    # same way either way.
+    card = review_surface(
+        interaction,
+        card_message if card_message is not None else interaction.message,
+    )
 
     try:
         await interaction.response.defer(ephemeral=True)
@@ -307,9 +320,12 @@ async def _handle_resolution(
     if not approve:
         await _do_deny(interaction, ctx, guild, settings, accent, submission_id,
                        card, deny_reason or "", member.id)
-        return
-    await _do_approve(interaction, bot, ctx, guild, settings, accent,
-                      submission_id, row, card, member.id)
+    else:
+        await _do_approve(interaction, bot, ctx, guild, settings, accent,
+                          submission_id, row, card, member.id)
+    # Whatever it resolved to, it is off the queue the board renders. Both
+    # branches above swallow their own failures, so this always runs.
+    await _refresh_board(bot, guild.id)
 
 
 async def _do_deny(
@@ -492,57 +508,3 @@ async def _dm_sponsor(
         await notify_member(bot, ctx.db_path, guild.id, int(row["user_id"]), content=text)
     except Exception:
         log.debug("econ pin: failed to DM member", exc_info=True)
-
-
-async def post_review_card(
-    bot: Bot,
-    ctx: AppContext,
-    guild: discord.Guild,
-    settings: EconSettings,
-    accent: discord.Color,
-    submission_id: int,
-    sponsor: discord.Member,
-) -> None:
-    """Best-effort: post the review card to the bank channel and record its ids.
-
-    The pending row already exists and the member has already paid, so a missing
-    or forbidden bank channel must never raise back to them.
-    """
-    if not settings.bank_channel_id:
-        return
-    channel = guild.get_channel(settings.bank_channel_id)
-    if not isinstance(channel, discord.abc.Messageable):
-        return
-
-    def _read():
-        with ctx.open_db() as conn:
-            return get_submission(conn, submission_id)
-
-    try:
-        row = await asyncio.to_thread(_read)
-        if row is None:
-            return
-        embed = render_pin_review_embed(
-            accent,
-            settings,
-            sponsor_mention=sponsor.mention,
-            message=str(row["message"]),
-            price=int(row["price"]),
-            state="pending",
-        )
-        message = await channel.send(embed=embed, view=PinReviewView(submission_id))
-    except discord.HTTPException:
-        log.warning("econ pin: failed to post review card for %s", submission_id)
-        return
-    except Exception:
-        log.exception("econ pin: unexpected error posting card %s", submission_id)
-        return
-
-    def _record() -> None:
-        with ctx.open_db() as conn:
-            set_submission_card(conn, submission_id, channel.id, message.id)
-
-    try:
-        await asyncio.to_thread(_record)
-    except Exception:
-        log.debug("econ pin: failed to record card ids", exc_info=True)
