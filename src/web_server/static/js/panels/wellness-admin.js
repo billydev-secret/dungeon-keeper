@@ -235,33 +235,41 @@ export function mount(container) {
     // after it fires: a listener bound to the element would keep running the
     // action the button no longer offers. Before this, acting on a row left a
     // disabled "Paused"/"Resumed" label and no way to undo without a reload.
-    container.addEventListener("click", async (e) => {
-      const btn = e.target.closest("[data-pause-uid], [data-resume-uid]");
-      if (!btn || btn.disabled) return;
-      const pausing = "pauseUid" in btn.dataset;
-      const uid = pausing ? btn.dataset.pauseUid : btn.dataset.resumeUid;
-      const statusCell = btn.closest("tr").querySelector("td:nth-child(4)");
-      btn.disabled = true;
-      try {
-        if (pausing) {
-          await wPost(`/api/wellness/admin/users/${uid}/pause`, { minutes: 60 });
-          statusCell.innerHTML = '<span class="chip chip-warning">Paused</span>';
-          delete btn.dataset.pauseUid;
-          btn.dataset.resumeUid = uid;
-          btn.textContent = "Resume";
-        } else {
-          await wPost(`/api/wellness/admin/users/${uid}/resume`, {});
-          statusCell.innerHTML = '<span class="chip chip-success">Active</span>';
-          delete btn.dataset.resumeUid;
-          btn.dataset.pauseUid = uid;
-          btn.textContent = "Pause 60 Minutes";
+    // Bound once, not per mount: this listener sits on `container`, which
+    // survives the innerHTML swap, so re-mounting stacked a fresh copy every
+    // time. The disabled-guard below kept that from double-firing a request,
+    // but activating and changing the role/channel both re-mount now, so the
+    // pile grew fast enough to be worth ending.
+    if (!container.dataset.wellnessRowActions) {
+      container.dataset.wellnessRowActions = "1";
+      container.addEventListener("click", async (e) => {
+        const btn = e.target.closest("[data-pause-uid], [data-resume-uid]");
+        if (!btn || btn.disabled) return;
+        const pausing = "pauseUid" in btn.dataset;
+        const uid = pausing ? btn.dataset.pauseUid : btn.dataset.resumeUid;
+        const statusCell = btn.closest("tr").querySelector("td:nth-child(4)");
+        btn.disabled = true;
+        try {
+          if (pausing) {
+            await wPost(`/api/wellness/admin/users/${uid}/pause`, { minutes: 60 });
+            statusCell.innerHTML = '<span class="chip chip-warning">Paused</span>';
+            delete btn.dataset.pauseUid;
+            btn.dataset.resumeUid = uid;
+            btn.textContent = "Resume";
+          } else {
+            await wPost(`/api/wellness/admin/users/${uid}/resume`, {});
+            statusCell.innerHTML = '<span class="chip chip-success">Active</span>';
+            delete btn.dataset.resumeUid;
+            btn.dataset.pauseUid = uid;
+            btn.textContent = "Pause 60 Minutes";
+          }
+        } catch (err) {
+          toast(`Couldn’t ${pausing ? "pause" : "resume"} that member — ${err.message}`, "error");
+        } finally {
+          btn.disabled = false;
         }
-      } catch (err) {
-        toast(`Couldn’t ${pausing ? "pause" : "resume"} that member — ${err.message}`, "error");
-      } finally {
-        btn.disabled = false;
-      }
-    });
+      });
+    }
 
     // Exempt remove
     container.querySelectorAll("[data-unexempt]").forEach(btn => {
