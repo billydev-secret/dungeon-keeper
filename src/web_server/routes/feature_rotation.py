@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from bot_modules.economy.quests import TRIGGER_KINDS
-from bot_modules.feature_rotation.logic import Room, local_day
+from bot_modules.feature_rotation.logic import Room, local_day, restore_all
 from bot_modules.feature_rotation.store import (
     RotationConfig,
     delete_room,
@@ -26,10 +26,15 @@ from bot_modules.feature_rotation.store import (
     list_pool,
     list_pool_state,
     rotation_day_for,
+    rotation_tz,
     save_config,
     upsert_room,
 )
-from bot_modules.services.feature_rotation_service import apply_day, show_room
+from bot_modules.services.feature_rotation_service import (
+    apply_day,
+    apply_plan,
+    show_room,
+)
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 
@@ -41,7 +46,6 @@ class ConfigBody(BaseModel):
     enabled: bool = False
     announce_channel_id: int = 0
     announce_hour: int = Field(9, ge=0, le=23)
-    tz_offset_hours: int = Field(-7, ge=-12, le=14)
     rooms_per_day: int = Field(1, ge=1, le=10)
 
 
@@ -104,9 +108,10 @@ async def get_rotation(
             cfg = get_config(conn, guild_id)
             rooms = list_pool(conn, guild_id)
             hidden = list_pool_state(conn, guild_id)
-            today_str = local_day(now, cfg.tz_offset_hours)
+            tz = rotation_tz(conn, guild_id)
+            today_str = local_day(now, tz)
             today = rotation_day_for(conn, guild_id, today_str)
-            tomorrow_day = local_day(now + 86400, cfg.tz_offset_hours)
+            tomorrow_day = local_day(now + 86400, tz)
             tomorrow = rotation_day_for(conn, guild_id, tomorrow_day)
             featured = set(today.featured) if today else set()
             return {
@@ -114,7 +119,7 @@ async def get_rotation(
                     "enabled": cfg.enabled,
                     "announce_channel_id": str(cfg.announce_channel_id),
                     "announce_hour": cfg.announce_hour,
-                    "tz_offset_hours": cfg.tz_offset_hours,
+                    "tz_offset_hours": tz,
                     "rooms_per_day": cfg.rooms_per_day,
                     "last_flip_date": cfg.last_flip_date,
                     "last_announce_date": cfg.last_announce_date,
@@ -162,7 +167,6 @@ async def put_config(
                     enabled=body.enabled,
                     announce_channel_id=body.announce_channel_id,
                     announce_hour=body.announce_hour,
-                    tz_offset_hours=body.tz_offset_hours,
                     rooms_per_day=body.rooms_per_day,
                 ),
             )
@@ -211,7 +215,10 @@ async def remove_room(
 
     Order matters and is not an optimisation: deleting the row first would
     discard the saved overwrites while the channel is still hidden, leaving no
-    record of what its permissions used to be.
+    record of what its permissions used to be. For the same reason the delete
+    is *refused* when the room is hidden and the restore didn't take — a bot
+    that is disconnected, or that lacks Manage Channels, must not be able to
+    turn "remove from the pool" into a permanently invisible channel.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -221,6 +228,19 @@ async def remove_room(
     if guild is not None:
         restored = await show_room(
             bot, guild, channel_id, reason="Removed from feature rotation"
+        )
+
+    def _hidden() -> bool:
+        with ctx.open_db() as conn:
+            return list_pool_state(conn, guild_id).get(channel_id, False)
+
+    if not restored and await run_query(_hidden):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This room is hidden right now and couldn't be reopened — check "
+                "the bot is online and can edit the channel, then try again."
+            ),
         )
 
     def _q() -> bool:
@@ -244,6 +264,12 @@ async def apply_now(
     Useful straight after editing the pool, and the only way to un-hide rooms
     if the rotation is switched off mid-day. Does not claim the day, so the
     real flip still happens on schedule.
+
+    With the rotation off there is no derived day at all — that is what "off"
+    means to every other reader — so this falls back to the reopen-everything
+    plan. Without it, switching the feature off would strand every room that
+    was hidden at the time, which is both what the panel promises and the only
+    way back out of the feature.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -258,14 +284,22 @@ async def apply_now(
 
     def _q():
         with ctx.open_db() as conn:
-            cfg = get_config(conn, guild_id)
-            return cfg, rotation_day_for(conn, guild_id, local_day(now, cfg.tz_offset_hours))
+            today = local_day(now, rotation_tz(conn, guild_id))
+            return (
+                rotation_day_for(conn, guild_id, today),
+                restore_all(list_pool(conn, guild_id)),
+            )
 
-    _cfg, day = await run_query(_q)
+    day, reopen = await run_query(_q)
     if day is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Turn the rotation on and add at least one channel first.",
+        if not reopen.show:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="There are no channels in the pool yet.",
+            )
+        shown, hidden = await apply_plan(
+            bot, guild, reopen, reason="Feature rotation off (manual)"
         )
+        return {"ok": True, "shown": shown, "hidden": hidden}
     shown, hidden = await apply_day(bot, guild, day, reason="Feature rotation (manual)")
     return {"ok": True, "shown": shown, "hidden": hidden}

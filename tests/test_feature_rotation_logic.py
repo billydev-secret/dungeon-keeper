@@ -26,6 +26,7 @@ from bot_modules.feature_rotation.logic import (
     parse_kinds,
     plan_visibility,
     resolve_day,
+    restore_all,
     rotating_rooms,
 )
 
@@ -145,10 +146,27 @@ def test_the_announcement_channel_is_never_hidden_even_when_pooled():
     assert 999 not in plan.hide
 
 
-def test_rooms_out_of_rotation_appear_in_neither_list():
+def test_a_room_out_of_rotation_is_reopened_not_skipped():
+    """Un-ticking "in rotation" on a hidden room has to bring it back.
+
+    It used to land in neither list, so a room that happened to be hidden the
+    day an admin took it out of the rotation stayed hidden forever — nothing
+    would ever plan its return.
+    """
     rooms = [*_pool(), Room(555, position=9, in_rotation=False)]
     plan = plan_visibility(rooms, [GUESS])
-    assert 555 not in plan.show and 555 not in plan.hide
+    assert 555 in plan.show
+    assert 555 not in plan.hide
+    # ...and it still takes no turn at being the featured room.
+    assert 555 not in featured_channel_ids(rooms, day_ordinal("2026-08-29"), 1)
+
+
+def test_restore_all_reopens_the_whole_pool_including_non_rotating_rooms():
+    """What "the rotation is off" has to mean, and the way back out."""
+    rooms = [*_pool(), Room(555, position=9, in_rotation=False)]
+    plan = restore_all(rooms)
+    assert set(plan.show) == {r.channel_id for r in rooms}
+    assert plan.hide == ()
 
 
 # ── quest kinds ──────────────────────────────────────────────────────────────

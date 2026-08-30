@@ -4,12 +4,20 @@
 // The pool table is the feature: every row is a channel plus the handful of
 // switches that decide how it behaves on the days it isn't the open one.
 import { api, apiPut, apiDelete, apiPost, esc } from "../api.js";
-import { loadChannels, guardForm, metaLoadFailed, mountAsync } from "../config-helpers.js";
+import { clearFormDirty, loadChannels, guardForm, metaLoadFailed, mountAsync } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { confirmDialog, toast } from "../ui.js";
 
 let channels = [];
 let triggerKinds = [];
+
+function tzLabel(offset) {
+  const n = Number(offset) || 0;
+  if (!n) return "UTC";
+  const whole = Math.trunc(Math.abs(n));
+  const mins = Math.round((Math.abs(n) - whole) * 60);
+  return `UTC${n < 0 ? "-" : "+"}${whole}${mins ? `:${String(mins).padStart(2, "0")}` : ""}`;
+}
 
 function chanName(id) {
   const c = channels.find((x) => String(x.id) === String(id));
@@ -135,11 +143,7 @@ function renderSettings(container, data) {
       </label>
       <label>Announce At (Hour, 0-23)
         <input data-f="announce_hour" type="number" min="0" max="23" value="${cfg.announce_hour}">
-        <span class="field-hint">Rooms always change at midnight so the quest board matches; only the announcement waits for this hour.</span>
-      </label>
-      <label>Hours From UTC
-        <input data-f="tz_offset_hours" type="number" min="-12" max="14" value="${cfg.tz_offset_hours}">
-        <span class="field-hint">Server time. No daylight saving.</span>
+        <span class="field-hint">Rooms always change at midnight so the quest board matches; only the announcement waits for this hour. Times are ${esc(tzLabel(cfg.tz_offset_hours))}, set under Server Settings.</span>
       </label>
       <label>Rooms Open Per Day
         <input data-f="rooms_per_day" type="number" min="1" max="10" value="${cfg.rooms_per_day}">
@@ -154,7 +158,9 @@ function renderSettings(container, data) {
       “Apply now” brings Discord into line with today’s plan straight away instead of waiting for midnight.
     </div>`;
 
-  const form = guardForm(host);
+  // Guard once: renderSettings re-runs on every refresh over the same host, so
+  // re-guarding would stack another listener triple each time.
+  const form = host.dataset.dkGuard ? host : guardForm(host);
   host.querySelector("[data-save-settings]").addEventListener("click", async () => {
     const body = {
       enabled: host.querySelector('[data-f="enabled"]').value === "1",
@@ -165,7 +171,7 @@ function renderSettings(container, data) {
     };
     try {
       await apiPut("/api/feature-rotation/config", body);
-      if (form) form.markClean();
+      clearFormDirty(form);
       toast("Settings saved.", "success");
       await refresh(container);
     } catch (err) {
@@ -250,14 +256,14 @@ function roomRow(room) {
           ${triggerKinds.map((t) => {
             const owned = room.quest_kinds.includes(t.kind);
             const blocked = room.blocked_kinds.includes(t.kind);
-            return `<label style="display:flex; align-items:center; gap:6px;">
-              <input type="checkbox" data-kind="${esc(t.kind)}" ${owned ? "checked" : ""}>
-              <span style="flex:1;">${esc(t.label)}</span>
-              <label style="display:flex; align-items:center; gap:4px; white-space:nowrap;" title="Needs the room open">
-                <input type="checkbox" data-blocked="${esc(t.kind)}" ${blocked ? "checked" : ""}>
-                <span class="field-hint">🔒</span>
-              </label>
-            </label>`;
+            const ownId = `fr-k-${room.channel_id}-${t.kind}`;
+            const lockId = `fr-b-${room.channel_id}-${t.kind}`;
+            return `<div style="display:flex; align-items:center; gap:6px;">
+              <input type="checkbox" id="${esc(ownId)}" data-kind="${esc(t.kind)}" ${owned ? "checked" : ""}>
+              <label for="${esc(ownId)}" style="flex:1;">${esc(t.label)}</label>
+              <input type="checkbox" id="${esc(lockId)}" data-blocked="${esc(t.kind)}" ${blocked ? "checked" : ""}>
+              <label for="${esc(lockId)}" class="field-hint" style="white-space:nowrap;" title="Needs the room open">🔒</label>
+            </div>`;
           }).join("")}
         </div>
       </td>

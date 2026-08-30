@@ -84,7 +84,6 @@ CREATE TABLE feature_rotation_config (
     enabled             INTEGER NOT NULL DEFAULT 0,
     announce_hour       INTEGER NOT NULL DEFAULT 9,
     rooms_per_day       INTEGER NOT NULL DEFAULT 1,
-    tz_offset_hours     INTEGER NOT NULL DEFAULT -7,
     announce_channel_id INTEGER NOT NULL DEFAULT 0,
     current_position    INTEGER NOT NULL DEFAULT 0,
     last_flip_date      TEXT    NOT NULL DEFAULT '',
@@ -117,7 +116,7 @@ channel tooling in `docs/dashboard_ia.md`. Admin config lives here, not in Disco
 ```
 Daily feature rotation                        [ On ]
 
-Announce at [ 09:00 ] ( UTC−7 )   in [ 💛│the-meadow ▾ ]
+Announce at [ 09:00 ] (server time, UTC−7)   in [ 💛│the-meadow ▾ ]
 Rooms flip at midnight, with the quest board.
 
   #  Channel          In rot.  Hide when off  Pause new  Announce
@@ -240,7 +239,11 @@ agreed rotation flip hour defaults to **09:00**. Left as-is:
 **Resolution: split the one hour dial into two.**
 
 * **Flip hour — locked to the quest day boundary (00:00 local, UTC−7).** Room,
-  board and economy day all turn over together. Nothing to reconcile.
+  board and economy day all turn over together. Nothing to reconcile. "Local"
+  is the guild's shared `tz_offset_hours` config key, the one birthdays, jail
+  and reports already read — the rotation deliberately has no offset of its
+  own, since two dials could be set apart and the flip would then fire hours
+  away from the boundary the board froze its pool on.
 * **Announce hour — configurable, default 09:00.** The announcement lands when
   main chat is awake and still says something true: "today's room is X".
 

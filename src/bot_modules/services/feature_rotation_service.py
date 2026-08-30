@@ -33,6 +33,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.feature_rotation.logic import (
     Room,
     RotationDay,
+    VisibilityPlan,
     build_announcement,
     local_day,
     local_hour,
@@ -46,7 +47,10 @@ from bot_modules.feature_rotation.store import (
     list_pool,
     mark_hidden,
     mark_visible,
+    release_announce,
+    release_flip,
     rotation_day,
+    rotation_tz,
 )
 from bot_modules.hidden_channels.overwrites import (
     rebuild_overwrites,
@@ -149,16 +153,28 @@ async def show_room(bot, guild: discord.Guild, channel_id: int, reason: str) -> 
     return True
 
 
-async def apply_day(bot, guild: discord.Guild, day: RotationDay, reason: str) -> tuple[int, int]:
-    """Bring every pool channel into line with ``day``. Returns (shown, hidden)."""
+async def apply_plan(
+    bot, guild: discord.Guild, plan: VisibilityPlan, reason: str
+) -> tuple[int, int]:
+    """Bring every named channel into line with ``plan``. Returns (shown, hidden).
+
+    Takes the plan rather than a day so the dashboard can apply the
+    reopen-everything plan when the rotation is switched off, which is exactly
+    the moment no derived day exists.
+    """
     shown = hidden = 0
-    for channel_id in day.plan.show:
+    for channel_id in plan.show:
         if await show_room(bot, guild, channel_id, reason):
             shown += 1
-    for channel_id in day.plan.hide:
+    for channel_id in plan.hide:
         if await hide_room(bot, guild, channel_id, reason):
             hidden += 1
     return shown, hidden
+
+
+async def apply_day(bot, guild: discord.Guild, day: RotationDay, reason: str) -> tuple[int, int]:
+    """Bring every pool channel into line with ``day``. Returns (shown, hidden)."""
+    return await apply_plan(bot, guild, day.plan, reason)
 
 
 async def post_announcement(bot, guild: discord.Guild, day: RotationDay) -> bool:
@@ -196,6 +212,19 @@ async def post_announcement(bot, guild: discord.Guild, day: RotationDay) -> bool
 # ── the loop ─────────────────────────────────────────────────────────────────
 
 
+def _release(bot, guild_id: int, releaser, day: str) -> None:
+    """Hand today's claim back after the work under it failed.
+
+    Best-effort by design: this runs on the failure path, and a database
+    hiccup here must not replace the original error with its own.
+    """
+    try:
+        with bot.ctx.open_db() as conn:
+            releaser(conn, guild_id, day)
+    except sqlite3.Error:
+        log.exception("Rotation: could not release the %s claim", day)
+
+
 async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
     """One guild's flip and announcement checks for this pass."""
 
@@ -206,7 +235,13 @@ async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
     cfg = await asyncio.to_thread(_read_cfg)
     if not cfg.enabled:
         return
-    today = local_day(now, cfg.tz_offset_hours)
+
+    def _read_tz() -> float:
+        with bot.ctx.open_db() as conn:
+            return rotation_tz(conn, guild.id)
+
+    tz = await asyncio.to_thread(_read_tz)
+    today = local_day(now, tz)
 
     def _read_day() -> RotationDay | None:
         with bot.ctx.open_db() as conn:
@@ -223,9 +258,13 @@ async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
                 return claim_flip(conn, guild.id, today)
 
         if await asyncio.to_thread(_claim_flip):
-            shown, hidden = await apply_day(
-                bot, guild, day, reason=f"Feature rotation — {today}"
-            )
+            try:
+                shown, hidden = await apply_day(
+                    bot, guild, day, reason=f"Feature rotation — {today}"
+                )
+            except Exception:
+                await asyncio.to_thread(_release, bot, guild.id, release_flip, today)
+                raise
             log.info(
                 "Rotation %s: %s featured, %d shown, %d hidden",
                 guild.id,
@@ -236,7 +275,7 @@ async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
 
     if (
         cfg.last_announce_date < today
-        and local_hour(now, cfg.tz_offset_hours) >= cfg.announce_hour
+        and local_hour(now, tz) >= cfg.announce_hour
     ):
 
         def _claim_announce() -> bool:
@@ -244,7 +283,14 @@ async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
                 return claim_announce(conn, guild.id, today)
 
         if await asyncio.to_thread(_claim_announce):
-            await post_announcement(bot, guild, day)
+            posted = False
+            try:
+                posted = await post_announcement(bot, guild, day)
+            finally:
+                if not posted:
+                    await asyncio.to_thread(
+                        _release, bot, guild.id, release_announce, today
+                    )
 
 
 async def feature_rotation_loop(bot) -> None:
@@ -274,6 +320,7 @@ async def feature_rotation_loop(bot) -> None:
 
 __all__ = [
     "apply_day",
+    "apply_plan",
     "feature_rotation_loop",
     "hide_room",
     "post_announcement",

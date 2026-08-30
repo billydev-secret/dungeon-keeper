@@ -10,6 +10,12 @@
 -- shared. `stored_overwrites` here is that same JSON shape.
 --
 -- Two clocks, deliberately separate:
+--   * "local" is the guild's shared `tz_offset_hours` config key, the same one
+--     birthdays, jail, reports and the quest board already read. This table
+--     deliberately does NOT carry its own offset: two dials could be set to
+--     different values, and the flip would then fire hours away from the day
+--     boundary the board froze its pool on -- exactly the desync the next
+--     note says is impossible.
 --   * the FLIP is locked to local midnight, because the quest board's period
 --     is date.toordinal(local_day) and its pool is frozen at the first read
 --     after midnight. A flip at any other hour would freeze a pool describing
@@ -38,7 +44,6 @@ CREATE TABLE IF NOT EXISTS feature_rotation_config (
     enabled             INTEGER NOT NULL DEFAULT 0,
     announce_channel_id INTEGER NOT NULL DEFAULT 0,
     announce_hour       INTEGER NOT NULL DEFAULT 9,
-    tz_offset_hours     INTEGER NOT NULL DEFAULT -7,
     rooms_per_day       INTEGER NOT NULL DEFAULT 1,
     last_flip_date      TEXT    NOT NULL DEFAULT '',
     last_announce_date  TEXT    NOT NULL DEFAULT ''

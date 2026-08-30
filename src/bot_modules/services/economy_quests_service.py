@@ -934,31 +934,44 @@ def _featured_pin_candidates(
     }
 
 
-def _pin_featured_room(
-    board: set[int],
-    featured_ids: set[int],
-    user_id: int,
-    idx: int,
-    n: int,
-    pairs: dict[int, int],
+def _featured_pick(
+    featured_ids: set[int], user_id: int, idx: int, n: int
 ) -> set[int]:
-    """Give today's open room one guaranteed slot on the board.
+    """The one quest today's open room contributes to this member's board.
 
     Drawn with the same per-member window walk as the setup pins
     (``assigned_quest_ids`` on ``idx``), so which of a room's quests a member
     gets rotates instead of repeating, and two members on the same day get
     different ones.
 
-    ``n <= 1`` is left alone deliberately: on a one-slot board the featured pin
-    would be the entire board, evicting a newcomer's only onboarding nudge to
-    advertise a room. The nudge wins at that size.
+    ``n <= 1`` yields nothing deliberately: on a one-slot board the featured
+    pin would be the entire board, evicting a newcomer's only onboarding nudge
+    to advertise a room. The nudge wins at that size.
+
+    Drawn *before* the setup pins so the caller can tell whether a slot needs
+    reserving at all — reserving one for a quest the draw already produced is
+    what left boards a quest short.
     """
     if n <= 1 or not featured_ids:
-        return board
-    pick = set(quests.assigned_quest_ids(sorted(featured_ids), user_id, idx, 1))
+        return set()
+    return set(quests.assigned_quest_ids(sorted(featured_ids), user_id, idx, 1))
+
+
+def _pin_featured_room(
+    board: set[int], pick: set[int], n: int, pairs: dict[int, int]
+) -> set[int]:
+    """Seat ``pick`` on the board, evicting the lowest ordinary unit for it.
+
+    Never *shrinks* a board: eviction can't split a locked pair, so on a
+    two-slot board whose draw was a single producer/consumer pair there is no
+    room to take without dropping the pair whole and leaving one quest where
+    there were two. Advertising the open room is not worth a smaller board, so
+    in that case the pin stands down.
+    """
     if not pick or pick & board:
         return board
-    return pick | _keep_ordinary_units(board - pick, pairs, n - 1)
+    seated = pick | _keep_ordinary_units(board - pick, pairs, n - 1)
+    return seated if len(seated) >= len(board) else board
 
 
 def _frozen_board_pool(
@@ -967,8 +980,8 @@ def _frozen_board_pool(
     qtype: str,
     idx: int,
     settings: EconSettings | None,
-) -> tuple[dict[int, str], int]:
-    """The cadence pool + board size frozen for ``(guild, qtype, period idx)``.
+) -> tuple[dict[int, str], int, set[int]]:
+    """The cadence pool, board size and featured pins frozen for a period.
 
     The personal board is a pure function of ``(pool, user, period_idx, n)``.
     Reading the live active set on every view meant an admin activating or
@@ -987,7 +1000,7 @@ def _frozen_board_pool(
     so it silently re-froze today's live pool into a wrong board.
     """
     row = conn.execute(
-        "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
+        "SELECT pool_json, board_size, featured_json FROM econ_quest_pool_snapshots "
         "WHERE guild_id = ? AND qtype = ? AND period_idx = ?",
         (guild_id, qtype, idx),
     ).fetchone()
@@ -1007,18 +1020,26 @@ def _frozen_board_pool(
         }
         sizes = board_sizes(settings) if settings is not None else None
         live_n = quests.board_size(qtype, sizes)
+        # The featured-room candidates are frozen here for the same reason the
+        # pool is: they are read from live rotation config, and an admin
+        # editing a room at noon would otherwise move the reserved slot under
+        # every member who reloaded.
+        live_featured = _featured_pin_candidates(
+            conn, guild_id, qtype, idx, set(live_tagged)
+        )
         # INSERT OR IGNORE: under concurrency a sibling read may win the freeze;
         # we re-select below so both sides draw from the same snapshot.
         conn.execute(
             "INSERT OR IGNORE INTO econ_quest_pool_snapshots "
-            "(guild_id, qtype, period_idx, pool_json, board_size) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(guild_id, qtype, period_idx, pool_json, board_size, featured_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
             (
                 guild_id,
                 qtype,
                 idx,
                 json.dumps({str(k): v for k, v in live_tagged.items()}),
                 live_n,
+                json.dumps(sorted(live_featured)),
             ),
         )
         conn.execute(
@@ -1027,12 +1048,16 @@ def _frozen_board_pool(
             (guild_id, qtype, idx - _SNAPSHOT_RETAIN_PERIODS),
         )
         row = conn.execute(
-            "SELECT pool_json, board_size FROM econ_quest_pool_snapshots "
+            "SELECT pool_json, board_size, featured_json "
+            "FROM econ_quest_pool_snapshots "
             "WHERE guild_id = ? AND qtype = ? AND period_idx = ?",
             (guild_id, qtype, idx),
         ).fetchone()
     tagged = {int(k): str(v) for k, v in json.loads(row["pool_json"]).items()}
-    return tagged, int(row["board_size"])
+    # Rows frozen before the column existed read as "no featured pin", which is
+    # both the safe default and the pre-rotation behaviour.
+    featured = {int(q) for q in json.loads(row["featured_json"] or "[]")}
+    return tagged, int(row["board_size"]), featured
 
 
 def assigned_board_ids(
@@ -1061,7 +1086,7 @@ def assigned_board_ids(
     if not quests.has_board(qtype):
         return set()
     idx = quests.period_index(qtype, local_day)
-    tagged, n = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
+    tagged, n, featured_ids = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
     if n <= 0:
         return set()
     pool = sorted(tagged)
@@ -1082,15 +1107,17 @@ def assigned_board_ids(
     # for the day rather than being allowed to fill the board and crowd it out.
     # A member with pending setups therefore sees 1 setup + 1 featured instead
     # of 2 setups; every setup still surfaces, just over more days.
-    featured_ids = _featured_pin_candidates(conn, guild_id, qtype, idx, pool_set)
-    reserve = 1 if featured_ids and n >= 2 else 0
+    #
+    # The slot is only reserved when the pin actually needs one: if the plain
+    # draw already produced today's featured quest, holding a slot open for it
+    # would hand the member a board one quest short all day.
+    pairs = quests.pair_map(tagged)
+    pick = _featured_pick(featured_ids & pool_set, user_id, idx, n)
+    reserve = 1 if pick and not pick <= board else 0
     board = _pin_pending_setup(
-        conn, guild_id, user_id, board, pool_set, n - reserve,
-        quests.pair_map(tagged), idx,
+        conn, guild_id, user_id, board, pool_set, n - reserve, pairs, idx,
     )
-    board = _pin_featured_room(
-        board, featured_ids, user_id, idx, n, quests.pair_map(tagged)
-    )
+    board = _pin_featured_room(board, pick, n, pairs)
     for row in conn.execute(
         "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "
         "WHERE guild_id = ? AND user_id = ? AND qtype = ? AND period_idx = ?",
@@ -1152,7 +1179,7 @@ def reroll_board_slot(
     # active set: a quest activated mid-period isn't in this period's snapshot,
     # so rerolling into it would be silently dropped by the ``to in pool_set``
     # guard in ``assigned_board_ids`` and waste the reroll.
-    frozen_tagged, _ = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
+    frozen_tagged, _, _ = _frozen_board_pool(conn, guild_id, qtype, idx, settings)
     pool = sorted(frozen_tagged)
     ordered = quests.assigned_quest_ids(pool, user_id, idx, len(pool))
     # Never swap a member INTO a one-time setup quest they've already done —

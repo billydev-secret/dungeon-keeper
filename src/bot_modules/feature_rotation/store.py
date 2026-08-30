@@ -17,6 +17,7 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 
+from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.feature_rotation.logic import (
     Room,
     RotationDay,
@@ -35,7 +36,6 @@ class RotationConfig:
     enabled: bool = False
     announce_channel_id: int = 0
     announce_hour: int = 9
-    tz_offset_hours: int = -7
     rooms_per_day: int = 1
     last_flip_date: str = ""
     last_announce_date: str = ""
@@ -56,7 +56,6 @@ def get_config(conn: sqlite3.Connection, guild_id: int) -> RotationConfig:
         enabled=bool(row["enabled"]),
         announce_channel_id=int(row["announce_channel_id"]),
         announce_hour=int(row["announce_hour"]),
-        tz_offset_hours=int(row["tz_offset_hours"]),
         rooms_per_day=int(row["rooms_per_day"]),
         last_flip_date=str(row["last_flip_date"]),
         last_announce_date=str(row["last_announce_date"]),
@@ -73,13 +72,12 @@ def save_config(conn: sqlite3.Connection, cfg: RotationConfig) -> None:
         """
         INSERT INTO feature_rotation_config
             (guild_id, enabled, announce_channel_id, announce_hour,
-             tz_offset_hours, rooms_per_day)
-        VALUES (?, ?, ?, ?, ?, ?)
+             rooms_per_day)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(guild_id) DO UPDATE SET
             enabled = excluded.enabled,
             announce_channel_id = excluded.announce_channel_id,
             announce_hour = excluded.announce_hour,
-            tz_offset_hours = excluded.tz_offset_hours,
             rooms_per_day = excluded.rooms_per_day
         """,
         (
@@ -87,7 +85,6 @@ def save_config(conn: sqlite3.Connection, cfg: RotationConfig) -> None:
             int(cfg.enabled),
             cfg.announce_channel_id,
             cfg.announce_hour,
-            cfg.tz_offset_hours,
             max(1, cfg.rooms_per_day),
         ),
     )
@@ -249,6 +246,33 @@ def _claim(
     return cur.rowcount > 0
 
 
+def release_claim(
+    conn: sqlite3.Connection, guild_id: int, column: str, day: str
+) -> None:
+    """Hand ``day`` back when the work the claim covered didn't happen.
+
+    A claim is taken *before* the Discord call, so nothing can act twice; the
+    cost is that a failure would otherwise burn the whole day, because the
+    guard only fires again tomorrow. Releasing on failure keeps both halves:
+    still exactly-once on success, but a missing permission or a dropped
+    gateway costs one minute rather than a day. Conditional on the day still
+    being ours, so a concurrent claimant's date is never clobbered.
+    """
+    conn.execute(
+        f"UPDATE feature_rotation_config SET {column} = '' "  # noqa: S608 - literal
+        f"WHERE guild_id = ? AND {column} = ?",
+        (guild_id, day),
+    )
+
+
+def release_flip(conn: sqlite3.Connection, guild_id: int, day: str) -> None:
+    release_claim(conn, guild_id, "last_flip_date", day)
+
+
+def release_announce(conn: sqlite3.Connection, guild_id: int, day: str) -> None:
+    release_claim(conn, guild_id, "last_announce_date", day)
+
+
 def claim_flip(conn: sqlite3.Connection, guild_id: int, day: str) -> bool:
     return _claim(conn, guild_id, "last_flip_date", day)
 
@@ -288,6 +312,16 @@ def rotation_day_for(
     )
 
 
+def rotation_tz(conn: sqlite3.Connection, guild_id: int) -> float:
+    """The guild's shared timezone offset — the one everything else reads.
+
+    The rotation has no offset of its own on purpose. The flip has to land on
+    the same midnight the quest board freezes its pool on, and the only way to
+    guarantee that is to read the same number the board reads.
+    """
+    return get_tz_offset_hours(conn, guild_id)
+
+
 def rotation_day(
     conn: sqlite3.Connection, guild_id: int, now: float
 ) -> RotationDay | None:
@@ -295,7 +329,9 @@ def rotation_day(
     cfg = get_config(conn, guild_id)
     if not cfg.enabled:
         return None
-    return rotation_day_for(conn, guild_id, local_day(now, cfg.tz_offset_hours))
+    return rotation_day_for(
+        conn, guild_id, local_day(now, rotation_tz(conn, guild_id))
+    )
 
 
 def blocked_quest_kinds_on(

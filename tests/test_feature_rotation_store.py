@@ -13,6 +13,8 @@ before the feature existed.
 
 from __future__ import annotations
 
+import json
+
 
 import pytest
 
@@ -31,11 +33,18 @@ from bot_modules.feature_rotation.store import (
     list_pool_state,
     mark_hidden,
     mark_visible,
+    release_announce,
+    release_flip,
     rotation_day_for,
+    rotation_tz,
     save_config,
     upsert_room,
 )
-from bot_modules.services.economy_quests_service import assigned_board_ids
+from bot_modules.services.economy_quests_service import (
+    _pin_featured_room,
+    assigned_board_ids,
+)
+from bot_modules.services.economy_service import EconSettings
 
 GUILD = 4242
 USER = 777
@@ -80,7 +89,6 @@ def test_config_defaults_when_the_guild_has_no_row(conn):
     assert cfg.enabled is False
     assert cfg.rooms_per_day == 1
     assert cfg.announce_hour == 9
-    assert cfg.tz_offset_hours == -7
 
 
 def test_config_round_trips(conn):
@@ -88,12 +96,52 @@ def test_config_round_trips(conn):
         conn,
         RotationConfig(
             guild_id=GUILD, enabled=True, announce_channel_id=55,
-            announce_hour=11, tz_offset_hours=-5, rooms_per_day=2,
+            announce_hour=11, rooms_per_day=2,
         ),
     )
     cfg = get_config(conn, GUILD)
     assert (cfg.enabled, cfg.announce_channel_id, cfg.announce_hour) == (True, 55, 11)
-    assert (cfg.tz_offset_hours, cfg.rooms_per_day) == (-5, 2)
+    assert cfg.rooms_per_day == 2
+
+
+def test_the_rotation_reads_the_guilds_shared_timezone(conn):
+    """One clock, not two.
+
+    The flip has to land on the same midnight the quest board freezes its pool
+    on. A dial of the rotation's own could be set to a different value, and the
+    room would then change hours away from the board that describes it.
+    """
+    conn.execute(
+        "INSERT INTO config (guild_id, key, value) VALUES (?, 'tz_offset_hours', '-4')",
+        (GUILD,),
+    )
+    assert rotation_tz(conn, GUILD) == -4
+    assert not hasattr(RotationConfig(guild_id=GUILD), "tz_offset_hours")
+
+
+def test_a_failed_flip_hands_the_day_back(conn):
+    """A claim is taken before the Discord call, so a failure must release it.
+
+    Otherwise one missing permission costs the whole day: the guard only fires
+    again tomorrow, and the rooms sit in yesterday's arrangement until then.
+    """
+    assert claim_flip(conn, GUILD, DAY) is True
+    assert claim_flip(conn, GUILD, DAY) is False
+    release_flip(conn, GUILD, DAY)
+    assert claim_flip(conn, GUILD, DAY) is True
+
+
+def test_releasing_never_clobbers_a_later_claim(conn):
+    """The release is conditional on the day still being ours."""
+    assert claim_flip(conn, GUILD, DAY) is True
+    release_flip(conn, GUILD, "2026-08-28")
+    assert get_config(conn, GUILD).last_flip_date == DAY
+
+
+def test_a_failed_announcement_hands_the_day_back(conn):
+    assert claim_announce(conn, GUILD, DAY) is True
+    release_announce(conn, GUILD, DAY)
+    assert claim_announce(conn, GUILD, DAY) is True
 
 
 def test_saving_settings_cannot_replay_todays_flip(conn):
@@ -351,3 +399,68 @@ def test_a_missing_rotation_table_does_not_break_the_board(conn):
     _add_quest(conn, qid=2, kind="whisper")
     conn.execute("DROP TABLE feature_rotation_config")
     assert assigned_board_ids(conn, GUILD, USER, "daily", DAY) == {1, 2}
+
+
+def test_the_reserved_slot_is_not_held_for_a_quest_already_drawn(conn):
+    """The board must never come up a quest short because of the pin.
+
+    A slot was reserved whenever the open room owned *any* quest, so on a day
+    the plain draw already produced that very quest the reservation bought
+    nothing and the member spent the day looking at n-1 quests. Swept across
+    members because which draw collides is per-member.
+    """
+    settings = EconSettings(enabled=True, quest_board_daily=3)
+    _add_quest(conn, qid=1, kind="bio_set")           # a pending setup pin
+    for qid in (2, 3, 4):
+        _add_quest(conn, qid=qid, kind="guess")       # the open room's quests
+    for qid in range(5, 14):
+        _add_quest(conn, qid=qid, kind="message_sent")
+    _enable(conn, [Room(GUESS, position=1, quest_kinds=("guess",))])
+    for user_id in range(1, 40):
+        conn.execute("DELETE FROM econ_quest_pool_snapshots")
+        board = assigned_board_ids(conn, GUILD, user_id, "daily", DAY, settings)
+        assert len(board) == 3, f"user {user_id} drew a short board: {board}"
+
+
+def test_the_pin_stands_down_rather_than_shrink_a_board(conn):
+    """A locked pair can't be split, so on a 2-slot board there is no room.
+
+    Eviction drops a producer/consumer pair whole rather than half of it, so
+    seating the pin on a two-slot board whose draw *was* a pair would leave
+    one quest where there were two. Advertising the open room isn't worth a
+    smaller board.
+    """
+    pairs = {1: 2, 2: 1}
+    assert _pin_featured_room({1, 2}, {9}, 2, pairs) == {1, 2}
+    # ...but with a spare singleton to evict it seats normally.
+    assert _pin_featured_room({1, 2, 3}, {9}, 3, pairs) == {1, 2, 9}
+
+
+def test_the_featured_pin_is_frozen_against_a_mid_day_edit(conn):
+    """An admin editing a room at noon must not move anyone's board.
+
+    The blocked kinds were captured in the period snapshot from the start; the
+    featured candidates were re-read live on every board view, so a mid-period
+    edit moved the reserved slot under everyone who reloaded — and could push
+    a quest a member had already made progress on off the board.
+    """
+    for qid in (1, 2):
+        _add_quest(conn, qid=qid, kind="guess")
+    for qid in range(3, 10):
+        _add_quest(conn, qid=qid, kind="message_sent")
+    _enable(conn, [Room(GUESS, position=1, quest_kinds=("guess",))])
+    first = assigned_board_ids(conn, GUILD, USER, "daily", DAY)
+    assert first & {1, 2}, "the open room should have taken its slot"
+
+    upsert_room(conn, GUILD, Room(GUESS, position=1, quest_kinds=()))
+    assert assigned_board_ids(conn, GUILD, USER, "daily", DAY) == first
+    # The next period is free to reflect the edit: nothing is pinned any more.
+    # (The quests themselves stay in the pool, so the ordinary draw may still
+    # land one — what has to be gone is the *reservation*.)
+    assigned_board_ids(conn, GUILD, USER, "daily", "2026-08-30")
+    row = conn.execute(
+        "SELECT featured_json FROM econ_quest_pool_snapshots "
+        "WHERE guild_id = ? AND qtype = 'daily' AND period_idx = ?",
+        (GUILD, day_ordinal("2026-08-30")),
+    ).fetchone()
+    assert json.loads(row["featured_json"]) == []

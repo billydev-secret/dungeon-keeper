@@ -67,19 +67,21 @@ class RotationDay:
 # ── clock ────────────────────────────────────────────────────────────────────
 
 
-def local_now(now: float, tz_offset_hours: int) -> datetime:
+def local_now(now: float, tz_offset_hours: float) -> datetime:
     """``now`` (epoch seconds) as a naive local datetime at a fixed offset.
 
     Fixed offset, no DST — the same convention ``announcements_service`` uses,
     so a guild's announcement hour and its rotation hour can't drift apart
-    twice a year.
+    twice a year. The offset itself is the guild's shared ``tz_offset_hours``
+    config key (``store.rotation_tz``); the rotation has none of its own, so
+    the flip cannot land on a different midnight than the quest board's.
     """
     return datetime.fromtimestamp(now, tz=timezone.utc) + timedelta(
         hours=tz_offset_hours
     )
 
 
-def local_day(now: float, tz_offset_hours: int) -> str:
+def local_day(now: float, tz_offset_hours: float) -> str:
     """The local calendar day as ``YYYY-MM-DD``.
 
     This is the rotation's period key and the exactly-once guard's value, and
@@ -89,7 +91,7 @@ def local_day(now: float, tz_offset_hours: int) -> str:
     return local_now(now, tz_offset_hours).date().isoformat()
 
 
-def local_hour(now: float, tz_offset_hours: int) -> int:
+def local_hour(now: float, tz_offset_hours: float) -> int:
     """Hour of the local day, 0–23."""
     return local_now(now, tz_offset_hours).hour
 
@@ -153,10 +155,17 @@ def plan_visibility(
     caller's guard list (the announcement channel above all): a channel there is
     never hidden, because hiding the room the announcement posts into would
     hide the announcement.
+
+    A room with ``in_rotation`` off is *shown*, never merely skipped. It takes
+    no turn at being featured, but it must still be reopened: un-ticking the
+    box on a room that happens to be hidden today would otherwise strand it
+    hidden forever, since nothing else would ever plan its return. "Not taking
+    part" has to mean "open", because that is the state a pool member is in
+    when the feature is doing nothing.
     """
     guarded = protected or set()
     featured_set = set(featured)
-    show: list[int] = []
+    show: list[int] = [r.channel_id for r in rooms if not r.in_rotation]
     hide: list[int] = []
     for room in rotating_rooms(rooms):
         if room.channel_id in featured_set or not room.hide_when_off:
@@ -166,6 +175,17 @@ def plan_visibility(
         else:
             hide.append(room.channel_id)
     return VisibilityPlan(show=tuple(show), hide=tuple(hide))
+
+
+def restore_all(rooms: list[Room]) -> VisibilityPlan:
+    """The plan that reopens the whole pool — what "the rotation is off" means.
+
+    Switching the feature off has to be reversible from the dashboard, and the
+    derived day is unavailable precisely when it is off, so the "everything
+    open" plan is built here rather than by asking for a day that doesn't
+    exist.
+    """
+    return VisibilityPlan(show=tuple(r.channel_id for r in rooms), hide=())
 
 
 def blocked_quest_kinds(rooms: list[Room], hidden: list[int]) -> frozenset[str]:
