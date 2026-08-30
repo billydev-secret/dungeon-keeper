@@ -232,6 +232,9 @@ def test_expiry_sweep_uses_each_guilds_own_window(sync_db_path):
     expired = expire_stale_pending_requests(sync_db_path)
 
     assert [(r["guild_id"], r["requester_id"]) for r in expired] == [(5, 100)]
+    # The window rides along on the row so the cog can word the "expired" DM
+    # without reopening SQLite on the bot's event loop.
+    assert expired[0]["expiry_hours"] == 2
     with open_db(sync_db_path) as conn:
         statuses = {
             int(r["guild_id"]): r["status"]

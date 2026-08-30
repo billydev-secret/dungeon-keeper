@@ -878,10 +878,15 @@ def test_restorable_profile_returns_defaults_when_saves_disabled():
     assert out == default_profile()
 
 
-def test_effective_blocked_can_drop_the_owners_own_list(db):
-    """With "blocked" unchecked the owner's saved blocks stop restoring —
-    no-contact partners stay enforced regardless."""
+def test_effective_blocked_always_keeps_the_owners_own_list(db):
+    """A member's own block is a safety choice, not a saved layout preference.
+
+    No admin dial may quietly drop it: the Saveable Fields whitelist gates
+    whether a *new* block can be saved (``validate_block_add`` says so to the
+    member's face), never whether an existing one is enforced. Gating it here
+    made a block vanish on channel create and reappear the moment the owner
+    ran ``/voice lock``, which reads the same list without any whitelist.
+    """
     with open_db(db) as conn:
         add_blocked(conn, GUILD, OWNER_A, TARGET_X)
         assert effective_blocked(conn, GUILD, OWNER_A) == [TARGET_X]
-        assert effective_blocked(conn, GUILD, OWNER_A, include_own=False) == []

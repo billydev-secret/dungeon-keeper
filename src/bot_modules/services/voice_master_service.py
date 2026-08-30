@@ -615,14 +615,15 @@ def effective_blocked(
     conn: sqlite3.Connection,
     guild_id: int,
     owner_id: int,
-    *,
-    include_own: bool = True,
 ) -> list[int]:
     """Blocklist to actually ENFORCE: the owner's own list plus no-contact.
 
-    ``include_own=False`` drops the owner's saved blocks — used when an admin
-    has unchecked "Block list" in Saveable Fields, so a stored list stops
-    restoring. No-contact partners are never optional and are always returned.
+    Neither half is optional. The Saveable Fields whitelist gates whether a
+    *new* block may be saved (``validate_block_add`` refuses to the member's
+    face when "Block list" is unchecked); it never silently stops an existing
+    block being applied. A block is the member's own safety choice, not part
+    of the room's look, and every caller of this function is an enforcement
+    site — channel create, /voice lock, hide and spectate alike.
 
     Deliberately separate from :func:`list_blocked`, which backs everything
     the owner can *see* (``/voice blocked list``, the profile embed, the
@@ -638,11 +639,7 @@ def effective_blocked(
         no_contact_partners_conn,
     )
 
-    own = (
-        _list_targets(conn, "voice_master_blocked", guild_id, owner_id)
-        if include_own
-        else []
-    )
+    own = _list_targets(conn, "voice_master_blocked", guild_id, owner_id)
     seen = set(own)
     partners = no_contact_partners_conn(conn, guild_id, owner_id)
     return own + [p for p in sorted(partners) if p not in seen]

@@ -122,12 +122,10 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (guild_id, requester_id, target_id)
         )
     """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS dm_request_channels (
-            guild_id INTEGER PRIMARY KEY,
-            channel_id INTEGER NOT NULL
-        )
-    """)
+    # NOTE: no dm_request_channels here. Requests are answered in DMs and on
+    # the dashboard; nothing has read or written that table since the request
+    # channel picker was removed, so a fresh database no longer grows one.
+    # Dropping the copy that already exists in prod needs its own migration.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS dm_audit_channels (
             guild_id INTEGER PRIMARY KEY,
@@ -359,7 +357,9 @@ def expire_stale_pending_requests(
     guilds that actually have pending rows and applies each one's dial.
     ``max_age_seconds`` overrides every dial (used by tests).
 
-    Returns the rows that were just expired (for audit-log emission).
+    Returns the rows that were just expired (for audit-log emission), each
+    carrying its guild's ``expiry_hours`` so the caller can word the
+    notification DM without reopening the database.
     """
     now = time.time()
     expired: list[dict[str, Any]] = []
@@ -371,10 +371,14 @@ def expire_stale_pending_requests(
             ).fetchall()
         ]
         for guild_id in guild_ids:
+            # Read the dial even when overridden: the caller needs it for the
+            # "your request expired" DM, and reading it here keeps that DM off
+            # a synchronous open_db() on the bot's event loop.
+            expiry_hours = get_request_limits_with_conn(conn, guild_id)["expiry_hours"]
             age = (
                 max_age_seconds
                 if max_age_seconds is not None
-                else get_request_limits_with_conn(conn, guild_id)["expiry_hours"] * 3600
+                else expiry_hours * 3600
             )
             cutoff = now - age
             rows = conn.execute(
@@ -397,6 +401,7 @@ def expire_stale_pending_requests(
                     "target_id": int(r["target_id"]),
                     "request_type": normalize_request_type(r["request_type"]),
                     "message_id": r["message_id"],
+                    "expiry_hours": expiry_hours,
                 }
                 for r in rows
             )
