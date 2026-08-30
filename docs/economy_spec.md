@@ -1549,6 +1549,7 @@ Edge cases:
 | reactor holds 0 | free no-op |
 | reactor is the poster | ignored — no debit, no credit, no row, so a self-tap can't pad the count |
 | reactor is a bot or webhook | ignored — the auto-react bot places these emoji and has no wallet |
+| the channel's rule was deleted, or its tipping toggle switched off | free no-op, including on posts the bot already reacted to — the rule and its toggle are re-read on every tap, and deleting the rule takes its prices with it |
 | balance changes mid-transaction | the guarded debit fails and nothing is written |
 
 Both sides are ledgered as `tip_out` / `tip_in` with the rake in `meta`, so

@@ -54,7 +54,7 @@ None. Auto-delete has no member-facing surface, so members never see error messa
 ## Non-goals
 
 - **No slash command.** Configuration is admin-only by design.
-- **No min/max enforcement on the configured values.** The dashboard surfaces sensible floors but the API accepts whatever it's sent — a malformed config can produce an aggressive rule.
+- **No upper bound or sanity range on the configured values.** The API enforces only the same floor the panel does — age and interval must both be at least 1 second, rejected with a 422 below that, since a 0 makes the rule due every tick with every tracked message eligible. Above that floor it accepts whatever it's sent, so an aggressively short (but positive) age is still an admin's own choice.
 - **No edit-tracking.** A message's age is its creation time. Editing doesn't reset the timer.
 - **No "preserve pins" toggle in the live sweep.** Pin a message after the queue picks it up and it'll still get deleted on the next tick. Mod policy: don't pin in auto-delete channels.
 - **No per-author exclusion.** Bot messages age out the same as member messages.
