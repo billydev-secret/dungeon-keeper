@@ -1,10 +1,44 @@
 # Dashboard configuration IA — audit and staged plan
 
-**Status: stages 1–4 LANDED on this branch (2026-08-29); the appendix queue
-below is the remaining work, tracked as todo-board items.** Billy's decisions:
-D1 keep Policy Tickets and Pen Pals merged; D2 all four grouping bundles;
-D3 stage 4 only on this branch, the other 85 findings queued (11 high-severity
-as individual todo rows, the rest grouped per area).
+**Status: COMPLETE on this branch — stages 1–4 (2026-08-29) plus the whole
+defect queue (2026-08-30). Full gate green: 15,227 passed, 63 skipped.**
+Billy's decisions: D1 keep Policy Tickets and Pen Pals merged; D2 all four
+grouping bundles; D3 was stage-4-only until he asked for "all of it including
+the defects" — so the remaining 85 findings were worked too.
+
+**Defect queue outcome: 82 fixed, 3 deferred**, by thirteen agents each in an
+isolated worktree, one per feature area, then merged here. The three deferrals
+are product calls, not oversights:
+
+* **#91 LegitLibs blank axes/prompts** — read-only from the dashboard, but no
+  copy claims otherwise. Closing it means a new CRUD surface with cascading
+  pos/domain/form and min_tier rules: a feature, and a decision about who may
+  reword the in-game prompts.
+* **#89 XP `role_grant_level`** — the milestone level is hard-coded at 5.
+  Partly addressed (the report stopped hard-coding it and now reads the
+  setting); making it a dial strands three member-facing surfaces that bake
+  "Level 5" into their wording.
+* **#53 `music_channel_settings`** — an unread table still holding one live
+  prod row. The only honest fix is `DROP TABLE`, which needs a migration.
+
+**Migrations deliberately not written** (thirteen parallel agents picking
+migration numbers is a guaranteed collision, and every one of these touches
+live prod data, so they need an explicit go-ahead): drop `dm_request_channels`,
+`give_role_permissions`, `music_channel_settings`; drop the now-unread columns
+behind findings 45–48 and `confession_config.max_attachments`; and delete the
+config rows that are now formally dead (`ticket_panel_*`, the legacy grant
+block, `ai_mod_model` / `ai_wellness_model` / `ai_model_%`, `econ_price_*_room`,
+`econ_quest_board_monthly`, the legacy `greeting_watch_notify_user_id`). None
+of it is load-bearing — the code no longer reads any of it.
+
+**Four collisions the parallel branches could not see** were reconciled at
+merge time and are worth knowing about: two agents each fixed the voice
+transcription gate (kept the rule that cannot trap an admin with a wiped
+cache), two disagreed on `risky_roller` (kept the rename to `risky_roll`, the
+spelling the scheduler actually reads), two wrote the same policy-sweep fix
+(composed: a whole-sweep entry point over a per-guild pass), and two chose
+different auction-duration ceilings (kept 720h — the dial is itself a
+guard-rail, and 168h remains its default).
 Written 2026-08-29 on branch `dashboard-config-ia-review`. Produced by a
 110-agent audit workflow plus a 14-agent gap-close pass; every defect claim was
 independently re-derived by an adversarial verifier before landing here.
@@ -230,6 +264,86 @@ stages land in order but are independently shippable. Gate per CLAUDE.md.
 - **D2** — which of grouping bundles A–D to adopt.
 - **D3** — how much of the defect queue this branch takes on: stage 4 only
   (recommended), stage 4 + the 14 high-severity findings, or queue everything.
+
+## QA checklist for the defect fixes
+
+Gathered from the thirteen fix branches; `/dk-ship` folds these into the
+branch's single QA card along with the stage 1-4 Testing sections.
+
+- [ ] Open Config → AI Models and confirm there are no model dropdowns anywhere on the page — just where the model comes from, and one instructions box per job.
+- [ ] Scroll that page to the "Rules Watch — automatic guard" card, press Try It Out, type a message and confirm an answer comes back below it.
+- [ ] Edit any job's instructions, press Save Instructions, reload the page, and confirm your text is still there with an "Edited" tag on the card.
+- [ ] Press Restore Original on that same card, confirm the warning, reload the page, and confirm the original wording is back and the tag reads "Original".
+- [ ] Open Config → AI Assistant, untick "Let Billy-bot look up settings when an admin asks", press Save, reload, and confirm the box is still unticked.
+- [ ] In a channel where Auto React tipping is switched on, remove that channel's rule on the Auto React panel, then tap one of the emoji the bot had already added to an older post — your coin balance does not change.
+- [ ] Uncheck the Tips box for a channel's Auto React rule and save, then tap a placed emoji on one of that channel's older posts — no coins move, and re-checking Tips shows the per-emoji prices still filled in.
+- [ ] Open Economy → Income Sources as an admin and check "Hosting a game, per attendee" and "Host bounty attendee cap" show your server's real numbers instead of 0
+- [ ] Change one faucet rate on Income Sources, save, reload the page, and confirm the host bounty boxes still hold their old values
+- [ ] On Economy → Pricing, set a Longest Auction of 24 hours and save, then start an auction and confirm it refuses a duration longer than 24 hours
+- [ ] On Economy → Pricing, confirm a Custom Shop Items card shows an order window in days and that a change to it saves
+- [ ] On the Wellness admin page, pick an Opt-In Role and a Wellness Channel, save, reload and confirm both are still selected
+- [ ] With the Opt-In Role set, run /wellness setup as a member and confirm the enrollment wizard opens instead of turning you away
+- [ ] On Economy → Statistics, confirm the affordability card no longer lists "Text room" or "Voice room"
+- [ ] Open Economy → Pricing, set an opening bid and a minimum raise under Live Auctions, save, then reload the page — the numbers you typed are still there.
+- [ ] On the same card, type 0 into the opening bid and press Save — it refuses and names the box instead of accepting it.
+- [ ] Start an auction with /bank auction start and try to bid below the opening bid you set — the bot turns the bid down.
+- [ ] On Economy → Pricing, set the Order Review Window under Custom Shop Items, save, and reload — the value sticks.
+- [ ] On Economy → Shop & Perks, give a custom item an On Sale From date in the future and save — the item is gone from the shop until that time.
+- [ ] Type delivery instructions into a custom item's Details box, save, then buy that item — the note appears on the job that lands on the mod todo board.
+- [ ] Edit any custom item's name or price and press Save — it saves instead of showing an error.
+- [ ] Change the Order box on two role icons so they swap places, save both, then reload the page — they are listed in the new order.
+- [ ] Open Economy → Statistics — the affordability card no longer lists "Text room" or "Voice room".
+- [ ] On the Pressure Cooker settings page, untick "Available on This Server", press Save in that Status box, then try to start a Pressure Cooker challenge in Discord — the bot refuses and says the game is switched off.
+- [ ] Tick "Available on This Server" back on, Save, and start the same challenge again — it starts normally.
+- [ ] Do the same untick-and-try on any one of Quickdraw, Hot Potato, Hot Potato (Group), Chicken or Musical Chairs — that game refuses too, and the others still start.
+- [ ] Type a word into "Extra Banned Words" on the Pressure Cooker page, press Save, then start a challenge with that word in the stakes text — the stakes are refused.
+- [ ] Reload the Pressure Cooker page — the word you saved is still in the "Extra Banned Words" box.
+- [ ] Open any duel game's settings page — there is no longer a notice claiming the game cannot be played anywhere, and the Allowed Channels hint says leaving the list empty allows the game anywhere.
+- [ ] On the Risky Rolls page, untick "Include in Scheduled Games", press Save in that box, then reload the page — it comes back unticked.
+- [ ] On the LegitLibs Templates page, tick and untick "Include in Scheduled Games" and Save — it saves and survives a reload, and the template list below still loads and edits normally.
+- [ ] Read the Audit Channel description on Games → Global Config — it says anonymous submissions are copied there with the author attached, and no longer claims every game that starts or finishes is recorded.
+- [ ] On the Todo List page, read the Discord Board card's description: it names all four board buttons and says Sign-Offs and Approvals need admin or the economy manager role.
+- [ ] Open the QA Tracker page, set "Passed Cards Linger (minutes)" to 0, save, and confirm a green passed card stays in the testing channel instead of vanishing.
+- [ ] Turn the QA Tracker off, save, and confirm a card that has already passed stays in the testing channel.
+- [ ] On the Voice Transcription page, pick a model whose Model Files row says "Not downloaded", tick the feature on and save — it refuses and tells you to download the model first.
+- [ ] On the Anonymous Features Audit page, hover an Actor to read that member's id, paste it into the Actor ID box, and confirm the table narrows to that member's entries.
+- [ ] On Reports → Member Lists → Birthdays, set Announcement Time to a different hour, save, reload the page, and see the new hour still selected.
+- [ ] On Config → Members → Welcome & Leave, change the Arrival Line wording, save, and have a member join — greeter chat shows your new wording.
+- [ ] Delete the @here from the Arrival Line, save, and have a member join — the line appears in greeter chat with no notification ping.
+- [ ] Empty the Arrival Line box entirely, save, and have a member join — greeter chat gets no arrival line at all.
+- [ ] On Config → DM Permissions, confirm there is no "Request Channel" picker and the page still saves.
+- [ ] Set "Requests expire after" to 1 hour, save, reload the page, and see 1 still there.
+- [ ] Send a DM request from a test account and check the DM it receives quotes the window you set instead of 24 hours.
+- [ ] Set "Requests one member may have waiting" to 1, then try to send a second request from that same account and see it refused, naming that number.
+- [ ] Turn off "Notify moderators when a ticket is opened" on Config → Moderation, open a ticket, and confirm no moderator is DM'd.
+- [ ] On Config → Greeting Watch, remove every member from the notify list, save, reload, and confirm the list is still empty.
+- [ ] On Config → Image Guard, clear the spoiler-required channel list, save, then post an unspoilered image in a channel that used to be on that list and see it stay up.
+- [ ] Ask the bot's setup advisor what still needs setting up and confirm Rules Watch is described as screening messages for a review queue, not as pointing members at the server guide.
+- [ ] On Games -> Operations -> Global Config, untick Story Builder under "Available on This Server", then run /games play story — the bot refuses and says the game is disabled; tick it back on and it starts.
+- [ ] Untick LegitLibs in that same list and run /games play legitlibs — it refuses; tick it back on and it starts.
+- [ ] Open Games -> Live Games -> AMA — the page shows only the availability switch and a line saying AMA questions come from the room, with no question bank.
+- [ ] Open the LegitLibs template editor and add or remove blanks on a template — the Players line updates itself (for example "2-4 players") and there is nothing to type in.
+- [ ] Start a LegitLibs round on a template with only a few blanks and have more people press Join than it fits — the extra joiner is told the round is full instead of being let in.
+- [ ] On the Rushmore page, set Draft Mode to Blitz, press Save and reload the page — Blitz is still selected.
+- [ ] Open the FFA / Truth or Dare question bank — the hint above it explains that tagging a prompt truth or dare is what makes it eligible for a truth or dare round.
+- [ ] On the Role Grants page, set "Role Required First" on a grant to a role your test account does not have, put that grant's role on a Role Menu, and click the button as the test account — the reply names the role you need first and no role is given.
+- [ ] Give the test account that required role and click the same menu button again — the role is handed out normally.
+- [ ] Read the Log Channel hint on any grant on the Role Grants page — it now says only handing the role out is recorded there, not removals.
+- [ ] With a Promotion Review Grant Role chosen on the XP & Leveling page, add or remove that role from a member who already has a Level 5 card — the card's "Spicy access" line updates to match.
+- [ ] On the Bump Tracker panel, untick "Send Bump Reminders" and save, then let a listing bot bump the server in the reminder channel — the site's "Last Bumped" time on the panel updates and nothing new appears in the channel.
+- [ ] With reminders still unticked, run /bump log for a site — you get the "Timer reset!" reply and the bump tracker status message in the channel does not change or reappear.
+- [ ] Re-tick "Send Bump Reminders", save, and run /bump log — the live status message in the reminder channel updates again.
+- [ ] On the Pen Pals settings page, choose Scheduled pairing, pick a day and an hour, save, then reload the page — your choices are still selected.
+- [ ] With Pen Pals set to Scheduled, press Join Pool on the signup panel — the reply names the day and hour you picked, in server time.
+- [ ] Set Question Swaps Allowed to something other than 3, then open a fresh pen pal chat — the pinned message's command list quotes that number.
+- [ ] On the Whisper settings page set Guesses Per Whisper to 5 and send a whisper — the recipient's DM says 5 guesses, and the Guess button lets them try five times.
+- [ ] Open the Survivor season settings — the Escalation & Endgame card no longer offers the wipeout, Accord or double-pick-minimum boxes, and saving the remaining settings still works.
+- [ ] On the Voice page, tick "Room access" under Saveable Fields and press Save — it saves instead of showing an error.
+- [ ] Untick every Saveable Fields box, save, then reload the page — every box is still empty.
+- [ ] Untick "Room name", save, then have a member who had saved a room name join the hub — their new room gets the default name, not the saved one.
+- [ ] Add a voice channel to "Channels That Earn No XP", sit in it with one other person for a few minutes, then check the XP leaderboard — no voice XP was added for that time.
+- [ ] On Voice Transcription, choose a model that reads "Not downloaded" and press Save — it refuses and names the model; press Download beside it first and the same Save succeeds.
+- [ ] Open Reports → Engagement → XP & Leveling → Time to Level 5 — the "XP required" figure matches your server's Level Curve Factor (320 at a factor of 20, not 249.6).
 
 ## Appendix: the verified defect queue (94 findings)
 
