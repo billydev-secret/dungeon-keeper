@@ -10,6 +10,7 @@ import { confirmDialog, toast } from "../ui.js";
 
 let channels = [];
 let triggerKinds = [];
+let launchableGames = [];
 
 function tzLabel(offset) {
   const n = Number(offset) || 0;
@@ -29,6 +30,59 @@ function chanOptions(selected, placeholder) {
     .map((c) => `<option value="${c.id}" ${String(c.id) === String(selected) ? "selected" : ""}>#${esc(c.name)}</option>`)
     .join("");
   return `<option value="0">${esc(placeholder)}</option>${opts}`;
+}
+
+function gameName(key) {
+  const g = launchableGames.find((x) => x.type === key);
+  return g ? `${g.icon} ${g.name}` : key;
+}
+
+// The "run a game here" controls, rendered into a room's expanded row. The
+// options come from the same SCHEDULE_OPTION_SCHEMA the scheduling panel uses,
+// so a field added to a game shows up in both places without new copy here.
+function gameControls(room) {
+  const chosen = room.launch_game || "";
+  const opts = launchableGames
+    .map((g) => `<option value="${esc(g.type)}"${g.type === chosen ? " selected" : ""}>${esc(g.icon)} ${esc(g.name)}</option>`)
+    .join("");
+  return `
+    <label style="display:block; margin-bottom:6px;">Run a game while this room is open
+      <select data-r="launch_game" style="margin-left:6px;">
+        <option value=""${chosen ? "" : " selected"}>— no game —</option>
+        ${opts}
+      </select>
+    </label>
+    <div class="field-hint">Starts at midnight on this room’s day, and is closed out — recap posted, coins paid — at midnight when the room’s day ends.</div>
+    <div data-game-options="${room.channel_id}" style="margin-top:6px;">${gameOptionFields(room)}</div>`;
+}
+
+function gameOptionFields(room, overrideKey) {
+  const key = overrideKey === undefined ? (room.launch_game || "") : overrideKey;
+  const game = launchableGames.find((g) => g.type === key);
+  if (!game || !(game.fields || []).length) return "";
+  const values = room.launch_options || {};
+  const fields = game.fields
+    .map((f) => {
+      const v = values[f.name] !== undefined ? values[f.name] : f.default;
+      let control;
+      if (f.type === "choice") {
+        const choices = (f.choices || [])
+          .map((c) => `<option value="${esc(c.value)}"${String(v) === String(c.value) ? " selected" : ""}>${esc(c.label)}</option>`)
+          .join("");
+        control = `<select data-opt="${esc(f.name)}" data-opt-type="choice">${choices}</select>`;
+      } else if (f.type === "bool") {
+        control = `<input type="checkbox" data-opt="${esc(f.name)}" data-opt-type="bool"${v ? " checked" : ""}>`;
+      } else if (f.type === "int") {
+        const minA = f.min !== undefined ? ` min="${f.min}"` : "";
+        const maxA = f.max !== undefined ? ` max="${f.max}"` : "";
+        control = `<input type="number"${minA}${maxA} data-opt="${esc(f.name)}" data-opt-type="int" value="${esc(String(v ?? ""))}">`;
+      } else {
+        control = `<input type="text" data-opt="${esc(f.name)}" data-opt-type="str" value="${esc(String(v ?? ""))}">`;
+      }
+      return `<div style="flex:1; min-width:200px;"><label>${esc(f.label)} ${control}</label></div>`;
+    })
+    .join("");
+  return `<div style="display:flex; flex-wrap:wrap; gap:12px;">${fields}</div>`;
 }
 
 function kindLabel(kind) {
@@ -117,6 +171,7 @@ async function refresh(container) {
     return;
   }
   triggerKinds = data.trigger_kinds || [];
+  launchableGames = data.launchable_games || [];
   renderSettings(container, data);
   renderToday(container, data);
   renderPool(container, data);
@@ -228,12 +283,15 @@ function roomRow(room) {
     : room.hidden_now
       ? `<span class="chip">hidden</span>`
       : `<span class="chip">visible</span>`;
+  const gameChip = room.launch_game
+    ? ` <span class="chip">${esc(gameName(room.launch_game))}</span>`
+    : "";
   return `
     <tr data-room="${room.channel_id}">
       <td><input type="number" min="0" max="999" value="${room.position}" data-r="position" style="width:4.5em;"></td>
       <td>
         <div>${esc(chanName(room.channel_id))}</div>
-        <div>${state}</div>
+        <div>${state}${gameChip}</div>
       </td>
       <td><input type="text" value="${esc(room.label)}" data-r="label" placeholder="${esc(chanName(room.channel_id))}" style="width:9em;"></td>
       <td style="text-align:center;"><input type="checkbox" data-r="in_rotation" ${room.in_rotation ? "checked" : ""}></td>
@@ -241,7 +299,7 @@ function roomRow(room) {
       <td style="text-align:center;"><input type="checkbox" data-r="announce" ${room.announce ? "checked" : ""}></td>
       <td>${kindChips(room)}</td>
       <td style="white-space:nowrap;">
-        <button class="btn btn-sm" data-edit>Quests</button>
+        <button class="btn btn-sm" data-edit>Setup</button>
         <button class="btn btn-sm" data-save-room>Save</button>
         <button class="btn btn-sm btn-danger" data-remove>Remove</button>
       </td>
@@ -251,6 +309,9 @@ function roomRow(room) {
         <label style="display:block; margin-bottom:8px;">Blurb (shown under the announcement)
           <input type="text" data-r="blurb" value="${esc(room.blurb)}" maxlength="300" placeholder="One line about what happens in here" style="width:100%; max-width:32em;">
         </label>
+        <div style="margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid var(--rule-soft);">
+          ${gameControls(room)}
+        </div>
         <div class="field-hint">Tick every quest this room owns. Then tick <em>needs the room open</em> for the ones that can only be done from a message inside the channel — those are the only ones held off the board on a hidden day.</div>
         <div class="kind-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:4px; margin-top:6px;">
           ${triggerKinds.map((t) => {
@@ -284,6 +345,17 @@ function readRoom(tr, kindsRow) {
   }
   // The blurb input lives in the expanded row, so read it from there.
   const blurbEl = kindsRow ? kindsRow.querySelector('[data-r="blurb"]') : null;
+  const gameEl = kindsRow ? kindsRow.querySelector('[data-r="launch_game"]') : null;
+  const launch_options = {};
+  if (kindsRow) {
+    kindsRow.querySelectorAll("[data-opt]").forEach((el) => {
+      const name = el.getAttribute("data-opt");
+      const type = el.getAttribute("data-opt-type");
+      if (type === "bool") launch_options[name] = el.checked;
+      else if (type === "int") { if (el.value !== "") launch_options[name] = parseInt(el.value, 10); }
+      else launch_options[name] = el.value;
+    });
+  }
   return {
     position: Number(val("position").value || 0),
     label: val("label").value,
@@ -291,6 +363,8 @@ function readRoom(tr, kindsRow) {
     in_rotation: val("in_rotation").checked,
     hide_when_off: val("hide_when_off").checked,
     announce: val("announce").checked,
+    launch_game: gameEl ? gameEl.value : "",
+    launch_options,
     quest_kinds,
     // A quest can only be "needs the room open" if the room owns it at all;
     // otherwise an unticked-then-reticked box could smuggle in a stray kind.
@@ -328,6 +402,18 @@ function renderPool(container, data) {
     tr.querySelector("[data-edit]").addEventListener("click", () => {
       kindsRow.hidden = !kindsRow.hidden;
     });
+
+    // Swapping the game swaps its option fields. Passing the new key rather
+    // than re-reading the room means the fields follow the select immediately,
+    // before anything is saved.
+    const gameSel = kindsRow.querySelector('[data-r="launch_game"]');
+    if (gameSel) {
+      gameSel.addEventListener("change", () => {
+        const room = (data.rooms || []).find((r) => String(r.channel_id) === String(id));
+        const host = kindsRow.querySelector(`[data-game-options="${id}"]`);
+        if (room && host) host.innerHTML = gameOptionFields(room, gameSel.value);
+      });
+    }
 
     tr.querySelector("[data-save-room]").addEventListener("click", async () => {
       try {
@@ -373,7 +459,7 @@ function renderAdd(container, data) {
       <button class="btn btn-primary" data-add-go>Add To Pool</button>
     </div>
     <div class="field-hint" style="margin-top:6px;">
-      A new room starts in rotation and hidden when off, with no quests linked. Use <strong>Quests</strong> on its row to say what it pays out for.
+      A new room starts in rotation and hidden when off, with no game and no quests linked. Use <strong>Setup</strong> on its row to pick a game to run on its day and say what it pays out for.
     </div>`;
   host.querySelector("[data-add-go]").addEventListener("click", async () => {
     const id = host.querySelector("[data-add-channel]").value;
@@ -387,6 +473,8 @@ function renderAdd(container, data) {
         announce: true,
         quest_kinds: [],
         blocked_kinds: [],
+        launch_game: "",
+        launch_options: {},
       });
       toast("Added to the pool.", "success");
       await refresh(container);

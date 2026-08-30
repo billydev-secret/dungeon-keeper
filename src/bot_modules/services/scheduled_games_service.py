@@ -9,6 +9,11 @@ Wall-clock fields (``time_of_day`` minutes, ``recur_days``, ``start_date``) are 
 source of truth; ``next_run_at`` is a derived UTC-epoch cache the loop polls. The
 guild's fixed ``tz_offset_hours`` defines local time (no DST — matches the rest of
 the bot, see ``db_utils.get_tz_offset_hours``).
+
+A due slot is also skipped while the **feature rotation** has its target channel
+hidden. Announcing is deliberately downstream of a successful launch, so that
+one check both stops a game posting into a room nobody can open and stops the
+role ping that would have advertised it.
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ from datetime import datetime, timedelta
 import discord
 
 from bot_modules.core.utils import jump_url, resolve_bot_channel
+from bot_modules.feature_rotation.store import is_hidden_by_rotation
 from bot_modules.games.constants import (
     GAME_NAMES,
     LOBBY_GAME_TYPES,
@@ -264,6 +270,30 @@ async def _advance_or_finish(games_db, row, now: float, last_status: str,
 
 
 
+async def _rotation_hidden(bot, guild_id: int, channel_id: int) -> bool:
+    """Is the feature rotation currently hiding this channel? Never raises.
+
+    Best-effort on purpose: the rotation is an optional feature and a database
+    hiccup reading it must not stop a scheduled game launching. Failing open
+    keeps today's behaviour, which is the safe direction — the cost of a wrong
+    ``False`` is one game posted into a hidden room, the cost of a wrong
+    ``True`` is a game that silently never runs.
+    """
+    ctx = getattr(bot, "ctx", None)
+    if ctx is None:
+        return False
+
+    def _read() -> bool:
+        with ctx.open_db() as conn:
+            return is_hidden_by_rotation(conn, guild_id, channel_id)
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception:
+        log.exception("Scheduled games: rotation visibility check failed")
+        return False
+
+
 async def _process_due(bot, games_db, row, now: float) -> None:
     sched_id = row["id"]
     guild_id = row["guild_id"]
@@ -305,6 +335,25 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     enable_type: str = SCHEDULE_BASE_GAME_TYPE.get(game_type) or str(game_type)
     if not await check_game_enabled(games_db, enable_type, guild_id):
         await _advance_or_finish(games_db, row, now, "skipped_disabled", offset, recur_days)
+        return
+
+    # 2.5 Skip if the feature rotation currently has this room hidden. Launching
+    #    into a channel members can't open would post a game nobody can reach —
+    #    and because the announcement below only fires after a successful
+    #    launch, skipping here also stops the role ping about it, which is the
+    #    "notification that opens nothing" papercut the rotation design flagged.
+    #    Reads the observed hidden state, so a guild with the rotation off, or a
+    #    channel outside its pool, is never gated.
+    if await _rotation_hidden(bot, guild_id, channel_id):
+        if row["recurrence"] == "once":
+            # Stay due — the room reopens on its next featured day, and the
+            # lateness guard above is what eventually gives up.
+            await games_db.execute(
+                "UPDATE games_scheduled SET last_status='skipped_hidden' WHERE id=?",
+                (sched_id,),
+            )
+            return
+        await _advance_or_finish(games_db, row, now, "skipped_hidden", offset, recur_days)
         return
 
     # 3. Skip if the channel already has an active game. Most games register in the

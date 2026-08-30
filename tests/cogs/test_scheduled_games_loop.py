@@ -443,3 +443,129 @@ async def test_scheduled_lobby_nudge_is_recorded_so_the_sweep_wont_repeat_it(syn
     payload = await get_game_payload(db, holder["gid"])
     assert payload["start_ping_sent"] is True
     assert ping_svc.start_ping_due(payload, NOW + 999) is False
+
+
+# ── the feature-rotation gate ────────────────────────────────────────────────
+#
+# Risky Rolls already auto-launches twice a day from its own schedules. Rather
+# than have the rotation open a third round, the scheduler learned to stay
+# quiet on the days the rotation has the room hidden — which also suppresses
+# the role ping, since announcing is downstream of a successful launch.
+
+
+class _Ctx:
+    def __init__(self, path):
+        self._path = path
+
+    def open_db(self):
+        from bot_modules.core.db_utils import open_db
+
+        return open_db(self._path)
+
+
+def _with_rotation(bot, sync_db_path):
+    bot.ctx = _Ctx(sync_db_path)
+    return bot
+
+
+def _pool_row(sync_db_path, *, hidden: bool):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.feature_rotation.logic import Room
+    from bot_modules.feature_rotation.store import mark_hidden, upsert_room
+
+    with open_db(sync_db_path) as c:
+        upsert_room(c, GUILD, Room(CHAN))
+        if hidden:
+            mark_hidden(c, GUILD, CHAN, [], 1.0)
+
+
+async def test_a_hidden_room_skips_the_launch_and_rolls_to_tomorrow(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _with_rotation(_make_bot(db, launched), sync_db_path)
+    _pool_row(sync_db_path, hidden=True)
+    row = await _insert(db, recurrence="daily", announce=1)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_hidden"
+    assert after["next_run_at"] > NOW  # advanced, not left due
+
+
+async def test_a_hidden_room_never_pings_the_role_it_would_have(sync_db_path):
+    # The papercut this closes: a member notified about a game in a channel
+    # they cannot open. The announcement rides on the launch, so proving the
+    # channel got no message proves no ping went out.
+    db = GamesDb(sync_db_path)
+    chan = _Chan(CHAN)
+    bot = _with_rotation(_Bot(db, {CHAN: chan}, {"wyr": None}), sync_db_path)
+    _pool_row(sync_db_path, hidden=True)
+    row = await _insert(db, recurrence="daily", announce=1, announce_role_id=555)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert chan.sends == []
+
+
+async def test_a_visible_pool_room_launches_as_normal(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _with_rotation(_make_bot(db, launched), sync_db_path)
+    _pool_row(sync_db_path, hidden=False)
+    row = await _insert(db, recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert len(launched) == 1
+
+
+async def test_a_guild_with_no_rotation_is_never_gated(sync_db_path):
+    # No pool row at all — the overwhelming majority of guilds, and every guild
+    # before this shipped. They must draw exactly today's behaviour.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _with_rotation(_make_bot(db, launched), sync_db_path)
+    row = await _insert(db, recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert len(launched) == 1
+
+
+async def test_a_one_time_schedule_into_a_hidden_room_stays_due(sync_db_path):
+    # Mirrors the busy branch: the 60s poll is the retry, and the lateness
+    # guard is what eventually gives up — so a one-off fires when the room
+    # next comes around rather than being silently thrown away.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _with_rotation(_make_bot(db, launched), sync_db_path)
+    _pool_row(sync_db_path, hidden=True)
+    row = await _insert(db, recurrence="once", giveup_at=NOW + 86400)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_hidden"
+    assert after["next_run_at"] == NOW  # still due
+
+
+async def test_a_rotation_read_failure_lets_the_game_launch(sync_db_path):
+    # Fail open: a wrong False costs one game posted into a hidden room, a
+    # wrong True costs a game that silently never runs.
+    class _BadCtx:
+        def open_db(self):
+            raise RuntimeError("db is gone")
+
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    bot.ctx = _BadCtx()
+    _pool_row(sync_db_path, hidden=True)
+    row = await _insert(db, recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert len(launched) == 1

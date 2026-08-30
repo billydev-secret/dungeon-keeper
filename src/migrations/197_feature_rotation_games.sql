@@ -1,0 +1,55 @@
+-- Migration 197: the rotation ends and starts a room's game with the flip
+-- (2026-08-30).
+--
+-- Billy's ask: "on the channel rotation, can the games be ended and started
+-- when the channel is moved". Migration 192 shipped the rotation as a pure
+-- visibility operation -- hide_room/show_room deny and restore view_channel
+-- and touch no game state at all. These two columns are what let a pool row
+-- also own a game's lifecycle.
+--
+-- `launch_game` is a game key from games/constants.py GAME_NAMES (the same
+-- keys bot.game_launchers registers under), or '' for "this room has no game",
+-- which is the default and what every existing row reads as. Setting it means
+-- BOTH halves, deliberately symmetric:
+--
+--   * on the day the room is featured, the flip launches that game in it;
+--   * on any day it is NOT featured, the flip ends whatever game is running
+--     there -- ended, not merely closed: an AMA posts its recap embed and its
+--     roster is paid, exactly as if the host had pressed the close button.
+--
+-- The end is keyed on "not featured today" rather than on "was hidden by this
+-- flip", for two reasons. A room with hide_when_off unticked is never in the
+-- hide plan but still stops being the featured room, and its game should still
+-- end. And the whole module derives the day from the ordinal precisely so a
+-- bot that was offline for three days comes back correct -- an end that
+-- required having *observed* yesterday's flip would give that property up.
+--
+-- Ordering at the flip is end -> hide -> show -> start. The end runs while the
+-- outgoing room is still visible so its recap lands in a channel members can
+-- still see; the start runs after the show so the game's first message posts
+-- into a channel that is already open.
+--
+-- Only rooms carrying a launch_game are touched. The rotation does not reach
+-- into a room whose lifecycle it was never told to manage, so whisper,
+-- confessions and guess-who keep migration 192's "out of sight, still
+-- running" behaviour exactly.
+--
+-- `launch_options` is the launcher's options dict as JSON, the same shape and
+-- the same SCHEDULE_OPTION_SCHEMA fields games_scheduled.options carries (for
+-- AMA: mode and format). '' means "the launcher's own defaults".
+--
+-- Deliberately NOT here: risky-rolls. It already auto-launches twice daily
+-- from games_scheduled (05:13 and 12:53 in TGM), so a third rotation launch at
+-- midnight would still be open at 05:13 and push that schedule into
+-- skipped_active. Instead the scheduler learned to skip a launch into a room
+-- the rotation currently has hidden -- which also stops it pinging a role
+-- about a game in a channel nobody can open. That gate needs no schema: it
+-- reads feature_rotation_pool.hidden_at, which 192 already keeps.
+--
+-- Still no per-user data: neither column names a member, so no
+-- docs/data_register.md row.
+ALTER TABLE feature_rotation_pool
+    ADD COLUMN launch_game TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE feature_rotation_pool
+    ADD COLUMN launch_options TEXT NOT NULL DEFAULT '';

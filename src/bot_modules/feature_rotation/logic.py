@@ -14,6 +14,7 @@ offline for three days returns to the correct room instead of three behind.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
@@ -36,10 +37,28 @@ class Room:
     announce: bool = True
     quest_kinds: tuple[str, ...] = ()
     blocked_kinds: tuple[str, ...] = ()
+    launch_game: str = ""
+    launch_options: str = ""
 
     def display(self) -> str:
         """What the announcement calls this room."""
         return self.label.strip() or f"<#{self.channel_id}>"
+
+
+@dataclass(frozen=True)
+class GamePlan:
+    """Which rooms should have a game started, and which one ended.
+
+    Separate from :class:`VisibilityPlan` because the two are applied at
+    different points of the same flip — the ends go first, while their rooms
+    are still visible, and the starts last, once their rooms are open.
+    """
+
+    start: tuple[tuple[int, str], ...] = ()
+    end: tuple[int, ...] = ()
+
+    def is_empty(self) -> bool:
+        return not self.start and not self.end
 
 
 @dataclass(frozen=True)
@@ -62,6 +81,7 @@ class RotationDay:
     plan: VisibilityPlan = field(default_factory=VisibilityPlan)
     blocked_quest_kinds: frozenset[str] = frozenset()
     featured_quest_kinds: frozenset[str] = frozenset()
+    games: GamePlan = field(default_factory=GamePlan)
 
 
 # ── clock ────────────────────────────────────────────────────────────────────
@@ -177,6 +197,42 @@ def plan_visibility(
     return VisibilityPlan(show=tuple(show), hide=tuple(hide))
 
 
+def plan_games(rooms: list[Room], featured: list[int]) -> GamePlan:
+    """Which rooms start a game today, and which have one ended.
+
+    Only rooms carrying a ``launch_game`` are in either list: the rotation
+    manages the lifecycle of the games it was told about and reaches into no
+    others, so a room like whisper or confessions keeps the "out of sight,
+    still running" behaviour the feature shipped with.
+
+    **Start** is the featured rooms that declare a game. **End** is every other
+    room that declares one — keyed on "not featured today" rather than on "this
+    flip hid it", for two reasons. A room with ``hide_when_off`` unticked never
+    appears in the hide plan, yet it stops being the featured room and its game
+    should still end. And the whole module derives the day from an ordinal so a
+    bot that was offline for three days returns to the right room; an end that
+    required having *observed* yesterday's flip would give that up. Ending a
+    room with nothing running is a no-op, so the wider net costs a lookup.
+
+    ``in_rotation`` is deliberately not consulted for the end list, matching
+    :func:`plan_visibility`'s reasoning: un-ticking the box on a room whose
+    game is running must still bring it to a defined state, or the game is
+    stranded with nothing left that would ever close it.
+    """
+    featured_set = set(featured)
+    start = tuple(
+        (r.channel_id, r.launch_game)
+        for r in rotating_rooms(rooms)
+        if r.launch_game and r.channel_id in featured_set
+    )
+    end = tuple(
+        r.channel_id
+        for r in rooms
+        if r.launch_game and r.channel_id not in featured_set
+    )
+    return GamePlan(start=start, end=end)
+
+
 def restore_all(rooms: list[Room]) -> VisibilityPlan:
     """The plan that reopens the whole pool — what "the rotation is off" means.
 
@@ -239,6 +295,7 @@ def resolve_day(
         plan=plan,
         blocked_quest_kinds=blocked_quest_kinds(rooms, list(plan.hide)),
         featured_quest_kinds=featured_quest_kinds(rooms, featured),
+        games=plan_games(rooms, featured),
     )
 
 
@@ -267,6 +324,35 @@ def format_kinds(kinds: object) -> str:
     if isinstance(kinds, str):
         kinds = parse_kinds(kinds)
     return ",".join(str(k).strip() for k in kinds if str(k).strip())  # type: ignore[union-attr]
+
+
+# ── launch options ───────────────────────────────────────────────────────────
+
+
+def parse_launch_options(raw: str) -> dict:
+    """The stored launcher options as a dict; ``{}`` for blank or unreadable.
+
+    Stored as a JSON string rather than a dict on :class:`Room` so the frozen
+    dataclass stays hashable, and read back leniently: a corrupt value costs
+    this room the launcher's *custom* options, never the launch itself, since
+    every field in ``SCHEDULE_OPTION_SCHEMA`` carries its own default.
+    """
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def format_launch_options(options: object) -> str:
+    """Render launcher options back to their stored JSON form."""
+    if isinstance(options, str):
+        options = parse_launch_options(options)
+    if not isinstance(options, dict) or not options:
+        return ""
+    return json.dumps(options, sort_keys=True)
 
 
 # ── announcement copy ────────────────────────────────────────────────────────

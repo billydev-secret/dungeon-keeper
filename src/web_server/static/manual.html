@@ -2718,11 +2718,13 @@
       <li><strong>A channel you used yesterday may not be in your list today.</strong> It hasn't been deleted and you haven't lost access — it's simply not this day's room. It comes back on its turn.</li>
       <li><strong>The rooms change at midnight</strong> (server time), and the announcement posts later in the morning so it lands when people are actually around.</li>
       <li><strong>More than one room can be open at once</strong> if the server is set up that way.</li>
+      <li><strong>A room can arrive with its game already running.</strong> Where staff have set one up, the day's room opens with a fresh game waiting in it — nobody has to start it. When the room's day ends at midnight the game is closed out properly: the results card is posted and everyone who played is paid, exactly as if a host had finished it.</li>
     </ul>
 
     <h4>Your things keep working</h4>
     <p>Being hidden isn't the same as being switched off. Anything you can reach with a slash command or a private panel carries on as normal even when its room is out of sight — you can still send an anonymous whisper, still post a confession with <code>/confess</code>, still submit a Guess Who round with <code>/guess submit</code>. Games already in progress keep running, and nothing you have going gets cancelled or lost because a room went quiet for a day.</p>
     <p>The exception is anything you'd do by pressing a button on a message <em>inside</em> the room — replying to a confession, guessing on a posted round. Those wait for the room to open again.</p>
+    <p>The one thing that does end with the day is a room's own scheduled game, where staff have set one up. It finishes at midnight rather than carrying over, so it always ends with a results card and a payout instead of trailing off in a room nobody can see. Anything else you had going is untouched.</p>
 
     <h4>Quests follow the open room</h4>
     <p>Your daily quest board keeps one slot for whichever room is open that day, so there's always something to do in the room that's actually available. And a quest you couldn't possibly complete — one that needs a room that's shut — is kept off your board that day rather than sitting there unachievable.</p>
@@ -2734,6 +2736,8 @@
         <p>Everything lives on the <strong>Feature Rotation</strong> dashboard panel — there are no slash commands. You choose which channels are in the pool (any channel can be), how many open per day, where the announcement goes and at what hour, and per room: whether it takes part, whether it actually hides on its off days, whether it gets named in the announcement, and which quests it owns.</p>
         <p>Hiding denies view to @everyone <em>in place</em> — the channel keeps its category and position, and role-level grants survive, so moderators still see a hidden room. The channel the announcement posts into is never hidden. "Apply now" syncs Discord to the current plan without waiting for midnight; turning the rotation off and pressing it reopens everything.</p>
         <p>Mark a quest as "needs the room open" only when it truly can't be done from a slash command or a private panel — that flag is what removes it from the daily board on a hidden day.</p>
+        <p><strong>Run a game on a room's day.</strong> Press <strong>Setup</strong> on a room's row and pick a game under "run a game while this room is open". It starts at midnight when the room opens and is closed out at midnight when the room's day ends — recap posted, players paid, through the game's own finish rather than a silent cancel. A room with no game picked is untouched: the rotation only manages lifecycles it has been told about, and a game someone starts by hand in a room that has none is left alone.</p>
+        <p><strong>Scheduled games skip hidden rooms.</strong> A <a href="/#/games-scheduling">scheduled game</a> pointing at a channel the rotation currently has hidden doesn't fire, and doesn't ping its role either — a recurring one rolls to its next slot and shows as "skipped — the room was hidden that day". That's the intended way to make an existing daily schedule follow the rotation, rather than picking a game here as well and ending up with two competing launches in one room.</p>
       </div>
     </div>
 

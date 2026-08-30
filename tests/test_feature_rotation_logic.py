@@ -21,9 +21,12 @@ from bot_modules.feature_rotation.logic import (
     featured_indices,
     featured_quest_kinds,
     format_kinds,
+    format_launch_options,
     local_day,
     local_hour,
     parse_kinds,
+    parse_launch_options,
+    plan_games,
     plan_visibility,
     resolve_day,
     restore_all,
@@ -262,3 +265,128 @@ def test_an_unlabelled_room_falls_back_to_a_channel_mention():
 def test_day_ordinal_rejects_a_non_date():
     with pytest.raises(ValueError):
         day_ordinal("not-a-day")
+
+
+# ── the game lifecycle ───────────────────────────────────────────────────────
+#
+# A room's game is started on the day it is featured and ended on every day it
+# is not. Rooms that name no game are never touched either way, which is what
+# keeps whisper/confessions/guess-who on the "out of sight, still running"
+# behaviour the rotation shipped with.
+
+
+def _game_pool() -> list[Room]:
+    """The pool with one room owning a game, one owning none."""
+    return [
+        Room(WHISPER, position=1, label="Whisper"),
+        Room(AMA, position=2, label="AMA", launch_game="ama"),
+        Room(CONF, position=3, label="Confessions"),
+    ]
+
+
+def _featured_on(rooms, ordinal, rooms_per_day=1):
+    return featured_channel_ids(rooms, ordinal, rooms_per_day)
+
+
+def test_the_featured_rooms_game_starts_and_no_other():
+    rooms = _game_pool()
+    # Find the ordinal on which the AMA room is the featured one.
+    ordinal = next(o for o in range(3) if AMA in _featured_on(rooms, o))
+    games = plan_games(rooms, _featured_on(rooms, ordinal))
+    assert games.start == ((AMA, "ama"),)
+    assert games.end == ()
+
+
+def test_a_room_that_is_not_featured_has_its_game_ended():
+    rooms = _game_pool()
+    ordinal = next(o for o in range(3) if AMA not in _featured_on(rooms, o))
+    games = plan_games(rooms, _featured_on(rooms, ordinal))
+    assert games.start == ()
+    assert games.end == (AMA,)
+
+
+def test_rooms_without_a_game_are_never_started_or_ended():
+    # Whisper and confessions carry no launch_game, so neither list can name
+    # them on any day of the cycle — the rotation manages only what it was told
+    # about, and reaching into a room it wasn't would end a game it never began.
+    rooms = _game_pool()
+    for ordinal in range(6):
+        games = plan_games(rooms, _featured_on(rooms, ordinal))
+        assert WHISPER not in games.end
+        assert CONF not in games.end
+        assert all(cid == AMA for cid, _ in games.start)
+
+
+def test_a_room_that_never_hides_still_has_its_game_ended():
+    # hide_when_off off means the room is never in the hide plan, so keying the
+    # end off "this flip hid it" would strand its game open forever. The end is
+    # keyed off "not featured today" precisely so this case works.
+    rooms = [
+        Room(WHISPER, position=1),
+        Room(AMA, position=2, launch_game="ama", hide_when_off=False),
+    ]
+    ordinal = next(o for o in range(4) if AMA not in _featured_on(rooms, o))
+    plan = plan_visibility(rooms, _featured_on(rooms, ordinal))
+    assert AMA not in plan.hide          # never hidden …
+    assert plan_games(rooms, _featured_on(rooms, ordinal)).end == (AMA,)  # … still ended
+
+
+def test_a_room_taken_out_of_rotation_still_has_its_game_ended():
+    # Un-ticking "in rotation" on a room whose game is running must bring it to
+    # a defined state, the same reasoning plan_visibility uses to *show* it.
+    rooms = [
+        Room(WHISPER, position=1),
+        Room(AMA, position=2, launch_game="ama", in_rotation=False),
+    ]
+    games = plan_games(rooms, _featured_on(rooms, 0))
+    assert games.end == (AMA,)
+    assert games.start == ()
+
+
+def test_two_featured_rooms_both_start_their_games():
+    rooms = [
+        Room(WHISPER, position=1, launch_game="ama"),
+        Room(AMA, position=2, launch_game="ama"),
+        Room(CONF, position=3),
+    ]
+    featured = _featured_on(rooms, 0, rooms_per_day=2)
+    games = plan_games(rooms, featured)
+    assert len(games.start) == 2
+    assert {cid for cid, _ in games.start} == set(featured)
+
+
+def test_resolve_day_carries_the_game_plan():
+    rooms = _game_pool()
+    day = resolve_day(rooms, local_day_str="2026-08-30", rooms_per_day=1)
+    assert day.games == plan_games(rooms, list(day.featured))
+
+
+def test_a_pool_with_no_games_plans_nothing():
+    day = resolve_day(_pool(), local_day_str="2026-08-30", rooms_per_day=1)
+    assert day.games.is_empty()
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("", {}),
+        ("{}", {}),
+        ('{"mode": "screened"}', {"mode": "screened"}),
+        ("not json", {}),          # corrupt costs the options, never the launch
+        ('["mode"]', {}),          # a list is not an options dict
+        ("null", {}),
+    ],
+)
+def test_parse_launch_options_is_lenient(raw, expected):
+    assert parse_launch_options(raw) == expected
+
+
+def test_launch_options_round_trip():
+    options = {"mode": "screened", "format": "panel"}
+    assert parse_launch_options(format_launch_options(options)) == options
+
+
+def test_empty_launch_options_store_as_blank():
+    # '' rather than '{}' so "no options" is one value in the column, not two.
+    assert format_launch_options({}) == ""
+    assert format_launch_options("") == ""
