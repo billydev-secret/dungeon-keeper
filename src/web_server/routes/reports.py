@@ -35,6 +35,7 @@ from web_server.schemas import (
     InactiveReportResponse,
     IntakeReportResponse,
     InteractionGraphResponse,
+    InteractionSeriesResponse,
     InviteEffectivenessResponse,
     JoinTimesResponse,
     NsfwGenderResponse,
@@ -571,6 +572,41 @@ async def interaction_graph(
     metrics = result.get("metrics")
     if metrics and metrics.get("bridge_users"):
         await _resolve_names(ctx, guild, metrics["bridge_users"], ("user_id", "user_name"))
+    return result
+
+
+@router.get("/interaction-graph-series", response_model=InteractionSeriesResponse)
+async def interaction_graph_series(
+    request: Request,
+    weeks: int = 30,
+    limit: int = 60,
+    resolution: float = 1.2,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Weekly-binned pair history powering the Connection Graph's replay."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+    resolution = max(0.3, min(3.0, float(resolution)))
+
+    def _q():
+        with ctx.open_db() as conn:
+            return reports_data.get_interaction_series(
+                conn,
+                guild_id,
+                weeks=weeks,
+                limit=min(limit, 100),
+                clustering_resolution=resolution,
+            )
+
+    result = await cached_run_query(
+        "interaction-graph-series",
+        guild_id,
+        {"weeks": weeks, "limit": limit, "res": round(resolution, 2)},
+        _q,
+    )
+    await _resolve_names(ctx, guild, result.get("nodes", []), ("user_id", "user_name"))
     return result
 
 

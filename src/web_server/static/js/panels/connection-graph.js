@@ -49,8 +49,8 @@ function _alpha(hex, a) {
 
 // Cluster colour is a grouping cue, not a legend-matched series: communities
 // sit apart on the canvas, so GRAPH_CLUSTERS' eight validated slots cover
-// everything Louvain finds on both live servers. Past eight the tail still
-// folds to the overflow neutral rather than inventing hues.
+// every community the server detects on both live servers. Past eight the
+// tail still folds to the overflow neutral rather than inventing hues.
 function clusterColor(id) {
   return GRAPH_CLUSTERS[Number(id) || 0] || SERIES_OVERFLOW;
 }
@@ -114,6 +114,7 @@ export function mount(container, initialParams) {
             </label>
           </div>
         </details>
+        <button type="button" data-replay class="graph-chip" title="Replay the network week by week — watch people arrive, leave, and drift between groups">Replay</button>
       </div>
 
       <div data-graph-wrap style="position:relative; flex:1; min-height:0; background:${BG}; border-radius:8px; overflow:hidden; cursor:grab;">
@@ -122,6 +123,18 @@ export function mount(container, initialParams) {
         <button data-fullscreen class="btn btn-icon" title="Toggle fullscreen" style="position:absolute;top:6px;right:6px;z-index:5;background:color-mix(in srgb, var(--bg-floor) 60%, transparent);">⛶</button>
         <div data-cluster-chips class="graph-clusterbar" role="group" aria-label="Communities — click a chip to hide or show that group"></div>
         <div class="graph-hint">drag · ctrl+scroll zooms · size = interactions · colour = friend group</div>
+        <div data-rp-notice class="graph-notice" hidden></div>
+        <div data-replaybar class="graph-replaybar" hidden>
+          <button type="button" data-rp-toggle title="Play / pause">▶</button>
+          <input type="range" data-rp-scrub min="0" max="0" step="1" value="0" aria-label="Replay position" />
+          <span data-rp-date></span>
+          <select data-rp-speed aria-label="Replay speed">
+            <option value="1">1×</option>
+            <option value="2" selected>2×</option>
+            <option value="4">4×</option>
+          </select>
+          <button type="button" data-rp-close title="Exit replay">✕</button>
+        </div>
       </div>
     </div>
   `;
@@ -146,6 +159,14 @@ export function mount(container, initialParams) {
   const maxPerNodeEl  = container.querySelector('[data-control="max_per_node"]');
   const fullscreenBtn = container.querySelector('[data-fullscreen]');
   const clusterChipsEl = container.querySelector("[data-cluster-chips]");
+  const replayBtn     = container.querySelector("[data-replay]");
+  const replayBar     = container.querySelector("[data-replaybar]");
+  const rpToggle      = container.querySelector("[data-rp-toggle]");
+  const rpScrub       = container.querySelector("[data-rp-scrub]");
+  const rpDate        = container.querySelector("[data-rp-date]");
+  const rpSpeed       = container.querySelector("[data-rp-speed]");
+  const rpClose       = container.querySelector("[data-rp-close]");
+  const rpNotice      = container.querySelector("[data-rp-notice]");
   const wrap          = container.querySelector("[data-graph-wrap]");
   // The canvas is created once and never replaced — loading/empty/error states
   // render as an overlay on top of it, so the mouse listeners bound below stay
@@ -364,7 +385,7 @@ export function mount(container, initialParams) {
   let commCenters = {};   // community id → {x, y}
 
   function detectCommunities() {
-    // The server's Louvain assignment (cluster_id, tunable via the
+    // The server's clustering assignment (cluster_id, tunable via the
     // Granularity knob) is the ONE partition this panel speaks: the chips,
     // the node fills and this layout's grouping all read it. The client-side
     // label propagation this replaced computed its own partition, so the
@@ -664,12 +685,19 @@ export function mount(container, initialParams) {
       const n = hovered;
       const connEdges = edges.filter((e) => e.source === n._idx || e.target === n._idx);
       const ratio = n.total_inbound > 0 ? (n.total_outbound / n.total_inbound).toFixed(2) : "∞";
-      const lines = [
-        n.name,
-        `Out: ${n.total_outbound}  In: ${n.total_inbound}  (ratio ${ratio})`,
-        `Partners: ${n.unique_partners}  Edges shown: ${connEdges.length}`,
-        `Cluster: ${(n.cluster_id ?? 0) + 1}`,
-      ];
+      const lines = replay
+        ? [
+            n.name,
+            `${n.total_outbound} interactions this window`,
+            `Partners shown: ${connEdges.length}`,
+            `Cluster: ${(n.cluster_id ?? 0) + 1}`,
+          ]
+        : [
+            n.name,
+            `Out: ${n.total_outbound}  In: ${n.total_inbound}  (ratio ${ratio})`,
+            `Partners: ${n.unique_partners}  Edges shown: ${connEdges.length}`,
+            `Cluster: ${(n.cluster_id ?? 0) + 1}`,
+          ];
       const pad = 6;
       ctx2d.font = "11px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
       const boxW = Math.max(...lines.map((l) => ctx2d.measureText(l).width)) + pad * 2;
@@ -880,16 +908,288 @@ export function mount(container, initialParams) {
         // Re-rendering replaced the buttons; hand focus back to the one the
         // keyboard user was on.
         clusterChipsEl.querySelector(`[data-cluster-toggle="${cid}"]`)?.focus();
-        rebuildGraph();
+        // During replay the chips speak the replay's own partition — refresh
+        // the current frame instead of tearing the replay down.
+        if (replay) applyReplayStep(replay.step);
+        else rebuildGraph();
       });
     });
   }
+
+  // ── Replay (the network over time) ────────────────────────────────────
+  //
+  // One fetch brings the whole weekly-binned pair history plus join/leave
+  // stamps and a full-span community partition (colours must hold still
+  // while the frames move). Each step composes a rolling 28-day window and
+  // updates the sim IN PLACE: surviving nodes keep their positions and
+  // velocities so the layout glides, newcomers spawn beside their strongest
+  // partner, and a member with a departure stamp vanishes at the week they
+  // left rather than four weeks later when their window drains.
+
+  const REPLAY_WINDOW_BINS = 4;   // 28-day rolling window
+  const REPLAY_STEP_MS = 1400;    // per week, divided by the speed picker
+
+  let replay = null;              // null = live view
+  let disposed = false;           // set by unmount; awaited work must check it
+
+  /** Non-blocking notice over the canvas — for a failure that did NOT
+   *  invalidate what is already drawn (the full-canvas veil takes a healthy
+   *  graph hostage with no way to dismiss it). */
+  let transientTimer = null;
+  function showTransient(text) {
+    rpNotice.textContent = text;
+    rpNotice.hidden = false;
+    if (transientTimer) clearTimeout(transientTimer);
+    transientTimer = setTimeout(() => { rpNotice.hidden = true; }, 7000);
+  }
+
+  function _fmtDay(ts) {
+    return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+
+  function applyReplayStep(step) {
+    const d = replay.data;
+    replay.step = step;
+    rpScrub.value = String(step);
+    const winStart = Math.max(0, step - (REPLAY_WINDOW_BINS - 1));
+    const windowEnd = d.start + (step + 1) * d.bin_seconds;
+    rpDate.textContent = `${_fmtDay(d.start + winStart * d.bin_seconds)} – ${_fmtDay(windowEnd)}`;
+
+    // Pair weights summed over the window.
+    const sums = [];
+    const nodeTotal = new Map();
+    for (const pr of d.pairs) {
+      let w = 0;
+      for (let b = winStart; b <= step; b++) w += pr.w[b];
+      if (!w) continue;
+      sums.push([pr.a, pr.b, w]);
+      nodeTotal.set(pr.a, (nodeTotal.get(pr.a) || 0) + w);
+      nodeTotal.set(pr.b, (nodeTotal.get(pr.b) || 0) + w);
+    }
+
+    // Presence: interacted in the window, cluster not hidden, and the most
+    // recent membership event by the window's end isn't a departure.
+    const present = new Set();
+    for (const n of d.nodes) {
+      if (!nodeTotal.has(n.user_id)) continue;
+      if (hiddenClusters.has(n.cluster_id)) continue;
+      let lastJoin = -1, lastLeave = -1;
+      for (const t of n.joins) if (t <= windowEnd && t > lastJoin) lastJoin = t;
+      for (const t of n.leaves) if (t <= windowEnd && t > lastLeave) lastLeave = t;
+      if (lastLeave > lastJoin) continue;
+      present.add(n.user_id);
+    }
+    const shownPairs = sums.filter(([a, b]) => present.has(a) && present.has(b));
+
+    // Rebuild the sim arrays, carrying positions across by member id.
+    const prev = new Map(nodes.map((n) => [n.id, n]));
+    const meta = new Map(d.nodes.map((n) => [n.user_id, n]));
+    const bestPartner = new Map();
+    for (const [a, b, w] of shownPairs) {
+      if (!bestPartner.has(a) || w > bestPartner.get(a)[1]) bestPartner.set(a, [b, w]);
+      if (!bestPartner.has(b) || w > bestPartner.get(b)[1]) bestPartner.set(b, [a, w]);
+    }
+    const W = canvas.width / devicePixelRatio;
+    const H = canvas.height / devicePixelRatio;
+    let maxTotal = 1;
+    for (const id of present) maxTotal = Math.max(maxTotal, nodeTotal.get(id) || 0);
+
+    const nextNodes = [];
+    const idx = new Map();
+    for (const id of present) {
+      const m = meta.get(id);
+      const old = prev.get(id);
+      const total = nodeTotal.get(id) || 0;
+      let x, y;
+      if (old) { x = old.x; y = old.y; }
+      else {
+        const anchor = prev.get(bestPartner.get(id)?.[0]);
+        x = (anchor ? anchor.x : W / 2) + (Math.random() - 0.5) * 60;
+        y = (anchor ? anchor.y : H / 2) + (Math.random() - 0.5) * 60;
+      }
+      idx.set(id, nextNodes.length);
+      nextNodes.push({
+        id,
+        name: (m && m.user_name) || id,
+        x, y,
+        vx: old ? old.vx : 0,
+        vy: old ? old.vy : 0,
+        r: 6 + (total / maxTotal) * 22,
+        total_outbound: total,
+        total_inbound: 0,
+        unique_partners: 0,
+        cluster_id: (m && m.cluster_id) || 0,
+      });
+    }
+    hovered = null;
+    dragged = null;
+    nodes = nextNodes;
+    edges = shownPairs.map(([a, b, w]) => ({ source: idx.get(a), target: idx.get(b), weight: w }));
+    labelledIdx = new Set(
+      nodes
+        .map((n, i) => [n.total_outbound, i])
+        .sort((a, b) => b[0] - a[0])
+        .slice(0, LABELLED_NODES)
+        .map(([, i]) => i)
+    );
+    startSim();
+  }
+
+  function _rpSchedule() {
+    const speed = parseInt(rpSpeed.value) || 2;
+    replay.timer = setTimeout(() => {
+      if (!replay || !replay.playing) return;
+      if (replay.step >= replay.data.weeks - 1) { setReplayPlaying(false); return; }
+      applyReplayStep(replay.step + 1);
+      _rpSchedule();
+    }, REPLAY_STEP_MS / speed);
+  }
+
+  function setReplayPlaying(playing) {
+    if (!replay) return;
+    replay.playing = playing;
+    rpToggle.textContent = playing ? "⏸" : "▶";
+    if (replay.timer) { clearTimeout(replay.timer); replay.timer = null; }
+    if (playing) {
+      // Restart from the top when play is hit at the end.
+      if (replay.step >= replay.data.weeks - 1) applyReplayStep(0);
+      _rpSchedule();
+    }
+  }
+
+  async function enterReplay() {
+    // The chip is the toggle: once a replay is running, pressing it again is
+    // the same "stop" the bar's ✕ performs.
+    if (replay) { exitReplay(); return; }
+    replayBtn.disabled = true;
+    showMessage(renderLoading("Loading the network's history…"));
+    let d;
+    try {
+      d = await api("/api/reports/interaction-graph-series", {
+        weeks: 30,
+        limit: Math.max(parseInt(limitEl.value) || 40, 60),
+        resolution: parseFloat(resolutionEl.value) || 1.2,
+      });
+    } catch (err) {
+      if (disposed) return;
+      replayBtn.disabled = false;
+      // The live graph underneath is untouched by this failure, so say so
+      // without veiling it. With no live graph, the veil is the right call.
+      if (cachedData) {
+        clearMessage();
+        showTransient(`Couldn't load the replay — ${err.message}`);
+      } else {
+        showMessage(renderError(`Couldn't load the replay — ${err.message}. Press Replay to try again.`));
+      }
+      return;
+    }
+    // The panel may have been unmounted while the fetch was in flight; unmount
+    // ran before `replay` existed, so nothing else would ever stop the timers.
+    if (disposed) return;
+    replayBtn.disabled = false;
+    if (!d.nodes.length || !d.pairs.length) {
+      showMessage(renderEmpty(
+        "No history to replay yet — this needs a few weeks of recorded conversation between members."
+      ));
+      return;
+    }
+    clearMessage();
+    if (sim) { cancelAnimationFrame(sim); sim = null; }
+    replay = {
+      data: d,
+      step: 0,
+      playing: false,
+      timer: null,
+      saved: {
+        clusterByUser,
+        clusterList,
+        hiddenClusters: new Set(hiddenClusters),
+        layout: currentLayout,
+      },
+    };
+    // Replay applies no focus expansion, so the live view's focus/second-ring
+    // state must not keep tinting nodes: it would paint members in a colour
+    // matching no chip, against the replay's own stable-partition premise.
+    focusId = null;
+    secondLevelIds = new Set();
+    // The replay speaks its own full-span partition: swap the cluster lookup
+    // and the chips over to it, with nothing hidden to start.
+    hiddenClusters.clear();
+    clusterByUser = {};
+    const counts = {};
+    for (const n of d.nodes) {
+      clusterByUser[n.user_id] = n.cluster_id;
+      counts[n.cluster_id] = (counts[n.cluster_id] || 0) + 1;
+    }
+    renderClusterChips(
+      Object.keys(counts)
+        .map((cid) => ({ id: parseInt(cid), size: counts[cid] }))
+        .sort((a, b) => a.id - b.id)
+    );
+    currentLayout = "force";   // the one layout that animates a changing graph
+    replayBtn.setAttribute("aria-pressed", "true");
+    replayBtn.classList.add("is-active");
+    replayBtn.title = "Stop the replay and return to the live network";
+    replayBar.hidden = false;
+    rpScrub.max = String(d.weeks - 1);
+    applyReplayStep(0);
+    setReplayPlaying(true);
+  }
+
+  function exitReplay(rebuild = true) {
+    if (!replay) return;
+    setReplayPlaying(false);
+    clusterByUser = replay.saved.clusterByUser;
+    hiddenClusters.clear();
+    for (const cid of replay.saved.hiddenClusters) hiddenClusters.add(cid);
+    currentLayout = replay.saved.layout;
+    const savedClusters = replay.saved.clusterList;
+    replay = null;
+    renderClusterChips(savedClusters);
+    replayBar.hidden = true;
+    replayBtn.setAttribute("aria-pressed", "false");
+    replayBtn.classList.remove("is-active");
+    replayBtn.title = "Replay the network week by week — watch people arrive, leave, and drift between groups";
+    if (!rebuild) return;
+    if (!cachedData) {
+      // rebuildGraph would early-return and leave the last replay frame on
+      // screen posing as the live graph — with the live tooltip reporting
+      // window totals as "Out: N  In: 0". Blank it and say what happened.
+      nodes = []; edges = []; labelledIdx = new Set();
+      if (sim) { cancelAnimationFrame(sim); sim = null; }
+      draw();
+      showMessage(renderError(
+        "The live graph didn't load. Change the period, max nodes or granularity to try again."
+      ));
+      return;
+    }
+    rebuildGraph();
+  }
+
+  replayBtn.addEventListener("click", enterReplay);
+  rpClose.addEventListener("click", () => exitReplay());
+  rpToggle.addEventListener("click", () => setReplayPlaying(!replay?.playing));
+  rpScrub.addEventListener("input", () => {
+    if (!replay) return;
+    setReplayPlaying(false);
+    applyReplayStep(parseInt(rpScrub.value) || 0);
+  });
+  rpSpeed.addEventListener("change", () => {
+    // Re-arm the timer so the new speed applies to the next step, not the one
+    // already scheduled.
+    if (replay && replay.playing) { setReplayPlaying(false); setReplayPlaying(true); }
+  });
 
   // ── Data loading ──────────────────────────────────────────────────────
 
   let cachedData = null;
 
   async function fetchData() {
+    // Leave the replay first: it snapshots cluster state on entry and restores
+    // it on exit, so exiting AFTER this installs the new dataset's clusters
+    // (via rebuildGraph below) would put the previous dataset's legend and
+    // cluster lookup back over fresh data.
+    if (replay) exitReplay(false);
     // include_metrics=1 even though the metric tiles are gone: community
     // detection runs inside the metrics block server-side, and without it
     // every node comes back cluster_id 0 (reports_data.get_interaction_graph_data).
@@ -922,6 +1222,7 @@ export function mount(container, initialParams) {
   }
 
   function rebuildGraph() {
+    if (replay) exitReplay(false);
     if (!cachedData) return;
 
     const qs = new URLSearchParams();
@@ -1058,6 +1359,9 @@ export function mount(container, initialParams) {
 
   return {
     unmount() {
+      disposed = true;
+      if (transientTimer) clearTimeout(transientTimer);
+      if (replay && replay.timer) clearTimeout(replay.timer);
       if (sim) cancelAnimationFrame(sim);
       ro.disconnect();
     },

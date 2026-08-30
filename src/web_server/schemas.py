@@ -277,6 +277,30 @@ class InteractionGraphResponse(BaseModel):
     metrics: InteractionGraphMetricsSchema | None = None
 
 
+class InteractionSeriesNodeSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    cluster_id: int = 0
+    joins: list[int] = []
+    leaves: list[int] = []
+
+
+class InteractionSeriesPairSchema(BaseModel):
+    a: str
+    b: str
+    w: list[int]
+
+
+class InteractionSeriesResponse(BaseModel):
+    """Weekly-binned pair history for the Connection Graph's replay."""
+
+    bin_seconds: int
+    start: int
+    weeks: int
+    nodes: list[InteractionSeriesNodeSchema]
+    pairs: list[InteractionSeriesPairSchema]
+
+
 # ── One-sided attention (moderator review) ──────────────────────────────
 
 

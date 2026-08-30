@@ -997,6 +997,151 @@ def get_interaction_graph_data(
     return result
 
 
+class InteractionSeriesNode(TypedDict):
+    user_id: str
+    user_name: str
+    cluster_id: int
+    joins: list[int]
+    leaves: list[int]
+
+
+class InteractionSeriesPair(TypedDict):
+    a: str
+    b: str
+    w: list[int]
+
+
+class InteractionSeriesData(TypedDict):
+    bin_seconds: int
+    start: int
+    weeks: int
+    nodes: list[InteractionSeriesNode]
+    pairs: list[InteractionSeriesPair]
+
+
+def get_interaction_series(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    weeks: int = 30,
+    limit: int = 60,
+    clustering_resolution: float = 1.2,
+) -> InteractionSeriesData:
+    """Weekly-binned interaction history for the Connection Graph's replay.
+
+    One aggregation over ``user_interactions_log`` (the log spans months and
+    the whole pair-week matrix computes in well under a second on prod data),
+    returned as per-pair weight vectors the client composes into any rolling
+    window. Pairs are undirected — replay is about who talks with whom, not
+    direction. The roster is the top ``limit`` members by total interactions
+    across the span, so a member who was central in week 2 and gone by week
+    20 still appears; ``member_events`` join/leave stamps ride along so the
+    client can pop a node in at arrival and drop it at departure instead of
+    letting a trailing window keep ghosts around.
+
+    ``cluster_id`` comes from ONE clustering pass (weighted label
+    propagation, same as the live graph) over the whole span's summed weights:
+    replay colours must stay stable while the frames move, and a
+    current-window partition would paint every since-departed member as
+    unknown. Bot endpoints are excluded exactly as in the live graph query.
+    """
+    now = int(datetime.now(timezone.utc).timestamp())
+    weeks = max(4, min(int(weeks), 60))
+    limit = max(5, min(int(limit), 100))
+    bin_seconds = 7 * 86400
+    start = now - weeks * bin_seconds
+
+    rows = conn.execute(
+        f"""
+        SELECT MIN(from_user_id, to_user_id) AS a,
+               MAX(from_user_id, to_user_id) AS b,
+               CAST((ts - ?) / ? AS INTEGER) AS bin,
+               COUNT(*) AS w
+        FROM user_interactions_log
+        WHERE guild_id = ? AND ts >= ? AND from_user_id != to_user_id
+          AND {_EXCLUDE_BOT_ENDPOINTS}
+        GROUP BY a, b, bin
+        """,
+        (start, bin_seconds, guild_id, start, guild_id, guild_id),
+    ).fetchall()
+
+    pair_bins: dict[tuple[int, int], list[int]] = {}
+    node_total: dict[int, int] = {}
+    for r in rows:
+        a, b, bin_i, w = int(r[0]), int(r[1]), int(r[2]), int(r[3])
+        # ts == now lands in bin `weeks`; fold it into the last bin.
+        bin_i = min(bin_i, weeks - 1)
+        vec = pair_bins.setdefault((a, b), [0] * weeks)
+        vec[bin_i] += w
+        node_total[a] = node_total.get(a, 0) + w
+        node_total[b] = node_total.get(b, 0) + w
+
+    shortlist = set(
+        sorted(node_total, key=lambda u: node_total[u], reverse=True)[:limit]
+    )
+
+    kept = {
+        pair: vec
+        for pair, vec in pair_bins.items()
+        if pair[0] in shortlist and pair[1] in shortlist and sum(vec) >= 2
+    }
+
+    # The roster is who SURVIVES the floor, not who made the shortlist: a
+    # member whose every pair is a one-off drops out entirely. Otherwise they
+    # ship as a node the client can never draw (no pair, so never present in
+    # any window) while defaulting to cluster 0 — which is the LARGEST real
+    # community, not an "unclustered" sentinel — inflating that community's
+    # chip count with members who appear in no frame.
+    roster = {uid for pair in kept for uid in pair}
+
+    # Stable replay colours: one partition over the whole span.
+    from bot_modules.services.graph_metrics import compute_graph_metrics
+
+    metrics = compute_graph_metrics(
+        ((a, b, sum(vec)) for (a, b), vec in kept.items()),
+        top_n=limit,
+        clustering_resolution=clustering_resolution,
+    )
+    cluster_lookup: dict[str, int] = metrics.get("node_cluster", {})
+
+    ev_rows = conn.execute(
+        "SELECT user_id, event_type, ts FROM member_events"
+        " WHERE guild_id = ? AND ts >= ?",
+        (guild_id, start),
+    ).fetchall()
+    joins: dict[int, list[int]] = {}
+    leaves: dict[int, list[int]] = {}
+    for r in ev_rows:
+        uid, etype, ts = int(r[0]), str(r[1]), int(r[2])
+        if uid not in roster:
+            continue
+        if etype == "join":
+            joins.setdefault(uid, []).append(ts)
+        elif etype == "leave":
+            leaves.setdefault(uid, []).append(ts)
+
+    nodes: list[InteractionSeriesNode] = [
+        {
+            "user_id": str(uid),
+            "user_name": "",
+            "cluster_id": cluster_lookup.get(str(uid), 0),
+            "joins": sorted(joins.get(uid, [])),
+            "leaves": sorted(leaves.get(uid, [])),
+        }
+        for uid in sorted(roster, key=lambda u: node_total[u], reverse=True)
+    ]
+    pairs: list[InteractionSeriesPair] = [
+        {"a": str(a), "b": str(b), "w": vec} for (a, b), vec in kept.items()
+    ]
+    return {
+        "bin_seconds": bin_seconds,
+        "start": start,
+        "weeks": weeks,
+        "nodes": nodes,
+        "pairs": pairs,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Member retention / dropoff
 # ---------------------------------------------------------------------------
