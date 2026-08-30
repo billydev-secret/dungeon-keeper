@@ -432,7 +432,7 @@ FEATURES: tuple[Feature, ...] = (
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
             _num("guess_inactivity_ping_hours", "Hours of silence before a nudge",
-                 minimum=0, maximum=720),
+                 minimum=0, maximum=168),
         ),
     ),
     Feature(

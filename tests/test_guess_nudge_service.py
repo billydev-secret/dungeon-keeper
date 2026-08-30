@@ -24,6 +24,7 @@ from bot_modules.services.guess_repo import (
     soft_delete_round,
 )
 from bot_modules.services.guess_nudge_service import (
+    MAX_QUIET_HOURS,
     NUDGED_ROUND_KEY,
     build_nudge_content,
     find_stalled_round,
@@ -188,6 +189,74 @@ def test_the_oldest_stalled_round_is_picked_first(sync_db_path: Path):
         older = _round(conn, age_hours=48)
         _round(conn, age_hours=6)
         assert find_stalled_round(conn, GUILD).round_id == older
+
+
+def test_a_round_quiet_for_months_is_never_nudged(sync_db_path: Path):
+    """The bug: a round from May pinged the role "quiet for 2704 hours"."""
+    with open_db(sync_db_path) as conn:
+        _enable(conn)
+        _round(conn, age_hours=2704)
+        assert find_stalled_round(conn, GUILD) is None
+
+
+def test_a_round_quiet_for_thirty_hours_is_still_nudged(sync_db_path: Path):
+    with open_db(sync_db_path) as conn:
+        _enable(conn)
+        rid = _round(conn, age_hours=30)
+        stalled = find_stalled_round(conn, GUILD)
+    assert stalled is not None and stalled.round_id == rid
+
+
+@pytest.mark.parametrize(
+    ("age_hours", "nudged"),
+    [
+        pytest.param(MAX_QUIET_HOURS - 1, True, id="just-inside"),
+        pytest.param(MAX_QUIET_HOURS + 1, False, id="just-outside"),
+    ],
+)
+def test_the_ceiling_bounds_how_stale_a_nudge_may_get(
+    sync_db_path: Path, age_hours: float, nudged: bool
+):
+    with open_db(sync_db_path) as conn:
+        _enable(conn)
+        rid = _round(conn, age_hours=age_hours)
+        stalled = find_stalled_round(conn, GUILD)
+    assert (stalled is not None and stalled.round_id == rid) is nudged
+
+
+def test_an_ancient_backlog_does_not_hide_a_recent_stalled_round(sync_db_path: Path):
+    """Before the ceiling the oldest round won forever, and the queue crawled.
+
+    Production had 31 unsolved rounds from May ahead of everything recent, and
+    the once-per-round guard remembers a single id — so each tick burned one
+    ancient round instead of reaching the ones worth bumping.
+    """
+    with open_db(sync_db_path) as conn:
+        _enable(conn)
+        for _ in range(3):
+            _round(conn, age_hours=2704)
+        recent = _round(conn, age_hours=30)
+        stalled = find_stalled_round(conn, GUILD)
+    assert stalled is not None and stalled.round_id == recent
+
+
+def test_the_oldest_round_inside_the_window_is_still_picked_first(sync_db_path: Path):
+    """Oldest-first survives, bounded: the round closest to ageing out goes now."""
+    with open_db(sync_db_path) as conn:
+        _enable(conn)
+        older = _round(conn, age_hours=MAX_QUIET_HOURS - 2)
+        _round(conn, age_hours=30)
+        assert find_stalled_round(conn, GUILD).round_id == older
+
+
+def test_a_dial_set_beyond_the_ceiling_nudges_nothing(sync_db_path: Path):
+    """The panel now stops at the ceiling, but a value stored under the old
+    720-hour bound can still be sitting in a guild's config — past the ceiling
+    the window is empty and the nudge stays quiet rather than misfiring."""
+    with open_db(sync_db_path) as conn:
+        _enable(conn, hours=int(MAX_QUIET_HOURS) + 24)
+        _round(conn, age_hours=MAX_QUIET_HOURS + 12)
+        assert find_stalled_round(conn, GUILD) is None
 
 
 def test_record_nudge_stores_the_round_id(sync_db_path: Path):

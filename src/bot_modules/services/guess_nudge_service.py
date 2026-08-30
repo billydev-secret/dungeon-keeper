@@ -12,10 +12,19 @@ on something already running. So the decision is:
 * the guild has a Guess channel, a Guess role to ping, and a positive hour
   count — any of those missing and the nudge is off;
 * pick the oldest round that is unsolved, not deleted, not answer-opted-out,
-  and whose last activity (the round going up, or its newest guess) is at
-  least that many hours ago;
+  and whose last activity (the round going up, or its newest guess) fell
+  inside a **window**: at least the dial's hours ago, and no more than
+  ``MAX_QUIET_HOURS`` ago;
 * ping once per round. A round nobody solves must not re-ping every tick, so
   the last-nudged round id is remembered in config and skipped.
+
+The ceiling is what makes "oldest first" safe. The dial alone is a minimum, so
+an unbounded search hands the ping to the most ancient unsolved round in the
+guild's history and keeps it there — a round abandoned in May was pinged as
+"quiet for 2704 hours", and because only one nudged id is remembered, each tick
+burned one more ancient round instead of ever reaching a live one. Past the
+ceiling a round is not stale, it is over; it drops out for good and the search
+starts from rounds people might still be playing.
 
 Everything here is sync sqlite3 against an open connection, mirroring
 ``guess_repo`` — the cog does the ``asyncio.to_thread`` and the posting.
@@ -36,6 +45,12 @@ NUDGED_ROUND_KEY = "guess_last_nudged_round_id"
 
 #: The dial itself, as the Config Advisor spells it.
 INACTIVITY_HOURS_KEY = "guess_inactivity_ping_hours"
+
+#: Hard ceiling on how stale a round may be and still earn a nudge. The dial is
+#: a *minimum* silence; without a maximum the oldest unsolved round in the
+#: guild's history wins forever, which is how a round from May came to ping the
+#: role "quiet for 2704 hours". A week is the outer edge of "still live".
+MAX_QUIET_HOURS = 24 * 7
 
 
 @dataclass(frozen=True)
@@ -65,10 +80,13 @@ def _int_config(conn: sqlite3.Connection, key: str, guild_id: int) -> int:
 def find_stalled_round(
     conn: sqlite3.Connection, guild_id: int, *, now: float | None = None
 ) -> StalledRound | None:
-    """The oldest open round this guild should be nudged about, if any.
+    """The oldest recently-open round this guild should be nudged about.
 
-    Returns ``None`` whenever the nudge is switched off, nothing qualifies, or
-    the only candidate is the round we already nudged about.
+    "Recently" is the point: a candidate must be quiet for at least the dial's
+    hours *and* no longer than :data:`MAX_QUIET_HOURS`. Returns ``None``
+    whenever the nudge is switched off, nothing falls in that window, or the
+    only candidate is the round we already nudged about. A dial set beyond the
+    ceiling leaves the window empty and so nudges nothing.
     """
     hours = _int_config(conn, INACTIVITY_HOURS_KEY, guild_id)
     if hours <= 0:
@@ -79,7 +97,9 @@ def find_stalled_round(
     if channel_id == 0 or role_id == 0:
         return None
 
-    cutoff = (time.time() if now is None else now) - hours * 3600.0
+    clock = time.time() if now is None else now
+    cutoff = clock - hours * 3600.0
+    floor = clock - MAX_QUIET_HOURS * 3600.0
     already = _int_config(conn, NUDGED_ROUND_KEY, guild_id)
 
     # MAX(created_at, newest guess) is the round's last activity. LEFT JOIN so a
@@ -99,11 +119,11 @@ def find_stalled_round(
           AND r.answer_optout = 0
           AND r.id != ?
         GROUP BY r.id
-        HAVING last_activity_at <= ?
+        HAVING last_activity_at <= ? AND last_activity_at >= ?
         ORDER BY last_activity_at ASC
         LIMIT 1
         """,
-        (guild_id, already, cutoff),
+        (guild_id, already, cutoff, floor),
     ).fetchone()
     if row is None:
         return None
