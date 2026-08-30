@@ -77,6 +77,7 @@ low-frequency, so every check is a direct indexed read.
 | Voice Master | Room permissions, via `effective_blocked` | `voice_master_service` |
 | DM requests | Consent suppressed; new requests refused | `dm_perms_cog` |
 | Risky Rolls | The dice: a draw that would seat a pair as asker/answerer is redrawn, and a round that cannot be made safe refuses to close. Plus the 69 room ping | `risky_roll/logic.py`, `risky_roll/views.py` |
+| Economy transfers | `/bank pay`'s public receipt *and* the recipient's notification; `/bank gift`'s notification. The money and the perk still move | `economy/transfers.py`, `economy_cog.finalize_pay` / `finalize_gift` |
 
 Features that hold their own connection (Pen Pals' matching pass, Voice
 Master's permission build) consult the list through
@@ -84,7 +85,7 @@ Master's permission build) consult the list through
 `no_contact_pairs` directly, so the table's shape stays owned by one module —
 adding an expiry or soft-delete column is a change in one place, not a grep.
 
-Only the first six surfaces record an **attempt** event. The last four are
+Only the first six surfaces record an **attempt** event. The last five are
 gated without one. For Pen Pals, Voice Master and DM requests that is because
 the gate extends an existing predicate running inside matching loops and
 permission syncs; there is no single moment there that means "he tried", and
@@ -92,8 +93,10 @@ recording per iteration would bury the real attempts. Risky Rolls is the
 stronger case: nobody ever submits anything aimed at a blocked person, because
 the pairing never forms. He pressed a dice button aimed at nobody, and a log
 line saying so would be a record of the bot's own arithmetic, not of an
-attempt. They are enforced just as strictly — they simply produce no log
-lines.
+attempt. Economy transfers are the weakest case of all for a log line: paying
+someone is not an attempt to contact them, and `econ_ledger` already records
+the transfer under the mods' eyes. They are enforced just as strictly — they
+simply produce no log lines.
 
 `dm_consent_pairs` rows are **suppressed, not deleted**: `_is_mutual` returns
 False for a no-contact pair while the row and its provenance survive for a mod
@@ -119,6 +122,10 @@ anything would have been *publicly visible*:
 - **The ordinary wrong-guess line** for Guess Who, which is not even a lie:
   his partner is filtered out of his candidate picker, so whatever he selected
   really was not the answer.
+- **A genuine success** for `/bank pay` and `/bank gift`: the transfer runs and
+  the sender's ephemeral receipt is the real one, balance and all. Only the
+  recipient's DM — the part carrying his name and his memo — is withheld. See
+  "Economy transfers" below for why the money is not held back with it.
 
 Three further leaks are closed away from the send paths:
 
@@ -173,6 +180,26 @@ The same reasoning applies to whisper replies: a blocked reply **writes its
 row** (and is never delivered or mod-logged), because `_do_count_replies` is
 what enforces the one-reply-per-whisper cap. Skipping the write let a second
 press succeed where a genuine one returns "already replied".
+
+### Economy transfers: the money moves, the note does not
+
+Refusing the payment was the obvious design and is the wrong one. Every other
+gate here hides behind something the blocked party cannot observe; a refused
+transfer leaves his balance untouched, and `/bank` will tell him so. Paying one
+member and having the coins vanish while paying anyone else works is a
+one-command probe.
+
+So the transfer runs its ordinary course — the same reasoning as Guess Who's
+written-not-discarded guess — and only `notify_member` is skipped. The
+recipient gets coins with nothing authored by him attached: no name, no memo,
+no bank-channel fallback post. The cost, accepted knowingly, is that she
+receives money she cannot account for; that is quieter than any refusal shape
+available, and mods can still read `econ_ledger`.
+
+`/bank gift` is the same call and the same answer, minus the public receipt it
+never had. `pay_disclosure` returns both decisions together so the receipt half
+and the notification half cannot drift apart again — which is exactly what had
+happened: the public receipt was gated on 2026-08-27 and the DM was not.
 
 ### Risky Rolls: the dice are nudged, not the outcome
 

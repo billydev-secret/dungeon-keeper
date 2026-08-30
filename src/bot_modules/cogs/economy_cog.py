@@ -34,7 +34,7 @@ from bot_modules.economy.view_helpers import (
     unit as _unit,
 )
 from bot_modules.economy.wallet import build_wallet_embed
-from bot_modules.economy.transfers import build_payment_receipt, receipt_is_public
+from bot_modules.economy.transfers import build_payment_receipt, pay_disclosure
 from bot_modules.economy.perks import (
     CUSTOMISE_LABELS as _CUSTOMISE_LABELS,
     FEATURE_GATED,
@@ -2318,12 +2318,11 @@ class EconomyCog(commands.Cog):
 
         def _tx() -> tuple[int, bool]:
             with self.bot.ctx.open_db() as conn:
-                # Only asked when it can change the outcome, so an ordinary
-                # private payment still costs exactly the queries it used to.
-                blocked = (
-                    is_no_contact_conn(conn, guild.id, sender.id, recipient.id)
-                    if public
-                    else False
+                # Asked on every payment, not just the public ones: the
+                # recipient's DM is contact too, so the answer changes the
+                # outcome of an ordinary private pay as well.
+                blocked = is_no_contact_conn(
+                    conn, guild.id, sender.id, recipient.id
                 )
                 transfer_currency(
                     conn, guild.id, sender.id, recipient.id, amount, memo=memo
@@ -2348,11 +2347,12 @@ class EconomyCog(commands.Cog):
         safe_memo = discord.utils.escape_markdown(memo) if memo else None
         # Permissions are only worth resolving for a payment that asked to be
         # published; the ordinary private receipt never touches the channel.
-        show_publicly = receipt_is_public(
+        disclosure = pay_disclosure(
             public,
             blocked=blocked,
             can_post=public and _can_post_publicly(interaction),
         )
+        show_publicly = disclosure.public_receipt
         embed = build_payment_receipt(
             settings, accent, sender, recipient, amount,
             memo=memo,
@@ -2386,6 +2386,11 @@ class EconomyCog(commands.Cog):
         # notify_member sends `content` with no allowed_mentions, and its
         # fallback posts into the public bank channel — so a memo has to be
         # mention-escaped here or it could ping the server.
+        if not disclosure.notify_recipient:
+            # A no-contact pair: the coins landed, and nothing authored by the
+            # sender goes with them. See transfers.pay_disclosure for why the
+            # transfer itself is not refused.
+            return
         note = (
             f"{sender.display_name} sent you {settings.currency_emoji} "
             f"{amount:,} {_unit(settings, amount)}."
@@ -3280,16 +3285,22 @@ class EconomyCog(commands.Cog):
     ) -> None:
         """Charge the gifter and open the rental with the friend as beneficiary."""
 
-        def _rent() -> None:
+        def _rent() -> bool:
             with self.bot.ctx.open_db() as conn:
+                # Read inside the same connection as the rental, for the same
+                # reason /bank pay does: the "who gifted you this" DM is
+                # contact, so a no-contact pair gets the perk without the
+                # announcement (transfers.pay_disclosure).
+                blocked = is_no_contact_conn(conn, guild.id, gifter.id, member.id)
                 rent_perk(
                     conn, settings, guild.id, gifter.id, perk,
                     beneficiary_id=member.id, now=time.time(),
                 )
+                return blocked
 
         label = PERK_LABELS[perk]
         try:
-            await asyncio.to_thread(_rent)
+            blocked = await asyncio.to_thread(_rent)
         except ValueError as exc:
             msg = str(exc)
             if "insufficient" in msg:
@@ -3325,12 +3336,13 @@ class EconomyCog(commands.Cog):
             gift_hint = "It's already live on your personal role — no setup needed."
         else:
             gift_hint = "Set it up from /bank shop."
-        await notify_member(
-            self.bot, self.bot.ctx.db_path, guild.id, member.id,
-            content=(
-                f"{gifter.display_name} gifted you **{label}**! {gift_hint}"
-            ),
-        )
+        if pay_disclosure(False, blocked=blocked, can_post=False).notify_recipient:
+            await notify_member(
+                self.bot, self.bot.ctx.db_path, guild.id, member.id,
+                content=(
+                    f"{gifter.display_name} gifted you **{label}**! {gift_hint}"
+                ),
+            )
         await interaction.edit_original_response(
             content=(
                 f"Gifted **{label}** to {member.mention}. They can set it from "
