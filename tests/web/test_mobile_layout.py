@@ -785,6 +785,12 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
         page.click(".graph-tuning > summary")  # fold the popover back away
         page.click("[data-replay]")
         page.wait_for_selector("[data-replaybar]:not([hidden])")
+        # Pause first: a playing replay re-renders every 700ms, and the date
+        # label's width changes with it ("Sep 2 – Sep 30" vs "Sep 12 – Oct 10"),
+        # so an audit taken mid-playback samples a bar whose wrap point is
+        # still moving. _settle only watches document scrollWidth, which an
+        # absolutely-positioned bar never moves, so it would not catch this.
+        page.click("[data-rp-toggle]")
         _settle(page)
         res_replay = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
