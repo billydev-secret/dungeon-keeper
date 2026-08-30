@@ -2,21 +2,20 @@
 
 A self-managed boundary tool. Members opt in, pick their own enforcement level, set message caps, and schedule blackout windows. When someone hits a limit, the bot adds friction (per-user slow mode) rather than locking them out. **This is not therapy** — a one-time disclaimer surfaces during setup.
 
-> **Document status (2026-07-15):** This doc was previously "Aspirational" and described ~22 `/wellness` slash commands as if they were live. In reality the surface is split by *how you reach a feature*, not by which feature: the **enforcement engine, background loops, and the web dashboard CRUD are built and wired**, but **only three slash commands exist** and there is **no supported path to provision a guild**. The sections below reflect that. Everything not confirmed in code lives under [Not Yet Built / Roadmap](#not-yet-built--roadmap), preserved for design intent.
+> **Document status (2026-07-15):** This doc was previously "Aspirational" and described ~22 `/wellness` slash commands as if they were live. In reality the surface is split by *how you reach a feature*, not by which feature: the **enforcement engine, background loops, and the web dashboard CRUD are built and wired**, but **only three slash commands exist**. The sections below reflect that. Everything not confirmed in code lives under [Not Yet Built / Roadmap](#not-yet-built--roadmap), preserved for design intent. *(The provisioning gap this note originally flagged was closed 2026-08-29 — see Activation, next.)*
 
 ---
 
-## Activation (read first)
+## Activation (gap closed 2026-08-29)
 
-**Closed 2026-08-29.** Wellness is switched on for a guild from the dashboard, on the **Wellness Admin** panel's *Server Defaults* form:
+The feature is gated on `wellness_config.role_id` (member opt-in refuses without it) and `channel_id` (the pinned active list and milestone posts refuse without it). From 2026-07-30's honesty pass until 2026-08-29 **nothing in src/ could write either key** — the whole feature was dormant by construction for any guild whose row wasn't seeded by hand (relaunch decision 5, `docs/reviews/2026-08-28-wellness-readiness.md`; relaunch plan Stage D). Now:
 
-- **Opt-In Role** → `wellness_config.role_id`. `/wellness setup` refuses to run until it is set, and its refusal ("An admin can configure it from the web dashboard") now names a control that exists.
-- **Wellness Channel** → `wellness_config.channel_id`. The scheduler posts neither the active-participants list nor a milestone celebration while it is 0.
-- Both go through `POST /api/wellness/admin/defaults` alongside `default_enforcement`, and are read back (as strings, for snowflake precision) from the matching GET. `0` remains a legal value in both boxes — it is what "not set" looks like to every gate, and clearing them is how an admin takes the programme back off the air.
+- The admin panel (**Config → Members → Wellness**, route id `config-wellness`) shows an **Activate Wellness card** whenever either key is unset *or its stored role/channel no longer resolves*: a role picker with a "create a Wellness Guardian role for me" default, plus a text-channel picker. Once both resolve, the panel shows the current role/channel with Change buttons instead.
+- Two setter routes back it, both `require_manage_server`: `POST /api/wellness/admin/provision/role` (`{role_id}` for an existing role — @everyone and managed roles refused — or `{auto_create: true}`, which goes through `core/role_provision.ensure_feature_role`, so a role named exactly "Wellness Guardian" is **adopted**, never twinned) and `POST /api/wellness/admin/provision/channel` (`{channel_id}`, must be a text channel). `GET /provision` serves the card's state.
+- `/wellness setup` still refuses without `role_id`; its error copy (and the deleted-role one) now names the Activate card's location.
+- The background scheduler additionally writes `active_list_message_id`, as before.
 
-What is still **not** built is *provisioning* in the original sense: nothing creates the role or the wellness category for you. An admin picks a role and a channel that already exist. `upsert_wellness_config`'s third writer remains the background scheduler, which sets `active_list_message_id` only. See [Roadmap](#provisioning-admin-setup) for the auto-create design that was never built.
-
-Before this, no code path wrote either field: a guild whose row had not been hand-seeded could never opt anybody in, and prod's second guild sat at `0/0` for exactly that reason.
+Provisioning writes ids only — it never creates channels/categories and never touches channel permission overwrites; whether the wellness role reveals a channel is (and remains) the admin's own Discord setup.
 
 ---
 
@@ -97,7 +96,7 @@ Full CRUD, authenticated as the logged-in member. The Wellness nav section is ga
 | `GET /users`, `POST /users/{id}/pause`, `POST /users/{id}/resume` | List opted-in members; admin pause/resume a member |
 | `GET/POST /exempt`, `DELETE /exempt/{id}` | Manage the exempt-channel list |
 
-The admin panel sets the opt-in role and wellness channel (see Activation) but does **not** create them, and does not let admins create caps/blackouts on a member's behalf.
+The admin panel provisions the wellness role + channel via the Activate card (see Activation; `GET /provision`, `POST /provision/role`, `POST /provision/channel`) but does not let admins create caps/blackouts on a member's behalf.
 
 ### Data model (confirmed)
 
@@ -111,9 +110,7 @@ Everything below was in the original design spec. Some of the *behavior* here al
 
 ### Provisioning (`/wellness-admin setup`)
 
-Partly closed. `wellness_config.role_id` / `channel_id` are now set from the dashboard (see Activation), but nothing *creates* the Wellness Guardian role or the wellness category/channels — an admin points the two settings at things that already exist. The original design assumed an admin provisioning step (a `/wellness-admin setup` command, since "retired" in favor of the dashboard) that would create the role + category and store their ids in one click. That auto-create step is still unbuilt; the dashboard controls that replaced it store ids an admin supplies.
-
-The original design also envisioned the wellness category being provisioned from the dashboard:
+**Built 2026-08-29** — as the dashboard Activate Wellness card, not the slash command this section originally envisioned (see Activation at the top of this doc). What remains unbuilt from the original design is the *category/channel creation*: the card stores the id of an **existing** text channel, whereas the original design envisioned the dashboard creating a whole wellness category:
 
 | Channel | Purpose |
 |---|---|
@@ -158,7 +155,7 @@ The original design placed all admin functionality in the **web Wellness panel**
 
 > *A short historical mapping from the retired `/wellness-admin X` commands to their dashboard equivalents lived here while admins migrated. It's now retained only in git history.*
 
-*Built today:* defaults (enforcement, opt-in role, wellness channel), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
+*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
 
 ### Onboarding (`/wellness setup`) — original 3-step design
 

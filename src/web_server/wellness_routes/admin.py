@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 
+from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
 from bot_modules.services.wellness_service import (
     ENFORCEMENT_LEVELS,
     add_exempt_channel,
@@ -238,6 +239,158 @@ async def admin_resume_user(
     if not ok:
         return _err("user is not opted in", status=404)
     return _ok()
+
+
+# ── Provisioning (the Activate Wellness card) ──────────────────────────
+#
+# `role_id` / `channel_id` gate the whole feature — opt-in refuses without a
+# role, the active list and milestone posts refuse without a channel — and
+# until these routes existed nothing in src/ ever wrote them (the retired
+# `/wellness-admin setup` command was their only writer). See
+# docs/plans/wellness-relaunch.md Stage D.
+
+#: The wellness role is Class A in the role-autocreate audit: the bot creates
+#: it, the bot hands it out on opt-in, and it means nothing without the
+#: feature — which is what makes auto-create safe here. Adopt-by-name means a
+#: guild that already has a "Wellness Guardian" role keeps it.
+WELLNESS_ROLE_SPEC = RoleSpec(
+    name="Wellness Guardian",
+    reason="Wellness activation from the dashboard",
+)
+
+
+@router.get("/provision")
+async def admin_provision_data(
+    user: AuthenticatedUser = Depends(require_manage_server),
+    ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
+):
+    def _q():
+        with ctx.open_db() as conn:
+            return get_wellness_config(conn, guild_id)
+
+    cfg = await run_query(_q)
+
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    role_id = cfg.role_id if cfg else 0
+    channel_id = cfg.channel_id if cfg else 0
+    role = guild.get_role(role_id) if guild and role_id else None
+    channel = guild.get_channel(channel_id) if guild and channel_id else None
+
+    role_options: list[dict[str, str]] = []
+    channel_options: list[dict[str, str]] = []
+    if guild:
+        for r in guild.roles:
+            # @everyone can't be handed out, and a managed role (bot,
+            # integration, booster) refuses add_roles outright.
+            if r.id == guild.id or getattr(r, "managed", False):
+                continue
+            role_options.append({"id": str(r.id), "name": r.name})
+        role_options.sort(key=lambda r: r["name"])
+        for ch in guild.text_channels:
+            channel_options.append({"id": str(ch.id), "name": ch.name})
+        channel_options.sort(key=lambda c: c["name"])
+
+    return {
+        "role_id": str(role_id),
+        "role_name": getattr(role, "name", None),
+        "channel_id": str(channel_id),
+        "channel_name": getattr(channel, "name", None),
+        "role_options": role_options,
+        "channel_options": channel_options,
+        "bot_connected": guild is not None,
+        "auto_role_name": WELLNESS_ROLE_SPEC.name,
+    }
+
+
+@router.post("/provision/role")
+async def admin_provision_role(
+    payload: dict = Body(...),
+    user: AuthenticatedUser = Depends(require_manage_server),
+    ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
+) -> JSONResponse:
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return _err("the bot isn't connected to this server right now", status=503)
+
+    async def _store(rid: int) -> None:
+        def _w():
+            with ctx.open_db() as conn:
+                upsert_wellness_config(conn, guild_id, role_id=int(rid))
+
+        await run_query(_w)
+
+    if payload.get("auto_create"):
+
+        def _load():
+            with ctx.open_db() as conn:
+                cfg = get_wellness_config(conn, guild_id)
+                return cfg.role_id if cfg else 0
+
+        stored_id = await run_query(_load)
+        # No mod-log announce even on a recreate: the admin is on the panel
+        # doing this deliberately and sees the outcome directly.
+        role = await ensure_feature_role(
+            guild,
+            WELLNESS_ROLE_SPEC,
+            load=lambda: stored_id,
+            store=_store,
+            feature="Wellness",
+        )
+        if role is None:
+            return _err(
+                "couldn't create the role — check the bot has Manage Roles",
+                status=502,
+            )
+        return _ok(role_id=str(role.id), role_name=role.name)
+
+    try:
+        role_id = int(payload.get("role_id", 0))
+    except (TypeError, ValueError):
+        return _err("role_id must be an integer")
+    if role_id <= 0:
+        return _err("role_id is required")
+    role = guild.get_role(role_id)
+    if role is None:
+        return _err("that role doesn't exist on this server", status=404)
+    if role.id == guild.id or getattr(role, "managed", False):
+        return _err("that role can't be handed out by the bot")
+    await _store(role.id)
+    return _ok(role_id=str(role.id), role_name=role.name)
+
+
+@router.post("/provision/channel")
+async def admin_provision_channel(
+    payload: dict = Body(...),
+    user: AuthenticatedUser = Depends(require_manage_server),
+    ctx=Depends(get_ctx),
+    guild_id: int = Depends(get_guild_id),
+) -> JSONResponse:
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    if guild is None:
+        return _err("the bot isn't connected to this server right now", status=503)
+
+    try:
+        channel_id = int(payload.get("channel_id", 0))
+    except (TypeError, ValueError):
+        return _err("channel_id must be an integer")
+    if channel_id <= 0:
+        return _err("channel_id is required")
+    channel = guild.get_channel(channel_id)
+    if channel is None or channel not in guild.text_channels:
+        return _err("pick a text channel on this server", status=404)
+
+    def _write():
+        with ctx.open_db() as conn:
+            upsert_wellness_config(conn, guild_id, channel_id=channel_id)
+
+    await run_query(_write)
+    return _ok(channel_id=str(channel_id), channel_name=channel.name)
 
 
 # ── Exempt channels ─────────────────────────────────────────────────────
