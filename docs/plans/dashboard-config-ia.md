@@ -18,18 +18,43 @@ are product calls, not oversights:
   Partly addressed (the report stopped hard-coding it and now reads the
   setting); making it a dial strands three member-facing surfaces that bake
   "Level 5" into their wording.
-* **#53 `music_channel_settings`** — an unread table still holding one live
-  prod row. The only honest fix is `DROP TABLE`, which needs a migration.
+* **#53 `music_channel_settings`** — was deferred for wanting a `DROP TABLE`;
+  **closed 2026-08-30** by migration 193 once Billy gave the go-ahead.
 
-**Migrations deliberately not written** (thirteen parallel agents picking
-migration numbers is a guaranteed collision, and every one of these touches
-live prod data, so they need an explicit go-ahead): drop `dm_request_channels`,
-`give_role_permissions`, `music_channel_settings`; drop the now-unread columns
-behind findings 45–48 and `confession_config.max_attachments`; and delete the
-config rows that are now formally dead (`ticket_panel_*`, the legacy grant
-block, `ai_mod_model` / `ai_wellness_model` / `ai_model_%`, `econ_price_*_room`,
-`econ_quest_board_monthly`, the legacy `greeting_watch_notify_user_id`). None
-of it is load-bearing — the code no longer reads any of it.
+**Migrations — WRITTEN 2026-08-30** on Billy's explicit go-ahead. They were
+held back because thirteen parallel agents picking migration numbers is a
+guaranteed collision and because every one of them touches live prod data.
+Numbering starts at 193: 192 is claimed by `rotating-feature-channels`.
+
+* **193** drops `give_role_permissions`, `dm_request_channels` and
+  `music_channel_settings`. Two of the three name a member
+  (`entity_id` / `updated_by_user_id`) while being invisible to every surface
+  a data subject could reach, so they were unregistered personal-data stores;
+  `docs/data_register.md` and `docs/music_spec.md` record the outcome.
+* **194** drops the eight columns behind findings 45–48 and
+  `confession_config.max_attachments`. All five duel/group config tables are
+  empty on the live server, and the three `confession_config` rows carry the
+  untouched default — so the drop discards nothing.
+* **195** deletes the dead config rows (`ticket_panel_*`, `ai_mod_model` /
+  `ai_wellness_model` / `ai_model_%`, `econ_price_*_room`,
+  `econ_quest_board_monthly`, the guild-0 legacy grant block, the legacy
+  `greeting_watch_notify_user_id`), the same operation migration 191 did after
+  the economy audit.
+
+Two things worth knowing. The legacy grant block is enumerated key-by-key and
+scoped to guild 0 because a `LIKE 'nsfw_%'` would also match Image Guard's live
+settings (`nsfw_classifier_threshold`, `nsfw_sfw_prevention_mode`, …) on the
+home guild — a test pins that. And deleting it is a **fix, not a tidy-up**:
+`migrate_grant_roles` early-returns only for a guild that already has
+`grant_roles` rows, which is the home guild alone, so today it would seed the
+other three guilds from the home guild's role ids and welcome copy read through
+the guild-0 fallback. After 195 it seeds an empty template.
+
+**New residual found while writing them:** `pressure_config`, the pre-migration-032
+shape of `duel_config`, is a whole orphan table — zero readers in `src/`, zero
+rows in prod — carrying its own copy of the same dead `allow_early_revert`.
+Dropping a table is a bigger call than dropping a column and it was not on the
+approved list, so it is left standing and recorded here.
 
 **Four collisions the parallel branches could not see** were reconciled at
 merge time and are worth knowing about: two agents each fixed the voice

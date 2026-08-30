@@ -78,9 +78,9 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "climb_duration": 25.0,
         "min_players": 2,
         "max_players": 8,
-        # `lobby_timeout` is a column nothing reads — the stale-lobby sweep in
-        # fetch_sweepable_games uses its own fixed window — so it is left out
-        # of the defaults rather than posing as a dial.
+        # No `lobby_timeout`: the stale-lobby sweep in fetch_sweepable_games
+        # uses its own fixed window, nothing ever read the stored value, and
+        # migration 194 dropped the column.
     }
     if row:
         defaults.update(dict(row))

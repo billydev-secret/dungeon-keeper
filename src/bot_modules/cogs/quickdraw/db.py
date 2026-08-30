@@ -97,9 +97,9 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "min_delay": 3.0,
         "max_delay": 8.0,
         "draw_window": 5.0,
-        # `void_on_double_noshow` is a column on quickdraw_config that nothing
-        # reads: a draw nobody answers is always voided. Left out of the
-        # defaults so no caller mistakes it for a live dial.
+        # No `void_on_double_noshow`: a draw nobody answers is always
+        # voided, nothing ever read the flag, and migration 194 dropped the
+        # column it sat in.
     }
     if row:
         defaults.update(dict(row))

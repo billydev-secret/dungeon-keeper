@@ -236,10 +236,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             log_channel_id INTEGER NOT NULL DEFAULT 0,
             cooldown_seconds INTEGER NOT NULL DEFAULT 120,
             max_chars INTEGER NOT NULL DEFAULT 2000,
-            -- Legacy column, kept so a fresh DB matches live servers'. Nothing
-            -- reads or writes it: confessions are submitted through a Discord
-            -- modal, which has no attachment path at all.
-            max_attachments INTEGER NOT NULL DEFAULT 4,
+            -- NOTE: no max_attachments here. Confessions are submitted through
+            -- a Discord modal, which has no attachment path at all; the column
+            -- was dropped in migration 194.
             panic INTEGER NOT NULL DEFAULT 0,
             replies_enabled INTEGER NOT NULL DEFAULT 1,
             notify_op_on_reply INTEGER NOT NULL DEFAULT 0,

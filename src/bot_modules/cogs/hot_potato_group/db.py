@@ -84,11 +84,11 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "min_hold": 2.0,
         "min_players": 2,
         "max_players": 10,
-        # hp_group_config also carries shake_threshold, pass_mode and
-        # lobby_timeout. None of them is read: the shake threshold is a fixed
-        # parameter of game.shake_emoji, passing is always clockwise, and the
-        # stale-lobby sweep uses its own fixed window. They stay out of the
-        # defaults so nothing treats them as settings.
+        # No shake_threshold, pass_mode or lobby_timeout: the shake
+        # threshold is a fixed parameter of game.shake_emoji, passing is always
+        # clockwise, and the stale-lobby sweep uses its own fixed window.
+        # Nothing ever read any of the three, so migration 194 dropped all
+        # three columns.
     }
     if row:
         defaults.update(dict(row))

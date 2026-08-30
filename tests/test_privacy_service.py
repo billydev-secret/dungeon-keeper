@@ -525,10 +525,10 @@ def test_export_finds_the_subject_on_either_side_of_a_pair_table(db):
 
 def test_export_finds_a_member_on_a_grant_keeper_allow_list(db):
     """`grant_role_permissions` names the members allowed to hand out a grant
-    in an `entity_id` column (entity_type 'user'); a legacy `give_role_permissions`
-    with the same shape is still sitting on live servers. Both were invisible
-    to the export until `entity_id` was a recognised subject column — a keeper
-    list is personal data about the keeper."""
+    in an `entity_id` column (entity_type 'user'). It was invisible to the
+    export until `entity_id` was a recognised subject column — a keeper list is
+    personal data about the keeper. (The legacy `give_role_permissions` table
+    had the same shape and the same blind spot; migration 193 dropped it.)"""
     with open_db(db) as conn:
         conn.execute(
             "INSERT INTO grant_role_permissions "

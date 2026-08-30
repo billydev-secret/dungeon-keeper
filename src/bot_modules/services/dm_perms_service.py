@@ -124,8 +124,8 @@ def _create_tables(conn: sqlite3.Connection) -> None:
     """)
     # NOTE: no dm_request_channels here. Requests are answered in DMs and on
     # the dashboard; nothing has read or written that table since the request
-    # channel picker was removed, so a fresh database no longer grows one.
-    # Dropping the copy that already exists in prod needs its own migration.
+    # channel picker was removed. Migration 193 dropped it, so the copy
+    # `000_init.sql` still builds on a fresh database is removed again there.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS dm_audit_channels (
             guild_id INTEGER PRIMARY KEY,
