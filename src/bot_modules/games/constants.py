@@ -432,7 +432,7 @@ HOW_TO_PLAY = {
         "♨️ **Pressure Cooker**\n"
         "A high-stakes nickname duel — pump the gauge and hope it doesn't blow.\n\n"
         "1. Use `/games pressure challenge @user` to issue a challenge (optional: add custom stakes text)\n"
-        "2. The target has 60 seconds to **Accept** or **Decline**\n"
+        "2. The target has 5 minutes to **Accept** or **Decline**\n"
         "3. Players take turns clicking **Pump** — each pump adds a random amount to the gauge\n"
         "4. First player to push the gauge past 100 **BUSTS** and loses\n"
         "5. The winner sets a nickname for the loser (default: 24 hours)\n\n"

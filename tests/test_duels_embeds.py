@@ -1,13 +1,16 @@
 """Duel/lobby embed styling — accent color + currency vocabulary on wagers."""
 from __future__ import annotations
 
+import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import discord
+import pytest
 
 from bot_modules.cogs.quickdraw.cog import QuickdrawDuel
 from bot_modules.duels.base_duel import BaseDuel
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 from bot_modules.duels.filters import resolve_stakes_text
 from bot_modules.duels.base_game import BaseGame, _fmt_coins
 from bot_modules.services.economy_service import EconSettings
@@ -101,6 +104,24 @@ def test_challenge_embed_lists_every_stake_in_one_field():
     assert "💎 **100** gems" in value  # winner takes 2×
     assert "nickname" in value.lower()
     assert "Nothing is charged" in value
+
+
+def test_challenge_embed_counts_down_instead_of_stating_a_number():
+    """A static "60 seconds to respond" footer never moved, and a footer can't
+    carry a Discord timestamp anyway — so the deadline is a field, and the
+    client ticks it down."""
+    embed = BaseDuel._build_challenge_embed(
+        _self("Quickdraw"), SimpleNamespace(mention="<@1>"),
+        SimpleNamespace(mention="<@2>"), None, _ACCENT,
+    )
+    field = next(f for f in embed.fields if "Expires" in (f.name or ""))
+    value = field.value or ""
+    assert value.startswith("<t:") and value.endswith(":R>")
+    deadline = int(value[3:-3])
+    assert deadline - int(time.time()) == pytest.approx(
+        CHALLENGE_RESPONSE_SECONDS, abs=2
+    )
+    assert embed.footer.text is None
 
 
 def test_challenge_embed_plain_duel_keeps_the_nickname_fallback():

@@ -5,6 +5,7 @@ import time
 from typing import TYPE_CHECKING
 
 from bot_modules.duels import db as duels_db
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 
 from bot_modules.games.utils import game_store
 from .game import PressureGame, game_from_row, pumps_to_json
@@ -121,7 +122,7 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[PressureGame]:
        OR (state = 'ACTIVE'   AND last_pump_at <= ?)
        OR (state = 'RESOLVED' AND resolved_at  <= ?)
         """,
-        (now - 60, now - 300, now - 300),
+        (now - CHALLENGE_RESPONSE_SECONDS, now - 300, now - 300),
     )
     return [game_from_row(r) for r in rows]
 

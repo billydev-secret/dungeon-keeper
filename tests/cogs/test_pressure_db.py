@@ -10,6 +10,7 @@ import pytest_asyncio
 from bot_modules.services.games_db import GamesDb
 from bot_modules.cogs.pressure_cooker import db as pdb
 from bot_modules.duels import db as duels_db
+from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
 
 
 @pytest_asyncio.fixture
@@ -141,10 +142,21 @@ async def test_fetch_sweepable_pending(db):
     # Backdating created_at via direct SQL to simulate old pending game
     await db.execute(
         "UPDATE pressure_games SET created_at = ? WHERE id = ?",
-        (time.time() - 120, gid),
+        (time.time() - (CHALLENGE_RESPONSE_SECONDS + 60), gid),
     )
     games = await pdb.fetch_sweepable_games(db, time.time())
     assert any(g.id == gid for g in games)
+
+
+async def test_pending_challenge_stays_open_for_the_whole_window(db):
+    """Two minutes in used to be expired — the window is five minutes now."""
+    gid = await _create(db)
+    await db.execute(
+        "UPDATE pressure_games SET created_at = ? WHERE id = ?",
+        (time.time() - 120, gid),
+    )
+    games = await pdb.fetch_sweepable_games(db, time.time())
+    assert not any(g.id == gid for g in games)
 
 
 async def test_fetch_sweepable_active_idle(db):

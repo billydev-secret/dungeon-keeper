@@ -7,6 +7,15 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from bot_modules.services.games_db import GamesDb
 
+#: How long a challenged player has to press Accept or Decline.
+#:
+#: One number for four places that must agree — the ChallengeView's own
+#: timeout, the countdown on the card, the copy a late presser gets, and the
+#: `state = 'PENDING'` cutoff in each game's ``fetch_sweepable_games``. It was
+#: 60 seconds, hard-coded in all four, which is barely long enough to notice
+#: the ping (game night 2026-08-21: "LMAO that did not let me accept").
+CHALLENGE_RESPONSE_SECONDS: int = 300
+
 _CONFIG_DEFAULTS: dict = {
     "cooldown_hours": 48,
     "sentence_hours": 24,
