@@ -2395,3 +2395,53 @@ def test_dms_post_panel_is_not_refused_on_account_of_itself(authed_client, fake_
     )
     assert resp.status_code == 200
     assert resp.json()["warning"] is None
+
+
+# ── Voice transcription: only a downloaded model can be selected ──────
+
+
+def test_voice_transcription_rejects_a_model_that_is_not_downloaded(
+    authed_client, monkeypatch
+):
+    """The panel says a model has to read Downloaded before you can choose it;
+    saving one that isn't only produced silent, member-invisible failures."""
+    monkeypatch.setattr("web_server.routes.config._vt_model_is_cached", lambda m: False)
+
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "tiny.en", "channel_ids": []},
+    )
+    assert resp.status_code == 400
+    assert "tiny.en" in resp.json()["detail"]
+
+
+def test_voice_transcription_saves_a_downloaded_model(authed_client, monkeypatch):
+    monkeypatch.setattr("web_server.routes.config._vt_model_is_cached", lambda m: True)
+
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "tiny.en", "channel_ids": ["4242"]},
+    )
+    assert resp.status_code == 200
+    body = authed_client.get("/api/config").json()["voice_transcription"]
+    assert body["model_name"] == "tiny.en"
+    assert body["enabled"] is True
+
+
+def test_voice_transcription_can_be_switched_off_with_its_model_gone(
+    authed_client, monkeypatch
+):
+    """A cache that lost its model must not lock an admin out of their own
+    settings — only *changing* to an uncached model is refused."""
+    monkeypatch.setattr("web_server.routes.config._vt_model_is_cached", lambda m: True)
+    authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "tiny.en", "channel_ids": []},
+    )
+
+    monkeypatch.setattr("web_server.routes.config._vt_model_is_cached", lambda m: False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": False, "model_name": "tiny.en", "channel_ids": []},
+    )
+    assert resp.status_code == 200

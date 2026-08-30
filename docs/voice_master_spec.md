@@ -128,7 +128,9 @@ Discord limits each channel to 2 name edits per 10 minutes. The bot tracks a two
 
 ### Saveable-fields whitelist
 
-The admin-controlled `voice_master_saveable_fields` config (see Configuration) is a comma-separated list of field names. A field's auto-save behavior only fires if its name is present in the list. Removing a token turns off auto-save for that one field while leaving the others on. There's also a global kill switch (`voice_master_disable_saves`) that disables every auto-save (and makes every member's hub-join apply pure defaults). With saves disabled or the relevant field removed, `trusted add` / `blocked add` refuse with "Saving the trust list/blocklist is disabled by an admin on this server."
+The admin-controlled `voice_master_saveable_fields` config (see Configuration) is a comma-separated list of field names, and the vocabulary is exactly `name`, `limit`, `access`, `trusted`, `blocked` — the five checkboxes the dashboard offers; the route rejects anything else. A field's auto-save behavior only fires if its name is present in the list. Removing a token turns off auto-save for that one field while leaving the others on. There's also a global kill switch (`voice_master_disable_saves`) that disables every auto-save (and makes every member's hub-join apply pure defaults). With saves disabled or the relevant field removed, `trusted add` / `blocked add` refuse with "Saving the trust list/blocklist is disabled by an admin on this server."
+
+The whitelist is enforced on the **restore** side too, not only on save: a hub-join re-applies a stored profile only for the fields still listed, so unchecking one stops an already-saved value coming back (a saved name, limit, access state, trust list or blocklist) rather than merely freezing it. No-contact partners are the one exception — they are not a saved preference and are always applied to a new room, saves disabled or not. An **empty** list means exactly what it says (nothing persists); only an unset key falls back to the full default set.
 
 ### Category fallback
 
@@ -204,7 +206,7 @@ Limits and cooldowns:
 Saveable-fields toggles:
 
 - `voice_master_disable_saves` — global kill switch for all auto-save (default off).
-- `voice_master_saveable_fields` — comma-separated whitelist of fields that auto-save. Default `"name,limit,access,trusted,blocked"`. Removing a token turns off auto-save for that one field.
+- `voice_master_saveable_fields` — comma-separated whitelist of fields that save *and* restore. Valid tokens: `name`, `limit`, `access`, `trusted`, `blocked`; unset defaults to all five. Removing a token turns off both auto-save and restore for that one field; an empty stored value means none of them persist.
 
 Moderation overrides (all via the web dashboard, all audit-logged and mirrored to the mod-log channel):
 

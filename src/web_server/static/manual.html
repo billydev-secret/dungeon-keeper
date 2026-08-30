@@ -1352,6 +1352,8 @@
       </tbody>
     </table>
 
+    <p><strong>Saveable Fields.</strong> The dashboard panel decides which parts of a room a member is allowed to keep between sessions — room name, user limit, room access, trust list, block list. A box that is ticked both saves and restores; unticking one stops that part being saved <em>and</em> stops anything already saved from coming back, so the next room a member opens uses your defaults for it. Untick them all and nothing persists at all.</p>
+
     <h3 id="voice-admin">Admin Override Commands</h3>
     <p>Configuration and admin overrides (hub channel, category, name blocklist, numeric tunables, inline panel auto-post, force-delete, force-transfer, force-clear-profile) live on the <strong>Voice Control</strong> panel in the <a href="/">web dashboard</a>. The panel also has a <strong>Post Guide</strong> button that drops a member-facing "how Voice Control works" embed into a channel of your choice (e.g. your lobby) — re-run it anytime. One slash command remains for in-Discord use:</p>
     <table>
@@ -2461,7 +2463,7 @@
       <li><strong><a href="/#/config-moderation">Config → Moderation &amp; Safety → Moderation</a></strong> — set the mod and admin roles, the jail and ticket categories, and the log and transcript channels. (This replaced the <code>/setup</code> wizard, which walked through the same six settings.)</li>
       <li><strong><a href="/#/config-global">Config → Server → Global</a></strong> — set your mod role IDs, admin role IDs, mod notification channel, and server timezone offset.</li>
       <li><strong><a href="/#/config-roles">Config → Roles → Role Grants</a></strong> — configure which community roles can be handed out with <code>/grant</code> and who can grant them.</li>
-      <li><strong><a href="/#/xp-leaderboard">Reports → Engagement → XP &amp; Leveling</a></strong> — the leaderboard, plus the settings below it: the Level-5 milestone role, XP announcement channels, and any channels excluded from XP.</li>
+      <li><strong><a href="/#/xp-leaderboard">Reports → Engagement → XP &amp; Leveling</a></strong> — the leaderboard, plus the settings below it: the Level-5 milestone role, XP announcement channels, and any channels excluded from XP (messages, reactions and voice time in them all earn nothing).</li>
       <li><strong><a href="/#/config-welcome">Config → Members → Welcome &amp; Leave</a></strong> — customize the join / leave embeds and preview them against your own profile before publishing.</li>
       <li><strong><a href="/#/voice-activity">Reports → Engagement → Voice</a></strong> — usage charts, with the Voice Control settings below them: set the hub channel and default category so members can create personal voice channels by joining the hub.</li>
       <li><strong><a href="/#/config-starboard">Config → Channels &amp; Messages → Starboard</a></strong> — set the channel, threshold, and emoji to enable the highlight reposting feature.</li>
@@ -2847,7 +2849,7 @@
         <tr><td><strong><a href="/#/mention-awards">Mention Awards</a></strong></td><td>Pay whoever gets @-mentioned in a message matching a rule's condition chips — for games the bot doesn't host, like a member-run Hot Seat rotation. Build each rule from chips: contains text (plain or regex), mentions a role, from a specific user, author holds a role; all must match. <strong>With no author chip, anyone in the channel can hand out currency</strong> — right when the game passes a baton, wide open otherwise</td></tr>
         <tr><td><strong><a href="/#/config-starboard">Starboard</a></strong></td><td>Channel, threshold, emoji, channel exclusion list</td></tr>
         <tr><td><strong><a href="/#/voice-activity">Voice</a></strong></td><td>Moved to Reports → Engagement, below the usage charts: hub channel, default category, name template, control panel placement, saveable fields</td></tr>
-        <tr><td><strong><a href="/#/config-voice-transcription">Voice Transcription</a></strong></td><td>Auto-transcribe Discord voice notes in chosen channels. Privacy note: clips are transcribed locally on the bot's own hardware — audio never leaves the server</td></tr>
+        <tr><td><strong><a href="/#/config-voice-transcription">Voice Transcription</a></strong></td><td>Auto-transcribe Discord voice notes in chosen channels. A model has to show <em>Downloaded</em> before it can be saved as the one in use. Privacy note: clips are transcribed locally on the bot's own hardware — audio never leaves the server</td></tr>
         <tr><td><strong><a href="/#/role-menus">Role Menus</a></strong></td><td>Build and post <a href="#role-menus">self-assign role menus</a> (modes, roles, channel, re-sync)</td></tr>
         <tr><td><strong><a href="/#/docs">Docs</a></strong></td><td>Author the documents posted into channels, and place them there</td></tr>
         <tr><td><strong><a href="/#/birthday-calendar">Birthdays</a></strong></td><td>Moved to Reports → Member Lists: the browsable birthday calendar, with the announcement channels and wording below it</td></tr>
