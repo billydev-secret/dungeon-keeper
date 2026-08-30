@@ -105,7 +105,24 @@ Points are the inline `**+N**`, or `**+N (+M)**` where a bonus applies, in which
 These settings are **live and enforced** but are configured from the web dashboard (`/api/games/*`), **not** slash commands. There are no slash commands to manage them.
 
 - **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 115). Every *question-bank* game preflights `check_allowed_channel`; the six duel/group games in `dk_pvp_games_suite_spec.md` do **not** — their only channel rule is their own per-game `channel_allowlist`, and their panels say so. A channel that isn't on the allowlist refuses every question-bank game. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 115 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
-- **Per-guild per-game enable/disable** (`games_game_config`, default enabled — no row means on). Checked by `check_game_enabled`. The key is the game type string the bot reads: the dashboard whitelist (`routes/games.py:ALL_GAME_TYPES`) must spell each one exactly as its reader does, or the switch is unreachable. It once carried `risky_roller`, which nothing read, while the scheduler asked about `risky_roll`. The six duel/group games use the same store, keyed by each cog's `GAME_KEY`, checked at both creation entrypoints. For `risky_roll` and `legitlibs` the only reader is the scheduler's enable gate, so their panels label the switch "Include in Scheduled Games" rather than promising more than it does.
+- **Per-guild per-game enable/disable** (`games_game_config`, default enabled —
+  no row means on). Checked by `check_game_enabled` at the start of every
+  game's command **and** by the scheduler before each auto-launch. Set on
+  **Games Global Config → Available on This Server**, which lists every type in
+  `routes/games.py:ALL_GAME_TYPES`; games with their own settings page repeat
+  the same switch there, and Photo Challenge's lives on its own page instead
+  (it is deliberately absent from the list, so the standalone panel stays the
+  only writer of its row). The key is the game type string the bot reads, so
+  each entry must be spelled exactly as its reader spells it or the switch is
+  unreachable. Before 2026-08-29 seven games could not be switched off at all:
+  `mfk`, `compliment`, `ttl`, `hottakes`, `story` and `fantasies` had no panel
+  and never called the check, and `legitlibs` was missing from the list so its
+  PUT 404'd; the list also carried a phantom `risky_roller` while the scheduler
+  asked about `risky_roll`. The six duel/group games use the same store, keyed
+  by each cog's `GAME_KEY`, checked at both creation entrypoints. For
+  `risky_roll` and `legitlibs` the only reader is the scheduler's enable gate,
+  so their panels label the switch "Include in Scheduled Games" rather than
+  promising more than it does.
 - **Player limits are offered only where there is a lobby.** Most Likely To and
   Mt. Rushmore Draft create their game with `state="joining"`, so a floor and a
   ceiling have somewhere to apply; every other game goes straight to
@@ -115,6 +132,14 @@ These settings are **live and enforced** but are configured from the web dashboa
   `mfk` caps its pool. Rushmore had no join cap at all until 2026-08-27: the
   Join button appended unconditionally while the vote roster was sliced at 25,
   so the 26th player drafted a full board and then could not be voted for.
+  **LegitLibs is the exception that proves the rule**: its ceiling isn't a dial
+  but arithmetic on the chosen template's blank count (`ceil(n/10)` to
+  `floor(n/5)`, each player filling 5–10 blanks), so the template editor shows
+  the range instead of collecting it, and both modes turn away a joiner once
+  the lobby reaches it (`validation.lobby_is_full`). Until 2026-08-29 the two
+  numbers were editable fields whose values were discarded on save — create
+  always derived them and update overwrote them whenever blanks rode along —
+  and nothing enforced the ceiling anyway.
 - **17 dials that no cog read were removed on 2026-08-27**, across WYR, AMA,
   NHIE, Price, Rushmore and Clapback. Three were worse than inert: WYR's "Hide
   Who Voted for What" could not have done what it said (naming is driven by a
@@ -130,7 +155,7 @@ These settings are **live and enforced** but are configured from the web dashboa
 
 ### Dashboard
 
-The dashboard mirrors the config surfaces above and adds full LegitLibs template authoring, question-bank import/export, and AI-prompt editing. Banks also share a **global pool** — bank rows stored under the reserved `global` game type, which gameplay never selects. Every bank manager has a per-question *Pool* button (copy to the pool; duplicate texts are skipped, and Traditional's category tags are translated to the generic `nsfw` tag or dropped) and a pool browser that imports selected pool questions into that game's bank (duplicates skipped; Traditional requires choosing the category the imports are filed under, other games carry the pool tags over). Two permission tiers gate it: `mod` (Administrator / Manage Server) for config writes, and a Game Host tier (Administrator OR the configured editor role) for content authoring (bank, templates, AI generate, history, stats). AI-prompt config is re-loaded per request so dashboard edits take effect mid-game without a restart.
+The dashboard mirrors the config surfaces above and adds full LegitLibs template authoring, question-bank import/export, and AI-prompt editing. Banks also share a **global pool** — bank rows stored under the reserved `global` game type, which gameplay never selects. Every bank manager has a per-question *Pool* button (copy to the pool; duplicate texts are skipped, and Traditional's category tags are translated to the generic `nsfw` tag or dropped) and a pool browser that imports selected pool questions into that game's bank (duplicates skipped; Traditional requires choosing the category the imports are filed under, other games carry the pool tags over). Two permission tiers gate it: `mod` (Administrator / Manage Server) for config writes, and a Game Host tier (Administrator OR the configured editor role) for content authoring (bank, templates, AI generate, history, stats). AI-prompt config is re-loaded per request so dashboard edits take effect mid-game without a restart. FFA's `truth`/`dare` tags are reserved the way `nsfw` is — a truth round draws only rows tagged `truth` — so its bank panel states that contract in its hint rather than enforcing a category the way Traditional does; an untagged FFA row is valid and simply only ever comes up in a random round.
 
 ## Behavior
 
@@ -140,7 +165,7 @@ The games cluster by shape; each cluster shares interaction patterns.
 
 ### Question-bank / AI-augmented games
 
-**Would You Rather, Never Have I Ever, Most Likely To, Mt. Rushmore Draft, Name Your Price, Clapback** — and AMA's question rewriting — draw prompts from a pre-seeded bank first, falling back to AI generation when the bank is empty for the requested game (except Clapback, which is bank-only). Bank draws are round-robin, not pure-random: each row tracks when it was last served and selection prefers the least-recently-served match (ties broken at random), so a small pool doesn't repeat a question until every row has been served once — including across separate game sessions. The multi-round ones rotate through rounds: each round opens with a fresh question (from bank, AI, or a host-supplied queue), collects votes or submissions, closes the previous round's view, then opens the next. `wyr` parses an optional `a | b` opening question; `nhie` clamps `lives` to 0–10 and disables elimination when set to 0; `rushmore`, `price`, and `clapback` show a live countdown timestamp the host can skip with a button. `rushmore` drafts in one of two modes (slash `mode:` arg or dashboard option; default snake): **snake** pings each player on their turn — the ping (and the 10-second nudge) carries its own **Make Your Pick** button so nobody scrolls back to the board — while **blitz** has everyone with an empty slot pick simultaneously each round, duplicates resolved first-come with an ephemeral "taken, try again". After the draft, skipped slots get a 60-second **backfill window** (own button, duplicates still blocked) before boards go final; boards that are still all-skip are hidden from the FINAL BOARDS embed and excluded from the vote. `clapback` pairs answers into head-to-head matchups with a special-case round-robin for 3-player games; a unanimous winner earns a "CLAPBACK!" bonus, and an odd submitter count gives one player a bye worth that round's average score (full bracketing and scoring rules in [clapback_spec.md](clapback_spec.md)). Bank lookups are NSFW-gated on the channel (`channel_allows_nsfw`), so NSFW prompts only surface in age-gated channels.
+**Would You Rather, Never Have I Ever, Most Likely To, Mt. Rushmore Draft, Name Your Price, Clapback** draw prompts from a pre-seeded bank first, falling back to AI generation when the bank is empty for the requested game (except Clapback, which is bank-only). **AMA has no bank** — every AMA question is typed by a member during the game, no draw function has ever read `game_type='ama'`, and the bank UI its panel used to offer (retired 2026-08-29) curated questions that could never be asked. The bank API still accepts the type so an old full-bank export re-imports. Bank draws are round-robin, not pure-random: each row tracks when it was last served and selection prefers the least-recently-served match (ties broken at random), so a small pool doesn't repeat a question until every row has been served once — including across separate game sessions. The multi-round ones rotate through rounds: each round opens with a fresh question (from bank, AI, or a host-supplied queue), collects votes or submissions, closes the previous round's view, then opens the next. `wyr` parses an optional `a | b` opening question; `nhie` clamps `lives` to 0–10 and disables elimination when set to 0; `rushmore`, `price`, and `clapback` show a live countdown timestamp the host can skip with a button. `rushmore` drafts in one of two modes (slash `mode:` arg or dashboard option; default snake): **snake** pings each player on their turn — the ping (and the 10-second nudge) carries its own **Make Your Pick** button so nobody scrolls back to the board — while **blitz** has everyone with an empty slot pick simultaneously each round, duplicates resolved first-come with an ephemeral "taken, try again". After the draft, skipped slots get a 60-second **backfill window** (own button, duplicates still blocked) before boards go final; boards that are still all-skip are hidden from the FINAL BOARDS embed and excluded from the vote. `clapback` pairs answers into head-to-head matchups with a special-case round-robin for 3-player games; a unanimous winner earns a "CLAPBACK!" bonus, and an odd submitter count gives one player a bye worth that round's average score (full bracketing and scoring rules in [clapback_spec.md](clapback_spec.md)). Bank lookups are NSFW-gated on the channel (`channel_allows_nsfw`), so NSFW prompts only surface in age-gated channels.
 
 ### Anonymous-submission games
 
@@ -268,8 +293,8 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 | Knob | Default | Purpose |
 |---|---|---|
-| Per-game `enabled` | on | Toggle a game on/off for the guild |
-| Per-game `options` | empty | Per-game knob bag. **Every dial a panel offers must be a key its cog reads** — `tests/web/test_game_dials_are_enforced.py` fails otherwise. Read by clapback, price, rushmore, ttl, photo and mlt; wyr, ama and nhie read none, so their panels offer none. |
+| Per-game `enabled` | on | Toggle a game on/off for the guild, from the availability list on Games Global Config |
+| Per-game `options` | empty | Per-game knob bag. **Every dial a panel offers must be a key its cog reads, and every key a cog reads must be a dial some panel offers** — `tests/web/test_game_dials_are_enforced.py` fails either way round. Read by clapback, price, rushmore, photo and mlt; wyr, ama and nhie read none, so their panels offer none. TTL's `vote_timer` fallback went on 2026-08-29 (no panel could ever write it; the per-schedule option is the only source), and Rushmore's `mode` gained the Draft Mode dial the same day. A save from a panel **replaces** the option bag rather than merging into it, so a key a panel stops offering is cleared by the next save; a payload with no `options` at all (the availability list) leaves the stored dials alone. |
 | Audit channel | unset | Mirror anonymous submissions here with original authors visible (the DB trail is always written either way) |
 | Editor / Game Host role | unset | Role whose holders pass the Game Host check on the dashboard and can move other players |
 | External tracking watches | unset | One or more (bot, channel, kind) pairs whose result messages are banked (set on Games → External Tracking); the same bot may appear in several channels |

@@ -36,6 +36,7 @@ from ..rendering import (
     render_redacted_body,
 )
 from ..modals import make_fill_modal
+from ..validation import lobby_is_full
 from ..views import JoinView, QuiplashFillView
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,14 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             uid = action_interaction.user.id
             if uid in payload["players"]:
                 await action_interaction.response.send_message("You're already in!", ephemeral=True)
+                return
+            if lobby_is_full(payload["players"], template["player_max"]):
+                await action_interaction.response.send_message(
+                    f"This round is full — **{template['player_max']}** players "
+                    "are already in. This template doesn't have enough blanks "
+                    "to give anyone else a turn.",
+                    ephemeral=True,
+                )
                 return
             def _add(p):
                 ql_add_player(p, uid)

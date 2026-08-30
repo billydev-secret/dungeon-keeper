@@ -1246,3 +1246,85 @@ def test_every_settable_game_type_is_read_by_the_bot():
         "chicken", "musical_chairs",
     }
     assert not set(ALL_GAME_TYPES) - known
+
+
+# ── LegitLibs player range is derived, never typed ─────────────────────────────
+
+
+def _blanks(n: int) -> str:
+    return json.dumps([{"id": f"b{i}", "pos": "noun"} for i in range(1, n + 1)])
+
+
+def test_ll_template_player_range_comes_from_the_blank_count(open_client):
+    """Each player fills 5–10 blanks, so the range is arithmetic on the blanks.
+    A player_min/player_max sent by a client is not a setting — it never was."""
+    tid = _create_template(
+        open_client, blanks=_blanks(20), player_min=9, player_max=9
+    ).json()["template_id"]
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert (data["player_min"], data["player_max"]) == (2, 4)
+
+
+def test_ll_template_update_keeps_the_range_derived(open_client):
+    """An update carrying only a typed range used to write it straight through
+    (the derive step ran only when blanks came with the payload), so the card
+    could advertise a ceiling the blank count never supported."""
+    tid = _create_template(open_client, blanks=_blanks(20)).json()["template_id"]
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/{tid}",
+        json={"title": "Renamed", "player_min": 9, "player_max": 9},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert data["title"] == "Renamed"
+    assert (data["player_min"], data["player_max"]) == (2, 4)
+
+
+# ── Per-game config ───────────────────────────────────────────────────────────
+
+
+def test_game_config_save_replaces_the_whole_option_set(open_client):
+    """A merge-only write meant a key dropped from a panel's schema could never
+    be cleared from the dashboard again — prod still carried clapback
+    min_players/max_players that nothing has read for a year."""
+    open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 5, "min_players": 2}},
+    )
+    resp = open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 7}},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/config/games/clapback").json()
+    assert data["options"] == {"rounds": 7}
+
+
+def test_game_config_enabled_only_save_keeps_stored_options(open_client):
+    """The availability list on Games Global Config sends no options at all;
+    that must not wipe the dials set on the game's own page."""
+    open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 7}},
+    )
+    open_client.put(f"{BASE}/config/games/clapback", json={"enabled": False})
+    data = open_client.get(f"{BASE}/config/games/clapback").json()
+    assert data["enabled"] is False
+    assert data["options"] == {"rounds": 7}
+
+
+@pytest.mark.parametrize("game_type", ["legitlibs", "ttl", "story"])
+def test_game_config_can_switch_off_every_startable_game(open_client, game_type):
+    """LegitLibs wasn't on the config API's list at all, so its switch 404'd."""
+    resp = open_client.put(f"{BASE}/config/games/{game_type}", json={"enabled": False})
+    assert resp.status_code == 200
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is False
+
+
+def test_game_config_list_names_every_game(open_client):
+    """The availability list renders straight from this payload, so each entry
+    carries the game's display name."""
+    games = open_client.get(f"{BASE}/config/games").json()["games"]
+    assert games["legitlibs"]["label"] == "LegitLibs"
+    assert games["ttl"]["label"] == "Two Truths and a Lie"
+    assert "risky_roller" not in games
