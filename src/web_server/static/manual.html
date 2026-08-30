@@ -545,6 +545,7 @@
         <tr><td><strong><a href="#server-ops">Server Upkeep</a></strong></td><td>Auto-delete schedules, inactivity pruning, a shared inactive-member holding channel, auto-threading, bump reminders, gender tagging, hidden channels.</td></tr>
         <tr><td><strong><a href="#greeting-watch">Greeting Watch</a></strong></td><td>DMs a greeter when a member's "good morning" in a watched channel goes unanswered. Dashboard-configured, no commands.</td></tr>
         <tr><td><strong><a href="#intake">Intake Cards</a></strong></td><td>Per-newcomer welcome checklist card in greeter chat that ticks itself as the procedure happens, plus a bot-synced procedure-reference channel. Dashboard-configured, no commands.</td></tr>
+        <tr><td><strong><a href="#feature-rotation">Feature Rotation</a></strong></td><td>Rotates a pool of activity channels so one is open each day, and announces the day's room in main chat. Dashboard-managed, no commands.</td></tr>
         <tr><td><strong><a href="#chat-revive">Chat Revive</a></strong></td><td>Rhythm-aware lull detector that revives a quiet channel with a question card and an opt-in ping role. Dashboard-managed, no commands.</td></tr>
         <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graph, interaction tables, invite trees — dashboard panels.</td></tr>
         <tr><td><strong><a href="#config">Configuration Reference</a></strong></td><td>Web dashboard panels covering every persistent setting.</td></tr>
@@ -2703,6 +2704,33 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/#/chat-revive">web dashboard</a></strong>
         <p>The Chat Revive panel covers eligible channels and their question flavors, the ping role, quiet hours and budgets, the question bank (add, bulk-import, retire), a "would it fire right now?" explainer per channel, a manual Fire button, posting the opt-in button, and a scoreboard of which questions actually spark conversation.</p>
+      </div>
+    </div>
+
+    <h3 id="feature-rotation">Feature Rotation</h3>
+    <p>Some rooms take turns. Instead of every activity channel sitting open all the time, a pool of them rotates: one is <strong>open today</strong> and the others are tucked away until their turn comes round. A note in main chat says which one it is.</p>
+
+    <h4>What you'll notice</h4>
+    <ul>
+      <li><strong>A channel you used yesterday may not be in your list today.</strong> It hasn't been deleted and you haven't lost access — it's simply not this day's room. It comes back on its turn.</li>
+      <li><strong>The rooms change at midnight</strong> (server time), and the announcement posts later in the morning so it lands when people are actually around.</li>
+      <li><strong>More than one room can be open at once</strong> if the server is set up that way.</li>
+    </ul>
+
+    <h4>Your things keep working</h4>
+    <p>Being hidden isn't the same as being switched off. Anything you can reach with a slash command or a private panel carries on as normal even when its room is out of sight — you can still send an anonymous whisper, still post a confession with <code>/confess</code>, still submit a Guess Who round with <code>/guess submit</code>. Games already in progress keep running, and nothing you have going gets cancelled or lost because a room went quiet for a day.</p>
+    <p>The exception is anything you'd do by pressing a button on a message <em>inside</em> the room — replying to a confession, guessing on a posted round. Those wait for the room to open again.</p>
+
+    <h4>Quests follow the open room</h4>
+    <p>Your daily quest board keeps one slot for whichever room is open that day, so there's always something to do in the room that's actually available. And a quest you couldn't possibly complete — one that needs a room that's shut — is kept off your board that day rather than sitting there unachievable.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>Configure via the <a href="/#/feature-rotation">web dashboard</a></strong>
+        <p>Everything lives on the <strong>Feature Rotation</strong> dashboard panel — there are no slash commands. You choose which channels are in the pool (any channel can be), how many open per day, where the announcement goes and at what hour, and per room: whether it takes part, whether it actually hides on its off days, whether it gets named in the announcement, and which quests it owns.</p>
+        <p>Hiding denies view to @everyone <em>in place</em> — the channel keeps its category and position, and role-level grants survive, so moderators still see a hidden room. The channel the announcement posts into is never hidden. "Apply now" syncs Discord to the current plan without waiting for midnight; turning the rotation off and pressing it reopens everything.</p>
+        <p>Mark a quest as "needs the room open" only when it truly can't be done from a slash command or a private panel — that flag is what removes it from the daily board on a hidden day.</p>
       </div>
     </div>
 

@@ -27,6 +27,7 @@ import sqlite3
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import date
 
 import logging
 
@@ -34,6 +35,10 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.core.xp_system import apply_xp_award, load_xp_settings
 from bot_modules.economy import live_signal, quests
 from bot_modules.economy.logic import local_day_for
+from bot_modules.feature_rotation.store import (
+    blocked_quest_kinds_on,
+    featured_quest_kinds_on,
+)
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -862,6 +867,100 @@ def _pin_pending_setup(
     return pinned | _keep_ordinary_units(board - set(pending), pairs, slots)
 
 
+def _rotation_local_day(qtype: str, idx: int) -> str | None:
+    """The ``YYYY-MM-DD`` a daily period index refers to, or ``None``.
+
+    Rotation coupling is **daily-only, on purpose**. A weekly board's period
+    spans seven days, over which every room in the pool is featured at least
+    once; freezing one day's open/shut state into a week-long board would
+    exclude quests that are perfectly playable for six of those days.
+    ``period_index('daily', day)`` is ``date.toordinal()``, so this is its
+    exact inverse.
+    """
+    if qtype != "daily":
+        return None
+    try:
+        return date.fromordinal(idx).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def _rotation_blocked_kinds(
+    conn: sqlite3.Connection, guild_id: int, qtype: str, idx: int
+) -> frozenset[str]:
+    """Trigger kinds unplayable today because their room is hidden.
+
+    Only kinds a hidden room declares channel-bound — a quest reached by slash
+    command or ephemeral panel stays on the board with its room shut, which is
+    most of them. Returns empty (i.e. "behave as before") for every guild with
+    the rotation off, and if the rotation tables aren't there yet: a board read
+    must never be what surfaces a missing migration.
+    """
+    day = _rotation_local_day(qtype, idx)
+    if day is None:
+        return frozenset()
+    try:
+        return blocked_quest_kinds_on(conn, guild_id, day)
+    except sqlite3.Error:
+        return frozenset()
+
+
+def _featured_pin_candidates(
+    conn: sqlite3.Connection, guild_id: int, qtype: str, idx: int, pool_ids: set[int]
+) -> set[int]:
+    """Pool quests belonging to whichever room is open today.
+
+    Restricted to ``pool_ids`` so the pin can only ever surface a quest the
+    frozen pool already contains — the featured room must not be a back door
+    into a deactivated or out-of-cadence quest.
+    """
+    day = _rotation_local_day(qtype, idx)
+    if day is None or not pool_ids:
+        return set()
+    try:
+        kinds = featured_quest_kinds_on(conn, guild_id, day)
+    except sqlite3.Error:
+        return set()
+    if not kinds:
+        return set()
+    return {
+        int(r["id"])
+        for r in conn.execute(
+            "SELECT id, trigger_kind FROM econ_quests "
+            "WHERE guild_id = ? AND active = 1 AND qtype = ?",
+            (guild_id, qtype),
+        )
+        if str(r["trigger_kind"]) in kinds and int(r["id"]) in pool_ids
+    }
+
+
+def _pin_featured_room(
+    board: set[int],
+    featured_ids: set[int],
+    user_id: int,
+    idx: int,
+    n: int,
+    pairs: dict[int, int],
+) -> set[int]:
+    """Give today's open room one guaranteed slot on the board.
+
+    Drawn with the same per-member window walk as the setup pins
+    (``assigned_quest_ids`` on ``idx``), so which of a room's quests a member
+    gets rotates instead of repeating, and two members on the same day get
+    different ones.
+
+    ``n <= 1`` is left alone deliberately: on a one-slot board the featured pin
+    would be the entire board, evicting a newcomer's only onboarding nudge to
+    advertise a room. The nudge wins at that size.
+    """
+    if n <= 1 or not featured_ids:
+        return board
+    pick = set(quests.assigned_quest_ids(sorted(featured_ids), user_id, idx, 1))
+    if not pick or pick & board:
+        return board
+    return pick | _keep_ordinary_units(board - pick, pairs, n - 1)
+
+
 def _frozen_board_pool(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -893,13 +992,18 @@ def _frozen_board_pool(
         (guild_id, qtype, idx),
     ).fetchone()
     if row is None:
+        # Rotation exclusion lands HERE, before the freeze, so a day's
+        # open/shut state is captured in the snapshot the whole day reads
+        # from — the same reason the pool is frozen at all.
+        blocked = _rotation_blocked_kinds(conn, guild_id, qtype, idx)
         live_tagged = {
             int(r["id"]): str(r["pair_tag"])
             for r in conn.execute(
-                "SELECT id, pair_tag FROM econ_quests "
+                "SELECT id, pair_tag, trigger_kind FROM econ_quests "
                 "WHERE guild_id = ? AND active = 1 AND qtype = ? ORDER BY id",
                 (guild_id, qtype),
             )
+            if str(r["trigger_kind"]) not in blocked
         }
         sizes = board_sizes(settings) if settings is not None else None
         live_n = quests.board_size(qtype, sizes)
@@ -974,8 +1078,18 @@ def assigned_board_ids(
     # for an override to be able to move it off, or a member could pay to
     # reroll a pin and watch it land straight back.
     board = _drop_completed_setup(conn, guild_id, user_id, board)
+    # The featured room gets a reserved slot, so setup pins are capped at n-1
+    # for the day rather than being allowed to fill the board and crowd it out.
+    # A member with pending setups therefore sees 1 setup + 1 featured instead
+    # of 2 setups; every setup still surfaces, just over more days.
+    featured_ids = _featured_pin_candidates(conn, guild_id, qtype, idx, pool_set)
+    reserve = 1 if featured_ids and n >= 2 else 0
     board = _pin_pending_setup(
-        conn, guild_id, user_id, board, pool_set, n, quests.pair_map(tagged), idx
+        conn, guild_id, user_id, board, pool_set, n - reserve,
+        quests.pair_map(tagged), idx,
+    )
+    board = _pin_featured_room(
+        board, featured_ids, user_id, idx, n, quests.pair_map(tagged)
     )
     for row in conn.execute(
         "SELECT from_quest_id, to_quest_id FROM econ_board_overrides "

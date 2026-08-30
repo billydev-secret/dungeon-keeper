@@ -266,6 +266,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     # ── API routes ──────────────────────────────────────────────────
     from web_server.routes import config as config_routes
     from web_server.routes import economy as economy_routes
+    from web_server.routes import feature_rotation as feature_rotation_routes
     from web_server.routes import economy_manager as economy_manager_routes
     from web_server.routes import home as home_routes
     from web_server.routes import logs as logs_routes
@@ -286,6 +287,9 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     app.include_router(economy_routes.router, prefix="/api", tags=["economy"])
     app.include_router(
         economy_manager_routes.router, prefix="/api", tags=["economy-manager"]
+    )
+    app.include_router(
+        feature_rotation_routes.router, prefix="/api", tags=["feature-rotation"]
     )
     app.include_router(ai_routes.router, prefix="/api", tags=["ai"])
     app.include_router(messages_routes.router, prefix="/api", tags=["messages"])

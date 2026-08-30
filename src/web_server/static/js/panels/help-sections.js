@@ -98,6 +98,7 @@ export const HELP_GROUPS = [
     { page: "help-config",         anchor: "config",            label: "Configuration Reference" },
     { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },
     { page: "help-chat-revive",    anchor: "chat-revive",       label: "Chat Revive" },
+    { page: "help-feature-rotation", anchor: "feature-rotation", label: "Feature Rotation" },
     { page: "help-event-echo",     anchor: "event-echo",        label: "Event Echo" },
     { page: "help-greeting-watch", anchor: "greeting-watch",    label: "Greeting Watch" },
     { page: "help-intake",         anchor: "intake",            label: "Intake Cards" },

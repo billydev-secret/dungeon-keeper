@@ -21,6 +21,7 @@ from bot_modules.services.announcements_service import announcements_loop
 from bot_modules.services.auto_delete_service import auto_delete_loop
 from bot_modules.services.bulk_cleanup_service import bulk_cleanup_loop
 from bot_modules.services.event_echo_service import event_echo_loop
+from bot_modules.services.feature_rotation_service import feature_rotation_loop
 from bot_modules.services.game_start_ping_service import game_start_ping_loop
 from bot_modules.services.scheduled_games_service import scheduled_games_loop
 from bot_modules.services.color_palette import PaletteColorButton
@@ -369,6 +370,8 @@ def main() -> None:
     bot.startup_task_factories.append(lambda: bulk_cleanup_loop(bot, db_path))
 
     bot.startup_task_factories.append(lambda: scheduled_games_loop(bot))
+
+    bot.startup_task_factories.append(lambda: feature_rotation_loop(bot))
 
     bot.startup_task_factories.append(lambda: game_start_ping_loop(bot))
 
