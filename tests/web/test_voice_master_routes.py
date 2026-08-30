@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+import re
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
@@ -9,6 +11,7 @@ import pytest
 
 from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.services.voice_master_service import (
+    SAVEABLE_FIELD_KEYS,
     VoiceProfile,
     add_trusted,
     add_blocked,
@@ -558,3 +561,36 @@ def test_voice_master_requires_auth(fake_ctx, method, path):
     resp = client.get(path) if method == "GET" else client.post(path)
     assert resp.status_code in (401, 403)
     client.close()
+
+
+def test_saveable_field_options_match_the_panel_and_the_commands():
+    """Panel checkboxes, route validation and command call-sites must agree.
+
+    These three lists were separate literals, and they drifted: the route still
+    named the pre-dial locked/hidden/spectator tokens after the single access
+    dial replaced them, so the panel offered "Room access", the command asked to
+    persist it, and the route rejected the save (2026-08-29 config audit,
+    finding #59). The route now reads SAVEABLE_FIELD_KEYS; this pins the other
+    two ends to it.
+    """
+    root = pathlib.Path(__file__).resolve().parents[2] / "src"
+
+    panel = (root / "web_server" / "static" / "js" / "panels" / "voice-settings.js").read_text(
+        encoding="utf-8"
+    )
+    block = re.search(r"const SAVEABLE_FIELDS = \[(.*?)\n\];", panel, re.S)
+    assert block, "SAVEABLE_FIELDS table not found — did the panel rename it?"
+    offered = set(re.findall(r'\[\s*"([a-z_]+)"', block.group(1)))
+    assert offered == set(SAVEABLE_FIELD_KEYS), (
+        "Voice Control offers checkboxes the route will reject, or hides ones it "
+        f"accepts: panel={sorted(offered)} route={sorted(SAVEABLE_FIELD_KEYS)}"
+    )
+
+    commands = (root / "bot_modules" / "commands" / "voice_master_commands.py").read_text(
+        encoding="utf-8"
+    )
+    asked = set(re.findall(r'saveable_key="([a-z_]+)"', commands))
+    assert asked <= set(SAVEABLE_FIELD_KEYS), (
+        "a voice command asks to persist a field admins can never enable: "
+        f"{sorted(asked - set(SAVEABLE_FIELD_KEYS))}"
+    )

@@ -527,3 +527,28 @@ def test_mount_async_conversion_covered_the_config_family():
         and "mountAsync" not in path.read_text(encoding="utf-8")
     ]
     assert not missing, f"config panels with neither a loader nor mountAsync: {missing}"
+
+
+def test_income_sources_panel_edits_only_faucets_the_route_returns():
+    """Every FAUCET_FIELDS key must appear in the route's ``faucets`` dict.
+
+    The panel renders ``data.faucets[key] ?? 0`` and posts the whole table
+    back on Save, so a key the GET omits is not merely blank — it saves a 0
+    over the guild's configured value. That is how the two host-bounty dials
+    became destructive (2026-08-29 config audit, finding #60).
+    """
+    panel = (_PANELS / "economy-income-sources.js").read_text(encoding="utf-8")
+    block = re.search(r"const FAUCET_FIELDS = \[(.*?)\n\];", panel, re.S)
+    assert block, "FAUCET_FIELDS table not found — did the panel rename it?"
+    edited = set(re.findall(r'\[\s*"([a-z0-9_]+)"', block.group(1)))
+    assert edited, "FAUCET_FIELDS parsed empty"
+
+    route = (
+        Path(__file__).resolve().parents[2]
+        / "src" / "web_server" / "routes" / "economy_manager.py"
+    ).read_text(encoding="utf-8")
+    served = set(re.findall(r'"([a-z0-9_]+)": settings\.\1,', route))
+    assert not edited - served, (
+        "Income Sources inputs whose value the route never returns — each one "
+        f"renders 0 and zeroes the real setting on Save: {sorted(edited - served)}"
+    )

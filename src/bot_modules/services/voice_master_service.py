@@ -64,9 +64,16 @@ class VoiceMasterConfig:
     spectator_gate_role_id: int
 
 
-_DEFAULT_SAVEABLE = frozenset(
-    {"name", "limit", "access", "trusted", "blocked"}
-)
+# The saveable-profile tokens, in one place. The Voice Control panel renders a
+# checkbox per entry, the config route validates against it, and
+# ``should_save_profile_field`` looks the chosen key up here. It drifted once:
+# the route still validated the three pre-dial names (locked/hidden/spectator)
+# that the single access dial replaced, so "access" — offered by the panel and
+# asked for by the command — could never be saved, and the guild that had it
+# ticked lost it silently (2026-08-29 config audit, finding #59).
+SAVEABLE_FIELD_KEYS: tuple[str, ...] = ("name", "limit", "access", "trusted", "blocked")
+
+_DEFAULT_SAVEABLE = frozenset(SAVEABLE_FIELD_KEYS)
 
 
 _CONFIG_DEFAULTS: dict[str, str] = {
