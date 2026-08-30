@@ -1,7 +1,7 @@
 // QA Tracker — admin board for the volunteer testing crew (Dev section).
 // Board of test cards with expandable verdicts (void with clawback, archive,
 // jump to the Discord card), a top-testers scoreboard, and the config knobs
-// the cog reads live (role, channel, reward, daily cap, enabled).
+// the cog reads live (role, channel, reward, daily cap, card linger, enabled).
 import { api, apiPost, apiPut, esc } from "../api.js";
 import { toast, confirmDialog } from "../ui.js";
 import { makeFilterStrip } from "../tab-strip.js";
@@ -299,7 +299,7 @@ export function mount(container, initialParams = {}) {
     formEl.innerHTML = `
       <div class="field">
         <label><input type="checkbox" name="enabled" ${settings.enabled ? "checked" : ""} /> Enabled</label>
-        <div class="field-hint">Off pauses verdict buttons; existing cards stay put.</div>
+        <div class="field-hint">Off pauses verdict buttons and the tidy-up sweep, so existing cards stay where they are. New cards from a shipped change still post.</div>
       </div>
       <div class="field-row">
         <div class="field"><label>QA Crew Role</label>
@@ -315,6 +315,9 @@ export function mount(container, initialParams = {}) {
         <div class="field"><label for="qa-daily-cap">Daily Paid Cap</label>
           <input id="qa-daily-cap" type="number" name="daily_cap" min="0" max="1000" step="1" value="${Number(settings.daily_cap) || 0}" style="max-width:120px;" />
           <div class="field-hint">Paid verdicts per tester per day; later verdicts still record, unpaid.</div></div>
+        <div class="field"><label for="qa-linger">Passed Cards Linger (minutes)</label>
+          <input id="qa-linger" type="number" name="linger_minutes" min="0" max="10080" step="1" value="${Number(settings.linger_minutes) || 0}" style="max-width:120px;" />
+          <div class="field-hint">How long a green (passed) card stays in the channel before it's deleted and archived. 0 = leave them up until an admin archives one.</div></div>
       </div>
       <div><button type="submit" class="btn btn-primary">Save</button><span data-status></span></div>
     `;
@@ -339,6 +342,7 @@ export function mount(container, initialParams = {}) {
           channel_id: channelPicker.getValue() || "0",
           reward: parseInt(fd.get("reward"), 10) || 0,
           daily_cap: parseInt(fd.get("daily_cap"), 10) || 0,
+          linger_minutes: parseInt(fd.get("linger_minutes"), 10) || 0,
         });
         showStatus(status, true);
         toast("QA settings saved");

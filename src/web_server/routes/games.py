@@ -9,6 +9,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from bot_modules.games.constants import GAME_NAMES
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
@@ -16,6 +17,10 @@ log = logging.getLogger("dungeonkeeper.games")
 
 router = APIRouter()
 
+# Bank game types. "ama" is retired from the dashboard — AMA questions come
+# only from members' own anonymous submissions and no draw function has ever
+# read an AMA bank, so its panel no longer offers one. It stays accepted here
+# purely so an old full-bank export still round-trips through /bank/import.
 VALID_GAME_TYPES = {"wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo", "ffa", "traditional", "pen_pals"}
 
 # The cross-game "global pool" lives in games_question_bank under this
@@ -29,15 +34,23 @@ GLOBAL_POOL_TYPE = "global"
 # a bank round can serve each player a question in a category they opted into.
 TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 
-# Every game type whose enable toggle / options this API can read and write.
-# Spellings must match ``games.constants`` — the scheduler gates a run by
-# calling ``check_game_enabled`` with the *constants* name, so a type spelled
-# differently here is a toggle nobody can reach (and a stored key nothing
-# reads). Two tripwires in tests/web/test_games_routes.py hold the line.
+# Every game the per-guild enable switch can address. Each name must be spelled
+# the way the bot itself reads it (GAME_NAMES / check_game_enabled / the
+# scheduler's enable gate): a row written under any other spelling is read by
+# nothing. "risky_roller" used to sit here while the scheduler asked about
+# "risky_roll", so the switch could never be answered. Two tripwires in
+# tests/web/test_games_routes.py hold the line.
 ALL_GAME_TYPES = [
+    # "photo" is deliberately absent: the standalone Photo Challenge panel
+    # (PUT /api/photo-challenge/config) owns that games_game_config row, and
+    # leaving it here kept a second live write path to the same row.
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
-    "traditional", "mfk", "compliment", "ffa", "photo", "ttl", "hottakes",
+    "traditional", "mfk", "compliment", "ffa", "ttl", "hottakes",
     "story", "fantasies", "risky_roll", "legitlibs",
+    # Duel-style games. Their settings live on their own panels, but the
+    # enable switch is stored here like every other game's.
+    "pressure", "quickdraw", "hot_potato", "hot_potato_group", "chicken",
+    "musical_chairs",
 ]
 
 
@@ -84,14 +97,16 @@ class GameConfigBody(BaseModel):
     options: Optional[dict] = None
 
 
+# player_min / player_max are deliberately absent from both bodies: the player
+# range is arithmetic on the blank count (see _players_from_blanks), never a
+# typed setting. They used to be accepted, silently ignored on create, and
+# written straight through on an update that carried no blanks.
 class LegitLibsTemplateBody(BaseModel):
     title: str
     body: str
     tier: int
     tags: str = ""
     status: str = "draft"
-    player_min: Optional[int] = None
-    player_max: Optional[int] = None
     blanks: Optional[str] = None
     notes: Optional[str] = None
 
@@ -102,8 +117,6 @@ class LegitLibsTemplateUpdateBody(BaseModel):
     tier: Optional[int] = None
     tags: Optional[str] = None
     status: Optional[str] = None
-    player_min: Optional[int] = None
-    player_max: Optional[int] = None
     blanks: Optional[str] = None
     notes: Optional[str] = None
 
@@ -1419,6 +1432,7 @@ async def get_all_game_configs(
             for gt in ALL_GAME_TYPES:
                 cfg = stored.get(gt, {})
                 games[gt] = {
+                    "label": GAME_NAMES.get(gt, gt),
                     "enabled": cfg.get("enabled", True),
                     "options": cfg.get("options", {}),
                 }
@@ -1478,9 +1492,16 @@ async def set_game_config(
 
             if row:
                 new_enabled = int(body.enabled) if body.enabled is not None else row[0]
+                # A save from a panel is the whole option set for that game, so
+                # it replaces what's stored. Merging meant a key a panel had
+                # stopped offering (clapback's min_players/max_players, dropped
+                # 2026-08-27) survived every later save with no way to clear it
+                # from the dashboard. A payload with no options at all — the
+                # availability list, which only flips `enabled` — still leaves
+                # the stored dials alone.
                 existing_opts = json.loads(row[1] or "{}")
                 if body.options is not None:
-                    existing_opts.update(body.options)
+                    existing_opts = body.options
                 conn.execute(
                     "UPDATE games_game_config SET enabled = ?, options = ?, updated_at = CURRENT_TIMESTAMP"
                     " WHERE guild_id = ? AND game_type = ?",

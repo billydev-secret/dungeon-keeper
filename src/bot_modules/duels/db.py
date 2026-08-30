@@ -10,7 +10,10 @@ if TYPE_CHECKING:
 _CONFIG_DEFAULTS: dict = {
     "cooldown_hours": 48,
     "sentence_hours": 24,
-    "allow_early_revert": 0,
+    # NOTE: no `allow_early_revert`. Early nickname revert was never built
+    # and nothing ever read the flag, so migration 194 dropped the column it
+    # sat in. (`pressure_config`, the pre-032 shape of this table, still
+    # carries its own copy — that whole table is an orphan.)
     "channel_allowlist": "[]",
     "nick_denylist": "[]",
     "max_nick_length": 32,

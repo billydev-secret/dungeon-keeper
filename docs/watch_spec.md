@@ -35,9 +35,10 @@ hot path costs one dict lookup. On a hit, `_notify_watchers` runs:
 
 1. **AI gate.** If `ollama_client.is_available()`, the message is sent to
    `ai_check_watched_message` (`ai_moderation_service.py`): a single-message
-   rule check whose system prompt and model are the dashboard-editable
-   `ai_prompt_watch_check` / `ai_model_watch_check` keys (AI panel, via
-   `list_prompts()` in `ai_config.py`). A `VIOLATION: …` reply forwards the
+   rule check whose system prompt is the dashboard-editable
+   `ai_prompt_watch_check` key (AI panel, via `list_prompts()` in
+   `ai_config.py`). There is no model key — one local model is loaded at a
+   time and every AI job uses it. A `VIOLATION: …` reply forwards the
    message with the reason line; anything else suppresses it. **Fail-open:**
    if the AI call raises, the cog logs a warning and forwards anyway — a
    flaky model never hides a watched member's posts. If AI is unavailable

@@ -179,6 +179,10 @@ class RiskyRollCog(commands.Cog):
             )
             return
 
+        # The Games Global Config availability list promises that switching a
+        # game off refuses its command as well as skipping its scheduled
+        # rounds. risky_roll is in that list, so honour it here rather than
+        # letting the switch mean something narrower for this one game.
         if not await check_game_enabled(self.db, "risky_roll", interaction.guild.id):
             await interaction.response.send_message(
                 "Risky Rolls is currently disabled on this server.", ephemeral=True

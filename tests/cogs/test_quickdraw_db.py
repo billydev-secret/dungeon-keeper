@@ -192,7 +192,9 @@ async def test_get_config_defaults(db):
     assert cfg["min_delay"] == pytest.approx(3.0)
     assert cfg["max_delay"] == pytest.approx(8.0)
     assert cfg["draw_window"] == pytest.approx(5.0)
-    assert cfg["void_on_double_noshow"] == 1
+    # A draw nobody answers is always voided; the column of the same name has
+    # no reader, so get_config must not hand it out as a setting.
+    assert "void_on_double_noshow" not in cfg
 
 
 async def test_upsert_config_updates_values(db):

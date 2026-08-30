@@ -14,7 +14,6 @@ from bot_modules.services.auto_delete_service import (
     format_duration_seconds,
     init_auto_delete_tables,
     list_auto_delete_rules_for_guild,
-    parse_duration_seconds,
     pop_due_auto_delete_message_ids,
     remove_auto_delete_rule,
     remove_tracked_auto_delete_message,
@@ -24,40 +23,6 @@ from bot_modules.services.auto_delete_service import (
     track_auto_delete_message,
     upsert_auto_delete_rule,
 )
-
-
-# ── parse_duration_seconds ────────────────────────────────────────────
-
-def test_named_intervals():
-    assert parse_duration_seconds("hourly") == 3600
-    assert parse_duration_seconds("daily") == 86400
-    assert parse_duration_seconds("weekly") == 7 * 86400
-
-
-@pytest.mark.parametrize("s,expected", [
-    ("30s", 30), ("30 seconds", 30),
-    ("5m", 300), ("5 minutes", 300),
-    ("2h", 7200), ("2 hours", 7200),
-    ("1d", 86400), ("1w", 7 * 86400),
-])
-def test_unit_variants(s, expected):
-    assert parse_duration_seconds(s) == expected
-
-
-def test_compound_durations():
-    assert parse_duration_seconds("1h30m") == 5400
-    assert parse_duration_seconds("2d12h") == 2 * 86400 + 12 * 3600
-    assert parse_duration_seconds("1h30m15s") == 5415
-
-
-def test_case_insensitive():
-    assert parse_duration_seconds("1H") == 3600
-    assert parse_duration_seconds("1D") == 86400
-
-
-@pytest.mark.parametrize("s", ("", "abc", "0h", "1h abc", "abc 1h"))
-def test_invalid_returns_none(s):
-    assert parse_duration_seconds(s) is None
 
 
 # ── format_duration_seconds ───────────────────────────────────────────

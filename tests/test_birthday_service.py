@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, set_config_value
 from tests.db_template import migrated_db
 from bot_modules.services.birthday_service import (
+    ANNOUNCE_HOUR_KEY,
+    DEFAULT_ANNOUNCE_HOUR,
     MAX_DAYS,
+    announce_hour,
     announced_birthday_ids,
     delete_birthday,
     is_birthday_wish,
@@ -251,3 +254,39 @@ def test_announced_birthday_ids_reads_todays_rows_only(db):
         # A quiet birthday (never announced) is never in the set — the
         # privacy gate for the birthday_wish quest.
         assert announced_birthday_ids(conn, 999, "2026-07-15") == set()
+
+
+# ── announce_hour ─────────────────────────────────────────────────────
+
+
+def test_announce_hour_defaults_to_nine(db):
+    """Untouched guilds keep the historical 09:00 announce."""
+    with open_db(db) as conn:
+        assert announce_hour(conn, GUILD) == DEFAULT_ANNOUNCE_HOUR == 9
+
+
+@pytest.mark.parametrize(
+    "stored,expected",
+    [
+        ("0", 0),      # midnight is a real choice, not "unset"
+        ("7", 7),
+        ("23", 23),
+        (" 18 ", 18),  # tolerated whitespace
+        ("24", 9),     # out of range → default
+        ("-1", 9),
+        ("noon", 9),   # garbage → default, never a stalled loop
+        ("", 9),
+    ],
+)
+def test_announce_hour_reads_the_guild_dial(db, stored, expected):
+    with open_db(db) as conn:
+        set_config_value(conn, ANNOUNCE_HOUR_KEY, stored, GUILD)
+        assert announce_hour(conn, GUILD) == expected
+
+
+def test_announce_hour_is_per_guild(db):
+    with open_db(db) as conn:
+        set_config_value(conn, ANNOUNCE_HOUR_KEY, "17", GUILD)
+        assert announce_hour(conn, GUILD) == 17
+        # A guild with no row of its own still gets the default.
+        assert announce_hour(conn, 424242) == 9

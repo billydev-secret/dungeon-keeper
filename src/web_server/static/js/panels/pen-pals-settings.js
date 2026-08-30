@@ -7,6 +7,17 @@ import {
 } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
 
+// Scheduled-round day/hour, stored on pen_pals_config.auto_round_dow /
+// auto_round_hour. -1 means every day; the hours are guild-local, matching how
+// the bot reads them through the server's timezone offset.
+const ROUND_DAYS = [
+  [-1, "Every day"], [0, "Mondays"], [1, "Tuesdays"], [2, "Wednesdays"],
+  [3, "Thursdays"], [4, "Fridays"], [5, "Saturdays"], [6, "Sundays"],
+];
+const ROUND_HOURS = Array.from({ length: 24 }, (_, h) => [
+  h, `${h % 12 || 12}:00 ${h < 12 ? "AM" : "PM"}`,
+]);
+
 // Timer fields: [input name, visible label, minimum, multiplier to seconds]
 const TIMER_FIELDS = [
   ["session_hours", "Session Length", 1, 3600],
@@ -72,9 +83,24 @@ export function mountSettings(container) {
               <label for="pp-match-mode">Pairing Mode</label>
               <select name="match_mode" id="pp-match-mode">
                 <option value="instant" ${(pp.match_mode || "instant") === "instant" ? "selected" : ""}>Instant — match the moment a partner is waiting</option>
-                <option value="scheduled" ${pp.match_mode === "scheduled" ? "selected" : ""}>Once a day — pair everyone waiting at 8:00 AM Eastern</option>
+                <option value="scheduled" ${pp.match_mode === "scheduled" ? "selected" : ""}>Scheduled — pair everyone waiting in one batch</option>
               </select>
-              <div class="field-hint">Instant matches members as soon as someone eligible is already in the pool. Scheduled queues everyone and pairs the whole pool in one batch, once a day at 8am Eastern — nobody is matched on join.</div>
+              <div class="field-hint">Instant matches members as soon as someone eligible is already in the pool. Scheduled queues everyone and pairs the whole pool in one batch at the time below — nobody is matched on join.</div>
+            </div>
+
+            <div class="field" data-schedule-row>
+              <label for="pp-round-day">Scheduled Round</label>
+              <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                <select name="auto_round_dow" id="pp-round-day">
+                  ${ROUND_DAYS.map(([v, label]) => `
+                    <option value="${v}" ${Number(pp.auto_round_dow ?? -1) === v ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+                <select name="auto_round_hour" id="pp-round-hour">
+                  ${ROUND_HOURS.map(([v, label]) => `
+                    <option value="${v}" ${Number(pp.auto_round_hour ?? 12) === v ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+              </div>
+              <div class="field-hint">When the batch goes out, in your server's own time (set on Config → Server → Global). Members are told this time when they join the pool and on the signup panel. Only used in Scheduled mode.</div>
             </div>
 
             <div class="field">
@@ -246,6 +272,8 @@ export function mountSettings(container) {
           opt_in_role_id:     optInPicker.getValue() || null,
           question_category:  fd.get("question_category"),
           match_mode:         fd.get("match_mode"),
+          auto_round_dow:     parseInt(fd.get("auto_round_dow"), 10),
+          auto_round_hour:    parseInt(fd.get("auto_round_hour"), 10),
           room_visibility:    fd.get("room_visibility"),
           intro_message:      fd.get("intro_message"),
           log_channel_id:     logPicker.getValue() || null,

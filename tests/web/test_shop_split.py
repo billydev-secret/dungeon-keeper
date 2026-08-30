@@ -133,14 +133,19 @@ def test_no_page_carries_another_page_s_concern(filename):
 
 
 def test_the_old_id_still_resolves():
-    """`economy-sinks` is frozen. The page still exists, so no redirect is owed."""
+    """`economy-sinks` is frozen. The page still exists, so no redirect is owed.
+
+    The check is on MOVED_PAGES *keys* only: being a redirect key would make
+    the page's own nav entry unreachable, while appearing as a *target* is
+    fine (config-booster-roles redirects here — the palette perk's successor).
+    """
     app = (_JS / "app.js").read_text(encoding="utf-8")
     assert 'id: "economy-sinks"' in app
     moved = re.search(r"const MOVED_PAGES = \{([^}]*)\}", app, re.S)
     assert moved, "MOVED_PAGES is gone"
-    assert "economy-sinks" not in moved.group(1), (
-        "economy-sinks was added to MOVED_PAGES, but the page still exists — a "
-        "redirect would make its own nav entry unreachable"
+    assert '"economy-sinks":' not in moved.group(1), (
+        "economy-sinks was added to MOVED_PAGES as a key, but the page still "
+        "exists — a redirect would make its own nav entry unreachable"
     )
 
 

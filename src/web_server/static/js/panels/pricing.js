@@ -157,9 +157,41 @@ const EMOJI_FIELDS = [
   }],
 ];
 
+// Custom shop items are curated on Shop & Perks, one price per item — the
+// only figure that belongs to the whole feature is how long an order may sit
+// on staff before it refunds itself, which is the same dial the sponsored
+// QOTD, pin and theme queues have here.
+const ITEM_FIELDS = [
+  ["shop_item_expire_days", "Order Review Window (days)", {
+    hint: "An order for a custom item that staff have neither delivered nor turned down within this many days refunds the buyer on its own and comes off the todo board. 0 leaves orders waiting forever. Only items that go on the mod todo list can wait — an item that gives a role is handed over instantly.",    max: 365,
+  }],
+];
+
+// Live auctions (/bank auction start). Guard-rails rather than prices: a mod
+// names the prize and the length, and these bound what any of them can do.
+const AUCTION_FIELDS = [
+  ["auction_min_bid", "Opening Bid", {
+    hint: "The lowest first bid an auction will take. There is no 0 here — an auction someone can win for nothing is not an auction.",
+    min: 1,
+  }],
+  ["auction_min_increment", "Minimum Raise", {
+    hint: "How far each new bid must beat the standing high bid. Small raises make for a long back-and-forth; large ones end the bidding sooner.",
+    min: 1,
+  }],
+  ["auction_soft_close_seconds", "Anti-Snipe Window (seconds)", {
+    hint: "A bid landing this close to the end pushes the end out by the same amount, so an auction cannot be won at the buzzer. 300 is five minutes; 0 turns sniping protection off.",
+    max: 3600,
+  }],
+  ["auction_max_duration_hours", "Longest Auction (hours)", {
+    hint: "The most hours a moderator may run one auction for. 168 is a week. This is a ceiling on what they can type, not the length itself — they pick that when they start one.",
+    min: 1,
+    max: 720,
+  }],
+];
+
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
-  ...QOTD_FIELDS, ...DEMURRAGE_FIELDS,
+  ...QOTD_FIELDS, ...ITEM_FIELDS, ...AUCTION_FIELDS, ...DEMURRAGE_FIELDS,
 ];
 
 // Every numeric field is capped somewhere so a typo can't create a price no
@@ -183,8 +215,8 @@ function fieldMin(opts) {
  *
  * Only the eight switchable shop lines have one, and their keys line up by
  * construction (`price_role_icon` -> `shop_role_icon_enabled`). Anything else
- * — rakes, sponsor prices, room prices — is priced but not switchable, and
- * returns null so it renders exactly as before.
+ * — rakes, sponsor prices, auction guard-rails — is priced but not switchable,
+ * and returns null so it renders exactly as before.
  */
 function saleKeyFor(key) {
   const SWITCHABLE = new Set([
@@ -327,6 +359,33 @@ function render(container, cfg, pricing) {
           <div class="section-label">Sponsored QOTD</div>
           <div class="field-row" style="flex-wrap:wrap;">
             ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">Custom Shop Items</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${ITEM_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+          <div class="field-hint">
+            The items themselves — what they cost, what buying one does, how many
+            there are — are set up on <a href="#/economy-sinks">Shop &amp; Perks</a>,
+            and the orders waiting on a person are worked from
+            <a href="#/shop-approvals">Approvals</a>.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">Live Auctions</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${AUCTION_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+          <div class="field-hint">
+            A moderator opens an auction with <code>/bank auction start</code> and
+            hands the prize over themselves. Members bid in the open, an outbid
+            bidder is refunded straight away, and the winning bid is spent — so the
+            auction is a sink. These four bound every auction; there is no on/off
+            switch because nothing happens until a moderator starts one.
           </div>
         </div>
 

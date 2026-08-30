@@ -84,7 +84,7 @@ Per-guild settings, all editable from the dashboard XP panel:
 - **Level-up log channel** — where per-level-up embeds post.
 - **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates).
 - **Grant-allowlist** — extra user ids (beyond mods) allowed to invoke `/xp_give`.
-- **Channel exclusion list** — channels (and threads whose parent is in the list) where text and image-reaction XP are suppressed. The AFK voice channel is implicitly excluded.
+- **Channel exclusion list** — channels (and threads whose parent is in the list) where text and image-reaction XP are suppressed. An excluded **voice** channel likewise never qualifies for a tick, so it pays neither voice XP nor the daily voice login. The AFK voice channel is implicitly excluded.
 
 Two internal knobs — the voice-tick poll period and the role-grant level itself — are pinned in code and not exposed. The level-5 promotion post's 2-day tenure minimum and the "Spicy access" field's grant role (`grant_roles["nsfw"]`, see `role_grant_spec.md`) are likewise not dashboard-configurable.
 

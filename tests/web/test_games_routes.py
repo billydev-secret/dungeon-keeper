@@ -1187,6 +1187,147 @@ def test_ll_template_from_another_guild_is_invisible_and_unowned(open_client, fa
     ).status_code == 404
 
 
+# ── Enable switch vocabulary ──────────────────────────────────────────────────
+# games_game_config is keyed by the game_type string the *bot* reads. The
+# dashboard's whitelist once spelled Risky Rolls "risky_roller", a key nothing
+# anywhere read, while the scheduler's enable gate asked about "risky_roll" and
+# could never be answered — two live schedules with no reachable off switch. The
+# duel games weren't in the vocabulary at all, so they had no off switch either.
+
+
+@pytest.mark.parametrize(
+    "game_type",
+    [
+        "risky_roll", "legitlibs",
+        "pressure", "quickdraw", "hot_potato", "hot_potato_group",
+        "chicken", "musical_chairs",
+    ],
+)
+def test_enable_switch_is_settable_for_every_game_the_bot_gates(
+    open_client, fake_ctx, game_type
+):
+    """A PUT lands under the exact game_type the bot's enable check reads."""
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is True
+
+    resp = open_client.put(
+        f"{BASE}/config/games/{game_type}", json={"enabled": False, "options": {}}
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT enabled FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+            (fake_ctx.guild_id, game_type),
+        ).fetchone()
+    assert row is not None and row[0] == 0
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is False
+
+
+def test_risky_roller_is_not_a_settable_game_type(open_client):
+    """The misspelled key is gone: nothing read it, so nothing may write it."""
+    assert open_client.get(f"{BASE}/config/games/risky_roller").status_code == 404
+    assert open_client.put(
+        f"{BASE}/config/games/risky_roller", json={"enabled": False}
+    ).status_code == 404
+
+
+def test_every_settable_game_type_is_read_by_the_bot():
+    """No entry in the whitelist may be a key with no reader.
+
+    Each type must be one the bot actually asks about — a cog's own
+    check_game_enabled call, the scheduler's list, or a duel cog's GAME_KEY.
+    """
+    from bot_modules.games.constants import SCHEDULABLE_GAME_TYPES
+    from web_server.routes.games import ALL_GAME_TYPES
+
+    known = set(SCHEDULABLE_GAME_TYPES) | {
+        "photo", "traditional", "mfk", "compliment", "ttl",
+        "pressure", "quickdraw", "hot_potato", "hot_potato_group",
+        "chicken", "musical_chairs",
+    }
+    assert not set(ALL_GAME_TYPES) - known
+
+
+# ── LegitLibs player range is derived, never typed ─────────────────────────────
+
+
+def _blanks(n: int) -> str:
+    return json.dumps([{"id": f"b{i}", "pos": "noun"} for i in range(1, n + 1)])
+
+
+def test_ll_template_player_range_comes_from_the_blank_count(open_client):
+    """Each player fills 5–10 blanks, so the range is arithmetic on the blanks.
+    A player_min/player_max sent by a client is not a setting — it never was."""
+    tid = _create_template(
+        open_client, blanks=_blanks(20), player_min=9, player_max=9
+    ).json()["template_id"]
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert (data["player_min"], data["player_max"]) == (2, 4)
+
+
+def test_ll_template_update_keeps_the_range_derived(open_client):
+    """An update carrying only a typed range used to write it straight through
+    (the derive step ran only when blanks came with the payload), so the card
+    could advertise a ceiling the blank count never supported."""
+    tid = _create_template(open_client, blanks=_blanks(20)).json()["template_id"]
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/{tid}",
+        json={"title": "Renamed", "player_min": 9, "player_max": 9},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert data["title"] == "Renamed"
+    assert (data["player_min"], data["player_max"]) == (2, 4)
+
+
+# ── Per-game config ───────────────────────────────────────────────────────────
+
+
+def test_game_config_save_replaces_the_whole_option_set(open_client):
+    """A merge-only write meant a key dropped from a panel's schema could never
+    be cleared from the dashboard again — prod still carried clapback
+    min_players/max_players that nothing has read for a year."""
+    open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 5, "min_players": 2}},
+    )
+    resp = open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 7}},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/config/games/clapback").json()
+    assert data["options"] == {"rounds": 7}
+
+
+def test_game_config_enabled_only_save_keeps_stored_options(open_client):
+    """The availability list on Games Global Config sends no options at all;
+    that must not wipe the dials set on the game's own page."""
+    open_client.put(
+        f"{BASE}/config/games/clapback",
+        json={"enabled": True, "options": {"rounds": 7}},
+    )
+    open_client.put(f"{BASE}/config/games/clapback", json={"enabled": False})
+    data = open_client.get(f"{BASE}/config/games/clapback").json()
+    assert data["enabled"] is False
+    assert data["options"] == {"rounds": 7}
+
+
+@pytest.mark.parametrize("game_type", ["legitlibs", "ttl", "story"])
+def test_game_config_can_switch_off_every_startable_game(open_client, game_type):
+    """LegitLibs wasn't on the config API's list at all, so its switch 404'd."""
+    resp = open_client.put(f"{BASE}/config/games/{game_type}", json={"enabled": False})
+    assert resp.status_code == 200
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is False
+
+
+def test_game_config_list_names_every_game(open_client):
+    """The availability list renders straight from this payload, so each entry
+    carries the game's display name."""
+    games = open_client.get(f"{BASE}/config/games").json()["games"]
+    assert games["legitlibs"]["label"] == "LegitLibs"
+    assert games["ttl"]["label"] == "Two Truths and a Lie"
+    assert "risky_roller" not in games
 # ── Per-game enable toggle (/config/games/{game_type}) ──────────────────────
 
 
@@ -1221,18 +1362,6 @@ def test_all_game_types_are_real_game_types():
 
     unknown = [gt for gt in ALL_GAME_TYPES if gt not in GAME_NAMES]
     assert not unknown, f"settable game types nothing else knows: {unknown}"
-
-
-def test_risky_roll_enable_toggle_round_trips(open_client):
-    resp = open_client.put(f"{BASE}/config/games/risky_roll", json={"enabled": False})
-    assert resp.status_code == 200
-    assert open_client.get(f"{BASE}/config/games/risky_roll").json()["enabled"] is False
-
-
-def test_legitlibs_enable_toggle_round_trips(open_client):
-    resp = open_client.put(f"{BASE}/config/games/legitlibs", json={"enabled": False})
-    assert resp.status_code == 200
-    assert open_client.get(f"{BASE}/config/games/legitlibs").json()["enabled"] is False
 
 
 # ── AMA has no bank ─────────────────────────────────────────────────────────

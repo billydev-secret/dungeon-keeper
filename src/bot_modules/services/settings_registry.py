@@ -73,15 +73,29 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 # write would succeed, and nothing whatsoever would change. Worse than
 # refusing.
 #
-#   nsfw/denizen/veteran_role_id — superseded by the `grant_roles` table
-#                                  (see advisor_actions.validate_grant_role_change)
+#   nsfw/denizen/veteran_*       — the whole legacy per-grant config block
+#                                  (role, log channel, announce channel,
+#                                  message), superseded by the `grant_roles`
+#                                  table (see
+#                                  advisor_actions.validate_grant_role_change).
+#                                  Their only remaining reader is the one-shot
+#                                  db_utils.migrate_grant_roles, which
+#                                  early-returns for any guild that already has
+#                                  grant_roles rows — i.e. every live guild.
 #   veil_*                       — Veil was renamed to Guess in migration 020
-DEAD_KEYS: frozenset[str] = frozenset({
-    "nsfw_role_id",
-    "denizen_role_id",
-    "veteran_role_id",
+#   ticket_panel_channel_id,     — the live panel record moved to the
+#   ticket_panel_message_id        `ticket_panels` table in migration 023
+_LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
+    f"{grant}_{suffix}"
+    for grant in ("nsfw", "denizen", "veteran")
+    for suffix in ("role_id", "log_channel_id", "announce_channel_id", "grant_message")
+)
+
+DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     "veil_role_id",
     "veil_channel_id",
+    "ticket_panel_channel_id",
+    "ticket_panel_message_id",
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -193,10 +207,20 @@ FEATURES: tuple[Feature, ...] = (
                   help="Left untouched, the bot makes a @Welcome Ping role "
                        "the first time it greets someone. Setting it to "
                        "(none) turns the ping off for good."),
-            _text("welcome_trigger", "What triggers the welcome"),
+            # Closed choice: enforcement matches only these exact strings —
+            # anything else silently disables welcome messages.
+            _text("welcome_trigger", "What triggers the welcome",
+                  choices=("join", "verified")),
             _role("unverified_role_id", "Unverified role", admin_only=True,
                   help="Losing this role is what counts as passing the gate — "
                        "full admin only."),
+            # Set on the Welcome panel and read by both the welcome and the
+            # leave embed, so it lives with the feature that owns the panel
+            # rather than being listed twice.
+            _ch("server_guide_channel_id", "Server guide channel",
+                help="What the {server_guide} placeholder expands to in the "
+                     "welcome and leave messages. Unset, the placeholder "
+                     "renders as nothing."),
         ),
     ),
     Feature(
@@ -218,23 +242,18 @@ FEATURES: tuple[Feature, ...] = (
             _ch("birthday_channel_id", "Birthday announcement channel", required=True),
             _text("birthday_message", "Birthday message"),
             _flag("birthday_pin", "Pin the birthday post"),
+            _num("birthday_announce_hour", "Hour announcements go out (guild-local)",
+                 minimum=0, maximum=23, default="9",
+                 help="0–23 in the server's own time zone; 9 means 09:00."),
         ),
     ),
-    Feature(
-        slug="qa_rewards",
-        label="Q&A rewards",
-        panel="Config → Q&A rewards",
-        blurb="Pays members coins for answering questions in a help channel.",
-        enable_key="qa_enabled",
-        settings=(
-            _flag("qa_enabled", "Q&A rewards on", required=True),
-            _ch("qa_channel_id", "Q&A channel", required=True),
-            _num("qa_reward", "Coins per accepted answer", minimum=0, maximum=100000),
-            _num("qa_daily_cap", "Daily reward cap", minimum=0, maximum=100000),
-            _role("qa_role_id", "Role that can mark answers", admin_only=True,
-                  help="Confers authority over payouts — full admin only."),
-        ),
-    ),
+    # The qa_* keys (QA Tracker, Dev → QA Tracker) are deliberately NOT here.
+    # The entry they had described a fictional "Q&A rewards" feature, nudged
+    # every unconfigured guild to set up what is dev tooling, and was a second
+    # write path with 10-100x the panel's bounds — the 2026-08-29 IA audit's
+    # duplicated-control finding. The panel (PUT /api/qa/settings) is the sole
+    # writer; the advisor still *sees* the settings via the advisor_context
+    # feature loader. Pinned by tests/test_settings_registry_contract.py.
     Feature(
         slug="greeting_watch",
         label="Greeting watch",
@@ -279,8 +298,10 @@ FEATURES: tuple[Feature, ...] = (
             _num("intake_stale_hours", "Hours before a stale-card nudge",
                  minimum=1, maximum=720),
             _ch("intake_reference_channel_id", "Procedure reference channel",
-                help="The bot keeps this channel in sync with the dashboard's "
-                     "procedure block editor."),
+                writable=False,
+                help="Set from the panel — its save is what syncs the "
+                     "procedure blocks into the new channel; a bare config "
+                     "write leaves the channel empty until someone re-saves."),
         ),
         extra_panel_only=("checklist step editor", "procedure reference blocks"),
     ),
@@ -288,28 +309,45 @@ FEATURES: tuple[Feature, ...] = (
         slug="rules_watch",
         label="Rules watch",
         panel="Config → Rules watch",
-        blurb="Points members at the server guide when they ask a rules question.",
+        blurb="Screens public messages for rule breaks and queues the flags for a moderator.",
         enable_key="rules_watch_enabled",
         settings=(
             _flag("rules_watch_enabled", "Rules watch on", required=True),
-            _ch("server_guide_channel_id", "Server guide channel", required=True),
+            _ch("rules_watch_channel_id", "Immediate alert channel",
+                help="Optional — only the most serious flags are posted here as "
+                     "they happen; everything else waits in the web review queue."),
         ),
     ),
     Feature(
         slug="inactivity",
-        label="Inactivity prune",
-        panel="Config → Inactivity",
-        blurb="Flags members who've gone quiet so you can nudge or prune them.",
+        # Label/panel name the *sweep*, not the prune. "Auto-Remove Role
+        # (Inactive)" is a separate panel backed by its own table
+        # (inactivity_prune_rules), which this KV-only registry cannot describe;
+        # calling this entry "Inactivity prune" made the two read as one feature
+        # and hid the real prune rule behind a name already spent.
+        label="Inactive sweep",
+        panel="Config → Inactive Sweep",
+        blurb="Flags members who've gone quiet so you can nudge them.",
         enable_key="inactive_auto_sweep",
         settings=(
             _flag("inactive_auto_sweep", "Automatic sweep"),
-            _ch("inactive_channel_id", "Sleeper report channel", required=True),
+            # Channel/role are set through POST /config/inactive/channel,
+            # which creates the role and re-plumbs channel permissions; a
+            # bare config write leaves the old channel visible to inactive
+            # members forever, so neither is model-writable.
+            _ch("inactive_channel_id", "Sleeper report channel", required=True,
+                writable=False,
+                help="Set from the panel — its setup flow moves the channel "
+                     "permissions with it."),
             _role("inactive_role_id", "Role applied to inactive members",
-                  admin_only=True,
-                  help="Applied to members in bulk by the sweep — full admin only."),
+                  writable=False,
+                  help="Created and plumbed by the panel's setup flow — "
+                       "panel only."),
             _num("inactive_threshold_days", "Days of silence before flagging",
                  minimum=1, maximum=3650),
-            _num("inactive_sweep_cap", "Max members per sweep", minimum=1, maximum=10000),
+            # 1-200 mirrors PUT /config/inactive's clamp; the enforcing
+            # reader clamps only the lower bound.
+            _num("inactive_sweep_cap", "Max members per sweep", minimum=1, maximum=200),
         ),
     ),
     Feature(
@@ -318,7 +356,6 @@ FEATURES: tuple[Feature, ...] = (
         panel="Config → Tickets",
         blurb="Gives members a button that opens a private ticket channel for staff.",
         settings=(
-            _ch("ticket_panel_channel_id", "Ticket panel channel", required=True),
             _num("ticket_category_id", "Ticket category", required=True, writable=False,
                  help="A category, not a text channel — set it from the panel."),
             _ch("transcript_channel_id", "Transcript archive channel",
@@ -405,9 +442,20 @@ FEATURES: tuple[Feature, ...] = (
         blurb="Members write a profile the server can browse.",
         settings=(
             _ch("bios_channel_id", "Bios channel", required=True),
-            _num("bios_questions_per_bio", "Questions per bio", minimum=1, maximum=50),
-            _num("bios_archive_grace", "Days before an old bio is archived",
-                 minimum=0, maximum=3650),
+            # BiosConfig.configured needs BOTH the channel and the wizard
+            # category, so the category has to be `required` here too — with it
+            # missing, gap detection called a bios setup "configured" that the
+            # wizard would refuse to start.
+            _num("bios_wizard_category_id", "Bios wizard category", required=True,
+                 writable=False, default="0",
+                 help="A category, not a text channel — set it from the panel."),
+            # Bounds mirror routes/bios.py BiosConfigBody — pinned by
+            # tests/test_settings_registry_contract.py. archive_grace is
+            # SECONDS the wizard room stays open, not days: the old "days"
+            # label made an advisor Apply an 86,400x error.
+            _num("bios_questions_per_bio", "Questions per bio", minimum=1, maximum=10),
+            _num("bios_archive_grace", "Seconds the bio wizard room stays open",
+                 minimum=0, maximum=3600),
         ),
     ),
     Feature(

@@ -41,8 +41,26 @@ class LevelRoleDecision(Enum):
     SKIP_ALREADY_HAS = "skip_already_has"
 
 
-def nsfw_grant_role_id(grant_roles: dict) -> int:
-    """The guild's configured NSFW/"spicy" access role id, or 0 if unset."""
+def nsfw_grant_role_id(grant_roles: dict, configured_role_id: int = 0) -> int:
+    """The guild's "spicy" access role id — what the Level 5 card's *Spicy
+    access* field reports on, and what a role change refreshes it for.
+
+    ``configured_role_id`` is the dashboard's **Promotion Review Grant Role**
+    (``promotion_review_grant_role_id``, XP & Leveling panel): the role the
+    review card's Grant button hands out, which is by definition the access
+    role a reviewer is deciding about. It wins when set.
+
+    The fallback is the grant whose *internal key* is literally ``nsfw``, which
+    is how this used to be found. That key is only ever there because the
+    default seed created it — an admin who renames, deletes or never creates it
+    (a second guild starts with no grants at all) had no way to point the field
+    anywhere, and it silently vanished. Kept as a fallback so guilds that
+    configured the grant and nothing else keep the field they have today.
+
+    0 when neither is set: the field is then omitted from the card entirely.
+    """
+    if configured_role_id > 0:
+        return int(configured_role_id)
     cfg = grant_roles.get("nsfw")
     return int(cfg["role_id"]) if cfg else 0
 
@@ -625,7 +643,7 @@ async def promotion_review_recheck_loop(
                         cfg.level_5_log_channel_id,
                         cfg.level_5_role_id,
                         cfg.xp_settings,
-                        nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                        nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
                         accent=accent,
                         db_path=db_path,
                     )

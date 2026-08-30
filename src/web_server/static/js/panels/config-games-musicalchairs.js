@@ -1,3 +1,5 @@
+import { esc } from "../api.js";
+import { mountGamePanel } from "./games-panel-shared.js";
 import {
   loadConfig, loadChannels, mountChannelMultiPicker, apiPut, showStatus,
   guardForm, renderMetaWarning,
@@ -28,7 +30,8 @@ export function mount(container) {
           <h2>Musical Chairs</h2>
           <div class="subtitle">The music stops, everyone grabs a chair, and one player is knocked out each round</div>
         </header>
-                ${renderMetaWarning()}
+        <div data-region="status"></div>
+        ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Lobby</div>
@@ -69,6 +72,17 @@ export function mount(container) {
               { min: 1, max: 32 })}
             ${numField("max_stakes_length", "Longest Stakes Text (characters)", cfg.max_stakes_length,
               "How much a host may write when describing what is at stake.", { min: 1, max: 2000 })}
+            <div class="field">
+              <label for="gc-nick_denylist">Extra Banned Words</label>
+              <input type="text" name="nick_denylist" id="gc-nick_denylist"
+                value="${esc((cfg.nick_denylist || []).join(", "))}"
+                style="width:100%;max-width:420px;box-sizing:border-box;" />
+              <div class="field-hint">Comma-separated. A nickname or stakes text
+                that uses one of these words is refused, on top of the slurs the bot
+                always blocks. Capitals are ignored, and each entry has to appear as a
+                whole word &mdash; &ldquo;ass&rdquo; won&rsquo;t block
+                &ldquo;class&rdquo;.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -96,6 +110,13 @@ export function mount(container) {
         </form>
       </div>
     `;
+
+    mountGamePanel(container.querySelector('[data-region="status"]'), {
+      gameType: "musical_chairs",
+      gameName: "Musical Chairs",
+      bare: true,
+      statusHint: "When off, nobody can start a new Musical Chairs game. Games already running finish normally.",
+    });
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
@@ -126,6 +147,8 @@ export function mount(container) {
         channel_allowlist: allowlist.getValues(),
         false_start_elim: form.querySelector('input[name="false_start_elim"]').checked,
       };
+      payload.nick_denylist = String(fd.get("nick_denylist") || "")
+        .split(",").map(s => s.trim()).filter(Boolean);
       for (const [name, label, min, max, isFloat] of NUMS) {
         const n = isFloat ? parseFloat(fd.get(name)) : parseInt(fd.get(name), 10);
         if (!Number.isFinite(n) || n < min || n > max) {

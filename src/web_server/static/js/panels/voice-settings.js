@@ -13,11 +13,23 @@ const SAVEABLE_FIELDS = [
 ];
 
 /**
- * The Voice Control settings half of the Voice page. Mounted into a region by
- * panels/voice.js, below the activity report, and locked read-only for
- * non-admins. Not a nav page in its own right.
+ * Voice Control — how member-owned voice rooms behave (Config → Voice,
+ * id config-voice-master, adminOnly). The usage evidence lives on
+ * Reports → Engagement → Voice Activity, cross-linked via `related:`.
+ * lockUnlessAdmin stays as defense in depth even though the nav entry is
+ * adminOnly; writes are refused server-side regardless.
  */
-export function mountSettings(container) {
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Voice Control</h2>
+        <div class="subtitle">How member-owned voice rooms behave</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  const container = outer.querySelector('[data-region="settings"]');
   container.innerHTML = `<div class="empty">Loading Voice Control configuration…</div>`;
 
   return mountAsync(container, async () => {
@@ -125,7 +137,7 @@ export function mountSettings(container) {
                     <input type="checkbox" name="saveable_fields" value="${value}"${(cfg.saveable_fields || []).includes(value) ? " checked" : ""} /> ${esc(label)}
                   </label>`).join("")}
               </div>
-              <div class="field-hint">Which parts of a room's setup owners may persist. "Room access" covers the single open / NSFW / locked / spectator state.</div>
+              <div class="field-hint">Which parts of a room's setup owners may persist. "Room access" covers the single open / NSFW / locked / spectator state. Unticking a box also stops anything already saved for it coming back — the next room uses your defaults instead. Untick them all and nothing persists. One exception: unticking "Block list" stops owners saving <em>new</em> blocks (they're told so when they try), but anyone a member has already blocked stays shut out of their rooms — that's a safety choice of theirs, not part of the room's look.</div>
             </div>
           </div>
 

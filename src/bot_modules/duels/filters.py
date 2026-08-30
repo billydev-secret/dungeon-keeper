@@ -29,15 +29,49 @@ def _clean(text: str) -> str:
     return unicodedata.normalize("NFKC", text).strip()
 
 
+def _extra_word_pattern(word: str) -> str:
+    """A configured banned word as a literal, whole-word regex.
+
+    The word is escaped, so admin-typed punctuation (``c++``) bans that literal
+    text instead of exploding (``re.error``) or silently never matching. The
+    boundary guards are added only on the ends that are word characters, which
+    is what keeps a short entry from swallowing longer words it merely sits
+    inside — "ass" must not block "class" or "Cassandra" — while an entry like
+    ``c++`` still matches, its ``+`` needing no boundary at all.
+    """
+    lead = r"(?<!\w)" if _is_word_char(word[:1]) else ""
+    tail = r"(?!\w)" if _is_word_char(word[-1:]) else ""
+    return f"{lead}{re.escape(word)}{tail}"
+
+
+def _is_word_char(ch: str) -> bool:
+    return bool(ch) and (ch.isalnum() or ch == "_")
+
+
+def _denylist_hit(cleaned: str, denylist: list[str] | None) -> bool:
+    """True when *cleaned* trips the built-in denylist or a configured word.
+
+    The built-in entries above are regexes. The configured extras are not: they
+    come from the "Extra Banned Words" box on each duel game's dashboard panel,
+    so they are matched literally and as whole words (see
+    ``_extra_word_pattern``).
+    """
+    if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in DEFAULT_NICK_DENYLIST):
+        return True
+    return any(
+        re.search(_extra_word_pattern(word.strip()), cleaned, re.IGNORECASE)
+        for word in (denylist or [])
+        if word.strip()
+    )
+
+
 def contains_disallowed_content(text: str, denylist: list[str] | None = None) -> bool:
     """True if the cleaned text matches the slur/abuse denylist.
 
     Reusable for free-text fields beyond nicknames/stakes (e.g. game question
     prompts, confessions) so they share one guard.
     """
-    cleaned = _clean(text)
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    return any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in effective_denylist)
+    return _denylist_hit(_clean(text), denylist)
 
 
 def validate_nickname(
@@ -56,10 +90,8 @@ def validate_nickname(
         return FilterResult(
             ok=False, value=raw, reason=f"Nickname must be {max_length} characters or fewer."
         )
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    for pattern in effective_denylist:
-        if re.search(pattern, cleaned, re.IGNORECASE):
-            return FilterResult(ok=False, value=raw, reason="Nickname contains disallowed content.")
+    if _denylist_hit(cleaned, denylist):
+        return FilterResult(ok=False, value=raw, reason="Nickname contains disallowed content.")
     if _DANGEROUS_PREFIX.search(cleaned):
         return FilterResult(
             ok=False, value=raw, reason="Nickname cannot start with @, #, or /."
@@ -95,12 +127,10 @@ def validate_stakes(
         return FilterResult(
             ok=False, value=raw, reason=f"Stakes must be {max_length} characters or fewer."
         )
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    for pattern in effective_denylist:
-        if re.search(pattern, cleaned, re.IGNORECASE):
-            return FilterResult(
-                ok=False, value=raw, reason="Stakes text contains disallowed content."
-            )
+    if _denylist_hit(cleaned, denylist):
+        return FilterResult(
+            ok=False, value=raw, reason="Stakes text contains disallowed content."
+        )
     return FilterResult(ok=True, value=cleaned, reason=None)
 
 

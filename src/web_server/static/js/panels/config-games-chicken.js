@@ -1,3 +1,5 @@
+import { esc } from "../api.js";
+import { mountGamePanel } from "./games-panel-shared.js";
 import {
   loadConfig, loadChannels, mountChannelMultiPicker, apiPut, showStatus,
   guardForm, renderMetaWarning,
@@ -28,7 +30,8 @@ export function mount(container) {
           <h2>Chicken</h2>
           <div class="subtitle">A nerve game: the meter climbs and whoever bails last, wins — the one who cracks first takes the forfeit</div>
         </header>
-                ${renderMetaWarning()}
+        <div data-region="status"></div>
+        ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Lobby</div>
@@ -51,6 +54,17 @@ export function mount(container) {
               { min: 1, max: 32 })}
             ${numField("max_stakes_length", "Longest Stakes Text (characters)", cfg.max_stakes_length,
               "How much a challenger may write when describing what is at stake.", { min: 1, max: 2000 })}
+            <div class="field">
+              <label for="gc-nick_denylist">Extra Banned Words</label>
+              <input type="text" name="nick_denylist" id="gc-nick_denylist"
+                value="${esc((cfg.nick_denylist || []).join(", "))}"
+                style="width:100%;max-width:420px;box-sizing:border-box;" />
+              <div class="field-hint">Comma-separated. A nickname or stakes text
+                that uses one of these words is refused, on top of the slurs the bot
+                always blocks. Capitals are ignored, and each entry has to appear as a
+                whole word &mdash; &ldquo;ass&rdquo; won&rsquo;t block
+                &ldquo;class&rdquo;.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -79,6 +93,13 @@ export function mount(container) {
       </div>
     `;
 
+    mountGamePanel(container.querySelector('[data-region="status"]'), {
+      gameType: "chicken",
+      gameName: "Chicken",
+      bare: true,
+      statusHint: "When off, nobody can start a new Chicken game. Games already running finish normally.",
+    });
+
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
     const allowlist = mountChannelMultiPicker(
@@ -103,6 +124,8 @@ export function mount(container) {
       e.preventDefault();
       const fd = new FormData(form);
       const payload = { channel_allowlist: allowlist.getValues() };
+      payload.nick_denylist = String(fd.get("nick_denylist") || "")
+        .split(",").map(s => s.trim()).filter(Boolean);
       for (const [name, label, min, max, isFloat] of NUMS) {
         const n = isFloat ? parseFloat(fd.get(name)) : parseInt(fd.get(name), 10);
         if (!Number.isFinite(n) || n < min || n > max) {

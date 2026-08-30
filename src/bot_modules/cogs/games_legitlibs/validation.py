@@ -9,6 +9,21 @@ MAX_BLANKS = 25
 MIN_BLANKS = 1
 
 
+def lobby_is_full(players, player_max) -> bool:
+    """True when a template's player ceiling leaves no room for another joiner.
+
+    ``player_max`` is derived from the template's blank count (each player is
+    meant to fill 5–10 blanks), so it is a real capacity, not a preference:
+    past it the round hands people a blank each or none at all. Both modes
+    gate their Join button on this; the lobby used to check only the floor and
+    let latecomers in unopposed. A missing or zero ceiling means "unset", so
+    nothing is capped.
+    """
+    if not player_max:
+        return False
+    return len(players) >= int(player_max)
+
+
 def validate_template(body: str, blanks: list[dict], tier: int, axes: dict) -> list[str]:
     """
     Validate a template definition. Returns a list of error strings (empty = valid).

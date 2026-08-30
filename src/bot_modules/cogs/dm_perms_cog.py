@@ -45,6 +45,7 @@ from bot_modules.services.dm_perms_service import (
     count_pending_for_requester,
     expire_stale_pending_requests,
     get_consent_pair_meta,
+    get_request_limits,
     init_db,
     is_dm_mode_role,
     load_audit_channels,
@@ -52,10 +53,10 @@ from bot_modules.services.dm_perms_service import (
     load_dm_mode_roles,
     load_panel_settings,
     load_request_by_message_id,
-    load_request_channels,
     load_requests,
     normalize_request_type,
     post_audit_event,
+    request_expiry_label,
     remove_consent_pair,
     remove_request,
     request_type_label,
@@ -78,10 +79,9 @@ DM_CONSENT_ACCEPT_CUSTOM_ID = "dm_consent:accept"
 DM_CONSENT_DENY_CUSTOM_ID = "dm_consent:deny"
 DM_CONSENT_DENY_REPLY_CUSTOM_ID = "dm_consent:deny_reply"
 
-REQUEST_TIMEOUT_SECONDS = 24 * 60 * 60
-REQUEST_TIMEOUT_LABEL = "24 hours"
+# How long a request waits and how many a member may have open are per-guild
+# dials on the DM Permissions panel (dm_perms_service.get_request_limits).
 EXPIRY_SWEEP_INTERVAL_SECONDS = 60 * 60  # hourly
-MAX_PENDING_PER_REQUESTER = 5
 MAX_REASON_LENGTH = 250  # leave headroom under the embed-field char ceiling
 
 
@@ -860,7 +860,6 @@ class DmPermsCog(commands.Cog):
         self.bot = bot
         self.consent_pairs: dict[int, set[tuple[int, int]]] = {}
         self.dm_requests: dict[int, dict[tuple[int, int], dict[str, Any]]] = {}
-        self.request_channels: dict[int, int] = {}
         self.panel_settings: dict[int, dict[str, Optional[int]]] = {}
         # Per-guild mode→role-id overrides ({"open"/"ask"/"closed": id}).
         # Loaded at cog_load; the web config route pokes this cache on save.
@@ -882,7 +881,6 @@ class DmPermsCog(commands.Cog):
             return {
                 "consent_pairs": load_consent_pairs(self.bot.ctx.db_path),
                 "dm_requests": load_requests(self.bot.ctx.db_path),
-                "request_channels": load_request_channels(self.bot.ctx.db_path),
                 "panel_settings": load_panel_settings(self.bot.ctx.db_path),
                 "mode_role_ids": load_dm_mode_roles(self.bot.ctx.db_path),
             }
@@ -890,7 +888,6 @@ class DmPermsCog(commands.Cog):
         loaded = await asyncio.to_thread(_load_all)
         self.consent_pairs = loaded["consent_pairs"]
         self.dm_requests = loaded["dm_requests"]
-        self.request_channels = loaded["request_channels"]
         self.panel_settings = loaded["panel_settings"]
         self.mode_role_ids = loaded["mode_role_ids"]
         self._publish_panel_guilds()
@@ -959,7 +956,7 @@ class DmPermsCog(commands.Cog):
     # ── Background tasks ─────────────────────────────────────────────────────
 
     async def _expiry_loop(self) -> None:
-        """Periodic sweep that marks 24h+ pending DM requests as expired."""
+        """Periodic sweep that expires pending requests past their window."""
         await self.bot.wait_until_ready()
         try:
             while not self.bot.is_closed():
@@ -975,7 +972,6 @@ class DmPermsCog(commands.Cog):
         expired = await asyncio.to_thread(
             expire_stale_pending_requests,
             self.bot.ctx.db_path,
-            max_age_seconds=REQUEST_TIMEOUT_SECONDS,
         )
         for row in expired:
             gid = row["guild_id"]
@@ -999,11 +995,14 @@ class DmPermsCog(commands.Cog):
                 audit_line_expired(requester_name, target_name, type_label),
             )
             if requester:
+                # The sweep hands back each guild's window with the row: a
+                # get_request_limits() here would open SQLite synchronously on
+                # the event loop, once per expired request.
                 exp_embed = build_expired_embed(
                     target_display_name=target_name,
                     guild_name=guild.name,
                     type_label=type_label,
-                    request_timeout_label=REQUEST_TIMEOUT_LABEL,
+                    request_timeout_label=request_expiry_label(row["expiry_hours"]),
                 )
                 await _dm(requester, self.bot.ctx.db_path, guild, embed=exp_embed)
 
@@ -1131,14 +1130,18 @@ class DmPermsCog(commands.Cog):
             return
 
         # Per-requester rate limit: cap concurrent pending requests so a single
-        # user can't spam DM prompts to dozens of targets at once.
+        # user can't spam DM prompts to dozens of targets at once. Both the cap
+        # and the expiry window are this guild's own dashboard dials.
+        limits = get_request_limits(self.bot.ctx.db_path, guild.id)
+        max_pending = limits["max_pending"]
+        timeout_label = request_expiry_label(limits["expiry_hours"])
         pending_count = count_pending_for_requester(
             self.bot.ctx.db_path, guild.id, requester.id
         )
-        if pending_count >= MAX_PENDING_PER_REQUESTER:
+        if pending_count >= max_pending:
             limit_msg = (
                 f"❌ You already have {pending_count} pending DM requests. "
-                f"Wait for some to be answered or expire (max {MAX_PENDING_PER_REQUESTER})."
+                f"Wait for some to be answered or expire (max {max_pending})."
             )
             if interaction.response.is_done():
                 await interaction.followup.send(limit_msg, ephemeral=True)
@@ -1155,7 +1158,7 @@ class DmPermsCog(commands.Cog):
             guild_name=guild.name,
             requester_display_name=requester.display_name,
             requester_avatar_url=requester.display_avatar.url,
-            request_timeout_label=REQUEST_TIMEOUT_LABEL,
+            request_timeout_label=timeout_label,
             type_label=type_label,
             reason=reason_clean,
             color=accent,
@@ -1185,7 +1188,7 @@ class DmPermsCog(commands.Cog):
         sender_embed = build_request_sent_embed(
             target_display_name=user.display_name,
             guild_name=guild.name,
-            request_timeout_label=REQUEST_TIMEOUT_LABEL,
+            request_timeout_label=timeout_label,
             type_label=type_label,
             reason=reason_clean,
             color=accent,

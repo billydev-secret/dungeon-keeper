@@ -157,6 +157,11 @@ export function mount(container) {
               <span data-picker="greeter_chat_channel_id"></span>
               <div class="field-hint">The channel where greeters chat with newcomers — the Greeter Response report watches it for first replies.</div>
             </div>
+            <div class="field">
+              <label for="cw-arrival-message">Arrival Line</label>
+              <textarea name="greeter_arrival_message" id="cw-arrival-message" rows="2">${esc(w.greeter_arrival_message || "")}</textarea>
+              <div class="field-hint">Posted in greeter chat when someone arrives without an intake card. <code>{member}</code> mentions them, <code>{member_name}</code> prints their name without pinging, <code>{server}</code> is the server name. Type <code>@here</code> yourself if you want the ping — leave the box empty to post nothing at all.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -282,6 +287,8 @@ export function mount(container) {
           leave_message: fd.get("leave_message"),
           greeter_role_id: pickers.greeter_role_id.getValue() || "0",
           greeter_chat_channel_id: pickers.greeter_chat_channel_id.getValue() || "0",
+          // Sent verbatim — an empty box is the "post no arrival line" setting.
+          greeter_arrival_message: String(fd.get("greeter_arrival_message") ?? ""),
           server_guide_channel_id: pickers.server_guide_channel_id.getValue() || "0",
           join_leave_log_channel_id: pickers.join_leave_log_channel_id.getValue() || "0",
         });

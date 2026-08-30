@@ -120,6 +120,11 @@ async def test_get_config_defaults(db):
     assert cfg["max_fuse"] == pytest.approx(60.0)
     assert cfg["min_players"] == 2
     assert cfg["max_players"] == 10
+    # Columns with no reader are not offered as defaults: the shake threshold is
+    # fixed in game.shake_emoji, passing is always clockwise, and the stale-lobby
+    # sweep uses its own window rather than lobby_timeout.
+    for dead in ("shake_threshold", "pass_mode", "lobby_timeout"):
+        assert dead not in cfg
 
 
 async def test_upsert_config_updates(db):

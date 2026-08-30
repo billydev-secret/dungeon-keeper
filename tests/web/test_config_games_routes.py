@@ -375,3 +375,49 @@ def test_duel_clamp_table_names_only_real_model_fields(game_key, model_name):
     assert not unknown, f"{game_key} clamps unknown field(s) {sorted(unknown)}"
     # and the shared tier really is shared
     assert set(cfg._DUEL_SHARED_DEFAULTS) <= set(model.model_fields)
+
+
+# ── nickname denylist ─────────────────────────────────────────────────────────
+# duel_config.nick_denylist has always been enforced (every nickname and every
+# line of stakes text is checked against it, on top of the built-in list), but
+# nothing could write it: the only way to add a guild's own banned words was
+# editing the database by hand. It is a panel field now.
+
+
+@pytest.mark.parametrize(("route", "key", "_game"), GAMES, ids=_GAME_IDS)
+def test_nick_denylist_round_trips(authed_client, route, key, _game):
+    resp = authed_client.put(
+        f"/api/config/{route}", json={"nick_denylist": ["Frobnicate", "  spam  "]}
+    )
+    assert resp.status_code == 200
+    assert _section(authed_client, key)["nick_denylist"] == ["frobnicate", "spam"]
+
+
+def test_nick_denylist_defaults_to_empty(authed_client):
+    assert _section(authed_client, "games_pressure")["nick_denylist"] == []
+
+
+def test_nick_denylist_lowercases_dedupes_and_drops_blanks(authed_client):
+    authed_client.put(
+        "/api/config/games-pressure",
+        json={"nick_denylist": ["Word", "word", "WORD", "", "   ", "other"]},
+    )
+    assert _section(authed_client, "games_pressure")["nick_denylist"] == ["word", "other"]
+
+
+def test_nick_denylist_is_bounded(authed_client):
+    """A sanity ceiling on entries and entry length — it is a word list, not a
+    content filter, and it is read on every nickname and stakes submission."""
+    authed_client.put(
+        "/api/config/games-pressure",
+        json={"nick_denylist": [f"w{i}" for i in range(60)] + ["x" * 200]},
+    )
+    stored = _section(authed_client, "games_pressure")["nick_denylist"]
+    assert len(stored) == 40
+    assert all(len(w) <= 64 for w in stored)
+
+
+def test_nick_denylist_is_per_game(authed_client):
+    """duel_config rows are per game_type, so one game's words stay its own."""
+    authed_client.put("/api/config/games-pressure", json={"nick_denylist": ["alpha"]})
+    assert _section(authed_client, "games_quickdraw")["nick_denylist"] == []

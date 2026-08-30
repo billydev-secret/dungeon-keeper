@@ -39,31 +39,37 @@ const SECTIONS = [
   {
     id: "home", label: "Dashboard", perms: [], icon: "⌂",
     items: [
-      { id: "home", label: "Dashboard", module: "./panels/home.js" },
+      // "Home", not "Dashboard": the section label above it already says
+      // Dashboard, and IA2 fixed this exact collision for Economy's Bank.
+      { id: "home", label: "Home", module: "./panels/home.js", keywords: "dashboard overview" },
       { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
     ],
   },
   {
     id: "reports", label: "Reports", perms: ["moderator"], icon: "▤",
     groups: [
+      // IA3 (2026-08-29): "General" became "Activity" — the one heading that
+      // named nothing — and gained DAU/MAU, its volume-metric sibling.
+      // NSFW by Gender moved beside Sentiment & Tone: it is content
+      // analytics read with a moderation eye, not an engagement metric.
       { heading: "Moderation", items: [
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
+        { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
         { id: "health-mod-engagement",  label: "Mod Engagement",     module: "./panels/health-mod-engagement.js" },
       ]},
-      { heading: "General", items: [
+      { heading: "Activity", items: [
         { id: "health-heatmap",         label: "Activity Heatmap",   module: "./panels/health-heatmap.js" },
         { id: "activity",             label: "Activity",             module: "./panels/activity.js" },
         { id: "channels",             label: "Channels",             module: "./panels/channels.js", keywords: "channel health comparison staleness" },
+        { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },
       ]},
       { heading: "Engagement", items: [
-        { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
-        { id: "voice-activity",       label: "Voice",                 module: "./panels/voice.js", help: "help-voice", keywords: "voice activity control hub temporary channels master post panel owner control panel" },
-        { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
+        { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js", keywords: "voice usage peak hours top users", related: ["config-voice-master"] },
+        { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js", keywords: "levels rank experience", related: ["config-xp"], help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
-        { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
       ]},
       { heading: "Social Graph", items: [
         { id: "interaction-graph",    label: "Interactions",          module: "./panels/interaction-graph.js", help: "help-network" },
@@ -76,44 +82,49 @@ const SECTIONS = [
         { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
         { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
-        { id: "intake-report",        label: "Intake",               module: "./panels/intake.js", keywords: "intake queue cards welcome procedure steps" },
+        { id: "intake-report",        label: "Intake Queue",         module: "./panels/intake-report.js", keywords: "intake queue cards welcome", related: ["config-intake"] },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
       ]},
-      { heading: "Bot Usage", items: [
-        { id: "usage-telemetry",      label: "Command & Panel Usage", module: "./panels/usage-telemetry.js", adminOnly: true, help: "help-usage-telemetry", keywords: "telemetry slash commands dashboard panels unused dead never used analytics" },
-      ]},
       { heading: "Member Lists", items: [
         { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
-        { id: "birthday-calendar",    label: "Birthdays",            module: "./panels/birthday.js", keywords: "birthday calendar report announcements settings" },
+        { id: "birthday-calendar",    label: "Birthday Calendar",    module: "./panels/birthday-calendar.js", keywords: "birthdays report", related: ["config-birthday"] },
       ]},
     ],
   },
   {
     id: "moderation", label: "Moderation", perms: ["moderator"], icon: "⚖",
-    items: [
-      { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks board recurring chores qotd reminders", help: "help-todo" },
-      { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
-      { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
-      { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
-      { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
-      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch-page.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger settings" },
-      { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
-      { id: "no-contact",     label: "No-Contact List", module: "./panels/no-contact.js", help: "help-no-contact", keywords: "block harassment separate pair safety whisper ama confession stalking" },
-    ],
+    // IA3 (2026-08-29): the eight bare items gained the "Queues & Workflows"
+    // heading dashboard_ia.md already used for them, making the section
+    // groups-only like its siblings. Image Guard's two diagnostic reports
+    // left Audit Logs (they're classifier diagnostics, not records of mod
+    // actions), and Grant Audit leads Audit Logs — it is the one entry a
+    // moderator can open, and it sat below nine locked rows.
     groups: [
+      { heading: "Queues & Workflows", items: [
+        { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks board recurring chores qotd reminders", help: "help-todo" },
+        { id: "mod-jails",      label: "Jails",          module: "./panels/mod-jails.js", help: "help-jail" },
+        { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
+        { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
+        { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
+        { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger", related: ["config-rules-watch"] },
+        { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
+        { id: "no-contact",     label: "No-Contact List", module: "./panels/no-contact.js", help: "help-no-contact", keywords: "block harassment separate pair safety whisper ama confession stalking" },
+      ]},
+      { heading: "Image Guard", items: [
+        { id: "nsfw-blocks",       label: "Image Guard Blocks", module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "blocked images nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
+        { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler"] },
+      ]},
       { heading: "Audit Logs", items: [
+        { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },
         { id: "mod-audit",         label: "Audit Log",        module: "./panels/mod-audit.js", adminOnly: true },
         { id: "mod-dm-audit",      label: "DM Audit",         module: "./panels/mod-dm-audit.js", adminOnly: true },
-        { id: "quotes-audit",      label: "Quotes Audit",     module: "./panels/quotes-audit.js", adminOnly: true },
-        { id: "guess-audit",       label: "Guess Who Audit",  module: "./panels/guess-audit.js", adminOnly: true },
-        { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true },
-        { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true },
-        { id: "anon-audit",        label: "Anonymous Features", module: "./panels/mod-anon-audit.js", adminOnly: true, keywords: "ama ffa hot takes fantasies clapback wyr would you rather compliment anonymous audit retention" },
-        { id: "nsfw-blocks",       label: "Blocked Images",   module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
-        { id: "nsfw-tags",         label: "Image Tags",       module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "nsfw nudity labels detections tags classifier metrics score distribution", related: ["config-spoiler"] },
-        { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card" },
+        { id: "quotes-audit",      label: "Quotes Audit",     module: "./panels/quotes-audit.js", adminOnly: true, related: ["config-quote-border"] },
+        { id: "guess-audit",       label: "Guess Who Audit",  module: "./panels/guess-audit.js", adminOnly: true, related: ["config-guess"] },
+        { id: "mod-whisper-audit", label: "Whisper Audit",    module: "./panels/mod-whisper-audit.js", adminOnly: true, related: ["config-whisper"] },
+        { id: "confessions-audit", label: "Confessions Audit", module: "./panels/mod-confessions-audit.js", adminOnly: true, related: ["config-confessions"] },
+        { id: "anon-audit",        label: "Anonymity Audit", module: "./panels/mod-anon-audit.js", adminOnly: true, keywords: "anonymous features ama ffa hot takes fantasies clapback wyr would you rather compliment anonymous audit retention" },
       ]},
     ],
   },
@@ -125,43 +136,67 @@ const SECTIONS = [
     // Docs / Role Menus / Chat Revive are fully moderator-level features.
     groups: [
       { heading: "Server", items: [
-        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true, help: "help-config" },
-        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true },
+        { id: "config-global",     label: "Global",          module: "./panels/config-global.js", adminOnly: true, help: "help-config", keywords: "timezone offset bypass roles mod notification channel bot allowlist greeter role" },
+        { id: "config-branding",   label: "Branding",        module: "./panels/config-branding.js", adminOnly: true, keywords: "accent color embed color avatar nickname bot name assistant name casino name" },
         { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true, help: "help-announcements" },
         { id: "config-bump-tracker", label: "Bump Tracker",    module: "./panels/config-bump-tracker.js", adminOnly: true, keywords: "bump disboard listing sites reminders" },
       ]},
       { heading: "Roles", items: [
-        { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup" },
-        { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true },
+        { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup", related: ["grant-audit"] },
         { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js", help: "help-role-menus" },
+      ]},
+      // IA3 (2026-08-29): the set-up-the-newcomer-experience job spanned three
+      // headings (Welcome under Members, Auto-Role/Onboarding under Roles,
+      // Greeting Watch under Moderation & Safety). One heading now carries it
+      // end to end, in the order a newcomer meets each piece.
+      { heading: "New Members", items: [
+        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
+        // Intake: revived 2026-08-29 with its pre-merge id (deleted by the
+        // 2026-07-28 merge with no MOVED_PAGES entry), so old deep links
+        // resolve again and the id's telemetry series resumes.
+        { id: "config-intake",     label: "Intake Cards",      module: "./panels/intake-settings.js", adminOnly: true, keywords: "intake cards steps procedure reference codes stale nudge", related: ["intake-report"] },
+        { id: "config-auto-role",   label: "Auto-Role",         module: "./panels/config-auto-role.js", adminOnly: true, keywords: "autorole join role automatic" },
         { id: "onboarding",        label: "Discord Onboarding", module: "./panels/onboarding.js", adminOnly: true, keywords: "channels and roles customize community server guide opt-in pings" },
+        { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true, help: "help-greeting-watch", keywords: "unanswered greeting newcomer ping moderation safety" },
       ]},
       { heading: "Members", items: [
-        { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
-        { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
+        // XP / Birthdays: revived 2026-08-29 with their pre-merge ids — same
+        // treatment as config-intake above.
+        { id: "config-xp",         label: "XP & Leveling",     module: "./panels/xp-settings.js", adminOnly: true, keywords: "xp levels settings curve rewards", related: ["xp-leaderboard"], help: "help-community" },
+        { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true, keywords: "profile introduction icebreaker" },
+        { id: "config-birthday",   label: "Birthdays",         module: "./panels/birthday-settings.js", adminOnly: true, keywords: "birthday announcements channel message pin", related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
-        { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-report"] },
-        { id: "config-inactive",   label: "Inactive Sweep",   module: "./panels/config-inactive.js", adminOnly: true, keywords: "inactive purge kick sweep", related: ["inactive-report"] },
+        // The inactive pair reads as a parallel pair on purpose: same subject,
+        // the differing verb is the distinction. Old labels stay as keywords.
+        { id: "config-prune",      label: "Inactive Role Removal", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune auto-remove inactive role removal", related: ["inactive-report"] },
+        { id: "config-inactive",   label: "Inactive Kick Sweep",   module: "./panels/config-inactive.js", adminOnly: true, keywords: "inactive sweep purge kick", related: ["inactive-report"] },
       ]},
       { heading: "Moderation & Safety", items: [
-        { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation" },
-        { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true, help: "help-greeting-watch" },
-        { id: "config-spoiler",      label: "Image Guard",       module: "./panels/config-spoiler.js", adminOnly: true, keywords: "spoiler nsfw nudity explicit classifier" },
+        // "& Privacy": this page holds message_storage_level — the biggest
+        // privacy dial on the dashboard — which the bare label hid entirely.
+        { id: "config-moderation", label: "Moderation & Privacy", module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation", keywords: "privacy data retention message storage content stored", related: ["config-cleanup", "mod-dm-audit"] },
+        // Revived 2026-08-29 with its pre-merge id (deleted by d2348dbf with
+        // no MOVED_PAGES entry) — same treatment as config-intake above.
+        { id: "config-rules-watch", label: "Rules Watch",      module: "./panels/rules-watch-settings.js", adminOnly: true, help: "help-rules-watch", keywords: "rules watch alerts settings", related: ["rules-watch"] },
+        { id: "config-spoiler",      label: "Image Guard",       module: "./panels/config-spoiler.js", adminOnly: true, keywords: "spoiler nsfw nudity explicit classifier", related: ["nsfw-blocks", "nsfw-tags"] },
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true, help: "help-dms" },
       ]},
       { heading: "Channels & Messages", items: [
         { id: "config-cleanup",    label: "Cleanup",           module: "./panels/config-cleanup.js", adminOnly: true, keywords: "purge retention delete auto-delete bulk cleanup schedules", help: "help-cleanup" },
         { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true, keywords: "needle thread replies" },
-        { id: "config-auto-react", label: "Auto React",        module: "./panels/config-auto-react.js", adminOnly: true, keywords: "reactions emoji tips tipping" },
+        { id: "config-auto-react", label: "Auto-React",        module: "./panels/config-auto-react.js", adminOnly: true, keywords: "auto react reactions emoji tips tipping" },
         { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
         { id: "music-playlist",    label: "Music Playlist",    module: "./panels/music-playlist.js", adminOnly: true, help: "help-music-playlist", keywords: "spotify rolling playlist songs tracks watched channel youtube links review unmatched window" },
-        { id: "config-event-echo", label: "Event Echo",        module: "./panels/config-event-echo.js", adminOnly: true, keywords: "echo announce games main chat jump link", help: "help-event-echo" },
-        { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color" },
+        { id: "config-quote-border", label: "Quote Tool",     module: "./panels/config-quote-border.js", adminOnly: true, keywords: "quotes border color", related: ["quotes-audit"] },
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},
       { heading: "Voice", items: [
+        // Revived 2026-08-29 with its pre-merge id (deleted by 18a3c691 with
+        // no MOVED_PAGES entry), so deep links saved before the merge resolve
+        // again and its telemetry series resumes.
+        { id: "config-voice-master", label: "Voice Control", module: "./panels/voice-settings.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels post panel owner control panel", related: ["voice-activity"] },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [
@@ -211,7 +246,7 @@ const SECTIONS = [
       // is QOTD's paid queue, so each sits under its own feature rather than
       // being hoisted into a queues-only group.
       { heading: "Earning", items: [
-        { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers", help: "help-economy" },
+        { id: "economy-income-sources", label: "Income Sources", module: "./panels/economy-income-sources.js", keywords: "faucet rates triggers daily streak login message rewards bonus earn", help: "help-economy" },
         { id: "economy-quests", label: "Quests", module: "./panels/economy-quests.js", keywords: "community goals settle progress payout", help: "help-economy" },
         { id: "economy-claims", label: "Claims", module: "./panels/economy-claims.js", keywords: "quest sign-off queue approve deny pending", help: "help-economy" },
         { id: "mention-awards", label: "Mention Awards", module: "./panels/config-mention-awards.js", adminOnly: true, keywords: "trigger phrase mention pay award hot seat member-run game host" },
@@ -239,7 +274,7 @@ const SECTIONS = [
       // Staking coins on an outcome — the house takes a cut, so these are
       // sinks too, but they are run and tuned as games.
       { heading: "Wagering", items: [
-        { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack", help: "help-casino", related: ["config-pools"] },
+        { id: "config-casino", label: "Casino", module: "./panels/config-casino.js", adminOnly: true, keywords: "gambling slots blackjack roulette keno dice mines baccarat war race", help: "help-casino", related: ["config-pools"] },
         // Keywords lean market-specific: "pools" alone also matches confession
         // pools and the pen-pals pool.
         { id: "config-pools", label: "Pools", module: "./panels/config-pools.js", adminOnly: true, keywords: "prediction market daily over under parimutuel takeout burn", help: "help-pools", related: ["config-casino"] },
@@ -272,14 +307,19 @@ const SECTIONS = [
         { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
         { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
         { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },
+        // IA3 (2026-08-29): the one game-night page that lived outside Games.
+        // It echoes game events into main chat, so it works the same shift as
+        // Scheduling; adminOnly keeps its gate, the section move only costs
+        // non-host moderators the locked-entry visibility.
+        { id: "config-event-echo", label: "Event Echo",        module: "./panels/config-event-echo.js", adminOnly: true, keywords: "echo announce games main chat jump link", help: "help-event-echo" },
       ]},
       // One page per game: the dials for a game that runs live in a channel.
       { heading: "Live Games", items: [
-        // AMA has no question bank — every question comes from members during a
-        // round — so it belongs with the live games, not the bank pages. Its
-        // route id stays `games-ama`; only the grouping moved.
+        // AMA sat under Question Banks until its bank came off: every AMA
+        // question is typed by a member mid-game, so there was never one to
+        // fill. Its route id stays `games-ama`; only the grouping moved.
         { id: "games-ama",          label: "Anonymous AMA",     module: "./panels/games-ama.js" },
-        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
+        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
         { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
         { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
         { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
@@ -320,8 +360,8 @@ const SECTIONS = [
     // open — the same treatment Confessions Audit already gets next door.
     id: "social", label: "Social", perms: ["moderator"], icon: "☺",
     items: [
-      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", help: "help-guess", keywords: "post panel submit prompt games" },
-      { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", help: "help-whisper", keywords: "anonymous message games" },
+      { id: "config-guess", label: "Guess Who", module: "./panels/config-guess.js", help: "help-guess", keywords: "post panel submit prompt games", related: ["guess-audit"] },
+      { id: "config-whisper",    label: "Whisper",     module: "./panels/config-whisper.js", help: "help-whisper", keywords: "anonymous message games", related: ["mod-whisper-audit"] },
       { id: "pen-pals",          label: "Pen Pals",    module: "./panels/pen-pals.js", help: "help-pen-pals", keywords: "pen pals matching questions conversation starters games" },
       { id: "config-confessions",  label: "Confessions",     module: "./panels/config-confessions.js", adminOnly: true, help: "help-confessions", keywords: "anonymous confession games", related: ["confessions-audit"] },
     ],
@@ -333,6 +373,10 @@ const SECTIONS = [
       { id: "help-owner",    label: "Developer Tools", module: "./panels/help.js" },
       { id: "live-log",      label: "Live Log",        module: "./panels/live-log.js", keywords: "console output tail" },
       { id: "system-stats",  label: "System Stats",    module: "./panels/system-stats.js" },
+      // IA3 (2026-08-29): moved from Reports, where it was the sole entry of
+      // a one-item adminOnly heading in the moderators' section. Its job —
+      // which commands and panels are dead — is owner tooling.
+      { id: "usage-telemetry", label: "Command & Panel Usage", module: "./panels/usage-telemetry.js", adminOnly: true, help: "help-usage-telemetry", keywords: "telemetry slash commands dashboard panels unused dead never used analytics bot usage" },
       { id: "qa-tracker",    label: "QA Tracker",      module: "./panels/qa-tracker.js", keywords: "testing checklist" },
       // Routes the QA Tracker manual section (HELP_EXTRA_PAGES → help-qa). Without
       // a SECTIONS entry the id is absent from ALL_PAGES, so #/help-qa cannot mount
@@ -437,8 +481,10 @@ function rebuildIndex() {
   });
 
   // Config is per-guild. For a non-primary guild, show every Config page except
-  // those marked `primaryOnly` (genuinely-global settings like the AI models,
-  // which live under guild_id=0 and apply bot-wide).
+  // those marked `primaryOnly` (genuinely-global settings like the AI model
+  // source and its prompts, which are stored under guild_id=0 and apply
+  // bot-wide — the routes behind such a page must write there too, or the
+  // guilds this hides the page from silently run something nobody can see).
   if (isNonPrimaryGuild) {
     const dropPrimaryOnly = (items) => (items || []).filter((it) => !it.primaryOnly);
     visibleSections = visibleSections.map((sec) =>
@@ -619,7 +665,7 @@ if (skipLinkEl) {
 })();
 
 // ── Nav filter ──────────────────────────────────────────────────────
-// dataset.search on each item = section + subgroup + label + keywords.
+// dataset.search on each item = section + subgroup + label + id + keywords.
 // Every whitespace-separated query token must match (AND), so
 // "games config" narrows instead of widening.
 
@@ -714,7 +760,10 @@ function palettePageResults(tokens) {
   for (const p of ALL_PAGES) {
     const sec = PAGE_TO_SECTION[p.id];
     const label = (p.label || "").toLowerCase();
-    const hay = `${sec ? sec.label : ""} ${p.label} ${p.keywords || ""}`.toLowerCase();
+    // The id is part of the haystack: ids appear in deep links, docs and
+    // telemetry, and where label and id have drifted ("shop-approvals" is
+    // labelled "Approvals") the id is the term people actually hold.
+    const hay = `${sec ? sec.label : ""} ${p.label} ${p.id} ${p.keywords || ""}`.toLowerCase();
     if (!tokens.every((t) => hay.includes(t))) continue;
     out.push({
       label: p.label,
@@ -1107,7 +1156,7 @@ function renderNav(activeId) {
     // Top-level items (rendered before any subgroup), alphabetized by label
     for (const item of byLabel(sec.items)) {
       const el = makeNavItem(item, activeId, { icon, sectionId: sec.id });
-      el.dataset.search = `${sec.label} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
+      el.dataset.search = `${sec.label} ${item.label} ${item.id} ${item.keywords || ""}`.trim().toLowerCase();
       sidebarItemsEl.appendChild(el);
       children.push(el);
     }
@@ -1146,7 +1195,7 @@ function renderNav(activeId) {
         for (const item of byLabel(g.items)) {
           const el = makeNavItem(item, activeId, { isSubitem: true, icon, sectionId: sec.id });
           el.dataset.search =
-            `${sec.label} ${g.heading} ${item.label} ${item.keywords || ""}`.trim().toLowerCase();
+            `${sec.label} ${g.heading} ${item.label} ${item.id} ${item.keywords || ""}`.trim().toLowerCase();
           if (!subgroupActive) el.classList.add("subgroup-hidden");
           sidebarItemsEl.appendChild(el);
           children.push(el);
@@ -1249,6 +1298,16 @@ function recordPanelView(pageId) {
 const MOVED_PAGES = {
   "channel-panels": "economy-config",
   "economy-qotd": "economy-qotd-submissions",
+  // config-policy-tickets: retired 2026-07-28 when its one field (the voting
+  // deadline) folded into the queue page — the only retirement that never got
+  // a redirect until the 2026-08-29 IA audit found its dead deep links.
+  "config-policy-tickets": "mod-policy-tickets",
+  // health-composite-score: dropped 2026-08-26 (e6c06624), the blend
+  // dissolved into its six metrics; DAU/MAU is the first of them.
+  "health-composite-score": "health-dau-mau",
+  // config-booster-roles: booster colors became the rentable Palette perk
+  // (2a83904b), sold from Shop & Perks.
+  "config-booster-roles": "economy-sinks",
 };
 
 /** Rewrite a retired page's hash to its successor. True if it redirected. */

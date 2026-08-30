@@ -4,7 +4,7 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 
 - **`/ai review | scan | channel | query`** — on-demand inspection commands. Reads the local message archive, assembles a tagged log with context, runs it through the configured system prompt, and returns the analysis ephemerally.
 - **`/watch add | remove | list`** — opt-in per-user subscription. Every public message from a watched member is evaluated by the LLM; only messages tagged as rule violations are DM'd to the watcher. When the LLM is unavailable, every public message is relayed unfiltered.
-- **Rules Watch** — passive all-channel monitor. Every public message is pre-screened by cheap heuristics; those that pass are evaluated by a recall-leaning guard model and scored against layered context signals. Flags are routed to a human-reviewed priority queue. Every confirm or dismiss a moderator makes becomes a labeled training example.
+- **Rules Watch** — passive all-channel monitor. Every public message is pre-screened by cheap heuristics; those that pass are evaluated by a recall-leaning guard model (its system prompt is the dashboard-editable `ai_prompt_rules_watch`) and scored against layered context signals. Flags are routed to a human-reviewed priority queue. Every confirm or dismiss a moderator makes becomes a labeled training example.
 
 ## Commands
 
@@ -19,8 +19,8 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
 | `Report Rule Violation` | Message context menu | Mod | Modal (optional rule number + note) that inserts a manual `immediate`-tier event for the message and pre-labels it a confirmed violation |
 | Rules Watch enable/disable + alert channel | Web | Admin | Toggle passive monitoring and set the immediate-alert channel (dashboard's Rules Watch config panel — replaced the retired `/rules-watch enable`/`disable`/`set-channel` commands) |
-| AI config (models / prompts / clear) | Web | Admin | Read or override the per-guild model and system prompt for each command |
-| AI prompt test | Web | Admin | Run the current prompt + model against arbitrary input |
+| AI config (prompts / clear) | Web | Admin | Read or override the bot-wide system prompt for each command, including the Rules Watch guard |
+| AI prompt test | Web | Admin | Run the current prompt against arbitrary input |
 | Model status / source / reload | Web | Admin | Inspect or change the loaded model file |
 | Guild-wide message query | Web | Moderator | Free-form question against the local archive with optional filters |
 | Rules Watch alert queue | Web | Moderator | Review flagged events (including the unlabeled digest tier); Confirm / Dismiss with inline label buttons. Replaced the retired `/rules-watch digest` and `/rules-watch label` commands |
@@ -195,7 +195,7 @@ The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or
 ## Non-goals
 
 - **No live Discord history fetch.** Every command reads the local archive. A gap in the archive is a gap in `/ai` output.
-- **No multi-model serving.** Per-command model overrides change which model name is requested; exactly one model is loaded at a time.
+- **No multi-model serving.** Exactly one model is loaded at a time, chosen by the model-source settings. There is no per-command or per-guild model dial: `ollama_client.chat` takes no model argument, and the remote backend is always asked for `"local"` so a stray config row can never route moderation content at a hosted API.
 - **No streaming.** Each inference call returns the whole completion.
 - **No prompt-injection mitigation** beyond 400-character per-message truncation.
 - **No DM inspection.** Rules Watch observes public chat only. The DM-consent registry contributes only as a relationship-confidence signal; it never implies reading private messages.
@@ -208,12 +208,10 @@ The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or
 
 ## Configuration
 
-Per-guild keys an admin sets via the dashboard:
+Keys an admin sets via the dashboard:
 
-- **Mod model / wellness model** — default model for moderation and wellness commands.
-- **Per-command model override** — review, scan, user query, channel query, watch check, rules watch guard. Empty falls through to the mod model default.
-- **Per-command system prompt** — same keys. Empty falls through to the hard-coded default.
-- **`rules_watch_enabled`** — whether the passive monitor is running (set via the web dashboard's Rules Watch config panel).
+- **Per-command system prompt** — review, scan, user query, channel query, watch check, wellness encouragement, and the Rules Watch guard. Empty falls through to the hard-coded default. These are **bot-wide**: the AI panel is primary-guild-only, so it writes them at `guild_id=0` and every guild's reader resolves them through `get_config_value`'s legacy fallback. Saving or restoring also clears any per-guild row an older build wrote, so nothing can shadow the value the panel shows. "Primary-guild-only" is enforced on the server, not just hidden in the nav: every write on this panel (prompt save, Restore Original, Try It Out, model source, model reload) returns **403** when the caller's active guild is not `ctx.guild_id`, so an admin of a secondary guild cannot rewrite the prompts every other guild runs.
+- **`rules_watch_enabled`** — whether the passive monitor is running (set via the web dashboard's Rules Watch config panel), per guild.
 - **`rules_watch_channel_id`** — Discord channel ID where `immediate`-tier alerts are posted (set via the same panel).
 
 Global-only (host-level, not per-guild):
@@ -246,9 +244,9 @@ Note that `LLAMA_N_CTX` must accommodate the largest prompt any command can buil
 | `rules_labels` | One row per labeled event: is_violation (bool), corrected rule, labeling mod ID, timestamp, optional notes. |
 | `rules_ledger` | (migration 095) One row per concrete recorded act — matched pattern, matched phrase, 240-char excerpt, date. No score, tier, or verdict; never posts to Discord. Written by the ledger recorder independently of the guard pipeline and surfaced on the dashboard's Rules Watch → Ledger tab. See §12 of `rules_watch_cog.md`. |
 
-**Per guild, in the shared config table:** model defaults, per-command model overrides, per-command prompt overrides, `rules_watch_enabled`, `rules_watch_channel_id`. The wellness prompt/model entries are co-owned with [[wellness-guardian-spec]].
+**Per guild, in the shared config table:** `rules_watch_enabled`, `rules_watch_channel_id`.
 
-**Global, in the shared config table:** model file path and HuggingFace source.
+**Global (`guild_id=0`), in the shared config table:** every `ai_prompt_*` override, the model file path, and the HuggingFace source. The wellness prompt entry is co-owned with [[wellness-guardian-spec]].
 
 **Read-only consumers:** the message archive (messages, message_attachments, message_mentions, message_sentiment) populated by [[events-spec]]. The AI cluster never writes to those tables.
 

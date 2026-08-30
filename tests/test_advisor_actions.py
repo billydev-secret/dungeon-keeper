@@ -50,8 +50,10 @@ def _guild():
 
 
 # Real registry keys, so the schema the tests exercise is the shipped one.
+# INT_KEY was qa_reward until the QA Tracker left the registry (2026-08-30):
+# its keys are written only by their own panel now.
 BOOL_KEY = "welcome_ping_member"
-INT_KEY = "qa_reward"
+INT_KEY = "inactive_threshold_days"  # writable, bounded 1-3650
 TEXT_KEY = "welcome_message"
 CHANNEL_KEY = "welcome_channel_id"
 ROLE_KEY = "welcome_ping_role_id"  # ping-only, so it's writable
@@ -151,9 +153,9 @@ def test_admin_only_setting_allowed_for_full_admin():
 
 
 def test_is_admin_defaults_to_false_so_callers_fail_closed():
-    conn = _conn([("qa_role_id", "0")])
+    conn = _conn([("jailed_role_id", "0")])
     with pytest.raises(ValueError, match="full server administrator"):
-        aa.validate_config_change(conn, _guild(), "qa_role_id", str(ROLE_ID))
+        aa.validate_config_change(conn, _guild(), "jailed_role_id", str(ROLE_ID))
 
 
 def test_ordinary_settings_need_no_admin_flag():

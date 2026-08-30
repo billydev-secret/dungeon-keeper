@@ -113,6 +113,7 @@ def test_settings_defaults(authed_client):
         "channel_id": "0",
         "reward": 15,
         "daily_cap": 4,
+        "linger_minutes": 10,
     }
 
 
@@ -124,6 +125,7 @@ def test_settings_roundtrip(authed_client, fake_ctx):
         "channel_id": 777,
         "reward": 25,
         "daily_cap": 2,
+        "linger_minutes": 0,
     }
     r = authed_client.put("/api/qa/settings", json=body)
     assert r.status_code == 200, r.text
@@ -138,6 +140,10 @@ def test_settings_roundtrip(authed_client, fake_ctx):
     assert settings.role_id == big_role
     assert settings.daily_cap == 2
     assert settings.enabled is False
+    # 0 = never sweep, and it must survive the round trip as 0 rather than
+    # falling back to the ten-minute default.
+    assert saved["linger_minutes"] == 0
+    assert settings.linger_minutes == 0
 
 
 def test_settings_accepts_string_snowflakes_exactly(authed_client, fake_ctx):
@@ -171,6 +177,9 @@ def test_settings_rejects_bad_payloads(authed_client):
     ).status_code == 422
     assert authed_client.put(
         "/api/qa/settings", json={**good, "role_id": -5}
+    ).status_code == 422
+    assert authed_client.put(
+        "/api/qa/settings", json={**good, "linger_minutes": -1}
     ).status_code == 422
     assert authed_client.put(
         "/api/qa/settings", json={**good, "daily_cap": 100_000}

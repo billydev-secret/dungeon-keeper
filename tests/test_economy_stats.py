@@ -35,8 +35,6 @@ SETTINGS = EconSettings(
     price_role_name=35,
     price_role_icon=75,
     price_role_gradient=120,
-    price_text_room=200,
-    price_voice_room=200,
 )
 
 
@@ -115,8 +113,10 @@ def test_affordability_days_one_dp():
     aff = stats.affordability(10.0, SETTINGS)
     assert aff["price_role_color"] == 5.0
     assert aff["price_role_gradient"] == 12.0
-    assert aff["price_text_room"] == 20.0
     assert set(aff) == set(stats.PRICE_FIELDS)
+    # The affordability card only lists things that are actually for sale —
+    # the never-built private rooms were dropped from it.
+    assert "price_text_room" not in aff
 
 
 def test_affordability_rounds_and_short_circuits():

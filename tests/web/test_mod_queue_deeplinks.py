@@ -121,7 +121,7 @@ class Panel:
 PANELS = [
     Panel("mod-tickets", "[data-filter-group]", "data-filter", "filter", "open", "closed", "ticket"),
     Panel("mod-jails", "[data-filter-group]", "data-filter", "filter", "active", "released", "jail"),
-    # rules-watch-page mounts rules-watch's queue and forwards initialParams.
+    # rules-watch mounts its own queue; initialParams come from the hash.
     Panel("rules-watch", "[data-tabs]", "data-tab", "tab", "queue", "ledger", "event"),
     Panel("qa-tracker", "[data-filter-group]", "data-filter", "filter", "all", "failed", "test"),
     Panel("mod-todo", "[data-filter-group]", "data-filter", "filter", "pending", "completed", "task"),

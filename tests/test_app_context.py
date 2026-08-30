@@ -113,6 +113,27 @@ def test_guild_config_load_reads_guild_specific_values(tmp_path):
     assert cfg.greeter_role_id == 444
 
 
+def test_guild_config_load_greeter_arrival_message(tmp_path):
+    """The arrival line is a per-guild dial: default, edited, and cleared."""
+    from bot_modules.services.welcome_service import DEFAULT_ARRIVAL_MESSAGE
+
+    db_path = tmp_path / "gc_arrival.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
+        assert cfg.greeter_arrival_message == DEFAULT_ARRIVAL_MESSAGE
+
+        _db_set(conn, "greeter_arrival_message", "{member_name} landed", guild_id=42)
+        cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
+        assert cfg.greeter_arrival_message == "{member_name} landed"
+
+        # A cleared box stays cleared — it must not fall back to the default,
+        # or "post nothing" would be unreachable from the panel.
+        _db_set(conn, "greeter_arrival_message", "", guild_id=42)
+        cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
+        assert cfg.greeter_arrival_message == ""
+
+
 def test_guild_config_load_strict_mode_ignores_legacy(tmp_path):
     """A non-home guild with no rows must NOT inherit legacy guild_id=0 config."""
     db_path = tmp_path / "gc3.db"
@@ -139,6 +160,20 @@ def test_guild_config_load_home_guild_uses_legacy_fallback(tmp_path):
     assert cfg.welcome_channel_id == 888
 
 
+def test_guild_config_carries_the_promotion_review_grant_role(tmp_path):
+    """The XP panel's Promotion Review Grant Role reaches the level-card path
+    through the config snapshot — without it the "Spicy access" field could
+    only ever find a grant literally keyed "nsfw"."""
+    db_path = tmp_path / "gc_promo.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        _db_set(conn, "promotion_review_grant_role_id", "424242", guild_id=42)
+        cfg = GuildConfig.load(conn, guild_id=42, allow_legacy_fallback=False)
+        bare = GuildConfig.load(conn, guild_id=43, allow_legacy_fallback=False)
+    assert cfg.promotion_review_grant_role_id == 424242
+    assert bare.promotion_review_grant_role_id == 0
+
+
 def test_guild_config_load_join_leave_log_defaults_to_leave_channel(tmp_path):
     db_path = tmp_path / "gc5.db"
     migrated_db(db_path)
@@ -159,6 +194,7 @@ def test_guild_config_member_is_mod_matches_mod_or_admin_role():
         unverified_role_id=0,
         greeter_role_id=0,
         greeter_chat_channel_id=0,
+        greeter_arrival_message="",
         leave_channel_id=0,
         leave_message="",
         join_leave_log_channel_id=0,

@@ -1,4 +1,4 @@
-"""Cog-level: /risky start channel game cap."""
+"""Cog-level: /risky start channel game cap and the per-guild enable switch."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -31,6 +31,13 @@ def _make_cog(*, enabled: bool = True):
     return RiskyRollCog(bot)
 
 
+@pytest.fixture(autouse=True)
+def _clear_risky_state():
+    yield
+    rr_state.active_games.clear()
+    rr_state.max_games_per_channel.clear()
+
+
 @pytest.mark.asyncio
 async def test_start_refused_when_game_disabled_on_the_server():
     """The dashboard's Available on This Server switch has to actually stop it."""
@@ -49,13 +56,6 @@ async def test_start_refused_when_game_disabled_on_the_server():
     msg = interaction.response.send_message.call_args.args[0]
     assert "disabled" in msg.lower()
     assert not rr_state.active_games
-
-
-@pytest.fixture(autouse=True)
-def _clear_risky_state():
-    yield
-    rr_state.active_games.clear()
-    rr_state.max_games_per_channel.clear()
 
 
 @pytest.mark.asyncio

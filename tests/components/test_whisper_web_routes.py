@@ -33,6 +33,9 @@ def test_whisper_section_reads_set_values(sync_db_path: Path):
         "log_channel_id": "999",
         "cooldown_seconds": 60,
         "hourly_cap_per_target": 3,
+        # Unset here, so this is the schema default the panel now exposes —
+        # it was a hard-coded 3 with no control until 2026-08-30.
+        "guesses_per_whisper": 3,
     }
 
 

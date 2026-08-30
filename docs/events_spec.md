@@ -45,7 +45,7 @@ Every role grant or removal the bot sees is appended to a role-event audit log (
 
 ### Joins
 
-A joining member runs through: jail rejoin enforcement ([[jail-spec]]), an upsert into the historical-names archive marking them present, a join row in the membership event log, the join-raid check ([[reporting-spec]]), and invite attribution (cache diff + record). Finally the welcome embed posts to the configured welcome channel and a greeter ping is sent to the greeter chat channel. Missing perms on these posts produce a one-time DM to the guild owner.
+A joining member runs through: jail rejoin enforcement ([[jail-spec]]), an upsert into the historical-names archive marking them present, a join row in the membership event log, the join-raid check ([[reporting-spec]]), and invite attribution (cache diff + record). Finally the welcome embed posts to the configured welcome channel and the **arrival line** is sent to the greeter chat channel (only when the newcomer got no intake card). That line is a per-guild template, `greeter_arrival_message` — default `@here - {member} has arrived`, understanding `{member}` / `{mention}`, `{member_name}` and `{server}`. The ping is part of the copy: an admin who deletes the `@here` gets a silent line, and a blank template posts nothing at all. The line is sent as plain message content, so `{member_name}` is escaped (`discord.utils.escape_mentions`) before it is spliced in — a newcomer named `@everyone` must not ride the Mention Everyone permission the `@here` needs. The admin-authored half of the template is untouched. Missing perms on these posts produce a one-time DM to the guild owner.
 
 ### Leaves
 
@@ -87,7 +87,7 @@ The module owns no configuration keys — every key it reads is owned by another
 - Spoiler-required channels and the bypass-role list (passed through to spoiler enforcement; see [[post-monitoring-spec]]).
 - The recorded-bots list (bots whose messages still get mention tracking).
 - The XP-excluded channel list and XP settings (passed through to message and image-reaction XP; see [[xp-spec]]).
-- The welcome channel, welcome message, welcome ping role, and greeter chat channel (used by the join handler).
+- The welcome channel, welcome message, welcome ping role, greeter chat channel, and greeter arrival message (used by the join handler).
 - The leave channel and leave message (used by the leave handler).
 - Level-5 role and the level-up / level-5 log channels (passed through to level progression).
 

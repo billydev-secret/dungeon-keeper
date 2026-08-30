@@ -446,6 +446,11 @@ async def list_income_sources(
                     "reward_game_participation": settings.reward_game_participation,
                     "reward_game_win": settings.reward_game_win,
                     "reward_cah_win_max": settings.reward_cah_win_max,
+                    # Both halves of the host bounty. The panel renders an
+                    # input for each, so omitting them here rendered "0" and
+                    # every faucet Save wrote that 0 back over a live rate.
+                    "host_bounty_per_joiner": settings.host_bounty_per_joiner,
+                    "host_bounty_cap": settings.host_bounty_cap,
                     "reward_photo_post": settings.reward_photo_post,
                     "reward_intake_step": settings.reward_intake_step,
                     "catcatch_coins_common": settings.catcatch_coins_common,

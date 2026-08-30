@@ -1040,3 +1040,45 @@ def test_forget_me_does_not_delete_replies_in_other_guilds(tmp_path):
     assert [r["content"] for r in kept] == ["keep"]
     assert whispers_a == 1
     assert whispers_b == 0
+
+
+# ── guesses-per-whisper dial ───────────────────────────────────────────
+
+
+def test_send_dm_body_quotes_the_configured_guess_count():
+    """The cap is a dashboard dial now, so the DM has to say the real number."""
+    out = format_send_dm_body(guild_name="S", message="hi", guesses=5)
+    assert "**5 guesses**" in out
+    assert format_send_dm_body(guild_name="S", message="hi", guesses=1).count(
+        "**1 guess**"
+    ) == 1
+
+
+def test_insert_whisper_seeds_the_configured_number_of_guesses(tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.whisper_repo import (
+        get_whisper,
+        get_whisper_config,
+        insert_whisper,
+        set_whisper_config_value,
+    )
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "test.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        # Default first: unchanged from the schema's three.
+        assert get_whisper_config(conn, 111).guesses_per_whisper == 3
+        wid = insert_whisper(
+            conn, guild_id=111, sender_id=1, target_id=2, message="m",
+        )
+        assert get_whisper(conn, wid).guesses_left == 3
+
+        set_whisper_config_value(conn, 111, "whisper_guesses_per_whisper", "5")
+        cfg = get_whisper_config(conn, 111)
+        assert cfg.guesses_per_whisper == 5
+        wid2 = insert_whisper(
+            conn, guild_id=111, sender_id=1, target_id=2, message="m",
+            guesses_left=cfg.guesses_per_whisper,
+        )
+        assert get_whisper(conn, wid2).guesses_left == 5

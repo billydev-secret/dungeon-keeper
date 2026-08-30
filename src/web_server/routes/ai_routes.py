@@ -13,6 +13,33 @@ from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_que
 
 router = APIRouter()
 
+# The AI panel is primary-guild-only and its prompts apply bot-wide, so they are
+# stored at guild_id=0 — the row every guild's reader resolves through
+# ``get_config_value``'s legacy fallback. Writing them at the active guild's id
+# (what this router used to do) left a second guild silently running whatever
+# stale guild-0 row happened to exist, with no surface anywhere to see or edit
+# it, and made "Restore Original" a no-op whenever the only row was the legacy
+# one. Saves and resets also clear the active guild's own row so an override
+# written by the old, guild-scoped behaviour can never shadow the global value.
+GLOBAL_GUILD_ID = 0
+
+
+def _require_primary_guild(ctx, guild_id: int) -> None:
+    """Refuse a bot-global AI write from anywhere but the primary guild.
+
+    ``require_perms({"admin"})`` only proves the caller administers the guild
+    they currently have selected, and every value this panel touches (the
+    prompts at guild 0, the model source, the loaded model) is shared by every
+    guild the bot serves. Without this, a second guild's admin could rewrite
+    the moderation prompts every other guild runs — a prompt that never emits
+    the verdict block makes every message read as fine. The panel is already
+    primary-guild-only in the nav, but that flag is client-side.
+    """
+    if int(guild_id) != int(ctx.guild_id):
+        raise HTTPException(
+            403, "AI settings are bot-global — edit them from the primary guild"
+        )
+
 
 # ── GET /config/ai ─────────────────────────────────────────────────────────────
 
@@ -20,34 +47,28 @@ router = APIRouter()
 @router.get("/config/ai")
 async def get_ai_config(
     request: Request,
-    guild_id: int = Depends(get_active_guild_id),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     from bot_modules.services import ollama_client
-    from bot_modules.services.ai_config import (
-        KNOWN_MODELS,
-        get_command_model_with_source,
-        get_mod_model,
-        get_prompt_with_source,
-        get_wellness_model,
-        list_prompts,
-    )
+    from bot_modules.services.ai_config import get_prompt_with_source, list_prompts
 
     ctx = get_ctx(request)
+    # Read is gated the same way the writes below are: the payload carries the
+    # host's model path and every shared prompt, and this panel is primary-guild
+    # only. Its sole caller is config-ai.js, which the nav never mounts
+    # elsewhere — so this closes the disclosure without costing anyone a page.
+    _require_primary_guild(ctx, get_active_guild_id(request))
 
     def _q():
         from bot_modules.core.db_utils import get_config_value
         with ctx.open_db() as conn:
-            mod_model = get_mod_model(conn, guild_id)
-            wellness_model = get_wellness_model(conn, guild_id)
             model_path = get_config_value(conn, "llm_model_path", "")
             hf_repo    = get_config_value(conn, "llm_hf_repo", "")
             hf_file    = get_config_value(conn, "llm_hf_file", "")
             prompts = []
             for p in list_prompts():
-                text, is_override = get_prompt_with_source(conn, p.key, guild_id)
-                model, model_is_override = get_command_model_with_source(
-                    conn, p.key, guild_id
+                text, is_override = get_prompt_with_source(
+                    conn, p.key, GLOBAL_GUILD_ID
                 )
                 prompts.append({
                     "key": p.key,
@@ -55,49 +76,16 @@ async def get_ai_config(
                     "description": p.description,
                     "text": text,
                     "is_override": is_override,
-                    "model": model,
-                    "model_is_override": model_is_override,
                 })
         return {
             "llm_status": ollama_client.status(),
             "llm_model_path": model_path or os.getenv("LLAMA_MODEL_PATH", ""),
             "llm_hf_repo": hf_repo or os.getenv("LLAMA_HF_REPO", ""),
             "llm_hf_file": hf_file or os.getenv("LLAMA_HF_FILE", ""),
-            "known_models": KNOWN_MODELS,
-            "mod_model": mod_model,
-            "wellness_model": wellness_model,
             "prompts": prompts,
         }
 
     return await run_query(_q)
-
-
-# ── PUT /config/ai/models ──────────────────────────────────────────────────────
-
-
-class ModelsBody(BaseModel):
-    mod_model: str
-    wellness_model: str
-
-
-@router.put("/config/ai/models")
-async def put_ai_models(
-    request: Request,
-    body: ModelsBody,
-    guild_id: int = Depends(get_active_guild_id),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    from bot_modules.services.ai_config import set_mod_model, set_wellness_model
-
-    ctx = get_ctx(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            set_mod_model(conn, body.mod_model, guild_id)
-            set_wellness_model(conn, body.wellness_model, guild_id)
-
-    await run_query(_q)
-    return {"ok": True}
 
 
 # ── PUT /config/ai/prompts/{key} ───────────────────────────────────────────────
@@ -115,13 +103,16 @@ async def put_ai_prompt(
     guild_id: int = Depends(get_active_guild_id),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
-    from bot_modules.services.ai_config import set_prompt
+    from bot_modules.services.ai_config import reset_prompt, set_prompt
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
-            set_prompt(conn, key, body.text, guild_id)
+            set_prompt(conn, key, body.text, GLOBAL_GUILD_ID)
+            if guild_id:
+                reset_prompt(conn, key, guild_id)
 
     try:
         await run_query(_q)
@@ -140,40 +131,13 @@ async def reset_ai_prompt(
     from bot_modules.services.ai_config import reset_prompt
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
-            reset_prompt(conn, key, guild_id)
-
-    try:
-        await run_query(_q)
-    except KeyError:
-        raise HTTPException(404, f"Unknown prompt key: {key}")
-    return {"ok": True}
-
-
-# ── PUT /config/ai/prompts/{key}/model ────────────────────────────────────────
-
-
-class PromptModelBody(BaseModel):
-    model: str
-
-
-@router.put("/config/ai/prompts/{key}/model")
-async def put_ai_prompt_model(
-    request: Request,
-    key: str,
-    body: PromptModelBody,
-    guild_id: int = Depends(get_active_guild_id),
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
-):
-    from bot_modules.services.ai_config import set_command_model
-
-    ctx = get_ctx(request)
-
-    def _q():
-        with ctx.open_db() as conn:
-            set_command_model(conn, key, body.model, guild_id)
+            reset_prompt(conn, key, GLOBAL_GUILD_ID)
+            if guild_id:
+                reset_prompt(conn, key, guild_id)
 
     try:
         await run_query(_q)
@@ -198,21 +162,21 @@ async def test_ai_prompt(
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     from bot_modules.services import ollama_client
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
+
+    ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     if not ollama_client.is_available():
         raise HTTPException(503, "LLM is not configured.")
 
-    ctx = get_ctx(request)
-
     def _q():
         with ctx.open_db() as conn:
-            return get_prompt(conn, key, guild_id), get_command_model(conn, key, guild_id)
+            return get_prompt(conn, key, GLOBAL_GUILD_ID)
 
-    system, model = await run_query(_q)
+    system = await run_query(_q)
 
     result = await ollama_client.chat(
-        model=model,
         system=system,
         user_content=body.user_input,
         max_tokens=512,
@@ -239,7 +203,7 @@ async def messages_ai_query(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     from bot_modules.services import ollama_client
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
     from bot_modules.services.ai_moderation_service import (
         _MAX_MSG_CHARS,
         _channel_label,
@@ -266,7 +230,6 @@ async def messages_ai_query(
     def _q():
         with ctx.open_db() as conn:
             system = get_prompt(conn, "ai_prompt_query_user", guild_id)
-            model = get_command_model(conn, "ai_prompt_query_user", guild_id)
 
             where = ["guild_id = ?", "ts >= ?", "content IS NOT NULL"]
             params: list = [guild_id, cutoff_ts]
@@ -294,9 +257,9 @@ async def messages_ai_query(
                 params,
             ).fetchall()
 
-        return rows, system, model
+        return rows, system
 
-    rows, system, model = await run_query(_q)
+    rows, system = await run_query(_q)
 
     if not rows:
         return {"result": "No messages found for the specified filters.", "message_count": 0}
@@ -316,7 +279,6 @@ async def messages_ai_query(
     )
 
     result = await ollama_client.chat(
-        model=model,
         system=system,
         user_content=prompt,
         max_tokens=4096,
@@ -354,6 +316,7 @@ async def put_model_source(
     from bot_modules.core.db_utils import set_config_value
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -371,11 +334,13 @@ async def put_model_source(
 @router.post("/config/ai/model-reload")
 async def post_model_reload(
     request: Request,
+    guild_id: int = Depends(get_active_guild_id),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     from bot_modules.services import ollama_client
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
     if not ollama_client.is_available(ctx.db_path):
         raise HTTPException(400, "No model source configured — set model path and HuggingFace details first.")
 

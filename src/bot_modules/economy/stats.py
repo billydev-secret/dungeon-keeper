@@ -77,8 +77,6 @@ PRICE_FIELDS: tuple[str, ...] = (
     "price_role_holographic",
     "price_streak_shield",
     "price_voice_style",
-    "price_text_room",
-    "price_voice_room",
     "price_quest_reroll",
 )
 

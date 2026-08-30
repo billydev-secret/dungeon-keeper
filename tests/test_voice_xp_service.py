@@ -132,3 +132,60 @@ async def test_voice_login_is_once_per_day(voice_db):
         count = conn.execute("SELECT COUNT(*) c FROM econ_logins").fetchone()["c"]
     assert first == second  # econ_logins PK blocks a second same-day payout
     assert count == 1
+
+
+# ── Channel exclusion (the "Channels That Earn No XP" dial) ───────────
+
+
+def _seed_earning_session(voice_db, *, intervals: int = 5) -> None:
+    """A session already past the qualification bar with unpaid intervals."""
+    now = time.time()
+    with open_db(voice_db) as conn:
+        set_voice_session(
+            conn,
+            VOICE_GID,
+            VOICE_UID,
+            CHANNEL_ID,
+            session_started_at=now - intervals * 60 - 10,
+            qualified_since=now - intervals * 60 - 10,
+            awarded_intervals=0,
+        )
+
+
+def _voice_xp_total(voice_db) -> float:
+    with open_db(voice_db) as conn:
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) t FROM xp_events"
+            " WHERE guild_id=? AND user_id=?",
+            (VOICE_GID, VOICE_UID),
+        ).fetchone()
+    return float(row["t"])
+
+
+async def test_voice_tick_pays_a_non_excluded_channel(voice_db):
+    _enable(voice_db)
+    bot = _bot([_vmember(VOICE_UID), _vmember(VOICE_UID + 1)])
+    _seed_earning_session(voice_db)
+
+    await process_voice_xp_tick(bot, voice_db, DEFAULT_XP_SETTINGS)
+
+    assert _voice_xp_total(voice_db) > 0
+
+
+async def test_voice_tick_pays_nothing_in_an_excluded_channel(voice_db):
+    """The XP page promises voice time in excluded channels earns nothing."""
+    _enable(voice_db)
+    bot = _bot([_vmember(VOICE_UID), _vmember(VOICE_UID + 1)])
+    _seed_earning_session(voice_db)
+
+    await process_voice_xp_tick(
+        bot,
+        voice_db,
+        DEFAULT_XP_SETTINGS,
+        excluded_for=lambda gid: frozenset({CHANNEL_ID}),
+    )
+
+    assert _voice_xp_total(voice_db) == 0
+    with open_db(voice_db) as conn:
+        logins = conn.execute("SELECT COUNT(*) c FROM econ_logins").fetchone()["c"]
+    assert logins == 0

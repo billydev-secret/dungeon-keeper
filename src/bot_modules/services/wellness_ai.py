@@ -44,13 +44,8 @@ async def generate_weekly_encouragement(
     if not ollama_client.is_available():
         return _fallback_text(streak_days, is_personal_best, compliance_pct)
 
-    from bot_modules.services.ai_config import get_prompt_from_path, get_wellness_model_from_path
+    from bot_modules.services.ai_config import get_prompt_from_path
 
-    model = (
-        get_wellness_model_from_path(db_path, guild_id)
-        if db_path
-        else ollama_client.default_model()
-    )
     system = (
         get_prompt_from_path(db_path, "ai_prompt_wellness_encouragement", guild_id)
         if db_path
@@ -66,7 +61,6 @@ async def generate_weekly_encouragement(
 
     try:
         result = await ollama_client.chat(
-            model=model,
             system=system,
             user_content=user_content,
             max_tokens=256,

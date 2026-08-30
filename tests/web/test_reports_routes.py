@@ -509,3 +509,45 @@ def test_time_to_level5_resolves_names_for_departed_members(open_client, fake_ct
     row = next(m for m in members if int(m["user_id"]) == user_id)
     assert row["display_name"] != str(user_id)
     assert row["display_name"] == f"User {user_id}"
+
+
+@pytest.mark.parametrize(
+    ("curve_factor", "expected_required", "expect_crossing"),
+    [
+        # Default curve: level 5 costs 15.6 × 16 = 249.6, so 300 XP clears it.
+        (None, 249.6, True),
+        # A guild that raised the Level Curve Factor needs 20 × 16 = 320 —
+        # the report has to use the guild's dial, not the default.
+        (20.0, 320.0, False),
+    ],
+)
+def test_time_to_level5_honours_the_level_curve_factor(
+    open_client, fake_ctx, curve_factor, expected_required, expect_crossing
+):
+    from bot_modules.core.db_utils import set_config_value
+
+    invalidate_report_cache()
+    guild_id = fake_ctx.guild_id
+    user_id = 5150
+    now = int(time.time())
+    with open_db(fake_ctx.db_path) as conn:
+        if curve_factor is not None:
+            set_config_value(
+                conn, "xp_coeff_level_curve_factor", str(curve_factor), guild_id
+            )
+        conn.execute(
+            """INSERT INTO xp_events (guild_id, user_id, amount, source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (guild_id, user_id, 1, "message", now - 86400),
+        )
+        conn.execute(
+            """INSERT INTO xp_events (guild_id, user_id, amount, source, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (guild_id, user_id, 299, "message", now),
+        )
+        conn.commit()
+
+    body = open_client.get("/api/reports/time-to-level-5").json()
+    assert body["xp_required"] == pytest.approx(expected_required)
+    reached = [m for m in body["members"] if int(m["user_id"]) == user_id]
+    assert bool(reached) is expect_crossing

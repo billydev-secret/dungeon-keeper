@@ -1,6 +1,13 @@
 import { wGet, wPost, wDelete, esc, showStatus, enfLabel } from "../wellness-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
-import { guardForm, mountAsync } from "../config-helpers.js";
+import {
+  guardForm,
+  mountAsync,
+  loadChannels,
+  loadRoles,
+  mountChannelPicker,
+  mountRolePicker,
+} from "../config-helpers.js";
 import { renderLoading, renderEmpty } from "../states.js";
 
 export function mount(container) {
@@ -11,11 +18,13 @@ export function mount(container) {
     // working Try again button. Catching it here rendered a dead-end error
     // and made this panel's own errorMsg unreachable. wellness-caps.js
     // documents the same reasoning where it rethrows on first load.
-    const [dash, defaults, users, exempt] = await Promise.all([
+    const [dash, defaults, users, exempt, channels, roles] = await Promise.all([
       wGet("/api/wellness/admin/dashboard"),
       wGet("/api/wellness/admin/defaults"),
       wGet("/api/wellness/admin/users"),
       wGet("/api/wellness/admin/exempt"),
+      loadChannels(),
+      loadRoles(),
     ]);
 
     // Overview cards
@@ -40,6 +49,21 @@ export function mount(container) {
     const defaultsHTML = `
       <div class="section-label">Server Defaults</div>
       <form data-defaults-form class="form">
+        <div class="field">
+          <label>Opt-In Role</label>
+          <span data-picker="role_id"></span>
+          <div class="field-hint">Members who run <code>/wellness setup</code> are
+            given this role, and the bot turns them away until you pick one — this is
+            the switch that opens the programme to your server. Pick a role the bot
+            can add and remove.</div>
+        </div>
+        <div class="field">
+          <label>Wellness Channel</label>
+          <span data-picker="channel_id"></span>
+          <div class="field-hint">Where the list of members currently taking part is
+            kept up to date, and where milestones are celebrated. Leave it unset and
+            neither is ever posted.</div>
+        </div>
         <div class="field">
           <label>Default Enforcement
             <select name="default_enforcement">
@@ -115,12 +139,28 @@ export function mount(container) {
     // Defaults form handler
     const dForm = guardForm(container.querySelector("[data-defaults-form]"));
     const dStatus = container.querySelector("[data-defaults-status]");
+    const rolePicker = mountRolePicker(
+      dForm.querySelector('[data-picker="role_id"]'),
+      roles,
+      String(cfg.role_id || "0"),
+      { label: "Opt-In Role" },
+    );
+    const channelPicker = mountChannelPicker(
+      dForm.querySelector('[data-picker="channel_id"]'),
+      channels,
+      String(cfg.channel_id || "0"),
+      { label: "Wellness Channel" },
+    );
     dForm.addEventListener("submit", async (e) => {
       e.preventDefault();
       const fd = new FormData(dForm);
       try {
         await wPost("/api/wellness/admin/defaults", {
           default_enforcement: fd.get("default_enforcement"),
+          // Strings, always: parseInt on a 19-digit snowflake rounds it and
+          // would repoint the setting at a role/channel that doesn't exist.
+          role_id: rolePicker.getValue() || "0",
+          channel_id: channelPicker.getValue() || "0",
         });
         showStatus(dStatus, true);
       } catch (err) { showStatus(dStatus, false, `Couldn’t save — ${err.message}`); }

@@ -130,10 +130,24 @@ function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }
 }
 
 /**
- * The settings half of the Birthdays page. Mounted into a region by
- * panels/birthday.js, below the calendar, and locked read-only for non-admins.
- * Not a nav page in its own right.
+ * Birthdays — the announcement settings (Config → Members, id
+ * config-birthday, adminOnly). The calendar lives on Reports → Member Lists
+ * → Birthday Calendar, cross-linked via `related:`. lockUnlessAdmin stays as
+ * defense in depth; writes are refused server-side regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Birthdays</h2>
+        <div class="subtitle">How the bot announces birthdays</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   clearChildren(container);
   appendLoading(container);
@@ -169,14 +183,42 @@ export function mountSettings(container) {
     const note = document.createElement("p");
     note.style.cssText = "color:var(--ink-dim); margin-bottom:1rem; font-size:13px;";
     note.textContent =
-      "Birthdays are announced once a day at midnight UTC. You can post to two channels, "
-      + "each with its own wording — handy when one is for the whole server and one is for a "
-      + "smaller room. See who has a birthday coming up on the Birthday Calendar page.";
+      "Birthdays are announced once a day, at the hour you pick below in the server's own "
+      + "time zone. You can post to two channels, each with its own wording — handy when one "
+      + "is for the whole server and one is for a smaller room. See who has a birthday coming "
+      + "up on the Birthday Calendar page.";
     panel.appendChild(note);
 
     const form = document.createElement("form");
     form.className = "form form-cards";
     panel.appendChild(form);
+
+    const timingCard = document.createElement("div");
+    timingCard.className = "card";
+    form.appendChild(timingCard);
+    const timingHeading = document.createElement("div");
+    timingHeading.className = "section-label";
+    timingHeading.textContent = "Timing";
+    timingCard.appendChild(timingHeading);
+
+    const hourSelect = document.createElement("select");
+    hourSelect.name = "birthday_announce_hour";
+    const savedHour = Number.isInteger(b.birthday_announce_hour) ? b.birthday_announce_hour : 9;
+    for (let h = 0; h < 24; h += 1) {
+      const opt = document.createElement("option");
+      opt.value = String(h);
+      opt.textContent = String(h).padStart(2, "0") + ":00";
+      if (h === savedHour) opt.selected = true;
+      hourSelect.appendChild(opt);
+    }
+    timingCard.appendChild(
+      field(
+        "Announcement Time",
+        hourSelect,
+        "The hour announcements go out, in the server's own time zone (the offset set "
+        + "on the Global page). Defaults to 09:00.",
+      ),
+    );
 
     const primary = buildChannelBlock(
       form,
@@ -242,6 +284,7 @@ export function mountSettings(container) {
           birthday_channel_id_2: secondary.chanPicker.getValue() || "0",
           birthday_message_2: message2,
           birthday_pin_2: secondary.pinBox.checked,
+          birthday_announce_hour: Number(hourSelect.value),
         });
         showStatus(saveStatus, true);
       } catch (err) {

@@ -213,6 +213,41 @@ def test_update_welcome_channel(authed_client, fake_ctx):
     assert val == "5001"
 
 
+def test_update_welcome_greeter_arrival_message(authed_client, fake_ctx):
+    """The greeter arrival line is editable, and an empty box means 'post
+    nothing' — it must survive as an empty string, not snap back to default."""
+    from bot_modules.core.db_utils import get_config_value
+
+    resp = authed_client.put(
+        "/api/config/welcome",
+        json={"greeter_arrival_message": "{member_name} just walked in"},
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_config_value(
+            conn, "greeter_arrival_message", "", fake_ctx.guild_id
+        ) == "{member_name} just walked in"
+
+    assert authed_client.put(
+        "/api/config/welcome", json={"greeter_arrival_message": ""}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_config_value(
+            conn, "greeter_arrival_message", "unset", fake_ctx.guild_id
+        ) == ""
+
+    body = authed_client.get("/api/config").json()["welcome"]
+    assert body["greeter_arrival_message"] == ""
+
+
+def test_get_config_welcome_defaults_the_arrival_line(authed_client):
+    """An untouched guild still reads back the historical @here line."""
+    from bot_modules.services.welcome_service import DEFAULT_ARRIVAL_MESSAGE
+
+    body = authed_client.get("/api/config").json()["welcome"]
+    assert body["greeter_arrival_message"] == DEFAULT_ARRIVAL_MESSAGE
+
+
 def test_update_welcome_invalidates_guild_config_cache(authed_client, fake_ctx):
     """Prime the per-guild cache, edit welcome via the API, confirm the next
     read reflects the edit (cache was dropped)."""
@@ -458,6 +493,32 @@ def test_update_spoiler_channels(authed_client, fake_ctx):
     assert ids == {1001, 1002}
 
 
+def test_update_spoiler_empty_list_really_switches_it_off(authed_client, fake_ctx):
+    """"Leave empty to switch this off" — the legacy guild-0 bucket no panel can
+    reach must not come back and re-enforce a stale list."""
+    from bot_modules.core.db_utils import add_config_id, get_config_id_set
+
+    with open_db(fake_ctx.db_path) as conn:
+        add_config_id(conn, "spoiler_required_channels", 9001, 0)
+        add_config_id(conn, "spoiler_required_channels", 9002, 0)
+
+    resp = authed_client.put(
+        "/api/config/spoiler", json={"spoiler_required_channels": []}
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        # The enforcing read (app_context) uses the legacy fallback for the
+        # home guild; it must now come back empty.
+        assert get_config_id_set(
+            conn, "spoiler_required_channels", fake_ctx.guild_id
+        ) == set()
+    assert fake_ctx.guild_config(fake_ctx.guild_id).spoiler_required_channels == frozenset()
+
+    section = authed_client.get("/api/config").json()["spoiler"]
+    assert section["spoiler_required_channels"] == []
+
+
 # ── PUT /api/config/nsfw-classifier ──────────────────────────────────
 
 
@@ -614,6 +675,22 @@ def test_auto_delete_rule_upsert_and_delete(authed_client, fake_ctx):
     assert resp.status_code == 200
     rules = list_auto_delete_rules_for_guild(fake_ctx.db_path, fake_ctx.guild_id)
     assert 3001 not in [r["channel_id"] for r in rules]
+
+
+@pytest.mark.parametrize("payload", [
+    pytest.param({"max_age_seconds": 0, "interval_seconds": 3600}, id="age-zero"),
+    pytest.param({"max_age_seconds": 86400, "interval_seconds": 0}, id="interval-zero"),
+    pytest.param({"max_age_seconds": -1, "interval_seconds": 3600}, id="age-negative"),
+])
+def test_auto_delete_rule_rejects_non_positive_durations(authed_client, fake_ctx, payload):
+    # The panel's own floor is 1 second; without a server-side floor a direct
+    # PUT of 0 makes the rule due every tick with every message eligible.
+    from bot_modules.services.auto_delete_service import list_auto_delete_rules_for_guild
+
+    resp = authed_client.put("/api/config/auto-delete/3003", json=payload)
+    assert resp.status_code == 422
+    rules = list_auto_delete_rules_for_guild(fake_ctx.db_path, fake_ctx.guild_id)
+    assert 3003 not in [r["channel_id"] for r in rules]
 
 
 def test_auto_delete_media_only_round_trips(authed_client, fake_ctx):
@@ -816,6 +893,42 @@ def test_update_birthday_rejects_empty_message(authed_client):
     assert resp.status_code == 400
 
 
+def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
+    """The announce hour was a code constant; it is a per-guild dial now."""
+    from bot_modules.services.birthday_service import announce_hour
+
+    # Untouched guild reads back the historical 09:00.
+    assert authed_client.get("/api/config").json()["birthday"][
+        "birthday_announce_hour"
+    ] == 9
+
+    resp = authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": 18}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        # The loop reads it through the same helper.
+        assert announce_hour(conn, fake_ctx.guild_id) == 18
+    assert authed_client.get("/api/config").json()["birthday"][
+        "birthday_announce_hour"
+    ] == 18
+
+    # Midnight is a real choice, not "unset".
+    assert authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": 0}
+    ).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert announce_hour(conn, fake_ctx.guild_id) == 0
+
+
+@pytest.mark.parametrize("hour", [-1, 24, 99])
+def test_update_birthday_rejects_an_impossible_hour(authed_client, hour):
+    resp = authed_client.put(
+        "/api/config/birthday", json={"birthday_announce_hour": hour}
+    )
+    assert resp.status_code == 400
+
+
 def test_get_config_includes_risky_section_defaults(authed_client):
     resp = authed_client.get("/api/config")
     assert resp.status_code == 200
@@ -902,6 +1015,57 @@ def test_update_pen_pals_config_normalizes_bad_room_visibility(authed_client, fa
     assert resp.status_code == 200
     pp = authed_client.get("/api/config").json()["pen_pals"]
     assert pp["room_visibility"] == "mods"
+
+
+def test_get_config_pen_pals_round_schedule_defaults(authed_client):
+    """The scheduled round's day and hour are dials now, not a hard-coded 8am
+    Eastern — so the panel has to be able to read them back."""
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert pp["auto_round_dow"] == -1  # every day
+    assert pp["auto_round_hour"] == 12
+
+
+def test_update_pen_pals_config_persists_the_round_schedule(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "auto_round_dow": 3, "auto_round_hour": 8},
+    )
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert (pp["auto_round_dow"], pp["auto_round_hour"]) == (3, 8)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"auto_round_dow": 7}, id="dow-too-high"),
+        pytest.param({"auto_round_dow": -2}, id="dow-too-low"),
+        pytest.param({"auto_round_hour": 24}, id="hour-out-of-day"),
+        pytest.param({"auto_round_hour": -1}, id="hour-negative"),
+    ],
+)
+def test_update_pen_pals_config_rejects_an_impossible_round_time(
+    authed_client, fake_ctx, body
+):
+    resp = authed_client.put(
+        "/api/config/pen-pals", json={"enabled": True, **body},
+    )
+    assert resp.status_code == 400
+
+
+def test_update_pen_pals_config_leaves_the_round_schedule_alone_when_omitted(
+    authed_client, fake_ctx
+):
+    """A save from a page that doesn't carry the two fields (an older cached
+    panel) must not silently reset the admin's chosen round time."""
+    authed_client.put(
+        "/api/config/pen-pals",
+        json={"enabled": True, "auto_round_dow": 5, "auto_round_hour": 9},
+    )
+    resp = authed_client.put("/api/config/pen-pals", json={"enabled": True})
+    assert resp.status_code == 200
+    pp = authed_client.get("/api/config").json()["pen_pals"]
+    assert (pp["auto_round_dow"], pp["auto_round_hour"]) == (5, 9)
 
 
 def test_get_config_pen_pals_intro_message_defaults_to_empty(authed_client):
@@ -1102,22 +1266,77 @@ def test_update_whisper_persists_fields(authed_client, fake_ctx):
     assert cfg.log_channel_id == 9000
 
 
+@pytest.mark.parametrize(
+    ("sent", "stored"),
+    [
+        pytest.param(5, 5, id="raised"),
+        pytest.param(1, 1, id="floor"),
+        pytest.param(0, 1, id="zero-clamps-to-one"),
+        pytest.param(99, 10, id="clamped-to-ten"),
+    ],
+)
+def test_update_whisper_persists_the_guess_cap(authed_client, fake_ctx, sent, stored):
+    """The recipient's guess allowance was fixed at three by the schema with no
+    control anywhere; it's a dial now, clamped to a playable range."""
+    resp = authed_client.put(
+        "/api/config/whisper", json={"guesses_per_whisper": sent},
+    )
+    assert resp.status_code == 200
+    assert authed_client.get("/api/config").json()["whisper"][
+        "guesses_per_whisper"
+    ] == stored
+
+
+def test_get_config_whisper_guess_cap_defaults_to_three(authed_client):
+    assert authed_client.get("/api/config").json()["whisper"][
+        "guesses_per_whisper"
+    ] == 3
+
+
 # ── /config/dms ──────────────────────────────────────────────────────
 
 
 def test_update_dms_persists_channels(authed_client, fake_ctx):
     resp = authed_client.put(
         "/api/config/dms",
-        json={"request_channel_id": "1100", "audit_channel_id": "1200"},
+        json={"audit_channel_id": "1200"},
     )
     assert resp.status_code == 200
 
-    from bot_modules.services.dm_perms_service import (
-        load_audit_channels,
-        load_request_channels,
-    )
-    assert load_request_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1100
+    from bot_modules.services.dm_perms_service import load_audit_channels
     assert load_audit_channels(fake_ctx.db_path).get(fake_ctx.guild_id) == 1200
+
+
+def test_update_dms_persists_request_limits(authed_client, fake_ctx):
+    """The expiry window and the pending cap are dials, not constants — what the
+    panel saves is what the request flow enforces."""
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"request_expiry_hours": 48, "max_pending_requests": 2},
+    )
+    assert resp.status_code == 200
+
+    limits = get_request_limits(fake_ctx.db_path, fake_ctx.guild_id)
+    assert limits == {"expiry_hours": 48, "max_pending": 2}
+
+    section = authed_client.get("/api/config").json()["dms"]
+    assert section["request_expiry_hours"] == 48
+    assert section["max_pending_requests"] == 2
+
+
+def test_update_dms_clamps_absurd_request_limits(authed_client, fake_ctx):
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    resp = authed_client.put(
+        "/api/config/dms",
+        json={"request_expiry_hours": 0, "max_pending_requests": 9999},
+    )
+    assert resp.status_code == 200
+
+    limits = get_request_limits(fake_ctx.db_path, fake_ctx.guild_id)
+    assert limits == {"expiry_hours": 1, "max_pending": 50}
 
 
 def test_update_dms_persists_mode_roles(authed_client, fake_ctx):
@@ -2180,6 +2399,34 @@ def test_greeting_watch_extra_words_roundtrip_and_bot_side_read(
     assert cfg.greeting_watch_extra_words == ("henlo", "good yawn", "o7")
 
 
+def test_greeting_watch_notify_list_can_actually_be_cleared(authed_client, fake_ctx):
+    """"Leave it empty and nothing is sent" has to be true even on a guild that
+    still carries the pre-multi single-subscriber key: both the DM loop and the
+    panel fall back to it when the CSV is empty, so saving an empty list has to
+    retire it."""
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.services.greeting_watch_loop import _load_settings
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(
+            conn, "greeting_watch_notify_user_id", "424242", fake_ctx.guild_id
+        )
+
+    resp = authed_client.put(
+        "/api/config/greeting-watch", json={"notify_user_ids": ""}
+    )
+    assert resp.status_code == 200
+
+    section = authed_client.get("/api/config").json()["greeting_watch"]
+    assert section["notify_user_ids"] == []
+
+    cfg = fake_ctx.guild_config(fake_ctx.guild_id)
+    assert not cfg.greeting_watch_notify_user_ids
+    # The DM loop reads the DB directly rather than the cached snapshot.
+    _, _, notify_ids = _load_settings(fake_ctx.db_path, fake_ctx.guild_id)
+    assert notify_ids == []
+
+
 def test_greeting_watch_extra_words_empty_string_clears(authed_client, fake_ctx):
     authed_client.put(
         "/api/config/greeting-watch", json={"extra_words": "henlo"}
@@ -2395,3 +2642,82 @@ def test_dms_post_panel_is_not_refused_on_account_of_itself(authed_client, fake_
     )
     assert resp.status_code == 200
     assert resp.json()["warning"] is None
+
+
+# ── Voice transcription: the model has to be downloaded first ──────────
+#
+# The panel promises "a model has to read Downloaded", and the bot loads models
+# offline (local_files_only) — an un-downloaded one raises on every voice
+# message and the failure is swallowed into the log. So the promise is enforced
+# on the way in rather than discovered later as silence.
+
+
+def _vt_env(monkeypatch, *, available=True, cached=True):
+    monkeypatch.setattr("web_server.routes.config._vt_is_available", lambda: available)
+    monkeypatch.setattr(
+        "web_server.routes.config._vt_model_is_cached", lambda name: cached
+    )
+
+
+def _vt_saved(fake_ctx):
+    from bot_modules.services.voice_transcription_service import get_config
+
+    with open_db(fake_ctx.db_path) as conn:
+        return get_config(conn, fake_ctx.guild_id)
+
+
+def test_voice_transcription_refuses_to_enable_an_undownloaded_model(
+    authed_client, fake_ctx, monkeypatch
+):
+    _vt_env(monkeypatch, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 400
+    assert "download" in resp.json()["detail"].lower()
+    assert _vt_saved(fake_ctx) is None  # nothing written
+
+
+def test_voice_transcription_enables_a_downloaded_model(
+    authed_client, fake_ctx, monkeypatch
+):
+    _vt_env(monkeypatch, cached=True)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "tiny.en", "channel_ids": ["5000"]},
+    )
+    assert resp.status_code == 200
+    saved = _vt_saved(fake_ctx)
+    assert saved is not None
+    assert saved.enabled is True
+    assert saved.model_name == "tiny.en"
+
+
+def test_voice_transcription_can_always_be_turned_off(
+    authed_client, fake_ctx, monkeypatch
+):
+    """A wiped model cache must not trap an admin in a setting they can't
+    switch off — the gate only guards turning transcription on."""
+    _vt_env(monkeypatch, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": False, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 200
+    saved = _vt_saved(fake_ctx)
+    assert saved is not None and saved.enabled is False
+
+
+def test_voice_transcription_gate_is_skipped_without_faster_whisper(
+    authed_client, fake_ctx, monkeypatch
+):
+    """Nothing is cached when the package is missing; the panel already says
+    nothing gets transcribed, so saving still works."""
+    _vt_env(monkeypatch, available=False, cached=False)
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={"enabled": True, "model_name": "base.en", "channel_ids": []},
+    )
+    assert resp.status_code == 200
+    assert _vt_saved(fake_ctx).enabled is True

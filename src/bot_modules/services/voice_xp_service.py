@@ -21,6 +21,7 @@ from bot_modules.core.xp_system import (
     completed_voice_intervals,
     delete_voice_session,
     get_voice_session,
+    is_channel_xp_eligible,
     list_voice_sessions,
     set_voice_session,
 )
@@ -103,10 +104,18 @@ def _try_voice_login(
 def is_qualifying_voice_channel(
     channel: discord.VoiceChannel,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
+    excluded_channel_ids: frozenset[int] | set[int] = frozenset(),
 ) -> bool:
-    """Check if a voice channel qualifies for XP awards."""
+    """Check if a voice channel qualifies for XP awards.
+
+    ``excluded_channel_ids`` is the guild's "Channels That Earn No XP" list —
+    the dashboard promises voice time there earns nothing, so an excluded
+    channel never qualifies (no interval XP, and no daily voice login either).
+    """
     afk_channel = channel.guild.afk_channel
     if afk_channel and channel.id == afk_channel.id:
+        return False
+    if not is_channel_xp_eligible(channel.id, None, excluded_channel_ids):
         return False
 
     human_count = sum(1 for member in channel.members if not member.bot)
@@ -118,13 +127,15 @@ async def process_voice_xp_tick(
     db_path: Path,
     settings: XpSettings = DEFAULT_XP_SETTINGS,
     settings_for: Callable[[int], XpSettings] | None = None,
+    excluded_for: Callable[[int], frozenset[int] | set[int]] | None = None,
 ) -> dict[tuple[int, int], tuple[discord.Member, AwardResult]]:
     """
     Process one voice XP tick, awarding XP to qualifying members.
 
     ``settings_for`` resolves per-guild XP settings (e.g.
     ``lambda gid: ctx.guild_config(gid).xp_settings``); when omitted the static
-    ``settings`` snapshot is used for every guild.
+    ``settings`` snapshot is used for every guild. ``excluded_for`` resolves the
+    guild's XP channel-exclusion list the same way; omitted, nothing is excluded.
 
     Returns a dict of (guild_id, member_id) -> (member, award_result) for level-up handling.
     """
@@ -150,12 +161,17 @@ async def process_voice_xp_tick(
 
         for guild in bot.guilds:
             g_settings = settings_for(guild.id) if settings_for is not None else settings
+            g_excluded = (
+                excluded_for(guild.id) if excluded_for is not None else frozenset()
+            )
             for channel in guild.voice_channels:
                 human_members = [member for member in channel.members if not member.bot]
                 if not human_members:
                     continue
 
-                qualifies = is_qualifying_voice_channel(channel, g_settings)
+                qualifies = is_qualifying_voice_channel(
+                    channel, g_settings, g_excluded
+                )
                 for member in human_members:
                     active_members.add((guild.id, member.id))
                     session = get_voice_session(conn, guild.id, member.id)
@@ -291,12 +307,14 @@ async def voice_xp_loop(
     settings: XpSettings = DEFAULT_XP_SETTINGS,
     settings_getter=None,
     settings_for: Callable[[int], XpSettings] | None = None,
+    excluded_for: Callable[[int], frozenset[int] | set[int]] | None = None,
 ) -> None:
     """Background task that periodically awards voice XP.
 
     Pass ``settings_for`` as a per-guild resolver (e.g.
     ``lambda gid: ctx.guild_config(gid).xp_settings``) so each guild uses its own
-    XP config. ``settings_getter`` (a zero-arg callable) and the static
+    XP config, and ``excluded_for`` likewise for the guild's XP channel-exclusion
+    list. ``settings_getter`` (a zero-arg callable) and the static
     ``settings`` snapshot remain supported as guild-agnostic fallbacks.
     """
     await bot.wait_until_ready()
@@ -305,7 +323,11 @@ async def voice_xp_loop(
         current_settings = settings_getter() if settings_getter is not None else settings
         try:
             leveled_members = await process_voice_xp_tick(
-                bot, db_path, current_settings, settings_for=settings_for
+                bot,
+                db_path,
+                current_settings,
+                settings_for=settings_for,
+                excluded_for=excluded_for,
             )
             for member, award in leveled_members.values():
                 await handle_level_progress_callback(member, award, source="voice_tick")

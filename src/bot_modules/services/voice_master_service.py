@@ -11,10 +11,11 @@ import logging
 import re
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
     import discord
@@ -40,11 +41,13 @@ DEFAULT_NAME_TEMPLATE: str = "{display_name}'s Room"
 
 @dataclass(frozen=True)
 class VoiceMasterConfig:
+    # The sticky panel's channel/message ids are deliberately NOT here: the
+    # cog tracks them through the raw config keys on the message path (see
+    # voice_master_cog._panel_ids), and nothing ever read them off this
+    # dataclass.
     hub_channel_id: int
     category_id: int
     control_channel_id: int
-    panel_channel_id: int
-    panel_message_id: int
     default_name_template: str
     default_user_limit: int
     default_bitrate: int
@@ -83,7 +86,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "voice_master_empty_grace_s": "15",
     "voice_master_trusted_prune_days": "0",
     "voice_master_disable_saves": "0",
-    "voice_master_saveable_fields": "name,limit,access,trusted,blocked",
+    "voice_master_saveable_fields": ",".join(sorted(_DEFAULT_SAVEABLE)),
     "voice_master_post_inline_panel": "1",
     "voice_master_spectator_gate_role_id": "0",
 }
@@ -113,16 +116,15 @@ def load_voice_master_config(
         key: _get(conn, key, default, guild_id)
         for key, default in _CONFIG_DEFAULTS.items()
     }
+    # An unset key falls back to the default CSV above; a *stored* empty string
+    # is an admin who unchecked every Saveable Fields box, and stays empty —
+    # resurrecting the defaults there silently reverted their choice.
     saveable_csv = raw["voice_master_saveable_fields"]
-    saveable = frozenset(
-        s.strip() for s in saveable_csv.split(",") if s.strip()
-    ) or _DEFAULT_SAVEABLE
+    saveable = frozenset(s.strip() for s in saveable_csv.split(",") if s.strip())
     return VoiceMasterConfig(
         hub_channel_id=_parse_int(raw["voice_master_hub_channel_id"], 0),
         category_id=_parse_int(raw["voice_master_category_id"], 0),
         control_channel_id=_parse_int(raw["voice_master_control_channel_id"], 0),
-        panel_channel_id=_parse_int(raw["voice_master_panel_channel_id"], 0),
-        panel_message_id=_parse_int(raw["voice_master_panel_message_id"], 0),
         default_name_template=raw["voice_master_default_name_template"]
             or DEFAULT_NAME_TEMPLATE,
         default_user_limit=_parse_int(raw["voice_master_default_user_limit"], 0),
@@ -187,6 +189,34 @@ def default_profile() -> VoiceProfile:
         spectator=False,
         age_gated=False,
     )
+
+
+def restorable_profile(
+    profile: VoiceProfile,
+    *,
+    disable_saves: bool,
+    saveable_fields: Iterable[str],
+) -> VoiceProfile:
+    """Strip the saved fields this guild no longer permits persisting.
+
+    The restore-side mirror of ``should_save_profile_field``: unchecking a
+    Saveable Field on the dashboard has to stop an already-saved value coming
+    back on the next room, not merely stop new saves — otherwise a value the
+    admin turned off keeps re-applying forever. ``bitrate`` has no
+    saveable-field token of its own and is left alone.
+    """
+    if disable_saves:
+        return default_profile()
+    allowed = set(saveable_fields)
+    if "name" not in allowed:
+        profile = replace(profile, saved_name=None)
+    if "limit" not in allowed:
+        profile = replace(profile, saved_limit=0)
+    if "access" not in allowed:
+        profile = replace(
+            profile, locked=False, hidden=False, spectator=False, age_gated=False
+        )
+    return profile
 
 
 @dataclass(frozen=True)
@@ -582,9 +612,18 @@ def list_blocked(
 
 
 def effective_blocked(
-    conn: sqlite3.Connection, guild_id: int, owner_id: int
+    conn: sqlite3.Connection,
+    guild_id: int,
+    owner_id: int,
 ) -> list[int]:
     """Blocklist to actually ENFORCE: the owner's own list plus no-contact.
+
+    Neither half is optional. The Saveable Fields whitelist gates whether a
+    *new* block may be saved (``validate_block_add`` refuses to the member's
+    face when "Block list" is unchecked); it never silently stops an existing
+    block being applied. A block is the member's own safety choice, not part
+    of the room's look, and every caller of this function is an enforcement
+    site — channel create, /voice lock, hide and spectate alike.
 
     Deliberately separate from :func:`list_blocked`, which backs everything
     the owner can *see* (``/voice blocked list``, the profile embed, the

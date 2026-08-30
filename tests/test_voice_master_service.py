@@ -29,6 +29,7 @@ from bot_modules.services.voice_master_service import (
     default_profile,
     delete_active_channel,
     delete_profile,
+    effective_blocked,
     get_active_channel,
     get_owned_channel,
     insert_active_channel,
@@ -46,6 +47,7 @@ from bot_modules.services.voice_master_service import (
     remove_name_blocklist,
     remove_trusted,
     render_name_template,
+    restorable_profile,
     resolve_channel_name,
     strip_state_icon,
     save_profile,
@@ -728,7 +730,6 @@ def test_load_config_returns_defaults_when_unset(db):
     assert cfg.hub_channel_id == 0
     assert cfg.category_id == 0
     assert cfg.control_channel_id == 0
-    assert cfg.panel_message_id == 0
     assert cfg.default_name_template == DEFAULT_NAME_TEMPLATE
     assert cfg.default_user_limit == 0
     assert cfg.default_bitrate == 0
@@ -820,3 +821,72 @@ def test_access_status_text_per_mode(mode, expected):
     rewritten (from "Age-gated ·") with nothing asserting on it.
     """
     assert access_status_text(mode=mode) == expected
+
+
+# ── Saveable fields on the RESTORE side ──────────────────────────────
+
+
+def _saved_everything() -> VoiceProfile:
+    return VoiceProfile(
+        saved_name="Cosy Corner",
+        saved_limit=6,
+        locked=True,
+        hidden=True,
+        bitrate=64000,
+        spectator=False,
+        age_gated=True,
+    )
+
+
+def test_restorable_profile_keeps_everything_when_all_fields_saveable():
+    profile = _saved_everything()
+    out = restorable_profile(
+        profile,
+        disable_saves=False,
+        saveable_fields={"name", "limit", "access", "trusted", "blocked"},
+    )
+    assert out == profile
+
+
+@pytest.mark.parametrize(
+    ("dropped", "expected"),
+    [
+        ("name", {"saved_name": None}),
+        ("limit", {"saved_limit": 0}),
+        (
+            "access",
+            {"locked": False, "hidden": False, "spectator": False, "age_gated": False},
+        ),
+    ],
+)
+def test_restorable_profile_drops_fields_the_admin_unchecked(dropped, expected):
+    """Unchecking a field must stop old values coming back, not just new saves."""
+    allowed = {"name", "limit", "access"} - {dropped}
+    out = restorable_profile(
+        _saved_everything(), disable_saves=False, saveable_fields=allowed
+    )
+    for field, value in expected.items():
+        assert getattr(out, field) == value
+    # Bitrate is not one of the saveable-field tokens and is never stripped.
+    assert out.bitrate == 64000
+
+
+def test_restorable_profile_returns_defaults_when_saves_disabled():
+    out = restorable_profile(
+        _saved_everything(), disable_saves=True, saveable_fields={"name", "access"}
+    )
+    assert out == default_profile()
+
+
+def test_effective_blocked_always_keeps_the_owners_own_list(db):
+    """A member's own block is a safety choice, not a saved layout preference.
+
+    No admin dial may quietly drop it: the Saveable Fields whitelist gates
+    whether a *new* block can be saved (``validate_block_add`` says so to the
+    member's face), never whether an existing one is enforced. Gating it here
+    made a block vanish on channel create and reappear the moment the owner
+    ran ``/voice lock``, which reads the same list without any whitelist.
+    """
+    with open_db(db) as conn:
+        add_blocked(conn, GUILD, OWNER_A, TARGET_X)
+        assert effective_blocked(conn, GUILD, OWNER_A) == [TARGET_X]

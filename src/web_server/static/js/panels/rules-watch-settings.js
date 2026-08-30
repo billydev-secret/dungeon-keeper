@@ -11,10 +11,25 @@ import {
 } from "../config-helpers.js";
 
 /**
- * The settings half of the Rules Watch page. Mounted into a region by
- * panels/rules-watch.js, below the alert queue, and locked read-only for
- * non-admins. Not a nav page in its own right.
+ * Rules Watch settings — enable/disable and the alert channel (Config →
+ * Moderation & Safety, id config-rules-watch, adminOnly). The alert queue
+ * lives under Moderation → Rules Watch, cross-linked via `related:`.
+ * lockUnlessAdmin stays as defense in depth; writes are refused server-side
+ * regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Rules Watch</h2>
+        <div class="subtitle">What the AI is told to watch for</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading configuration…</div>`;
 

@@ -62,6 +62,12 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
                 ephemeral=True,
             )
             return
+        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "LegitLibs is currently disabled on this server.",
+                ephemeral=True,
+            )
+            return
 
         if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
             await interaction.response.send_message(

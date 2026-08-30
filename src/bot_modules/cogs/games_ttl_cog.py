@@ -16,9 +16,9 @@ from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     update_game_message,
-    get_game_options,
     get_game_payload,
     modify_payload,
     end_game,
@@ -347,6 +347,12 @@ class TTLCog(commands.Cog):
                 ephemeral=True,
             )
             return
+        if not await check_game_enabled(self.db, "ttl", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "Two Truths and a Lie is currently disabled on this server.",
+                ephemeral=True,
+            )
+            return
 
         await interaction.response.defer()
         game_id = await self.launch(
@@ -369,9 +375,12 @@ class TTLCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         prompt = options.get("prompt")
-        game_opts = await get_game_options(self.db, "ttl", guild_id)
+        # The vote timer is a per-schedule launch option (Games → Scheduling);
+        # 0 means "no timer". There is no server-wide default: the fallback
+        # that used to read one out of games_game_config had no dashboard
+        # writer anywhere, so it could never be anything but 0.
         try:
-            vote_timer = int(options.get("vote_timer", game_opts.get("vote_timer", 0)))
+            vote_timer = int(options.get("vote_timer", 0))
         except (TypeError, ValueError):
             vote_timer = 0
         vote_timer = max(0, min(vote_timer, 300))

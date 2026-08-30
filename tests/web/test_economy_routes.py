@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import load_econ_settings
 from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
+from web_server.routes.economy import EconomyConfigUpdate
 from web_server.server import create_app
 
 
@@ -187,6 +189,81 @@ def test_put_qotd_sponsor_price_roundtrips(authed_client, fake_ctx):
     assert cfg.qotd_sponsor_expire_days == 10
 
 
+def test_put_auction_dials_roundtrip(authed_client, fake_ctx):
+    """Audit finding 67: the four live-auction guard-rails are enforced by the
+    auction service but were absent from the whitelist, so the only way to move
+    them was a hand-written row in the config table."""
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "auction_min_bid": 25,
+            "auction_min_increment": 10,
+            "auction_soft_close_seconds": 600,
+            "auction_max_duration_hours": 72,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.auction_min_bid == 25
+    assert cfg.auction_min_increment == 10
+    assert cfg.auction_soft_close_seconds == 600
+    assert cfg.auction_max_duration_hours == 72
+
+
+@pytest.mark.parametrize(
+    ("payload"),
+    [
+        pytest.param({"auction_min_bid": 0}, id="min-bid-of-zero"),
+        pytest.param({"auction_min_increment": 0}, id="raise-of-zero"),
+        pytest.param({"auction_soft_close_seconds": 3601}, id="anti-snipe-over-an-hour"),
+        pytest.param({"auction_max_duration_hours": 0}, id="zero-length-auction"),
+        pytest.param({"auction_max_duration_hours": 721}, id="auction-over-a-month"),
+    ],
+)
+def test_put_refuses_an_auction_dial_the_service_would_clamp(authed_client, payload):
+    """The service floors these itself; the panel must refuse rather than let an
+    admin save a number that is silently ignored."""
+    assert authed_client.put("/api/economy/config", json=payload).status_code == 422
+
+
+@pytest.mark.parametrize(
+    "days",
+    [
+        pytest.param(5, id="a-review-window"),
+        pytest.param(0, id="zero-disables-the-sweep"),
+    ],
+)
+def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx, days):
+    """Audit finding 68: the custom-item order sweep read this hourly, but every
+    sibling review window was editable and this one was not."""
+    resp = authed_client.put(
+        "/api/economy/config", json={"shop_item_expire_days": days}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.shop_item_expire_days == days
+
+
+@pytest.mark.parametrize(
+    "dropped",
+    [
+        pytest.param("price_text_room", id="text-room-price"),
+        pytest.param("price_voice_room", id="voice-room-price"),
+        pytest.param("quest_board_monthly", id="monthly-board-size"),
+    ],
+)
+def test_put_refuses_the_dropped_dials(authed_client, dropped):
+    """Findings 44 and 57: private rooms were never built and monthly became a
+    single guild-wide goal, so these three bought and sized nothing. The
+    whitelist kept accepting them, which is how a stored value went on looking
+    like a live setting."""
+    assert authed_client.put(
+        "/api/economy/config", json={dropped: 5}
+    ).status_code == 422
+
+
 def test_put_partial_leaves_other_fields_unset(authed_client, fake_ctx):
     """Only the sent key is written — empty icon URL is settable, and the rest
     of the settings are not persisted."""
@@ -249,6 +326,74 @@ def test_put_accepts_zero_host_bounty_cap(authed_client, fake_ctx):
 def test_put_rejects_negative_host_bounty_cap(authed_client):
     resp = authed_client.put("/api/economy/config", json={"host_bounty_cap": -1})
     assert resp.status_code == 422
+
+
+def test_put_auction_guard_rails_roundtrip(authed_client, fake_ctx):
+    """The four auction dials are enforced on every bid but had no write path:
+    absent from the whitelist and from every panel, they could only be changed
+    by hand-editing the config table."""
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "auction_min_bid": 25,
+            "auction_min_increment": 10,
+            "auction_soft_close_seconds": 120,
+            "auction_max_duration_hours": 72,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.auction_min_bid == 25
+    assert cfg.auction_min_increment == 10
+    assert cfg.auction_soft_close_seconds == 120
+    assert cfg.auction_max_duration_hours == 72
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"auction_max_duration_hours": 0}, id="duration-zero"),
+        # The ceiling is 720h (30 days), not the 168h default: this dial is
+        # itself the guard-rail on how long a mod may run one auction, so the
+        # route bounds how far that rail can be moved rather than pinning it
+        # to the shipped default.
+        pytest.param({"auction_max_duration_hours": 721}, id="duration-over-a-month"),
+        pytest.param({"auction_min_bid": -1}, id="negative-min-bid"),
+    ],
+)
+def test_put_rejects_out_of_range_auction_dials(authed_client, payload):
+    assert authed_client.put("/api/economy/config", json=payload).status_code == 422
+
+
+def test_every_pricing_panel_box_is_writable_and_readable(authed_client):
+    """Each numeric box on Pricing must be a field the PUT accepts *and* the GET
+    returns — a box the model rejects 422s the whole Save, and one the GET omits
+    renders blank and then refuses to submit."""
+    import re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "web_server"
+        / "static"
+        / "js"
+        / "panels"
+        / "pricing.js"
+    ).read_text(encoding="utf-8")
+    keys: set[str] = set()
+    for block in re.findall(r"const [A-Z_]+_FIELDS = \[(.*?)\n\];", src, re.S):
+        keys |= set(re.findall(r'\["([a-z0-9_]+)"', block))
+    assert "auction_min_bid" in keys and "shop_item_expire_days" in keys
+    model_fields = set(EconomyConfigUpdate.model_fields)
+    assert not keys - model_fields, (
+        f"Pricing boxes the config PUT would reject: {sorted(keys - model_fields)}"
+    )
+    cfg = authed_client.get("/api/economy/config").json()
+    assert not keys - set(cfg), (
+        f"Pricing boxes the config GET never returns: {sorted(keys - set(cfg))}"
+    )
 
 
 def test_put_rejects_booster_multiplier_below_one(authed_client):
@@ -317,9 +462,10 @@ def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
     # curated colours arrived (todo #76) — the hints track the spec defaults.
     assert hints["price_role_preset"] == 80
     assert hints["price_role_gradient"] == 240
-    assert hints["price_text_room"] == 200
-    assert hints["price_voice_room"] == 200
-
+    # The two private-room prices used to be hinted here for a stage that was
+    # never built — a suggestion for something nobody could ever buy.
+    assert "price_text_room" not in hints
+    assert "price_voice_room" not in hints
 
 def test_metrics_requires_admin(fake_ctx):
     client = _non_admin_client(fake_ctx)

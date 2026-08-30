@@ -53,6 +53,7 @@ from bot_modules.services.moderation import (
     reopen_ticket,
     resolve_policy_vote,
     store_transcript,
+    ticket_notify_on_create_enabled,
     write_audit,
     PolicyTicketRow,
     TicketRow,
@@ -1090,10 +1091,10 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
         # Notify mods
         def _get_notify():
             with ctx.open_db() as conn:
-                return get_config_value(conn, "ticket_notify_on_create", "1")
+                return ticket_notify_on_create_enabled(conn, guild.id)
 
         notify = await asyncio.to_thread(_get_notify)
-        if notify != "0":
+        if notify:
             for rid in mod_role_ids:
                 role = guild.get_role(rid)
                 if not role:
@@ -1963,31 +1964,52 @@ def _policy_vote_timeout_seconds(ctx: AppContext, guild_id: int) -> float:
     return max(hours, 0) * 3600.0
 
 
+async def _policy_vote_timeout_pass(bot, ctx: AppContext, guild) -> None:
+    """One sweep of one guild: resolve every policy vote past its deadline."""
+    timeout_secs = _policy_vote_timeout_seconds(ctx, guild.id)
+    if timeout_secs <= 0:
+        return
+    pvt_guild_id = guild.id
+
+    def _get_expired_votes():
+        with ctx.open_db() as conn:
+            return find_expired_policy_votes(
+                conn, pvt_guild_id, timeout_seconds=timeout_secs
+            )
+
+    expired = await asyncio.to_thread(_get_expired_votes)
+    for policy in expired:
+        try:
+            await _resolve_expired_policy(bot, ctx, guild, policy)
+        except Exception:
+            log.exception(
+                "Failed to resolve expired policy %s",
+                policy.get("id"),
+            )
+
+
+async def sweep_expired_policy_votes(bot: discord.Client, ctx: AppContext) -> None:
+    """One pass over **every** guild the bot is in.
+
+    ``/policy open`` works on any server, and each server sets its own voting
+    deadline on its own dashboard, so the sweep can't be home-guild-only — a
+    proposal on a second server would hang in 'voting' forever at any deadline.
+    """
+    for guild in list(getattr(bot, "guilds", [])):
+        await _policy_vote_timeout_pass(bot, ctx, guild)
+
+
 async def policy_vote_timeout_loop(bot: discord.Client, ctx: AppContext) -> None:
-    """Background task that resolves policy votes past their deadline."""
+    """Background task that resolves policy votes past their deadline.
+
+    Sweeps every guild the bot is in: the deadline dial is written per-guild
+    by the dashboard (PUT /api/config/policy), and consulting only the home
+    guild made that dial a silent no-op everywhere else.
+    """
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            guild = bot.get_guild(ctx.guild_id)
-            if guild is not None:
-                timeout_secs = _policy_vote_timeout_seconds(ctx, guild.id)
-                pvt_guild_id = guild.id
-                if timeout_secs > 0:
-                    def _get_expired_votes():
-                        with ctx.open_db() as conn:
-                            return find_expired_policy_votes(
-                                conn, pvt_guild_id, timeout_seconds=timeout_secs
-                            )
-
-                    expired = await asyncio.to_thread(_get_expired_votes)
-                    for policy in expired:
-                        try:
-                            await _resolve_expired_policy(bot, ctx, guild, policy)
-                        except Exception:
-                            log.exception(
-                                "Failed to resolve expired policy %s",
-                                policy.get("id"),
-                            )
+            await sweep_expired_policy_votes(bot, ctx)
         except Exception:
             log.exception("Error in policy vote timeout loop")
         await asyncio.sleep(60)

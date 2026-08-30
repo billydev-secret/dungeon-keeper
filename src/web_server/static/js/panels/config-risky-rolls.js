@@ -1,3 +1,4 @@
+import { mountGamePanel } from "./games-panel-shared.js";
 import {
   loadConfig,
   loadRoles,
@@ -8,7 +9,6 @@ import {
   mountRolePicker,
   mountAsync,
 } from "../config-helpers.js";
-import { mountGamePanel } from "./games-panel-shared.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -69,9 +69,15 @@ export function mount(container) {
 
     // The on/off switch lives in games_game_config, not the risky config row,
     // so it rides the shared game-panel status section like every other game.
+    // The label matches the Global Config list this game appears in, and the
+    // hint names both readers — /risky start and the scheduler.
     mountGamePanel(container.querySelector('[data-region="status"]'), {
       gameType: "risky_roll", gameName: "Risky Rolls", gameIcon: "🎰",
       hasBank: false, bare: true,
+      statusLabel: "Available on This Server",
+      statusHint: "When off, /risky start refuses to open a round and a scheduled"
+        + " Risky Rolls round is skipped when its time comes round. Rounds already"
+        + " running finish normally.",
     });
 
     const form = container.querySelector("[data-form]");

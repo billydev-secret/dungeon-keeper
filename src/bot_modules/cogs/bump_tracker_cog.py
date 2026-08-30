@@ -13,7 +13,12 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.bump_tracker.detector_logic import match_site, message_text
+from bot_modules.bump_tracker.detector_logic import (
+    match_site,
+    message_text,
+    should_detect,
+    should_post_widget,
+)
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 
@@ -502,7 +507,10 @@ class BumpTrackerCog(commands.Cog):
             occurrence=str(interaction.id),
         )
 
-        if not cfg["channel_id"]:
+        # The widget is half of what "Send Bump Reminders" buys, so a guild
+        # that switched reminders off gets no widget edit (and no fresh widget
+        # message) out of a manual log — matching the background loop.
+        if not should_post_widget(cfg):
             return
 
         statuses = [
@@ -561,9 +569,7 @@ class BumpTrackerCog(commands.Cog):
         def _load():
             with open_db(self.bot.ctx.db_path) as conn:
                 cfg = _get_config(conn, guild_id)
-                if cfg is None or not cfg["enabled"] or not cfg["channel_id"]:
-                    return None, []
-                if message.channel.id != cfg["channel_id"]:
+                if not should_detect(cfg, message.channel.id):
                     return None, []
                 sites = _get_sites_with_detectors(conn, guild_id)
                 return cfg, sites
@@ -622,16 +628,17 @@ class BumpTrackerCog(commands.Cog):
                 occurrence=str(message.id),
             )
 
-        statuses = [
-            _SiteStatus(
-                name=r["site_name"],
-                cooldown_seconds=r["cooldown_seconds"],
-                bumped_at=r["bumped_at"],
-                notified=r["notified"] if r["notified"] is not None else 0,
-            )
-            for r in log_rows
-        ]
-        await _refresh_widget(self.bot, self.bot.ctx.db_path, dict(cfg), statuses, {}, force_resend=True)
+        if should_post_widget(cfg):
+            statuses = [
+                _SiteStatus(
+                    name=r["site_name"],
+                    cooldown_seconds=r["cooldown_seconds"],
+                    bumped_at=r["bumped_at"],
+                    notified=r["notified"] if r["notified"] is not None else 0,
+                )
+                for r in log_rows
+            ]
+            await _refresh_widget(self.bot, self.bot.ctx.db_path, dict(cfg), statuses, {}, force_resend=True)
 
 
 async def setup(bot: Bot) -> None:

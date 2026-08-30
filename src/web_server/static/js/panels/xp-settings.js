@@ -31,10 +31,25 @@ const LIST_FIELDS = [
 ];
 
 /**
- * The settings half of the XP page. Mounted into a region by panels/xp.js,
- * below the leaderboard, and locked read-only for non-admins by the caller —
- * see lockUnlessAdmin in config-helpers.js. Not a nav page in its own right.
+ * XP & Leveling — the curve and reward settings (Config → Members,
+ * id config-xp, adminOnly). The leaderboard they shape lives on
+ * Reports → Engagement → XP Leaderboard, cross-linked via `related:`.
+ * lockUnlessAdmin stays as defense in depth; writes are refused server-side
+ * regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>XP &amp; Leveling</h2>
+        <div class="subtitle">The rules that decide how XP is earned and what levels award</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading XP settings…</div>`;
 
@@ -62,7 +77,7 @@ export function mountSettings(container) {
             <div class="field">
               <label>Promotion Review Grant Role</label>
               <div data-picker="promotion_review_grant_role_id"></div>
-              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. Choose "(none)" and the Grant button has nothing to give. Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
+              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. This is also the role the Level 5 card's <strong>Spicy access</strong> line reports on. Choose "(none)" and the Grant button has nothing to give (the Spicy access line then falls back to a grant named <code>nsfw</code>, and is left off the card if there isn't one). Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
             </div>
             <div class="field">
               <label>Promotion Review Ping Role</label>

@@ -89,6 +89,24 @@ A sortable list of rows, each defining one choice:
 - **Button color** (button style only) or **Description** (dropdown style only, short)
 - Drag to reorder; order controls layout.
 
+**Grant prerequisites apply here too** (2026-08-29). If a chosen role is also a
+configured grant role with a *Role Required First* (Config → Roles → Role
+Grants), the click path refuses the member until they hold that role — same
+gate, same admin-only bypass, and fail-closed when the required role is gone;
+see `role_grant_spec.md`. Otherwise a menu button would be a way around a gate
+`/grant` holds even moderators to. The check happens on the click, not at
+publish time, so it also covers menus published before the grant existed. The
+grant's *Who Can Hand This Out* keeper list is not consulted — that governs
+handing the role to someone else, not self-service.
+
+On a **dropdown** menu the gate is applied per choice, not to the submission:
+the gated picks are dropped and everything else in the selection — the other
+roles added, and the roles the member deselected — still applies, with the
+"you need @X first" note leading the confirmation. A gate that cancelled four
+unrelated picks and named one prerequisite read as a broken menu. The
+fail-closed case is the exception: a *deleted* required role refuses the whole
+click and alerts the mods, because that menu is genuinely misconfigured.
+
 Limit: **25 choices per menu** (platform ceiling). The editor counts down and blocks past the cap. Need more? Make a second menu.
 
 ### 3.3 Modes

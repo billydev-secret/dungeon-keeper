@@ -89,6 +89,28 @@ def normalize_auto_close_options(
     return players, minutes
 
 
+def effective_min_game_seconds(
+    configured: dict[int, int],
+    guild_id: int,
+    skip_min_game_time: bool = False,
+) -> int:
+    """How long a round must stay open in *guild_id*, in seconds.
+
+    One lookup for both close paths — the host's Close Round button and the
+    auto-close that fires once enough people have rolled. They used to disagree:
+    auto-close fell back to a 30-minute default when no value was stored, while
+    the dashboard shows an unset dial as 0 and promises "0 lets the host close a
+    round the moment it opens". A guild reading 0 on the panel then waited half
+    an hour for a full round to close. Absent config means 0 here, so the panel
+    tells the truth for both paths.
+
+    ``skip_min_game_time`` is the per-round override and wins outright.
+    """
+    if skip_min_game_time:
+        return 0
+    return int(configured.get(guild_id, 0))
+
+
 def collect_channel_state_ids(
     active_games: dict[str, RiskyRollState],
     pending_questions: dict[str, PendingQuestionState],

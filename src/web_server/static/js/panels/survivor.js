@@ -459,14 +459,10 @@ const RULES_CARDS = [
   ["Escalation & Endgame", [
     ["num", "double_pick_start_week", "Double-Pick From Week",
       "0 = never.", { max: 18 }],
-    ["num", "double_pick_min_alive", "…Only If This Many Alive", "",
-      { min: 2, max: 1000 }],
-    ["num", "wipeout_annul_through_week", "Wipeout Annuls Through Week",
-      "A week that kills everyone is annulled through this week; afterwards "
-      + "it's an equal split.", { max: 18 }],
-    ["num", "accord_max_alive", "Accord Available At ≤",
-      "Living players needed before /survivor accord can be invoked.",
-      { min: 2, max: 1000 }],
+    // The wipeout-annul, double-pick-minimum and Accord dials are deliberately
+    // absent: nothing enforces those rules yet, so offering them here would
+    // promise a season rule the bot does not play by. They return with the
+    // code that reads them.
     ["check", "ghost_streak", "Ghost Streak side-game",
       "The dead keep picking for a side-pot. Load-bearing for late entry — "
       + "gauntlet joiners who arrive dead land here."],

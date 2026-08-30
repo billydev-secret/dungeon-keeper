@@ -1182,3 +1182,49 @@ def test_emoji_approve_requires_connected_bot(authed_client, fake_ctx, tmp_path)
             "SELECT state FROM econ_emoji_submissions WHERE id = ?", (sid,)
         ).fetchone()
     assert row["state"] == "pending"  # no claim burned
+
+
+# ── Income Sources: the faucet payload must cover every box the panel edits ──
+
+
+def _faucet_field_keys() -> list[str]:
+    """The keys ``economy-income-sources.js`` renders an input for."""
+    import re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "web_server"
+        / "static"
+        / "js"
+        / "panels"
+        / "economy-income-sources.js"
+    ).read_text(encoding="utf-8")
+    block = src.split("const FAUCET_FIELDS = [", 1)[1].split("\n];", 1)[0]
+    return re.findall(r'\["([a-z0-9_]+)"', block)
+
+
+def test_income_sources_returns_every_faucet_the_panel_edits(authed_client):
+    """A key the panel renders but the GET omits shows as 0 and is saved as 0.
+
+    The host-bounty pair was exactly that: both boxes rendered "0" on load and
+    every faucet Save wrote a 0 over the guild's real rate, silently killing
+    host payouts.
+    """
+    body = authed_client.get("/api/economy/income-sources").json()
+    missing = [k for k in _faucet_field_keys() if k not in body["faucets"]]
+    assert not missing, f"faucet keys the panel edits but the GET omits: {missing}"
+
+
+def test_income_sources_faucets_report_stored_host_bounty(authed_client, fake_ctx):
+    """Round-trip: a configured host bounty comes back, so a Save re-sends it."""
+    with open_db(fake_ctx.db_path) as conn:
+        save_econ_settings(
+            conn,
+            fake_ctx.guild_id,
+            {"host_bounty_per_joiner": 100, "host_bounty_cap": 8},
+        )
+    faucets = authed_client.get("/api/economy/income-sources").json()["faucets"]
+    assert faucets["host_bounty_per_joiner"] == 100
+    assert faucets["host_bounty_cap"] == 8

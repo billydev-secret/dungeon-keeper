@@ -174,10 +174,24 @@ function renderLedgerRepeats(rows) {
 }
 
 /**
- * The queue half of the Rules Watch page — alert queue and ledger tabs.
- * Mounted into a region by panels/rules-watch-page.js, above the settings.
- * Moderator-level information — no gating applies here.
+ * Rules Watch — the alert queue and ledger tabs (Moderation section).
+ * Moderator-level information — no gating applies here. Enable/disable and
+ * the alert channel live on Config → Moderation & Safety → Rules Watch
+ * (config-rules-watch), cross-linked via `related:`.
  */
+export function mount(container, initialParams = {}) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Rules Watch</h2>
+        <div class="subtitle">What the AI flagged for review</div>
+      </header>
+      <section data-region="queue"></section>
+    </div>
+  `;
+  return mountQueue(container.querySelector('[data-region="queue"]'), initialParams);
+}
+
 export function mountQueue(container, initialParams = {}) {
   container.innerHTML = `
     <div>

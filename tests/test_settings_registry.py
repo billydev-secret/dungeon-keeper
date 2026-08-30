@@ -104,6 +104,42 @@ def test_intake_feature_is_registered():
     assert "intake_channel_id" in sr.writable_keys(is_admin=False)
 
 
+def test_bios_requires_the_wizard_category_too():
+    """Regression: BiosConfig.configured needs channel AND wizard category, but
+    the registry listed only the channel — so gap detection called a bios setup
+    "configured" that the wizard would refuse to start."""
+    f = sr.FEATURES_BY_SLUG["starboard_bios"]
+    required = {s.key for s in f.required_settings()}
+    assert {"bios_channel_id", "bios_wizard_category_id"} <= required
+    # A stored 0 (the panel's "unset" value) must not read as configured.
+    assert sr.get_setting("bios_wizard_category_id").is_set("0") is False
+
+
+def test_inactive_sweep_entry_does_not_claim_to_be_the_prune_feature():
+    """The KV registry describes the *sweep*. Auto-Remove Role (Inactive) is a
+    separate panel backed by its own table, which this registry can't see —
+    naming this entry "prune" made the two read as one feature."""
+    f = sr.FEATURES_BY_SLUG["inactivity"]
+    assert "prune" not in f.label.lower()
+    assert "prune" not in f.blurb.lower()
+    assert {s.key for s in f.settings} == {
+        "inactive_auto_sweep",
+        "inactive_channel_id",
+        "inactive_role_id",
+        "inactive_threshold_days",
+        "inactive_sweep_cap",
+    }
+
+
+def test_birthday_announce_hour_is_registered_and_bounded():
+    f = sr.FEATURES_BY_SLUG["birthdays"]
+    hour = next(s for s in f.settings if s.key == "birthday_announce_hour")
+    assert (hour.minimum, hour.maximum) == (0, 23)
+    # Midnight is a real choice; the default is 09:00.
+    assert hour.is_set("0") is True
+    assert hour.is_set("9") is False
+
+
 # ── lookups ─────────────────────────────────────────────────────────────────
 
 
@@ -139,12 +175,13 @@ def test_writable_keys_narrows_for_a_non_admin():
 
 
 def test_access_granting_roles_are_writable_but_admin_only():
+    # qa_role_id left the registry entirely and inactive_role_id became
+    # non-writable (panel-only setup flow) in the 2026-08-29 registry-contract
+    # fix — both are stronger restrictions than writable-but-admin-only.
     for key in (
         "jailed_role_id",
-        "qa_role_id",
         "whisper_role_id",
         "greeter_role_id",
-        "inactive_role_id",
     ):
         s = sr.get_setting(key)
         assert s is not None, key
@@ -169,6 +206,78 @@ def test_no_dead_key_is_in_the_registry():
     """These have rows on live servers but nothing reads them — a change would
     silently do nothing, which is worse than refusing."""
     assert not (set(sr.SETTINGS_BY_KEY) & sr.DEAD_KEYS)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "denizen_role_id", "nsfw_role_id", "veteran_role_id",
+        "denizen_log_channel_id", "nsfw_log_channel_id", "veteran_log_channel_id",
+        "denizen_announce_channel_id", "nsfw_announce_channel_id",
+        "veteran_announce_channel_id",
+        "denizen_grant_message", "nsfw_grant_message", "veteran_grant_message",
+    ],
+)
+def test_the_whole_legacy_grant_config_block_is_documented_dead(key):
+    """Live servers still hold all four keys per legacy grant (role, log
+    channel, announce channel, message) at guild_id 0. Only the *_role_id
+    third of them used to be listed, so a future pass could have added a
+    "Denizen Log Channel" setting that wrote a row nothing reads — the
+    grant's real config has lived in the `grant_roles` table since."""
+    assert key in sr.DEAD_KEYS
+
+
+def test_guess_inactivity_ping_hours_is_a_real_setting_again():
+    """It was a dead key for as long as the nudge loop was unbuilt. The loop
+    landed on 2026-08-30 (`guess_nudge_service`), so the key has a reader and
+    the advisor may propose it — a dial with a reader must not stay on the
+    dead list, or gap detection goes on ignoring a feature that is now real."""
+    setting = sr.get_setting("guess_inactivity_ping_hours")
+    assert setting is not None
+    assert "guess_inactivity_ping_hours" not in sr.DEAD_KEYS
+    assert "guess_inactivity_ping_hours" in sr.writable_keys(is_admin=True)
+
+
+@pytest.mark.parametrize("key", [
+    # The live panel record moved to the ticket_panels table (migration 023).
+    "ticket_panel_channel_id",
+    "ticket_panel_message_id",
+    # Superseded by the grant_roles table; only the completed one-time startup
+    # migration still reads them, exactly like their nsfw_role_id sibling.
+    "nsfw_grant_message",
+    "nsfw_announce_channel_id",
+    "nsfw_log_channel_id",
+])
+def test_superseded_key_is_guarded_as_dead(key):
+    assert key in sr.DEAD_KEYS
+    assert sr.get_setting(key) is None
+
+
+def test_rules_watch_requires_its_own_keys_only():
+    """Its alert channel is the control the model can propose; the Welcome
+    panel's server-guide channel has nothing to do with it."""
+    feature = sr.FEATURES_BY_SLUG["rules_watch"]
+    keys = {s.key for s in feature.settings}
+    assert "rules_watch_channel_id" in keys
+    assert "server_guide_channel_id" not in keys
+
+
+def test_server_guide_channel_is_listed_under_welcome():
+    """It moved off rules-watch, and had to land somewhere.
+
+    The key is live — both the welcome and the leave embed expand
+    ``{server_guide}`` from it, and the Welcome panel writes it — so leaving it
+    unlisted would hide it from the advisor entirely: it couldn't be read back,
+    proposed, or gap-reported, while the panel went on saving it.
+    """
+    setting = sr.get_setting("server_guide_channel_id")
+    assert setting is not None
+    assert setting.kind == "channel"
+    welcome = sr.FEATURES_BY_SLUG["welcome"]
+    assert "server_guide_channel_id" in {s.key for s in welcome.settings}
+    assert "server_guide_channel_id" in sr.writable_keys(is_admin=False)
+    # Optional: a server with no guide channel is still fully set up.
+    assert not setting.required
 
 
 def test_check_registry_rejects_a_dead_key(monkeypatch):
@@ -204,7 +313,7 @@ def test_is_set_channel_and_role_treat_zero_as_unset():
 
 
 def test_is_set_bool_reads_falsey_words_as_unset():
-    flag = sr.get_setting("qa_enabled")
+    flag = sr.get_setting("greeting_watch_enabled")
     assert flag is not None
     assert flag.is_set("1") is True
     assert flag.is_set("on") is True
@@ -240,7 +349,7 @@ def test_coerce_bool_accepts_synonyms_both_ways():
 
 
 def test_coerce_int_strips_commas_and_enforces_bounds():
-    s = sr.get_setting("qa_reward")
+    s = sr.get_setting("greeting_watch_window_minutes")  # bounds 1-1440
     assert s is not None
     assert sr.coerce_value(s, "1,000") == "1000"
     with pytest.raises(ValueError, match="whole number"):

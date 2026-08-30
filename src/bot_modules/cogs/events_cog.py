@@ -79,7 +79,11 @@ from bot_modules.services.login_card_service import (
     record_card,
 )
 from bot_modules.services.sentiment_service import score_text
-from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
+from bot_modules.services.welcome_service import (
+    build_leave_embed,
+    build_welcome_embed,
+    render_arrival_message,
+)
 from bot_modules.services.wellness_enforcement import wellness_on_message
 from bot_modules.services.wellness_service import (
     login_digest_value as wellness_login_digest_value,
@@ -1054,7 +1058,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
 
         # Economy faucets — daily text login + QOTD reward. Optional and fully
@@ -1510,7 +1514,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
             # Reaction quest trigger — `given` is non-None only when the XP
             # dedup admitted a NEW (message, reactor) pair, so the quest
@@ -1583,7 +1587,7 @@ class EventsCog(commands.Cog):
                 level_5_log_channel_id=cfg.level_5_log_channel_id,
                 settings=cfg.xp_settings,
                 db_path=self.bot.ctx.db_path,
-                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles),
+                nsfw_role_id=nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id),
             )
 
         if payload.guild_id:
@@ -1777,7 +1781,7 @@ class EventsCog(commands.Cog):
         # not delay the welcome or greeter ping, and spawning it up here means an
         # exception from that later work can't skip it either (nothing replays a
         # missed refresh). refresh_level_5_cards never raises on its own.
-        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles)
+        nsfw_role_id = nsfw_grant_role_id(cfg.grant_roles, cfg.promotion_review_grant_role_id)
         has_nsfw = nsfw_role_id in after_ids
         if nsfw_role_id > 0 and has_nsfw != (nsfw_role_id in before_ids):
             from bot_modules.services.promotion_review_views import (
@@ -1806,9 +1810,12 @@ class EventsCog(commands.Cog):
                 _guild_id, _member_id
             ):
                 greeter_channel = after.guild.get_channel(cfg.greeter_chat_channel_id)
-                if isinstance(greeter_channel, discord.TextChannel):
+                arrival_line = render_arrival_message(
+                    cfg.greeter_arrival_message, after
+                )
+                if isinstance(greeter_channel, discord.TextChannel) and arrival_line:
                     try:
-                        await greeter_channel.send(f"@here - {after.mention} has arrived")
+                        await greeter_channel.send(arrival_line)
                     except discord.Forbidden:
                         log.warning(
                             "Missing permission to send greeter ping in #%s.",
@@ -1913,9 +1920,10 @@ class EventsCog(commands.Cog):
 
         if not intake_posted and cfg.greeter_chat_channel_id > 0:
             greeter_channel = member.guild.get_channel(cfg.greeter_chat_channel_id)
-            if isinstance(greeter_channel, discord.TextChannel):
+            arrival_line = render_arrival_message(cfg.greeter_arrival_message, member)
+            if isinstance(greeter_channel, discord.TextChannel) and arrival_line:
                 try:
-                    await greeter_channel.send(f"@here - {member.mention} has arrived")
+                    await greeter_channel.send(arrival_line)
                 except discord.Forbidden:
                     log.warning(
                         "Missing permission to send greeter ping in #%s.",

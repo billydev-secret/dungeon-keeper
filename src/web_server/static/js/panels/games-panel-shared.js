@@ -15,12 +15,17 @@ export const TIER_EMOJI  = { 1: "\u{1F338}", 2: "\u{1F336}\uFE0F", 3: "\u{1F525}
 // hasStatus=false drops the Enabled/options section for features that manage
 // their own enable switch outside games_game_config (e.g. Pen Pals config).
 /**
+ * `intro` is a sentence rendered under the header, for a page that needs to
+ * say where its content comes from — AMA has no question bank because its
+ * questions are typed by members during the game, and a page that simply
+ * stopped offering one would read as a missing feature.
+ *
  * `bare: true` renders the game's controls without the surrounding
  * `<div class="panel">` and `<h2>` header, so a page that already has its own
  * shell can mount this into one of its sections (see panels/pen-pals.js).
  * Everything else behaves identically.
  */
-export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null, bare = false }) {
+export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null, bare = false, statusHint = "", statusLabel = "", intro = "" }) {
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
 
@@ -47,6 +52,13 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         '<input type="text" data-opt="' + esc(opt.key) + '"' + (opt.placeholder ? ' placeholder="' + esc(opt.placeholder) + '"' : "") + ' style="width:240px;" /></label>' +
         (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
     }
+    if (opt.type === "select") {
+      const opts = (opt.choices || []).map(c =>
+        '<option value="' + esc(c.value) + '">' + esc(c.label) + "</option>").join("");
+      return '<div class="field"><label>' + esc(opt.label) +
+        '<select data-opt="' + esc(opt.key) + '" style="width:240px;">' + opts + "</select></label>" +
+        (opt.hint ? '<div class="field-hint">' + esc(opt.hint) + "</div>" : "") + "</div>";
+    }
     if (opt.type === "role") {
       // Options are filled in loadConfig() once the role list has loaded.
       return '<div class="field"><label>' + esc(opt.label) +
@@ -66,19 +78,27 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="margin-bottom:' + (optSchema.length ? "16px" : "12px") + ';">' +
       '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
       '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
-      "<span>Available on This Server</span></label>" +
-      '<div class="field-hint">When off, ' + esc(gameName) + " won't start and its commands stay hidden. " +
-      "Existing rounds finish normally.</div></div>" +
+      "<span>" + esc(statusLabel || "Available on This Server") + "</span></label>" +
+      // Not "commands stay hidden": nothing hides them. A disabled game's
+      // command stays registered and refuses with a message, which is what a
+      // member actually sees.
+      '<div class="field-hint">' + (statusHint ? esc(statusHint) : "When off, " + esc(gameName) +
+        " won't start — its command refuses and scheduled rounds are skipped." +
+        " Existing rounds finish normally.") +
+      "</div></div>" +
       optFieldsHtml +
       '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
       '<button class="btn btn-primary" data-action="save-config">Save</button>' +
       '<span data-status="config" class="save-status"></span></div></section>'
     : "";
 
+  // `intro` is authored copy (not user input), so it may carry markup.
+  const introHtml = intro ? '<div class="field-hint" style="margin-bottom:12px;">' + intro + "</div>" : "";
+
   container.innerHTML = bare
-    ? statusHtml + bankHtml
+    ? introHtml + statusHtml + bankHtml
     : '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
-      statusHtml + bankHtml + "</div>";
+      introHtml + statusHtml + bankHtml + "</div>";
 
   async function loadConfig() {
     try {
@@ -100,6 +120,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         const val = Object.prototype.hasOwnProperty.call(opts, opt.key) ? opts[opt.key] : opt.default;
         if (opt.type === "bool") el.checked = val !== false && val !== 0;
         else if (opt.type === "role") el.value = String(val || "0");
+        else if (opt.type === "select") el.value = String(val ?? opt.default ?? "");
         else el.value = val ?? "";
       }
     } catch (err) {
@@ -121,6 +142,7 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
         if (!el) continue;
         if (opt.type === "bool") options[opt.key] = el.checked;
         else if (opt.type === "text") options[opt.key] = el.value.trim();
+        else if (opt.type === "select") options[opt.key] = el.value;
         else if (opt.type === "role") options[opt.key] = el.value === "0" ? "" : el.value;
         else {
           const lo = opt.min ?? 0, hi = opt.max ?? 9999;

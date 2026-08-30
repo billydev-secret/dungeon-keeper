@@ -72,6 +72,23 @@ function mkOpt(value, label, selected) {
 }
 
 function buildControl(filter) {
+  if (filter.type === "text") {
+    // Fires on blur/Enter (the "change" event), not per keystroke, so typing an
+    // id doesn't fire a request per digit.
+    const input = el("input", {
+      type: "text", name: filter.name, placeholder: filter.placeholder || "",
+      inputmode: filter.inputmode || null, size: filter.size || "18",
+    });
+    const label = el("label", null, `${filter.label} `, input);
+    return {
+      node: label,
+      read: (params) => {
+        const v = input.value.trim();
+        if (v) params[filter.name] = v;
+      },
+      input,
+    };
+  }
   if (filter.type === "checkbox") {
     const cb = el("input", { type: "checkbox" });
     const label = el("label", null, cb, ` ${filter.label}`);
@@ -122,7 +139,8 @@ function buildTable(rows, total, columns) {
 //
 // config = {
 //   title, subtitle, empty,
-//   filters: [{ name, label, options:[{value,label}] } | { name, label, type:"checkbox" }],
+//   filters: [{ name, label, options:[{value,label}] } | { name, label, type:"checkbox" }
+//             | { name, label, type:"text", placeholder?, inputmode?, size? }],
 //   columns: [{ label, render(e), className?, title?(e) }],
 //   fetch: async (params) => ({ rows, total? }),
 // }

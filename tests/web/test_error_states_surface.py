@@ -254,9 +254,11 @@ def test_the_playlist_maintenance_card_is_guarded() -> None:
     assert "guardForm(cardMaint)" in src
 
 
-def test_intake_report_does_not_send_admins_to_a_page_that_does_not_exist() -> None:
-    """It said "enable them under Config → Intake Cards". There is no such
-    page: app.js has one intake route, and the switch is on this same page."""
+def test_intake_report_points_at_the_real_settings_page() -> None:
+    """The intake-off message names where the switch lives. Config → Intake
+    Cards (config-intake) exists again since the 2026-08-29 split, so the
+    message must name it — and must not point "below" at settings that left
+    this page when the merged pane was split."""
     src = _src(_PANELS / "intake-report.js")
-    assert "Config → Intake Cards" not in src
-    assert "Card Settings" in src
+    assert "Config → Intake Cards" in src
+    assert "Card Settings, below" not in src

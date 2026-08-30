@@ -198,7 +198,6 @@ async def ai_rules_watch_check(
     window_text: str,
     *,
     channel_is_nsfw: bool = False,
-    model: str | None = None,
     db_path: Path | None = None,
     guild_id: int = 0,
 ) -> RulesWatchGuardResult:
@@ -206,21 +205,19 @@ async def ai_rules_watch_check(
 
     Returns a structured result; falls back to ok on any parse failure.
     """
-    from bot_modules.services.ai_config import DEFAULT_MOD_MODEL, get_command_model_from_path
+    from bot_modules.services.ai_config import get_prompt_from_path
 
-    if model is None:
-        model = (
-            get_command_model_from_path(db_path, "ai_prompt_rules_watch", guild_id)
-            if db_path
-            else DEFAULT_MOD_MODEL
-        )
+    system = (
+        get_prompt_from_path(db_path, "ai_prompt_rules_watch", guild_id)
+        if db_path
+        else _RULES_WATCH_SYSTEM
+    )
 
     nsfw_note = " [Channel is NSFW-designated — explicit content is permitted here]" if channel_is_nsfw else ""
     user_content = f"{nsfw_note}\n{window_text}".strip()
 
     raw = await ollama_client.chat(
-        model=model,
-        system=_RULES_WATCH_SYSTEM,
+        system=system,
         user_content=user_content,
         max_tokens=256,
         temperature=0.0,
@@ -430,12 +427,9 @@ async def ai_review_user(
     user: discord.Member,
     *,
     days: int = 7,
-    model: str | None = None,
 ) -> AiModerationResult:
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
 
-    if model is None:
-        model = get_command_model(conn, "ai_prompt_review", guild.id)
     system = get_prompt(conn, "ai_prompt_review", guild.id)
 
     lines, user_msg_count, channels_checked = _fetch_user_context_from_db(
@@ -452,7 +446,6 @@ async def ai_review_user(
 
     analysis = (
         await ollama_client.chat(
-            model=model,
             system=system,
             user_content=body,
             max_tokens=4096,
@@ -472,12 +465,9 @@ async def ai_scan_channel(
     channel: discord.TextChannel | discord.Thread,
     *,
     count: int = 50,
-    model: str | None = None,
 ) -> AiModerationResult:
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
 
-    if model is None:
-        model = get_command_model(conn, "ai_prompt_scan", guild.id)
     system = get_prompt(conn, "ai_prompt_scan", guild.id)
 
     rows = conn.execute(
@@ -517,7 +507,6 @@ async def ai_scan_channel(
 
     analysis = (
         await ollama_client.chat(
-            model=model,
             system=system,
             user_content="\n".join(lines),
             max_tokens=2048,
@@ -530,22 +519,15 @@ async def ai_scan_channel(
 async def ai_check_watched_message(
     message: discord.Message,
     *,
-    model: str | None = None,
     db_path: Path | None = None,
 ) -> tuple[bool, str]:
     """Check a single live message against server rules.
 
     Returns (is_violation, reason). Errors are raised to the caller.
     """
-    from bot_modules.services.ai_config import DEFAULT_MOD_MODEL, get_command_model_from_path, get_prompt_from_path
+    from bot_modules.services.ai_config import get_prompt_from_path
 
     guild_id = message.guild.id if message.guild else 0
-    if model is None:
-        model = (
-            get_command_model_from_path(db_path, "ai_prompt_watch_check", guild_id)
-            if db_path
-            else DEFAULT_MOD_MODEL
-        )
     system = (
         get_prompt_from_path(db_path, "ai_prompt_watch_check", guild_id)
         if db_path
@@ -560,7 +542,6 @@ async def ai_check_watched_message(
     prompt = f"[{ts}] #{channel_name}{nsfw_tag} | {message.author.display_name}: {content}"
 
     reply = await ollama_client.chat(
-        model=model,
         system=system,
         user_content=prompt,
         max_tokens=256,
@@ -578,12 +559,9 @@ async def ai_query_channel(
     question: str,
     *,
     minutes: int = 60,
-    model: str | None = None,
 ) -> AiModerationResult:
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
 
-    if model is None:
-        model = get_command_model(conn, "ai_prompt_query_channel", guild.id)
     system = get_prompt(conn, "ai_prompt_query_channel", guild.id)
 
     cutoff_ts = int(
@@ -629,7 +607,6 @@ async def ai_query_channel(
 
     analysis = (
         await ollama_client.chat(
-            model=model,
             system=system,
             user_content=prompt,
             max_tokens=4096,
@@ -646,12 +623,9 @@ async def ai_query_user(
     question: str,
     *,
     days: int = 14,
-    model: str | None = None,
 ) -> AiModerationResult:
-    from bot_modules.services.ai_config import get_command_model, get_prompt
+    from bot_modules.services.ai_config import get_prompt
 
-    if model is None:
-        model = get_command_model(conn, "ai_prompt_query_user", guild.id)
     system = get_prompt(conn, "ai_prompt_query_user", guild.id)
 
     lines, user_msg_count, _ = _fetch_user_context_from_db(
@@ -670,7 +644,6 @@ async def ai_query_user(
 
     analysis = (
         await ollama_client.chat(
-            model=model,
             system=system,
             user_content=prompt,
             max_tokens=4096,

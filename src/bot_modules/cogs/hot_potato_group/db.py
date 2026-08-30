@@ -82,11 +82,13 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "min_fuse": 20.0,
         "max_fuse": 60.0,
         "min_hold": 2.0,
-        "shake_threshold": 0.70,
-        "pass_mode": "clockwise",
         "min_players": 2,
         "max_players": 10,
-        "lobby_timeout": 60.0,
+        # No shake_threshold, pass_mode or lobby_timeout: the shake
+        # threshold is a fixed parameter of game.shake_emoji, passing is always
+        # clockwise, and the stale-lobby sweep uses its own fixed window.
+        # Nothing ever read any of the three, so migration 194 dropped all
+        # three columns.
     }
     if row:
         defaults.update(dict(row))

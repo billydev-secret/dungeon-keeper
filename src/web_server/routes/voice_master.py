@@ -133,7 +133,6 @@ async def get_config(
             "hub_channel_id": str(cfg.hub_channel_id),
             "category_id": str(cfg.category_id),
             "control_channel_id": str(cfg.control_channel_id),
-            "panel_message_id": str(cfg.panel_message_id),
             "default_name_template": cfg.default_name_template,
             "default_user_limit": cfg.default_user_limit,
             "default_bitrate": cfg.default_bitrate,
@@ -162,9 +161,11 @@ async def set_config(
 ) -> dict[str, str]:
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    valid_fields = {
-        "name", "limit", "locked", "hidden", "spectator", "trusted", "blocked",
-    }
+    # Exactly the tokens the panel offers and the bot enforces (see
+    # should_save_profile_field's callers). "access" is the single room-access
+    # dial; the old "locked"/"hidden"/"spectator" tokens were never sent and
+    # never read, and accepting them only let a save wipe the real fields.
+    valid_fields = {"name", "limit", "access", "trusted", "blocked"}
     chosen = {f.lower() for f in payload.saveable_fields}
     if not chosen.issubset(valid_fields):
         raise HTTPException(400, f"Unknown fields: {chosen - valid_fields}")

@@ -1,6 +1,6 @@
 # Birthday — Feature Spec
 
-Self-service per-guild birthday tracker. Members set their own birthday (month + day, optional one-line "request"); the bot posts a configurable announcement in up to two chosen channels once per local day at 09:00 guild-local time, mentioning each birthday-haver. Announcements can optionally be pinned per channel, with an automatic next-day unpin. Idempotent across restarts.
+Self-service per-guild birthday tracker. Members set their own birthday (month + day, optional one-line "request"); the bot posts a configurable announcement in up to two chosen channels once per local day at the guild's chosen local hour (09:00 by default), mentioning each birthday-haver. Announcements can optionally be pinned per channel, with an automatic next-day unpin. Idempotent across restarts.
 
 ## Commands
 
@@ -8,7 +8,7 @@ Self-service per-guild birthday tracker. Members set their own birthday (month +
 |---|---|---|---|
 | `/birthday set` | Slash | Everyone (server only) | Open a modal: month (1–12), day (1–31), optional "birthday request" (≤100 chars) |
 | `/birthday remove` | Slash | Everyone (server only) | Remove your own birthday |
-| Birthday panel | Web (dashboard) | Admin | Configure up to two announcement channels (each with its own message template and pin toggle); preview the next 90 days of upcoming birthdays |
+| Birthday panel | Web (dashboard) | Admin | Configure the announcement hour and up to two announcement channels (each with its own message template and pin toggle); preview the next 90 days of upcoming birthdays |
 
 ## Behavior
 
@@ -31,7 +31,7 @@ The set command stores the birthday for the current guild only — birthdays don
 
 ### Daily announcement
 
-The announcement loop ticks **hourly**. On each pass it computes every guild's local date and hour from its `tz_offset_hours` config (via `get_tz_offset_hours` — the same offset reports, games, and jail honor) and, once the local clock has reached **09:00**, posts an announcement in each configured channel for every member whose birthday matches today's local date. Each (guild, member, day) is announced at most once, so later ticks in the same day are no-ops.
+The announcement loop ticks **hourly**. On each pass it computes every guild's local date and hour from its `tz_offset_hours` config (via `get_tz_offset_hours` — the same offset reports, games, and jail honor) and, once the local clock has reached the guild's **`birthday_announce_hour`** (0–23, default 9), posts an announcement in each configured channel for every member whose birthday matches today's local date. Each (guild, member, day) is announced at most once, so later ticks in the same day are no-ops.
 
 Templates are per-channel. The default is:
 
@@ -54,15 +54,15 @@ Each channel has an independent pin toggle (`birthday_pin` / `birthday_pin_2`). 
 
 ### Startup catch-up
 
-The loop runs a pass on boot before settling into its hourly cadence. So a bot that was offline at 09:00 local still announces today's birthdays on the first pass after it comes back — any tick later in the local day catches up. The catch-up is idempotent — a member is announced at most once per (guild, day), even across restarts.
+The loop runs a pass on boot before settling into its hourly cadence. So a bot that was offline at the announce hour still announces today's birthdays on the first pass after it comes back — any tick later in the local day catches up. The catch-up is idempotent — a member is announced at most once per (guild, day), even across restarts.
 
 ### Timezone
 
-Scheduling is guild-local: the 09:00 announce hour and the "one announcement per day" boundary both follow the guild's `tz_offset_hours` config. A guild with no offset row inherits the global default.
+Scheduling is guild-local: the announce hour (`birthday_announce_hour`, default 9) and the "one announcement per day" boundary both follow the guild's `tz_offset_hours` config. A guild with no offset row inherits the global default. A stored hour that isn't an integer in 0–23 falls back to 9 rather than stalling the loop.
 
 ### Dashboard
 
-The admin panel configures both announcement channels — for each, a channel dropdown, a message template with a live preview, and the pin toggle. It also exposes a calendar projection of upcoming birthdays for the next N days (default 90), sorted by days-until, resolved to member display names.
+The admin panel configures the announcement hour (a 00:00–23:00 dropdown, guild-local) and both announcement channels — for each, a channel dropdown, a message template with a live preview, and the pin toggle. It also exposes a calendar projection of upcoming birthdays for the next N days (default 90), sorted by days-until, resolved to member display names.
 
 ## Permissions
 
@@ -88,7 +88,7 @@ The daily announcement loop is silent on failure — if the configured channel w
 
 - **No leap-day birthdays.** Feb 29 is rejected; members born then choose Feb 28 or Mar 1.
 - **No age / year of birth.** Only month and day — keeps the feature low-PII.
-- **No retroactive announcements.** A bot offline for the rest of the local day after 09:00 catches up on the next boot that same day; once the local day rolls over, yesterday's birthdays are silently missed.
+- **No retroactive announcements.** A bot offline for the rest of the local day after the announce hour catches up on the next boot that same day; once the local day rolls over, yesterday's birthdays are silently missed.
 - **No DM notifications.** The message only goes to the announcement channel.
 - **No reactions / interactive UI on the announcement.** Plain text + mention.
 - **No moderation override.** Admins can't set or remove other members' birthdays through the bot.
@@ -102,8 +102,9 @@ The daily announcement loop is silent on failure — if the configured channel w
 | `birthday_channel_id_2` | unset | Optional second announcement channel |
 | `birthday_message_2` | same default | Second channel's template |
 | `birthday_pin` / `birthday_pin_2` | off | Pin the announcement in that channel; auto-unpinned on the next local day |
+| `birthday_announce_hour` | `9` | Guild-local hour (0–23) announcements go out; out-of-range or non-numeric falls back to 9 |
 
-The announce hour follows the guild's shared `tz_offset_hours` config (owned elsewhere — not a birthday-specific knob). No role gating or rate-limit knob.
+The announce hour is `birthday_announce_hour` (default 9, guild-local), interpreted against the guild's shared `tz_offset_hours` config (owned elsewhere). No role gating or rate-limit knob.
 
 ## Stored data
 

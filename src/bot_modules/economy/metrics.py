@@ -54,8 +54,6 @@ PRICING_FACTORS: dict[str, float] = {
     "price_role_gradient": 2.4,
     "price_role_holographic": 3.0,
     "price_voice_style": 0.3,
-    "price_text_room": 2.0,
-    "price_voice_room": 2.0,
     # Consumables, not rentals — priced as impulse buys, not considered
     # purchases like the perks above. The shield runs richer than a reroll:
     # it protects accumulated value (a long streak), not a single board slot.

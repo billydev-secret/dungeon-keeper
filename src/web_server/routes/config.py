@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.core.db_utils import (
     add_grant_permission,
+    clear_config_id_bucket,
     delete_config_value,
     delete_grant_role,
     get_config_id_set,
@@ -31,6 +32,10 @@ from bot_modules.core.db_utils import (
     replace_config_id_bucket,
     set_config_value,
     upsert_grant_role,
+)
+from bot_modules.services.birthday_service import (
+    ANNOUNCE_HOUR_KEY,
+    announce_hour as _announce_hour,
 )
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
@@ -97,7 +102,7 @@ from bot_modules.services.dm_perms_service import (
     set_audit_channel,
     set_dm_mode_role_ids,
     set_panel_settings,
-    set_request_channel,
+    set_request_limits,
 )
 from web_server.routes.panel_posting import (
     ChannelIdBody,
@@ -155,11 +160,15 @@ from bot_modules.starboard.filters import validate_emoji as _starboard_validate_
 from bot_modules.cogs.pen_pals_cog import (
     DEFAULT_MATCH_MODE as _PP_DEFAULT_MATCH_MODE,
     DEFAULT_ROOM_VISIBILITY as _PP_DEFAULT_ROOM_VISIBILITY,
+    DEFAULT_ROUND_DOW as _PP_DEFAULT_ROUND_DOW,
+    DEFAULT_ROUND_HOUR as _PP_DEFAULT_ROUND_HOUR,
     _get_admin_separations as _pp_get_admin_separations,
     _get_config as _pp_get_config,
     _get_opt_outs as _pp_get_opt_outs,
     _get_pool as _pp_get_pool,
     _normalize_match_mode as _pp_normalize_match_mode,
+    _round_dow as _pp_round_dow,
+    _round_hour as _pp_round_hour,
     _normalize_room_visibility as _pp_normalize_room_visibility,
     _recent_pool_events as _pp_recent_pool_events,
     _set_admin_separations as _pp_set_admin_separations,
@@ -361,7 +370,10 @@ def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
 
 def _dms_section_with_conn(conn, guild_id: int) -> dict:
     cfg = get_dms_config_with_conn(conn, guild_id)
-    return {k: str(v) for k, v in cfg.items()}
+    # Ids go out as strings (snowflake precision); the two lifecycle dials are
+    # small counts and stay numbers so the panel's number inputs get numbers.
+    numeric = {"request_expiry_hours", "max_pending_requests"}
+    return {k: (v if k in numeric else str(v)) for k, v in cfg.items()}
 
 
 # ── Starboard config helper ──────────────────────────────────────────
@@ -451,6 +463,8 @@ def _birthday_section(conn, guild_id: int) -> dict:
             conn, "birthday_message_2", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
         ),
         "birthday_pin_2": _bool_val(conn, "birthday_pin_2", guild_id=guild_id),
+        # Guild-local hour the announcement goes out (0–23).
+        "birthday_announce_hour": _announce_hour(conn, guild_id),
     }
 
 
@@ -541,6 +555,7 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "log_channel_id": str(wc.log_channel_id),
         "cooldown_seconds": wc.cooldown_seconds,
         "hourly_cap_per_target": wc.hourly_cap_per_target,
+        "guesses_per_whisper": wc.guesses_per_whisper,
     }
 
 
@@ -695,6 +710,10 @@ _DUEL_SHARED_DEFAULTS: dict = {
     "cooldown_hours": 48,
     "sentence_hours": 24,
     "channel_allowlist": "[]",
+    # Extra banned words on top of the bot's built-in nickname denylist. The
+    # bot has always enforced these on nicknames and stakes text; until now
+    # nothing could set them, so every guild ran on the built-in list alone.
+    "nick_denylist": "[]",
     "max_nick_length": 32,
     "max_stakes_length": 200,
     # 0 = no limit. Was a hardcoded 3 in the bot, which is a spam brake set at
@@ -788,6 +807,7 @@ def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
     out["channel_allowlist"] = [
         str(i) for i in json.loads(out["channel_allowlist"] or "[]")
     ]
+    out["nick_denylist"] = [str(w) for w in json.loads(out["nick_denylist"] or "[]")]
     out.update(_duel_game_table_row(conn, guild_id, spec["table"], spec["defaults"]))
     return out
 
@@ -806,6 +826,9 @@ def _duel_shared_updates(body) -> dict:
     allowlist = _clamp_channel_allowlist(body.channel_allowlist)
     if allowlist is not None:
         out["channel_allowlist"] = allowlist
+    denylist = _clamp_nick_denylist(body.nick_denylist)
+    if denylist is not None:
+        out["nick_denylist"] = denylist
     if body.max_nick_length is not None:
         out["max_nick_length"] = max(1, min(32, body.max_nick_length))
     if body.max_stakes_length is not None:
@@ -935,6 +958,8 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
             "room_visibility": _PP_DEFAULT_ROOM_VISIBILITY,
             "intro_message": "",
             "match_mode": _PP_DEFAULT_MATCH_MODE,
+            "auto_round_dow": _PP_DEFAULT_ROUND_DOW,
+            "auto_round_hour": _PP_DEFAULT_ROUND_HOUR,
             "pool_size": pool_size,
             "session_seconds": 86400,
             "match_cooldown_seconds": 2592000,
@@ -958,6 +983,10 @@ def _pen_pals_section(conn, guild_id: int) -> dict:
         "match_mode": _pp_normalize_match_mode(
             cfg["match_mode"] if "match_mode" in cfg.keys() else None
         ),
+        # The scheduled round's day (-1 = every day) and hour, in guild-local
+        # time — dead columns until 2026-08-29, now the dial the round reads.
+        "auto_round_dow": _pp_round_dow(cfg),
+        "auto_round_hour": _pp_round_hour(cfg),
         "pool_size": pool_size,
         "session_seconds": int(cfg["session_seconds"]),
         "match_cooldown_seconds": int(cfg["match_cooldown_seconds"]),
@@ -1102,6 +1131,7 @@ def _privacy_section(conn, guild_id: int) -> dict:
 
 def _welcome_section(conn, guild_id: int) -> dict:
     from bot_modules.services.welcome_service import (
+        DEFAULT_ARRIVAL_MESSAGE,
         DEFAULT_LEAVE_MESSAGE,
         DEFAULT_WELCOME_MESSAGE,
     )
@@ -1131,6 +1161,12 @@ def _welcome_section(conn, guild_id: int) -> dict:
             ),
             "greeter_role_id": _id_str(conn, "greeter_role_id", guild_id),
             "greeter_chat_channel_id": _id_str(conn, "greeter_chat_channel_id", guild_id),
+            "greeter_arrival_message": _str_val(
+                conn,
+                "greeter_arrival_message",
+                DEFAULT_ARRIVAL_MESSAGE,
+                guild_id=guild_id,
+            ),
             "server_guide_channel_id": _id_str(conn, "server_guide_channel_id", guild_id),
             "join_leave_log_channel_id": _id_str(
                 conn,
@@ -1375,6 +1411,15 @@ async def update_global(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    # booster_swatch_dir is bot-global (stored and read at guild 0), so only
+    # the primary guild's panel may write it — accepting it from any guild let
+    # a secondary guild's admin overwrite the shared value, and showed them
+    # the host filesystem path.
+    if body.booster_swatch_dir is not None and guild_id != ctx.guild_id:
+        raise HTTPException(
+            403, "booster_swatch_dir is bot-global — edit it from the primary guild"
+        )
+
     def _q():
         with ctx.open_db() as conn:
             _apply_config_fields(conn, guild_id, body, _GLOBAL_FIELDS)
@@ -1492,6 +1537,7 @@ class WelcomeConfigUpdate(BaseModel):
     leave_message: str | None = None
     greeter_role_id: str | None = None
     greeter_chat_channel_id: str | None = None
+    greeter_arrival_message: str | None = None
     server_guide_channel_id: str | None = None
     join_leave_log_channel_id: str | None = None
 
@@ -1515,6 +1561,9 @@ async def update_welcome(
         "leave_message": "leave_message",
         "greeter_role_id": "greeter_role_id",
         "greeter_chat_channel_id": "greeter_chat_channel_id",
+        # Stored verbatim, blank included: an empty line is the "post nothing"
+        # setting, so it must not be coerced back to the default.
+        "greeter_arrival_message": "greeter_arrival_message",
         "server_guide_channel_id": "server_guide_channel_id",
         "join_leave_log_channel_id": "join_leave_log_channel_id",
     }
@@ -2487,6 +2536,24 @@ def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
     return json.dumps(sorted({int(v) for v in values if str(v).strip()}))
 
 
+# Matched case-insensitively as substrings by duels/filters.py, so they are
+# stored lowercased and de-duplicated. The 40-entry / 64-character bounds are
+# sanity limits: this is a small list of words, not a content filter.
+_MAX_DENYLIST_WORDS = 40
+_MAX_DENYLIST_WORD_LEN = 64
+
+
+def _clamp_nick_denylist(values: list[str] | None) -> str | None:
+    if values is None:
+        return None
+    words = []
+    for raw in values:
+        word = str(raw).strip().lower()[:_MAX_DENYLIST_WORD_LEN]
+        if word and word not in words:
+            words.append(word)
+    return json.dumps(words[:_MAX_DENYLIST_WORDS])
+
+
 class DuelSharedConfigUpdate(BaseModel):
     """The knobs every duel game shares. Enforced for all six in
     bot_modules/duels/base_duel.py and base_game.py."""
@@ -2494,6 +2561,7 @@ class DuelSharedConfigUpdate(BaseModel):
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
     channel_allowlist: list[str] | None = None
+    nick_denylist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
     challenge_limit_per_hour: int | None = None
@@ -2637,6 +2705,16 @@ async def update_greeting_watch(
                     conn,
                     "greeting_watch_notify_user_ids",
                     normalized,
+                    guild_id,
+                )
+                # Blank the pre-multi single-subscriber key at the same time.
+                # Both the DM loop and this panel fall back to it whenever the
+                # CSV holds no ids, so leaving it behind would resurrect the
+                # old subscriber the moment an admin clears the list.
+                set_config_value(
+                    conn,
+                    "greeting_watch_notify_user_id",
+                    "",
                     guild_id,
                 )
             if body.window_minutes is not None:
@@ -2787,6 +2865,12 @@ async def update_spoiler(
                     body.spoiler_required_channels,
                     guild_id,
                 )
+                # The home guild also inherits a pre-per-guild bucket stored
+                # under guild 0 whenever its own bucket is empty, and no panel
+                # can reach those rows. Retire them on save, or "leave empty to
+                # switch this off" would silently re-enforce a stale list.
+                if guild_id == ctx.guild_id:
+                    clear_config_id_bucket(conn, "spoiler_required_channels", 0)
         return {"ok": True}
 
     result = await run_query(_q)
@@ -3141,8 +3225,13 @@ async def delete_quote_border(
 
 
 class AutoDeleteRuleUpdate(BaseModel):
-    max_age_seconds: int
-    interval_seconds: int
+    # Both floors are server-side as well as in the panel: a 0 (or negative)
+    # age makes every tracked message eligible and a 0 interval makes the rule
+    # due on every poll tick, so a direct PUT past the panel's own `min=1`
+    # would empty a channel. The panel is the only caller and never sends
+    # anything below 1.
+    max_age_seconds: int = Field(ge=1)
+    interval_seconds: int = Field(ge=1)
     media_only: bool = False
 
 
@@ -3417,6 +3506,10 @@ class PenPalsConfigUpdate(BaseModel):
     room_visibility: str = _PP_DEFAULT_ROOM_VISIBILITY
     intro_message: str = ""
     match_mode: str = _PP_DEFAULT_MATCH_MODE
+    # Optional so a client that doesn't send them (an older cached panel)
+    # leaves the stored schedule alone instead of resetting it.
+    auto_round_dow: int | None = None
+    auto_round_hour: int | None = None
 
 
 # Pen Pals settings are moderator-level, unlike the rest of this module's
@@ -3435,6 +3528,10 @@ async def update_pen_pals_config(
     intro_message = body.intro_message.strip()
     if len(intro_message) > 1000:
         raise HTTPException(400, "Message must be 1000 characters or fewer")
+    if body.auto_round_dow is not None and not -1 <= body.auto_round_dow <= 6:
+        raise HTTPException(400, "auto_round_dow must be -1 (every day) or 0-6")
+    if body.auto_round_hour is not None and not 0 <= body.auto_round_hour <= 23:
+        raise HTTPException(400, "auto_round_hour must be an hour from 0 to 23")
 
     def _q() -> tuple[int, int]:
         with ctx.open_db() as conn:
@@ -3453,6 +3550,16 @@ async def update_pen_pals_config(
                 room_visibility=_pp_normalize_room_visibility(body.room_visibility),
                 intro_message=intro_message,
                 match_mode=_pp_normalize_match_mode(body.match_mode),
+                auto_round_dow=(
+                    body.auto_round_dow if body.auto_round_dow is not None
+                    else _pp_round_dow(existing) if existing is not None
+                    else _PP_DEFAULT_ROUND_DOW
+                ),
+                auto_round_hour=(
+                    body.auto_round_hour if body.auto_round_hour is not None
+                    else _pp_round_hour(existing) if existing is not None
+                    else _PP_DEFAULT_ROUND_HOUR
+                ),
             )
             return old_channel_id, old_message_id
 
@@ -3622,6 +3729,18 @@ async def update_voice_transcription_config(
     guild_id = get_active_guild_id(request)
     model = body.model_name if body.model_name in _VT_VALID_MODELS else _VT_DEFAULT_MODEL
     channel_ids = tuple(int(c) for c in body.channel_ids if c)
+    # The panel promises a model has to read "Downloaded" before it can be used,
+    # and the bot loads models offline (local_files_only), so an un-downloaded
+    # one fails silently on every voice message. Refuse to switch transcription
+    # on with a model that isn't there yet — but never block turning it *off*,
+    # or a wiped cache would trap an admin in a broken setting. Only meaningful
+    # when faster-whisper is installed; without it nothing is cached and the
+    # panel already says nothing gets transcribed.
+    if body.enabled and _vt_is_available() and not _vt_model_is_cached(model):
+        raise HTTPException(
+            400,
+            f"{model} isn't downloaded yet — download it under Model Files first.",
+        )
 
     def _q() -> dict:
         with ctx.open_db() as conn:
@@ -3779,11 +3898,12 @@ async def post_confessions_button(
 
 
 class DmsConfigUpdate(BaseModel):
-    request_channel_id: str | None = None
     audit_channel_id: str | None = None
     open_role_id: str | None = None
     ask_role_id: str | None = None
     closed_role_id: str | None = None
+    request_expiry_hours: int | None = None
+    max_pending_requests: int | None = None
 
 
 @router.put("/config/dms")
@@ -3798,8 +3918,14 @@ async def update_dms(
     role_fields = (body.open_role_id, body.ask_role_id, body.closed_role_id)
 
     def _q():
-        if body.request_channel_id is not None:
-            set_request_channel(ctx.db_path, guild_id, int(body.request_channel_id))
+        if body.request_expiry_hours is not None or body.max_pending_requests is not None:
+            with ctx.open_db() as conn:
+                set_request_limits(
+                    conn,
+                    guild_id,
+                    expiry_hours=body.request_expiry_hours,
+                    max_pending=body.max_pending_requests,
+                )
         if body.audit_channel_id is not None:
             set_audit_channel(ctx.db_path, guild_id, int(body.audit_channel_id))
         if any(f is not None for f in role_fields):
@@ -3984,6 +4110,7 @@ class BirthdayConfigUpdate(BaseModel):
     birthday_channel_id_2: str | None = None
     birthday_message_2: str | None = None
     birthday_pin_2: bool | None = None
+    birthday_announce_hour: int | None = None
 
 
 _BIRTHDAY_FIELDS = {
@@ -4016,6 +4143,13 @@ async def update_birthday(
                 if not msg2:
                     raise HTTPException(400, "Message cannot be empty")
                 set_config_value(conn, "birthday_message_2", msg2, guild_id)
+            if body.birthday_announce_hour is not None:
+                hour = int(body.birthday_announce_hour)
+                if not 0 <= hour <= 23:
+                    raise HTTPException(400, "Announce hour must be between 0 and 23")
+                set_config_value(
+                    conn, ANNOUNCE_HOUR_KEY, str(hour), guild_id
+                )
         return {"ok": True}
 
     return await run_query(_q)
@@ -4412,6 +4546,7 @@ class WhisperConfigUpdate(BaseModel):
     log_channel_id: str | None = None
     cooldown_seconds: int | None = None
     hourly_cap_per_target: int | None = None
+    guesses_per_whisper: int | None = None
 
 
 @router.put("/config/whisper")
@@ -4441,6 +4576,13 @@ async def update_whisper_config(
             if body.hourly_cap_per_target is not None:
                 set_whisper_config_value(
                     conn, guild_id, "whisper_hourly_cap_per_target", str(max(1, body.hourly_cap_per_target))
+                )
+            if body.guesses_per_whisper is not None:
+                # At least one guess: a whisper nobody can guess at is a
+                # different game, and the game is the point.
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_guesses_per_whisper",
+                    str(min(10, max(1, body.guesses_per_whisper))),
                 )
         return {"ok": True}
 

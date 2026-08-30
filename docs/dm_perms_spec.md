@@ -14,7 +14,7 @@ This is **not** a Discord-friend system — it lives entirely inside the bot. Th
 | User picker | Ephemeral settings panel | Everyone | "✅ connected" / "❌ no connection yet" check against the picked member |
 | **Remove connection** button | Ephemeral settings panel | Everyone | Remove an existing consent pair; only shown when one exists |
 | **Accept** / **Deny** buttons | Persistent in-DM | Target only | Routes via the message id back to the pending request |
-| DM config | Web (dashboard) | Admin | Set the request channel and the audit channel |
+| DM config | Web (dashboard) | Admin | Set the audit channel, the status-role overrides, and the two request-lifecycle dials |
 | Post panel | Web (dashboard) | Admin | Force-(re)post the panel into a chosen channel |
 | DM audit log | Web (dashboard) | Admin | Paginated audit-log browser with optional action/type filters |
 
@@ -38,7 +38,7 @@ On submit the system pre-checks:
 - No existing consent pair (no duplicate-requesting).
 - No existing pending request from the same requester to the same target.
 
-A requester can hold at most **5 pending requests** at once.
+A requester can hold at most as many pending requests as the guild's cap allows (**5** by default).
 
 When the pre-checks pass, the target is DM'd a request embed with Accept / Deny buttons. The requester gets a confirmation DM. If the target's DMs are closed, nothing is persisted — the requester is told and that's the end of the attempt.
 
@@ -47,7 +47,7 @@ The DM's buttons survive bot restarts; per-request state is recovered via the DM
 
 - **Accept** records the consent pair (bidirectional), edits the DM in place with the acceptance embed, DMs both sides the same confirmation, and writes `request_accepted` to the audit log.
 - **Deny** edits the target's DM to a denial embed, DMs the requester a denial DM (with the lowercased type label inside the sentence), and writes `request_denied`.
-- **Expire**: pending requests age out after **24 hours**. A background sweep runs hourly (and once at startup, so requests aged-out during downtime are swept on next boot), flips them to `expired`, DMs the requester an expiry notice, and writes `request_expired`. Aged-out rows are retained as evidence.
+- **Expire**: pending requests age out after the guild's configured window (**24 hours** by default). A background sweep runs hourly (and once at startup, so requests aged-out during downtime are swept on next boot), flips them to `expired`, DMs the requester an expiry notice, and writes `request_expired`. Aged-out rows are retained as evidence.
 
 If the bot has been removed from the guild between the request being sent and the click, the target's DM is replaced with a "this guild is no longer available" embed and the request row is dropped.
 
@@ -82,7 +82,7 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 | Target is a bot | (request rejected with a "can't target a bot" message) |
 | Already connected | "You two already have a connection — no need to request again." |
 | Already a pending request to that target | "You already have a pending request to them." |
-| At the 5-pending cap | "You already have N pending DM requests. Wait for some to be answered or expire (max 5)." |
+| At the pending cap | "You already have N pending DM requests. Wait for some to be answered or expire (max N)." |
 | Target's DMs are closed | "I couldn't DM that user — they may have DMs disabled." |
 | Non-target clicks Accept / Deny | "This request isn't for you." |
 | Accept/Deny click on an already-resolved request | (DM edits to "this request has already been resolved or expired") |
@@ -100,19 +100,21 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 - **No specific-user blocklist.** Refuse via Deny, or switch to Closed.
 - **No mod-side force-disconnect.** Mods can audit but cannot retroactively break two members' consent.
 - **No expiry on accepted pairs.** Once accepted, a pair survives until revoked.
-- **No retraction by the requester.** A pending request can't be cancelled — wait for the target to act or for the 24-hour expiry.
+- **No retraction by the requester.** A pending request can't be cancelled — wait for the target to act or for the expiry window to pass.
 - **No offline-revoke notification beyond the best-effort DM.** If the revoke DM fails, only the audit log records it.
 
 ## Configuration
 
 Per-guild settings an admin chooses via the dashboard:
 
-- **Request channel** — where the persistent panel lives.
 - **Audit channel** — where one-line audit posts fan out (optional; events still persist when unset).
+- **Status roles** — an existing role per mode, or the bot's own `DMs: …` roles.
+- **Requests expire after** (`dm_request_expiry_hours`, default 24, clamped 1–720) — how long a request waits for an answer. The figure is quoted to the member in the request DM and in the expiry notice.
+- **Requests one member may have waiting** (`dm_request_max_pending`, default 5, clamped 1–50) — the per-requester cap on outstanding requests.
 
-The panel message id is bot-managed (written when the panel is posted or bumped) and not user-editable.
+Where the panel lives is set by posting it (Post Panel), not by a channel dial: the channel and message id are bot-managed and not user-editable. There was once a separate "request channel" setting; nothing ever read it, and it has been removed rather than left looking like a control.
 
-Built-in behavioral constants (not user-tunable): pending requests expire after 24 hours, the expiry sweep runs hourly, requesters cap at 5 simultaneous pending requests, reason fields cap at 250 characters, and the panel-bump debounce is 2 seconds per guild.
+Built-in behavioral constants (not user-tunable): the expiry sweep runs hourly, reason fields cap at 250 characters, and the panel-bump debounce is 2 seconds per guild.
 
 ## Stored data
 

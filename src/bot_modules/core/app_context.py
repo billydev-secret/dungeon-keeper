@@ -317,6 +317,9 @@ class GuildConfig:
     unverified_role_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
+    #: The arrival line dropped in greeter chat when a newcomer arrives without
+    #: an intake card. Blank means "post nothing".
+    greeter_arrival_message: str
     leave_channel_id: int
     leave_message: str
     join_leave_log_channel_id: int
@@ -349,6 +352,10 @@ class GuildConfig:
     grant_roles: dict[str, GrantRoleConfig]
     # roles automatically applied to every new member on join
     auto_role_ids: frozenset[int]
+    # the access role a promotion-review card's Grant button hands out — also
+    # what the Level 5 card's "Spicy access" field reports on (xp_service.
+    # nsfw_grant_role_id). Defaulted so a stub/partial construction still works.
+    promotion_review_grant_role_id: int = 0
 
     @classmethod
     def load(
@@ -360,6 +367,7 @@ class GuildConfig:
     ) -> "GuildConfig":
         from bot_modules.services.greeting_watch_service import parse_extra_words
         from bot_modules.services.welcome_service import (
+            DEFAULT_ARRIVAL_MESSAGE,
             DEFAULT_LEAVE_MESSAGE,
             DEFAULT_WELCOME_MESSAGE,
         )
@@ -397,6 +405,9 @@ class GuildConfig:
             unverified_role_id=_int("unverified_role_id"),
             greeter_role_id=_int("greeter_role_id"),
             greeter_chat_channel_id=_int("greeter_chat_channel_id"),
+            greeter_arrival_message=_val(
+                "greeter_arrival_message", DEFAULT_ARRIVAL_MESSAGE
+            ),
             leave_channel_id=leave_channel_id,
             leave_message=_val("leave_message", DEFAULT_LEAVE_MESSAGE),
             join_leave_log_channel_id=_parse_int_config(
@@ -440,6 +451,7 @@ class GuildConfig:
             xp_settings=load_xp_settings(conn, guild_id),
             grant_roles=get_grant_roles(conn, guild_id),
             auto_role_ids=_ids("auto_role_ids"),
+            promotion_review_grant_role_id=_int("promotion_review_grant_role_id"),
         )
 
     def member_is_mod(self, member: discord.Member) -> bool:
