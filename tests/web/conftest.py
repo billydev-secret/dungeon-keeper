@@ -75,13 +75,21 @@ def fake_ctx(web_db) -> FakeCtx:
 
 
 class StubPermissions:
-    """discord.Permissions stand-in — only the four bits health.py reads."""
+    """discord.Permissions stand-in — only the bits health.py reads.
 
-    def __init__(self, *, mod: bool = False):
+    ``manage_messages`` is a *separate* argument because it is a separate
+    population: Mod Coverage counts everyone who can delete a message, which
+    is a wider circle than the kick/ban holders the workload report counts.
+    It defaults to ``mod`` so existing callers keep describing one kind of
+    moderator, and Discord grants it implicitly with Administrator anyway.
+    """
+
+    def __init__(self, *, mod: bool = False, manage_messages: bool | None = None):
         self.administrator = mod
         self.manage_guild = mod
         self.kick_members = mod
         self.ban_members = mod
+        self.manage_messages = mod if manage_messages is None else manage_messages
 
 
 class StubMember:
@@ -91,12 +99,15 @@ class StubMember:
         *,
         bot: bool = False,
         mod: bool = False,
+        manage_messages: bool | None = None,
         joined_at=None,
         display_name: str | None = None,
     ):
         self.id = member_id
         self.bot = bot
-        self.guild_permissions = StubPermissions(mod=mod)
+        self.guild_permissions = StubPermissions(
+            mod=mod, manage_messages=manage_messages
+        )
         self.joined_at = joined_at
         self.display_name = display_name or f"member-{member_id}"
 

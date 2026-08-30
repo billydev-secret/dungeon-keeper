@@ -162,6 +162,7 @@ def test_a_cached_good_value_survives_a_degraded_window(
         ("/api/health/cohort-retention", "cohort_retention"),
         ("/api/health/mod-workload", "mod_workload"),
         ("/api/health/mod-engagement", "mod_engagement"),
+        ("/api/health/mod-coverage", "mod_coverage"),
     ],
 )
 def test_every_guild_derived_deep_dive_skips_the_cache_while_degraded(

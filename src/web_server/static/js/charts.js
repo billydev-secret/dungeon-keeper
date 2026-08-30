@@ -66,6 +66,26 @@ export const CHART_GRID   = "#3f4147";
 // read as a 2px gap rather than a border.
 export const CHART_SURFACE = "#2b2d31";
 
+// ── Overlay charts ─────────────────────────────────────────────────────
+// Two identities, not N: collapsing history into one envelope means this chart
+// never needs a twelve-step ramp. Amber is the subject, teal the comparison —
+// validated as a categorical pair against CHART_SURFACE (all six checks pass,
+// worst adjacent dE 13.9 protan / 19.2 normal, both >= 3:1 on the surface).
+// A neutral-grey band was rejected: it fails the chroma floor and would have
+// read as a gridline rather than as data.
+// Dashed median + solid current, so identity never rests on colour alone.
+//
+// "Now" leads with the brand amber; the historical band is teal, two steps
+// round the wheel from it. The band's fill is that teal at 15% alpha — light
+// enough that the lines drawn over it stay at full contrast.
+export const OVERLAY_NOW  = CHART_BAR;      // ROLE_COLORS[0], amber
+export const OVERLAY_PAST = ROLE_COLORS[2]; // teal
+export const OVERLAY_BAND_FILL = OVERLAY_PAST + "26";
+// Additional lines an overlay's caller can lay over the band, in order.
+// Orchid first: it is the furthest hue from both amber and teal, and every one
+// of these is dotted as well as coloured.
+export const OVERLAY_EXTRA = [ROLE_COLORS[4], ROLE_COLORS[1], ROLE_COLORS[5]];
+
 // ── Network-graph extension ────────────────────────────────────────────
 // The Connection Graph is the one chart where series identity is NOT
 // legend-matched across the page: communities are separated spatially, so
@@ -684,4 +704,154 @@ export function renderChartTable(host, { labels, datasets, indexLabel = "Period"
 
   host.appendChild(toggle);
   host.appendChild(wrap);
+}
+
+
+/**
+ * The band chart: this period against a p25–p75 envelope over the last N.
+ *
+ * The envelope is a *pair* of line datasets with a fill between them, which is
+ * how Chart.js draws a band. Only the upper one carries the legend entry — the
+ * lower is scaffolding and opts out via `skipLegend`, so nobody can toggle off
+ * half a band and be left with a stray line.
+ *
+ * Draw order matters: the band goes in first so the two lines sit on top of it
+ * rather than under a translucent wash.
+ */
+export function makeOverlayChart(
+  canvas, data,
+  { subject, typical, isWeek, currentTotal, typicalToDate, extraSeries = [] }
+) {
+  const hasBand = (data.band_mid || []).length > 0;
+
+  const datasets = [];
+  if (hasBand) {
+    datasets.push({
+      label: `${typical} (p25–p75)`,
+      data: data.band_high,
+      borderColor: "transparent",
+      backgroundColor: OVERLAY_BAND_FILL,
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      fill: "+1",
+      tension: 0.2,
+      // A spread is not a quantity you can add up.
+      legendValue: null,
+      order: 3,
+    });
+    datasets.push({
+      label: `${typical} p25`,
+      data: data.band_low,
+      borderColor: "transparent",
+      backgroundColor: "transparent",
+      borderWidth: 0,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      fill: false,
+      tension: 0.2,
+      skipLegend: true,
+      order: 3,
+    });
+    datasets.push({
+      label: `${typical} (median)`,
+      data: data.band_mid,
+      borderColor: OVERLAY_PAST,
+      backgroundColor: "transparent",
+      // Dashed, so the two lines stay distinguishable without colour.
+      borderDash: [6, 4],
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      tension: 0.2,
+      legendValue: typicalToDate,
+      order: 2,
+    });
+  }
+  datasets.push({
+    label: `${subject} so far`,
+    data: data.counts,
+    borderColor: OVERLAY_NOW,
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    tension: 0.2,
+    // The current period stops at the hour we are in. Never bridge the gap —
+    // a line drawn across unlived hours is a claim about the future.
+    spanGaps: false,
+    legendValue: currentTotal,
+    order: 1,
+  });
+  // Extra lines ride the SAME y-axis as everything else. A second scale would
+  // make where this line sits relative to the band an artefact of autoscaling
+  // rather than a fact — the exact misread _makeActivityChart split the
+  // members chart out to avoid. A caller whose extra series is not in the same
+  // unit as `data.counts` must draw its own chart, not pass it here.
+  extraSeries.forEach((s, i) => {
+    datasets.push({
+      label: s.label,
+      data: s.data,
+      borderColor: s.color || OVERLAY_EXTRA[i % OVERLAY_EXTRA.length],
+      backgroundColor: "transparent",
+      // Dotted, so this line separates from the solid current period and the
+      // dashed median without relying on colour.
+      borderDash: s.dash || [2, 3],
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      tension: 0.2,
+      spanGaps: false,
+      legendValue: s.total,
+      order: 0,
+    });
+  });
+
+  return new Chart(canvas.getContext("2d"), {
+    type: "line",
+    data: { labels: data.labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        // Both drawn in HTML by the caller — see the caption and legend hosts.
+        title: { display: false },
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            // 168 ticks cannot all be shown, so the tooltip is where the exact
+            // hour lives.
+            title: (items) => data.labels[items[0].dataIndex] || "",
+          },
+        },
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: CHART_TEXT,
+            maxRotation: 0,
+            autoSkip: false,
+            // A tick per day across a week, every third hour across a day —
+            // 168 labels would be a grey smear.
+            callback(value, index) {
+              if (isWeek) {
+                return index % 24 === 0
+                  ? (data.labels[index] || "").split(" ")[0]
+                  : "";
+              }
+              return index % 3 === 0 ? data.labels[index] : "";
+            },
+          },
+          grid: { color: CHART_GRID },
+        },
+        y: {
+          ticks: { color: CHART_TEXT },
+          grid: { color: CHART_GRID },
+          beginAtZero: true,
+          title: { display: true, text: data.y_label, color: CHART_TEXT },
+        },
+      },
+    },
+  });
 }
