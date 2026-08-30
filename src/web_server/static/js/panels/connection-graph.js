@@ -197,6 +197,7 @@ export function mount(container, initialParams) {
 
   // Load member list
   api("/api/meta/members", {}).then((members) => {
+    if (disposed) return;
     const opts = members.map((m) => ({
       id: m.id,
       label: (m.display_name || m.name) + (m.left_server ? " (left)" : ""),
@@ -928,9 +929,20 @@ export function mount(container, initialParams) {
 
   const REPLAY_WINDOW_BINS = 4;   // 28-day rolling window
   const REPLAY_STEP_MS = 1400;    // per week, divided by the speed picker
+  // Playback starts where the window is first complete. Starting at 0 would
+  // sum one week, then two, then three — every replay opening with a growth
+  // curve that is an artefact of the ramp, not the community.
+  const REPLAY_START_STEP = REPLAY_WINDOW_BINS - 1;
 
   let replay = null;              // null = live view
   let disposed = false;           // set by unmount; awaited work must check it
+  // Bumped by every live refetch. enterReplay captures it before awaiting and
+  // abandons its result if it changed: otherwise a series fetch that resolves
+  // after a live fetch started would snapshot the OUTGOING dataset's cluster
+  // state, and exiting the replay would restore that over the new data —
+  // the legend and the hidden-cluster filter speaking the previous period's
+  // partition while the canvas draws the new one.
+  let dataGeneration = 0;
 
   /** Non-blocking notice over the canvas — for a failure that did NOT
    *  invalidate what is already drawn (the full-canvas veil takes a healthy
@@ -952,34 +964,47 @@ export function mount(container, initialParams) {
     replay.step = step;
     rpScrub.value = String(step);
     const winStart = Math.max(0, step - (REPLAY_WINDOW_BINS - 1));
-    const windowEnd = d.start + (step + 1) * d.bin_seconds;
-    rpDate.textContent = `${_fmtDay(d.start + winStart * d.bin_seconds)} – ${_fmtDay(windowEnd)}`;
+    const winStartTs = d.start + winStart * d.bin_seconds;
+    // The step's OWN week, which is what membership is judged against.
+    const stepStartTs = d.start + step * d.bin_seconds;
+    rpDate.textContent = `${_fmtDay(winStartTs)} – ${_fmtDay(d.start + (step + 1) * d.bin_seconds)}`;
 
-    // Pair weights summed over the window.
-    const sums = [];
-    const nodeTotal = new Map();
+    // Pass 1 — who interacted at all in this window.
+    const windowPairs = [];
+    const rawTotal = new Map();
     for (const pr of d.pairs) {
       let w = 0;
       for (let b = winStart; b <= step; b++) w += pr.w[b];
       if (!w) continue;
-      sums.push([pr.a, pr.b, w]);
-      nodeTotal.set(pr.a, (nodeTotal.get(pr.a) || 0) + w);
-      nodeTotal.set(pr.b, (nodeTotal.get(pr.b) || 0) + w);
+      windowPairs.push([pr.a, pr.b, w]);
+      rawTotal.set(pr.a, (rawTotal.get(pr.a) || 0) + w);
+      rawTotal.set(pr.b, (rawTotal.get(pr.b) || 0) + w);
     }
 
-    // Presence: interacted in the window, cluster not hidden, and the most
-    // recent membership event by the window's end isn't a departure.
+    // Pass 2 — presence: interacted, cluster not hidden, and still a member.
+    // Membership is judged against the step's own week, not the window's end:
+    // a member who left this week is still drawn for the week they left (the
+    // window holds their last conversations) and is gone the week after.
     const present = new Set();
     for (const n of d.nodes) {
-      if (!nodeTotal.has(n.user_id)) continue;
+      if (!rawTotal.has(n.user_id)) continue;
       if (hiddenClusters.has(n.cluster_id)) continue;
       let lastJoin = -1, lastLeave = -1;
-      for (const t of n.joins) if (t <= windowEnd && t > lastJoin) lastJoin = t;
-      for (const t of n.leaves) if (t <= windowEnd && t > lastLeave) lastLeave = t;
+      for (const t of n.joins) if (t < stepStartTs && t > lastJoin) lastJoin = t;
+      for (const t of n.leaves) if (t < stepStartTs && t > lastLeave) lastLeave = t;
       if (lastLeave > lastJoin) continue;
       present.add(n.user_id);
     }
-    const shownPairs = sums.filter(([a, b]) => present.has(a) && present.has(b));
+    const shownPairs = windowPairs.filter(([a, b]) => present.has(a) && present.has(b));
+
+    // Pass 3 — totals over what is actually DRAWN, so a dot's size and its
+    // "N interactions" tooltip never count partners the frame doesn't show
+    // (a hidden cluster, or someone who has left).
+    const nodeTotal = new Map();
+    for (const [a, b, w] of shownPairs) {
+      nodeTotal.set(a, (nodeTotal.get(a) || 0) + w);
+      nodeTotal.set(b, (nodeTotal.get(b) || 0) + w);
+    }
 
     // Rebuild the sim arrays, carrying positions across by member id.
     const prev = new Map(nodes.map((n) => [n.id, n]));
@@ -991,15 +1016,20 @@ export function mount(container, initialParams) {
     }
     const W = canvas.width / devicePixelRatio;
     const H = canvas.height / devicePixelRatio;
-    let maxTotal = 1;
-    for (const id of present) maxTotal = Math.max(maxTotal, nodeTotal.get(id) || 0);
+
+    // Hover and drag survive a frame: the node objects are new, but the member
+    // is the same one the cursor is on. Dropping them meant a playing replay
+    // cancelled its own hover every step.
+    const hoveredId = hovered ? hovered.id : null;
+    const draggedId = dragged ? dragged.id : null;
 
     const nextNodes = [];
     const idx = new Map();
     for (const id of present) {
+      if (!nodeTotal.has(id)) continue;   // every pair of theirs was filtered out
       const m = meta.get(id);
       const old = prev.get(id);
-      const total = nodeTotal.get(id) || 0;
+      const total = nodeTotal.get(id);
       let x, y;
       if (old) { x = old.x; y = old.y; }
       else {
@@ -1014,17 +1044,31 @@ export function mount(container, initialParams) {
         x, y,
         vx: old ? old.vx : 0,
         vy: old ? old.vy : 0,
-        r: 6 + (total / maxTotal) * 22,
+        // Scaled against the busiest window of the WHOLE replay, never this
+        // frame's own max: a per-frame max repaints a dead week to look
+        // exactly as busy as a peak one, erasing the growth the replay exists
+        // to show.
+        r: 6 + (total / replay.maxTotal) * 22,
         total_outbound: total,
         total_inbound: 0,
         unique_partners: 0,
         cluster_id: (m && m.cluster_id) || 0,
       });
     }
+    nodes = nextNodes;
+    edges = shownPairs
+      .filter(([a, b]) => idx.has(a) && idx.has(b))
+      .map(([a, b, w]) => ({ source: idx.get(a), target: idx.get(b), weight: w }));
+
     hovered = null;
     dragged = null;
-    nodes = nextNodes;
-    edges = shownPairs.map(([a, b, w]) => ({ source: idx.get(a), target: idx.get(b), weight: w }));
+    if (hoveredId !== null && idx.has(hoveredId)) {
+      const i = idx.get(hoveredId);
+      hovered = nodes[i];
+      hovered._idx = i;
+    }
+    if (draggedId !== null && idx.has(draggedId)) dragged = nodes[idx.get(draggedId)];
+
     labelledIdx = new Set(
       nodes
         .map((n, i) => [n.total_outbound, i])
@@ -1052,7 +1096,7 @@ export function mount(container, initialParams) {
     if (replay.timer) { clearTimeout(replay.timer); replay.timer = null; }
     if (playing) {
       // Restart from the top when play is hit at the end.
-      if (replay.step >= replay.data.weeks - 1) applyReplayStep(0);
+      if (replay.step >= replay.data.weeks - 1) applyReplayStep(REPLAY_START_STEP);
       _rpSchedule();
     }
   }
@@ -1062,6 +1106,7 @@ export function mount(container, initialParams) {
     // the same "stop" the bar's ✕ performs.
     if (replay) { exitReplay(); return; }
     replayBtn.disabled = true;
+    const gen = dataGeneration;
     showMessage(renderLoading("Loading the network's history…"));
     let d;
     try {
@@ -1073,6 +1118,8 @@ export function mount(container, initialParams) {
     } catch (err) {
       if (disposed) return;
       replayBtn.disabled = false;
+      // A live refetch overtook us; it owns the screen and its own messaging.
+      if (gen !== dataGeneration) return;
       // The live graph underneath is untouched by this failure, so say so
       // without veiling it. With no live graph, the veil is the right call.
       if (cachedData) {
@@ -1087,17 +1134,40 @@ export function mount(container, initialParams) {
     // ran before `replay` existed, so nothing else would ever stop the timers.
     if (disposed) return;
     replayBtn.disabled = false;
+    // A live refetch started while we were awaiting: its data (and cluster
+    // state) is what the panel is about to show, so drop this result rather
+    // than entering a replay snapshotted from the outgoing dataset.
+    if (gen !== dataGeneration) return;
     if (!d.nodes.length || !d.pairs.length) {
-      showMessage(renderEmpty(
-        "No history to replay yet — this needs a few weeks of recorded conversation between members."
-      ));
+      const msg = "No history to replay yet — this needs a few weeks of recorded conversation between members.";
+      // Same rule as the fetch failure: the live graph is untouched, so say it
+      // beside the graph rather than veiling it with no way back.
+      if (cachedData) { clearMessage(); showTransient(msg); }
+      else showMessage(renderEmpty(msg));
       return;
     }
     clearMessage();
     if (sim) { cancelAnimationFrame(sim); sim = null; }
+    // The busiest window across the whole replay, so dot size means the same
+    // thing in every frame.
+    let maxTotal = 1;
+    for (let s = REPLAY_START_STEP; s < d.weeks; s++) {
+      const from = Math.max(0, s - (REPLAY_WINDOW_BINS - 1));
+      const tot = new Map();
+      for (const pr of d.pairs) {
+        let w = 0;
+        for (let b = from; b <= s; b++) w += pr.w[b];
+        if (!w) continue;
+        tot.set(pr.a, (tot.get(pr.a) || 0) + w);
+        tot.set(pr.b, (tot.get(pr.b) || 0) + w);
+      }
+      for (const v of tot.values()) if (v > maxTotal) maxTotal = v;
+    }
+
     replay = {
       data: d,
-      step: 0,
+      step: REPLAY_START_STEP,
+      maxTotal,
       playing: false,
       timer: null,
       saved: {
@@ -1121,18 +1191,29 @@ export function mount(container, initialParams) {
       clusterByUser[n.user_id] = n.cluster_id;
       counts[n.cluster_id] = (counts[n.cluster_id] || 0) + 1;
     }
+    // Capped at ten, exactly as the live path's metrics.clusters is, so the
+    // legend doesn't grow a different length when the replay opens.
     renderClusterChips(
       Object.keys(counts)
         .map((cid) => ({ id: parseInt(cid), size: counts[cid] }))
         .sort((a, b) => a.id - b.id)
+        .slice(0, 10)
     );
-    currentLayout = "force";   // the one layout that animates a changing graph
+    // Force is the one layout that animates a changing graph; the select has
+    // to say so, or it reports a layout the canvas is not running.
+    currentLayout = "force";
+    layoutEl.value = "force";
+    // A live view left zoomed into a corner would put the replay's freshly
+    // centred frames off-screen (rebuildGraph resets these for the same
+    // reason).
+    panX = 0; panY = 0; scale = 1;
     replayBtn.setAttribute("aria-pressed", "true");
     replayBtn.classList.add("is-active");
     replayBtn.title = "Stop the replay and return to the live network";
     replayBar.hidden = false;
+    rpScrub.min = String(REPLAY_START_STEP);
     rpScrub.max = String(d.weeks - 1);
-    applyReplayStep(0);
+    applyReplayStep(REPLAY_START_STEP);
     setReplayPlaying(true);
   }
 
@@ -1143,6 +1224,7 @@ export function mount(container, initialParams) {
     hiddenClusters.clear();
     for (const cid of replay.saved.hiddenClusters) hiddenClusters.add(cid);
     currentLayout = replay.saved.layout;
+    layoutEl.value = replay.saved.layout;
     const savedClusters = replay.saved.clusterList;
     replay = null;
     renderClusterChips(savedClusters);
@@ -1190,6 +1272,7 @@ export function mount(container, initialParams) {
     // (via rebuildGraph below) would put the previous dataset's legend and
     // cluster lookup back over fresh data.
     if (replay) exitReplay(false);
+    dataGeneration += 1;
     // include_metrics=1 even though the metric tiles are gone: community
     // detection runs inside the metrics block server-side, and without it
     // every node comes back cluster_id 0 (reports_data.get_interaction_graph_data).
@@ -1317,6 +1400,11 @@ export function mount(container, initialParams) {
     startSim();
   }
 
+  // Deferred work below (the members fetch, the granularity debounce, the
+  // focusout timer) all lands in rebuildGraph, which calls
+  // history.replaceState — after a navigation that would rewrite the address
+  // bar of whatever panel the user moved to. Each checks `disposed`.
+
   // Controls: fetch when data source changes, rebuild when filters change
   timescaleEl.addEventListener("change", fetchData);
   limitEl.addEventListener("change", fetchData);
@@ -1329,7 +1417,7 @@ export function mount(container, initialParams) {
   resolutionEl.addEventListener("input", () => {
     resolutionValEl.textContent = parseFloat(resolutionEl.value).toFixed(1);
     if (resolutionTimer) clearTimeout(resolutionTimer);
-    resolutionTimer = setTimeout(fetchData, 350);
+    resolutionTimer = setTimeout(() => { if (!disposed) fetchData(); }, 350);
   });
 
   // Fullscreen toggle
@@ -1346,6 +1434,7 @@ export function mount(container, initialParams) {
   let lastMemberId = memberFS.getValue();
   memberSlot.addEventListener("focusout", () => {
     setTimeout(() => {
+      if (disposed) return;
       const cur = memberFS.getValue();
       if (cur !== lastMemberId) { lastMemberId = cur; rebuildGraph(); }
     }, 200);
@@ -1361,6 +1450,7 @@ export function mount(container, initialParams) {
     unmount() {
       disposed = true;
       if (transientTimer) clearTimeout(transientTimer);
+      if (resolutionTimer) clearTimeout(resolutionTimer);
       if (replay && replay.timer) clearTimeout(replay.timer);
       if (sim) cancelAnimationFrame(sim);
       ro.disconnect();

@@ -1051,18 +1051,38 @@ def get_interaction_series(
     bin_seconds = 7 * 86400
     start = now - weeks * bin_seconds
 
+    # The roster shortlist is chosen in SQL, before the pair-week matrix is
+    # materialized: the unfiltered GROUP BY returns every (pair, week) row in
+    # the guild — ~25k on the main guild today, and growing with the square of
+    # the member count — to keep `limit` of them. Ranking users first and
+    # joining against that set bounds what crosses into Python.
     rows = conn.execute(
         f"""
+        WITH live AS (
+            SELECT from_user_id, to_user_id, ts
+            FROM user_interactions_log
+            WHERE guild_id = ? AND ts >= ? AND from_user_id != to_user_id
+              AND {_EXCLUDE_BOT_ENDPOINTS}
+        ),
+        totals AS (
+            SELECT uid, SUM(n) AS total FROM (
+                SELECT from_user_id AS uid, COUNT(*) AS n FROM live GROUP BY 1
+                UNION ALL
+                SELECT to_user_id AS uid, COUNT(*) AS n FROM live GROUP BY 1
+            ) GROUP BY uid
+            ORDER BY total DESC
+            LIMIT ?
+        )
         SELECT MIN(from_user_id, to_user_id) AS a,
                MAX(from_user_id, to_user_id) AS b,
                CAST((ts - ?) / ? AS INTEGER) AS bin,
                COUNT(*) AS w
-        FROM user_interactions_log
-        WHERE guild_id = ? AND ts >= ? AND from_user_id != to_user_id
-          AND {_EXCLUDE_BOT_ENDPOINTS}
+        FROM live
+        WHERE from_user_id IN (SELECT uid FROM totals)
+          AND to_user_id   IN (SELECT uid FROM totals)
         GROUP BY a, b, bin
         """,
-        (start, bin_seconds, guild_id, start, guild_id, guild_id),
+        (guild_id, start, guild_id, guild_id, limit, start, bin_seconds),
     ).fetchall()
 
     pair_bins: dict[tuple[int, int], list[int]] = {}
@@ -1076,15 +1096,9 @@ def get_interaction_series(
         node_total[a] = node_total.get(a, 0) + w
         node_total[b] = node_total.get(b, 0) + w
 
-    shortlist = set(
-        sorted(node_total, key=lambda u: node_total[u], reverse=True)[:limit]
-    )
-
-    kept = {
-        pair: vec
-        for pair, vec in pair_bins.items()
-        if pair[0] in shortlist and pair[1] in shortlist and sum(vec) >= 2
-    }
+    # Both endpoints are already inside the SQL shortlist; only the pair floor
+    # is left to apply.
+    kept = {pair: vec for pair, vec in pair_bins.items() if sum(vec) >= 2}
 
     # The roster is who SURVIVES the floor, not who made the shortlist: a
     # member whose every pair is a one-off drops out entirely. Otherwise they
