@@ -8,6 +8,8 @@ consent path.
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 
 from bot_modules.core.db_utils import open_db
@@ -31,6 +33,23 @@ def db(sync_db_path):
 
 
 # ── Storage ──────────────────────────────────────────────────────────────
+
+
+def test_the_gate_under_test_is_the_real_one():
+    """Sentinel: a cog test must not leave its stub on the service module.
+
+    tests/cogs/ patches these three functions for every test in that
+    directory. A test there that re-patches one with ``monkeypatch`` records
+    the stub as the original and can restore it *after* the fixture has put
+    the real function back — leaving the gate mocked out for every later test
+    in the same xdist worker. That happened, and it surfaced here as three
+    unrelated failures, so the check lives here where the damage shows.
+    """
+    for name in ("is_no_contact", "check_and_record", "no_contact_partners"):
+        fn = getattr(svc, name)
+        assert not isinstance(fn, Mock), (
+            f"{name} is still mocked — an earlier test leaked its stub"
+        )
 
 
 def test_add_and_detect_pair(db):

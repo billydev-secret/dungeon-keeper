@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock
 
 import pytest
+
+from bot_modules.services import no_contact_service
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +31,7 @@ def _stub_whisper_name_fn(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def no_contact_absent():
+def no_contact_absent(monkeypatch):
     """Default every cog test to "these two have no no-contact entry".
 
     Cog tests run against stub db paths (``:memory:``, a mocked
@@ -49,19 +51,24 @@ def no_contact_absent():
     wins over this one (see tests/cogs/test_guess_no_contact.py). Because this
     is autouse across tests/cogs/, a new test that means to exercise a gate
     must patch it explicitly rather than relying on the default.
+
+    Applied through ``monkeypatch`` rather than ``mock.patch`` so it shares one
+    undo stack with the tests. A test that reaches for
+    ``monkeypatch.setattr(no_contact_service, "is_no_contact", ...)`` records
+    *whatever is there at the time* as the original — which is this stub — and
+    a separate ``mock.patch`` teardown could then run first, put the real
+    function back, and let monkeypatch write the stub back over it, for the
+    rest of the session. That is not hypothetical: it left the real
+    no-contact gate mocked out for every later test in the same worker, and
+    tests/test_no_contact_service.py failed with a MagicMock where the gate
+    should have been. Sharing the stack makes the restores strictly LIFO.
     """
-    with (
-        patch(
-            "bot_modules.services.no_contact_service.check_and_record",
-            return_value=False,
-        ),
-        patch(
-            "bot_modules.services.no_contact_service.no_contact_partners",
-            return_value=set(),
-        ),
-        patch(
-            "bot_modules.services.no_contact_service.is_no_contact",
-            return_value=False,
-        ),
-    ):
-        yield
+    monkeypatch.setattr(
+        no_contact_service, "check_and_record", MagicMock(return_value=False)
+    )
+    monkeypatch.setattr(
+        no_contact_service, "no_contact_partners", MagicMock(return_value=set())
+    )
+    monkeypatch.setattr(
+        no_contact_service, "is_no_contact", MagicMock(return_value=False)
+    )
