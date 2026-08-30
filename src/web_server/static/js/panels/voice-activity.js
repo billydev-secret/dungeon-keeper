@@ -4,14 +4,18 @@ import { makeBarChart, makeHorizontalBarChart, renderChartTable, CHART_ACCENT } 
 import { renderSortableTable } from "../table.js";
 
 /**
- * The activity half of the Voice page. Mounted into a region by panels/voice.js,
- * above the settings. Moderator-level information — no gating applies here.
+ * Voice Activity — the voice usage report (Reports → Engagement).
+ * Moderator-level information — no gating applies here. The settings that
+ * shape these rooms live on Config → Voice → Voice Control
+ * (config-voice-master), cross-linked via `related:`.
  */
-export function mountActivity(container, initialParams) {
+export function mount(container, initialParams = {}) {
   container.innerHTML = `
-    <div>
-      <div class="section-label">Activity</div>
-      <div class="field-hint" style="margin-bottom:10px;">Voice channel usage — top users and peak hours</div>
+    <div class="panel">
+      <header>
+        <h2>Voice Activity</h2>
+        <div class="subtitle">Voice channel usage — top users and peak hours</div>
+      </header>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
       <div class="chart-caption" data-caption-hour></div>

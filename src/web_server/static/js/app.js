@@ -60,7 +60,7 @@ const SECTIONS = [
         { id: "health-dau-mau",         label: "DAU/MAU",            module: "./panels/health-dau-mau.js", keywords: "daily monthly active users" },
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
-        { id: "voice-activity",       label: "Voice",                 module: "./panels/voice.js", help: "help-voice", keywords: "voice activity control hub temporary channels master post panel owner control panel" },
+        { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js", keywords: "voice usage peak hours top users", related: ["config-voice-master"] },
         { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
@@ -162,6 +162,10 @@ const SECTIONS = [
         { id: "docs",              label: "Docs",              module: "./panels/docs.js", keywords: "channel docs documentation publish" },
       ]},
       { heading: "Voice", items: [
+        // Revived 2026-08-29 with its pre-merge id (deleted by 18a3c691 with
+        // no MOVED_PAGES entry), so deep links saved before the merge resolve
+        // again and its telemetry series resumes.
+        { id: "config-voice-master", label: "Voice Control", module: "./panels/voice-settings.js", adminOnly: true, help: "help-voice", keywords: "voice master hub temporary channels post panel owner control panel", related: ["voice-activity"] },
         { id: "config-voice-transcription", label: "Voice Transcription", module: "./panels/config-voice-transcription.js", adminOnly: true },
       ]},
       { heading: "AI & Maintenance", items: [

@@ -132,7 +132,9 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         ),
         cog="VoiceMasterCog",
         method="post_control_panel",
-        host_page="voice-activity",
+        # The poster lives on the settings half; after the 2026-08-29 split
+        # the report page (voice-activity) no longer carries it.
+        host_page="config-voice-master",
     ),
     PanelSpec(
         key="guess-prompt",

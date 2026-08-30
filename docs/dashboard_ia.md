@@ -15,15 +15,16 @@ is narrower, and until 2026-08 it was written nowhere a user could see it:
 > report or a queue keeps its dials at the bottom of that page, one pane. A
 > feature with no such page keeps them under **Config**.
 
-Six features are on the first side of that line — their settings pages were
+Five features are on the first side of that line — their settings pages were
 merged into their report/queue panels, with the settings half rendered
 read-only for non-admins (`lockUnlessAdmin`), because two nav entries with the
-same label were the clearest possible sign the split was noise:
+same label were the clearest possible sign the split was noise. (Voice was
+un-merged 2026-08-29 — see `docs/plans/dashboard-config-ia.md`; its settings
+page revived its pre-merge id `config-voice-master` under Config → Voice.)
 
 | Feature | Where its settings are |
 |---|---|
 | XP & Leveling | Reports → Engagement → XP & Leveling |
-| Voice | Reports → Engagement → Voice |
 | Birthdays | Reports → Member Lists → Birthdays |
 | Intake | Reports → Greeter → Intake |
 | Rules Watch | Moderation → Rules Watch |
