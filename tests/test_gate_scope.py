@@ -296,3 +296,72 @@ def test_somewhere_that_is_not_a_repo_does_not_defer(tmp_path):
     """The safe default: if git can't answer, run the full suite rather than
     silently skip it."""
     assert gate.in_linked_worktree(tmp_path) is False
+
+
+# ── the full-gate tag ────────────────────────────────────────────────────
+#
+# Work branches defer the full suite to main, and nothing forces that run. The
+# tag records what this machine has actually verified so teardown can say how
+# far main has drifted from it.
+
+
+def _repo(tmp_path: Path) -> Path:
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    _git(main, "config", "user.email", "gate@example.com")
+    _git(main, "config", "user.name", "gate")
+    (main / "f.txt").write_text("hi", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "init")
+    return main
+
+
+def test_ungated_merges_is_none_before_the_tag_exists(tmp_path):
+    """Unknown must not read as zero — they call for different advice."""
+    assert gate.ungated_merges(_repo(tmp_path)) is None
+
+
+def test_marking_then_counting_walks_from_zero(tmp_path):
+    main = _repo(tmp_path)
+    assert gate.mark_full_gate(main) is not None
+    assert gate.ungated_merges(main) == 0
+
+    for i in range(3):
+        (main / f"m{i}.txt").write_text("x", encoding="utf-8")
+        _git(main, "add", "-A")
+        _git(main, "commit", "-qm", f"merge {i}")
+    assert gate.ungated_merges(main) == 3
+
+    gate.mark_full_gate(main)
+    assert gate.ungated_merges(main) == 0
+
+
+def test_a_work_branch_cannot_clear_mains_backlog(tmp_path):
+    """The tag says main was verified. A green branch does not say that, so a
+    full run from a linked worktree must leave the count alone."""
+    main = _repo(tmp_path)
+    gate.mark_full_gate(main)
+    (main / "m.txt").write_text("x", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "a merge")
+
+    linked = tmp_path / "session"
+    _git(main, "worktree", "add", "-q", "-b", "feature", str(linked))
+    assert gate.mark_full_gate(linked) is None
+    assert gate.ungated_merges(main) == 1
+
+
+def test_a_detached_or_side_branch_checkout_does_not_mark(tmp_path):
+    """Only main. Marking from anywhere else would credit main for a run that
+    never touched it."""
+    main = _repo(tmp_path)
+    _git(main, "checkout", "-q", "-b", "side")
+    assert gate.mark_full_gate(main) is None
+    assert gate.ungated_merges(main) is None
+
+
+def test_a_missing_repo_is_quiet(tmp_path):
+    """A missing tag is a missing nag, never a failed gate."""
+    assert gate.mark_full_gate(tmp_path) is None
+    assert gate.ungated_merges(tmp_path) is None

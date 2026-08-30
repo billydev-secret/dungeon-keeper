@@ -124,7 +124,11 @@ SQLite-backed. Tests in `tests/`.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
   single test). **Run it on `main` once a batch of merges is complete** — that
   is where the work branches' deferred full runs are paid, and where a clean
-  merge between two parallel sessions is caught leaving main red. Full-suite
+  merge between two parallel sessions is caught leaving main red. A green run moves
+  the local `last-full-gate` tag to main's HEAD, and `dk_session.py teardown`
+  prints how far main has drifted from it, so a skipped run is visible rather
+  than remembered. The tag is never pushed — it records what *this* machine
+  verified. Full-suite
   green is required before a **push to origin**, but
   CI on that push satisfies it — a local full run is optional. If
   you do run it locally, run it **solo**: a parallel full run alongside other

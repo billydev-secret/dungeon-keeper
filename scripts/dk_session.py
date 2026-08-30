@@ -23,6 +23,7 @@ get its final report on screen before the pane disappears.
 
 from __future__ import annotations
 
+import contextlib
 import argparse
 import json
 import os
@@ -1029,6 +1030,36 @@ def post_qa_card(main_repo: Path, branch: str) -> None:
     qa_card_log(main_repo, branch, output)
 
 
+def report_ungated_merges(main_repo: Path) -> None:
+    """Say how far main has drifted from its last green full run.
+
+    Work branches defer the full-suite fallback (see scripts/gate.py), so the
+    run that used to happen per-commit now happens once on main — and nothing
+    forces it. This is the reminder: it prints at teardown, when a merge has
+    just landed and the number has just gone up.
+
+    Never fails a teardown. A missing tag, a missing git, an old gate.py
+    without the helper: all of them mean "can't say", and a silent teardown is
+    better than a noisy traceback over a branch that already merged.
+    """
+    try:
+        sys.path.insert(0, str(main_repo / "scripts"))
+        import gate  # noqa: PLC0415 — optional, and only needed here
+        n = gate.ungated_merges(main_repo)
+    except Exception:
+        return
+    finally:
+        with contextlib.suppress(ValueError):
+            sys.path.remove(str(main_repo / "scripts"))
+    if n is None:
+        print("main has never had a full gate recorded — "
+              "run `python scripts/gate.py` on main to start the count")
+    elif n:
+        commits = "commit" if n == 1 else "commits"
+        print(f"main is {n} {commits} past its last full gate — "
+              "run `python scripts/gate.py` on main when this batch is done")
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -1064,6 +1095,8 @@ def cmd_teardown(args: argparse.Namespace) -> int:
         print(f"deleted branch {name}")
     elif "not fully merged" in res.stderr:
         print(f"kept branch {name} — not merged into main", file=sys.stderr)
+
+    report_ungated_merges(main_repo)
 
     window = args.window or name
     run(["tmux", "kill-window", "-t", window], check=False)

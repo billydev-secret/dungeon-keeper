@@ -376,7 +376,9 @@ Same commit, not a follow-up.
 - [ ] `python scripts/gate.py` on **main**, once a batch of merges is complete —
       this is where the deferred runs are paid, and where a clean merge between
       two parallel sessions is caught leaving main red. One run covers every
-      branch merged since the last one; it is not a per-ship step.
+      branch merged since the last one; it is not a per-ship step. A green run
+      moves the local `last-full-gate` tag; teardown prints how many commits
+      main is past it, so a skipped run is visible rather than remembered.
 - [ ] Dashboard assets touched ⇒ `npx eslint` and `npx stylelint`, the exact
       commands the blocking CI job runs.
 - [ ] Full suite green before a **push to origin** — CI on that push satisfies
