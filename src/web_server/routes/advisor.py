@@ -275,6 +275,7 @@ class AdvisorConfigBody(BaseModel):
     model: str
     staff_model: str
     server_context: bool
+    config_tools: bool
 
 
 @router.get("/config/advisor")
@@ -288,6 +289,7 @@ async def get_advisor_config(
         get_advisor_context_enabled,
         get_advisor_model,
         get_advisor_staff_model,
+        get_advisor_tools_enabled,
     )
     from bot_modules.services.branding_service import resolve_assistant_name_conn
 
@@ -299,6 +301,7 @@ async def get_advisor_config(
                 "model": get_advisor_model(conn, guild_id),
                 "staff_model": get_advisor_staff_model(conn, guild_id),
                 "server_context": get_advisor_context_enabled(conn, guild_id),
+                "config_tools": get_advisor_tools_enabled(conn, guild_id),
                 # Read-only here — the name is edited on the Branding panel.
                 "assistant_name": resolve_assistant_name_conn(conn, guild_id),
             }
@@ -318,6 +321,7 @@ async def put_advisor_config(
         set_advisor_context_enabled,
         set_advisor_model,
         set_advisor_staff_model,
+        set_advisor_tools_enabled,
     )
 
     ctx = get_ctx(request)
@@ -327,6 +331,7 @@ async def put_advisor_config(
             set_advisor_model(conn, body.model, guild_id)
             set_advisor_staff_model(conn, body.staff_model, guild_id)
             set_advisor_context_enabled(conn, body.server_context, guild_id)
+            set_advisor_tools_enabled(conn, body.config_tools, guild_id)
 
     try:
         await run_query(_q)

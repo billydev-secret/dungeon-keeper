@@ -207,8 +207,20 @@ async def test_chat_routes_to_remote_and_strips_whitespace(monkeypatch, fake_htt
 
 
 @pytest.mark.asyncio
-async def test_caller_model_arg_is_never_forwarded(monkeypatch, fake_httpx):
-    """A hosted model ID left in the DB must not reach the wire."""
+async def test_no_caller_can_choose_the_model(monkeypatch, fake_httpx):
+    """There is no model argument at all, and the wire always asks for 'local'.
+
+    chat() used to accept a model name and silently drop it, which is what let
+    the dashboard ship eight model dropdowns that changed nothing. Taking the
+    argument away is what keeps a hosted model ID (left in a config row by an
+    abandoned cloud switch) from ever reaching the wire.
+    """
+    import inspect
+
+    assert "model" not in inspect.signature(ollama_client.chat).parameters
+    with pytest.raises(TypeError):
+        ollama_client.chat(model="claude-sonnet-4-6", system="S", user_content="U")
+
     monkeypatch.setenv("LLAMA_SERVER_URL", "http://192.168.1.20:8080")
     monkeypatch.setattr(ollama_client, "_phase", "ready")
 
@@ -217,9 +229,7 @@ async def test_caller_model_arg_is_never_forwarded(monkeypatch, fake_httpx):
     event.set()
     monkeypatch.setattr(ollama_client, "_ready_event", event)
 
-    await ollama_client.chat(
-        model="claude-sonnet-4-6", system="SYS", user_content="USER"
-    )
+    await ollama_client.chat(system="SYS", user_content="USER")
 
     assert fake_httpx.captured["json"]["model"] == "local"
     assert "claude" not in json.dumps(fake_httpx.captured["json"])

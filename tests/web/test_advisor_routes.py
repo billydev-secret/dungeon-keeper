@@ -91,6 +91,8 @@ def test_advisor_config_defaults_to_tiered_models(open_client):
     assert body["model"] == "claude-haiku-4-5"
     assert body["staff_model"] == "claude-sonnet-5"
     assert body["server_context"] is False
+    # On-demand settings lookup is the default, and the panel now shows it.
+    assert body["config_tools"] is True
     assert {m["id"] for m in body["models"]} >= {body["model"], body["staff_model"]}
 
 
@@ -101,6 +103,7 @@ def test_advisor_config_roundtrip(open_client):
             "model": "claude-sonnet-5",
             "staff_model": "claude-opus-4-8",
             "server_context": True,
+            "config_tools": False,
         },
     )
     assert r.status_code == 200, r.text
@@ -108,12 +111,41 @@ def test_advisor_config_roundtrip(open_client):
     assert body["model"] == "claude-sonnet-5"
     assert body["staff_model"] == "claude-opus-4-8"
     assert body["server_context"] is True
+    assert body["config_tools"] is False
+
+
+def test_advisor_config_tools_toggle_reaches_the_enforcing_reader(open_client, fake_ctx):
+    """The panel had no control for this at all, so the only ways to turn the
+    settings-lookup tools off were a raw DB write or asking the assistant to do
+    it from Discord. Both ask surfaces gate on this reader."""
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.advisor_service import get_advisor_tools_enabled
+
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_advisor_tools_enabled(conn, fake_ctx.guild_id) is True
+
+    payload = {
+        "model": "claude-haiku-4-5",
+        "staff_model": "claude-sonnet-5",
+        "server_context": True,
+        "config_tools": False,
+    }
+    assert open_client.put("/api/config/advisor", json=payload).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_advisor_tools_enabled(conn, fake_ctx.guild_id) is False
+
+    payload["config_tools"] = True
+    assert open_client.put("/api/config/advisor", json=payload).status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_advisor_tools_enabled(conn, fake_ctx.guild_id) is True
 
 
 def test_advisor_config_rejects_an_unknown_model_on_either_tier(open_client):
     for payload in (
-        {"model": "gpt-9", "staff_model": "claude-sonnet-5", "server_context": False},
-        {"model": "claude-haiku-4-5", "staff_model": "nope", "server_context": False},
+        {"model": "gpt-9", "staff_model": "claude-sonnet-5",
+         "server_context": False, "config_tools": True},
+        {"model": "claude-haiku-4-5", "staff_model": "nope",
+         "server_context": False, "config_tools": True},
     ):
         assert open_client.put("/api/config/advisor", json=payload).status_code == 400
 
@@ -121,7 +153,8 @@ def test_advisor_config_rejects_an_unknown_model_on_either_tier(open_client):
 def test_advisor_config_requires_both_models(open_client):
     r = open_client.put(
         "/api/config/advisor",
-        json={"model": "claude-haiku-4-5", "server_context": False},
+        json={"model": "claude-haiku-4-5", "server_context": False,
+              "config_tools": True},
     )
     assert r.status_code == 422
 

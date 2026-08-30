@@ -434,8 +434,10 @@ function rebuildIndex() {
   });
 
   // Config is per-guild. For a non-primary guild, show every Config page except
-  // those marked `primaryOnly` (genuinely-global settings like the AI models,
-  // which live under guild_id=0 and apply bot-wide).
+  // those marked `primaryOnly` (genuinely-global settings like the AI model
+  // source and its prompts, which are stored under guild_id=0 and apply
+  // bot-wide — the routes behind such a page must write there too, or the
+  // guilds this hides the page from silently run something nobody can see).
   if (isNonPrimaryGuild) {
     const dropPrimaryOnly = (items) => (items || []).filter((it) => !it.primaryOnly);
     visibleSections = visibleSections.map((sec) =>

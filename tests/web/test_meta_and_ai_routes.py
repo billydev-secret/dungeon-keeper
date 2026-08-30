@@ -454,57 +454,26 @@ def test_get_ai_config_returns_expected_sections(authed_client):
     assert resp.status_code == 200
     body = resp.json()
     assert "llm_status" in body
-    assert "known_models" in body
     assert "prompts" in body
+    # One model is loaded at a time, chosen by the model-source fields — the
+    # panel offers no per-command model choice, so the payload carries none.
+    assert "known_models" not in body
+    assert "mod_model" not in body
+    assert all("model" not in p for p in body["prompts"])
     # Every known prompt key must appear in the response
     expected_keys = {p.key for p in list_prompts()}
     actual_keys = {p["key"] for p in body["prompts"]}
     assert actual_keys == expected_keys
 
 
-def test_ai_config_round_trip_via_dashboard(authed_client, fake_ctx):
-    """End-to-end regression: dashboard PUT then dashboard GET should reflect
-    the change. Before the guild_id fix, PUT wrote to guild_id=N and GET
-    read from guild_id=0, so the response always showed the default.
-    """
-    new_model = "test-model-xyz"
-    authed_client.put(
-        "/api/config/ai/models",
-        json={"mod_model": new_model, "wellness_model": new_model},
-    )
-
-    # GET the config back through the dashboard route — the user's view.
-    from unittest.mock import patch
-    with patch(
-        "bot_modules.services.ollama_client.status",
-        return_value={"available": False, "model": None},
-    ):
-        body = authed_client.get("/api/config/ai").json()
-
-    assert body["mod_model"] == new_model
-    assert body["wellness_model"] == new_model
-
-
-def test_put_ai_models_persists_choice(authed_client, fake_ctx):
-    """PUT writes at the active guild_id; GET reads at the same guild_id —
-    full round-trip works. This regression-tests the fix for the old
-    asymmetry where writes went to the active guild_id but reads always
-    used guild_id=0, so dashboard edits silently disappeared."""
-    resp = authed_client.put(
-        "/api/config/ai/models",
-        json={"mod_model": "qwen-7b", "wellness_model": "qwen-7b"},
-    )
-    assert resp.status_code == 200
-
-    from bot_modules.services.ai_config import get_mod_model, get_wellness_model
-    with open_db(fake_ctx.db_path) as conn:
-        assert get_mod_model(conn, fake_ctx.guild_id) == "qwen-7b"
-        assert get_wellness_model(conn, fake_ctx.guild_id) == "qwen-7b"
-
-
 def test_put_ai_prompt_persists_override(authed_client, fake_ctx):
-    """Full round-trip: PUT a prompt override, GET it back via the same
-    guild_id."""
+    """Full round-trip: PUT a prompt override, GET it back.
+
+    The panel is primary-guild-only and its prompts are bot-wide, so the row
+    lands at guild_id=0 — where the active guild and every other guild resolve
+    it through the legacy fallback. Writing it at the active guild's id (the old
+    behaviour) left a second guild with no editable surface at all.
+    """
     key = list_prompts()[0].key
     resp = authed_client.put(
         f"/api/config/ai/prompts/{key}", json={"text": "Custom prompt text"}
@@ -513,7 +482,46 @@ def test_put_ai_prompt_persists_override(authed_client, fake_ctx):
 
     from bot_modules.services.ai_config import get_prompt
     with open_db(fake_ctx.db_path) as conn:
+        assert get_prompt(conn, key, 0) == "Custom prompt text"
         assert get_prompt(conn, key, fake_ctx.guild_id) == "Custom prompt text"
+        # A guild that has no dashboard of its own reads the same text.
+        assert get_prompt(conn, key, 1476525656115515484) == "Custom prompt text"
+
+
+def test_restore_original_clears_a_legacy_guild_zero_override(authed_client, fake_ctx):
+    """The button used to put the *old override* back, not the default.
+
+    reset_prompt deleted only the active guild's row; prod's only row for this
+    key lived at guild_id=0, so get_prompt fell straight back onto it and the
+    Edited badge returned on the next load.
+    """
+    key = "ai_prompt_query_channel"
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.services.ai_config import get_prompt_with_source
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, key, "These are bulk messages.", 0)
+
+    assert authed_client.delete(f"/api/config/ai/prompts/{key}").status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        _, is_override = get_prompt_with_source(conn, key, fake_ctx.guild_id)
+    assert is_override is False
+
+
+def test_saving_clears_a_stale_guild_scoped_row(authed_client, fake_ctx):
+    """An override written by the old guild-scoped panel must not shadow."""
+    key = list_prompts()[0].key
+    from bot_modules.core.db_utils import set_config_value
+    from bot_modules.services.ai_config import get_prompt
+
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, key, "stale per-guild text", fake_ctx.guild_id)
+
+    authed_client.put(f"/api/config/ai/prompts/{key}", json={"text": "the new text"})
+
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_prompt(conn, key, fake_ctx.guild_id) == "the new text"
 
 
 def test_put_ai_prompt_rejects_unknown_key(authed_client):
@@ -526,7 +534,7 @@ def test_put_ai_prompt_rejects_unknown_key(authed_client):
 def test_delete_ai_prompt_clears_override(authed_client, fake_ctx):
     key = list_prompts()[0].key
 
-    # Seed an override and verify the same-guild round-trip works.
+    # Seed an override and verify the round-trip works.
     authed_client.put(f"/api/config/ai/prompts/{key}", json={"text": "custom"})
     from bot_modules.services.ai_config import get_prompt_with_source
     with open_db(fake_ctx.db_path) as conn:
@@ -544,21 +552,6 @@ def test_delete_ai_prompt_clears_override(authed_client, fake_ctx):
 def test_delete_ai_prompt_unknown_key_returns_404(authed_client):
     resp = authed_client.delete("/api/config/ai/prompts/does_not_exist")
     assert resp.status_code == 404
-
-
-def test_put_ai_prompt_model_persists(authed_client, fake_ctx):
-    # Pick a prompt whose info.model_key is set (only some prompts support
-    # per-command model overrides).
-    key = next(p.key for p in list_prompts() if p.model_key)
-
-    resp = authed_client.put(
-        f"/api/config/ai/prompts/{key}/model", json={"model": "qwen-13b"}
-    )
-    assert resp.status_code == 200
-
-    from bot_modules.services.ai_config import get_command_model
-    with open_db(fake_ctx.db_path) as conn:
-        assert get_command_model(conn, key, fake_ctx.guild_id) == "qwen-13b"
 
 
 def test_test_ai_prompt_returns_503_when_llm_unavailable(authed_client):

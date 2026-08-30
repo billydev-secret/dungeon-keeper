@@ -156,6 +156,13 @@ ordering is part of the behaviour. Guarded by
 `test_every_db_backed_tool_runs_off_the_event_loop` (service) and
 `test_advisor_config_tools_run_off_the_event_loop` (route wiring).
 
+The loop is gated per guild by `advisor_config_tools` (default on), which both
+ask surfaces read. Off, an admin asker gets the older inline settings dump
+instead. It is a checkbox on the AI Assistant panel ("Let … look up settings
+when an admin asks") — before that it had no dashboard control at all, so the
+only ways to flip it were a raw DB write or the assistant's own Discord
+Apply flow via its `settings_registry` entry.
+
 ## Follow-ups (not yet built)
 
 - **Token streaming** on the dashboard via the `logs.py` SSE precedent
