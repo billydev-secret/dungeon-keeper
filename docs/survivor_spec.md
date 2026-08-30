@@ -283,12 +283,21 @@ CREATE TABLE nfl_games (
 | `missed_pick` | `auto_assign` | `auto_assign` \| `eliminate` |
 | `max_auto_assigns` | 3 | Per season; 4th = elimination |
 | `double_pick_start_week` | 14 | 0 = never |
-| `double_pick_min_alive` | 5 | Only escalates if ≥ this many alive |
-| `wipeout_annul_through_week` | 13 | After: equal split |
-| `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living |
+| `double_pick_min_alive` | 5 | Only escalates if ≥ this many alive. **Not a stored setting yet** — see below |
+| `wipeout_annul_through_week` | 13 | After: equal split. **Not a stored setting yet** — see below |
+| `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living. **Not a stored setting yet** — see below |
 | `ghost_streak` | on | Side-pot % of main pot + DOA fees |
 | `slate_hour`, `lastcall_hour`, `reckoning_hour` | Wed 9 / Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours`. `slate_hour` added 2026-08-17 — §2.3 schedules three tasks; the table only had hours for two |
 | `channel_id`, `role_survivor_id`, `role_ghost_id`, `role_sole_survivor_id` | 0 (unset) | Wiring, not rules — the #survivor channel and the three managed roles (§3.3). Added at stage 1; 0 degrades that step to skipped-and-logged, never a crash |
+
+**Tier 2 dials are not stored yet** *(2026-08-29)*: `double_pick_min_alive`,
+`wipeout_annul_through_week` and `accord_max_alive` were defined in
+`DEFAULT_CONFIG` and rendered on the panel before anything read them, so an
+admin could set a season rule the bot never played by. They were removed from
+the defaults, the validator and the panel; `validate_config` now rejects them
+outright. The values above stay as the intended defaults — they come back, key
+and dial together, in the same change that ships the rule that enforces them
+(§1.5 double-pick escalation, §1.6 wipeout/annul and the Accord).
 
 ### 5.1 The seed is a faucet — say so out loud
 

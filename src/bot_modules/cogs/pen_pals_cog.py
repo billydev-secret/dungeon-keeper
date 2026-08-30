@@ -6,10 +6,9 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
-from zoneinfo import ZoneInfo
 
 import discord
 from discord import app_commands
@@ -18,7 +17,7 @@ from discord.ext import commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.games.utils.question_source import _pick_least_recently_served
 from bot_modules.services.no_contact_service import is_no_contact_conn
 
@@ -49,21 +48,24 @@ DEFAULT_ROOM_VISIBILITY = ROOM_VIS_MODS
 # ── Match mode ───────────────────────────────────────────────────────────────
 # 'instant' (default): pair the moment someone joins if a partner is waiting,
 # with the background sweep only mopping up stragglers. 'scheduled': never
-# match on join — everyone queues, and the whole pool is drawn once a day at
-# _SCHEDULED_MATCH_HOUR in _SCHEDULED_MATCH_TZ. Stored on
-# pen_pals_config.match_mode (migration 128).
+# match on join — everyone queues, and the whole pool is drawn on the day and
+# at the hour the dashboard sets, in the guild's own time (`tz_offset_hours`).
+# Stored on pen_pals_config.match_mode (migration 128) plus the auto_round_dow
+# / auto_round_hour columns (migration 048), which went unread until 2026-08-29
+# — the round used to fire at a hard-coded 8am Eastern for every server.
 MATCH_MODE_INSTANT = "instant"
 MATCH_MODE_SCHEDULED = "scheduled"
 MATCH_MODES = (MATCH_MODE_INSTANT, MATCH_MODE_SCHEDULED)
 DEFAULT_MATCH_MODE = MATCH_MODE_INSTANT
-_SCHEDULED_MATCH_TZ = ZoneInfo("America/New_York")
-_SCHEDULED_MATCH_HOUR = 8  # 8am Eastern, DST-aware via ZoneInfo
+DEFAULT_ROUND_HOUR = 12   # matches pen_pals_config.auto_round_hour's schema default
+DEFAULT_ROUND_DOW = -1    # -1 = every day; 0-6 = Monday-Sunday only
+_DOW_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
+              "Saturday", "Sunday")
 
 _QUEUED_MSG_INSTANT = (
     "✅ You're in the pool! The moment someone else joins, "
     "your private channel opens automatically."
 )
-_QUEUED_MSG_SCHEDULED = "✅ You're in the pool! Matches go out once a day at 8:00 AM Eastern."
 
 # Last sweep outcome logged per guild — ("idle", eligible) or ("swept", pairs,
 # left) — so a pool in a steady state says so once rather than every five
@@ -137,18 +139,23 @@ def _set_config(
     room_visibility: str = DEFAULT_ROOM_VISIBILITY,
     intro_message: str = "",
     match_mode: str = DEFAULT_MATCH_MODE,
+    auto_round_dow: int = DEFAULT_ROUND_DOW,
+    auto_round_hour: int = DEFAULT_ROUND_HOUR,
 ) -> None:
     conn.execute("INSERT OR IGNORE INTO pen_pals_config (guild_id) VALUES (?)", (guild_id,))
     conn.execute(
         """UPDATE pen_pals_config
            SET enabled=?, category_id=?, opt_in_role_id=?, question_category=?,
                log_channel_id=?, panel_channel_id=?, room_visibility=?, intro_message=?,
-               match_mode=?
+               match_mode=?, auto_round_dow=?, auto_round_hour=?
            WHERE guild_id=?""",
         (int(enabled), category_id, opt_in_role_id, question_category,
          log_channel_id, panel_channel_id,
          _normalize_room_visibility(room_visibility), intro_message,
-         _normalize_match_mode(match_mode), guild_id),
+         _normalize_match_mode(match_mode),
+         auto_round_dow if -1 <= auto_round_dow <= 6 else DEFAULT_ROUND_DOW,
+         auto_round_hour if 0 <= auto_round_hour <= 23 else DEFAULT_ROUND_HOUR,
+         guild_id),
     )
 
 
@@ -875,21 +882,70 @@ def _update_last_sweep(conn, guild_id: int) -> None:
     )
 
 
-def _scheduled_round_due(cfg, now: float) -> bool:
-    """True once per day: it's past _SCHEDULED_MATCH_HOUR local time and
-    today's round hasn't run yet.
+def _cfg_int(cfg, key: str, default: int) -> int:
+    """One int off a config row (or a plain dict, as the tests pass), tolerating
+    a missing column and a NULL."""
+    if key not in cfg.keys():
+        return default
+    value = cfg[key]
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
-    Compares local dates (not a 24h interval) so a bot restart after 8am
-    catches up immediately instead of waiting a full day, and so the round
-    never fires twice in the same local day even if the tick interval drifts.
+
+def _round_hour(cfg) -> int:
+    hour = _cfg_int(cfg, "auto_round_hour", DEFAULT_ROUND_HOUR)
+    return hour if 0 <= hour <= 23 else DEFAULT_ROUND_HOUR
+
+
+def _round_dow(cfg) -> int:
+    dow = _cfg_int(cfg, "auto_round_dow", DEFAULT_ROUND_DOW)
+    return dow if -1 <= dow <= 6 else DEFAULT_ROUND_DOW
+
+
+def _round_time_label(cfg) -> str:
+    """How the round's timing reads to a member — "12:00 PM server time", or
+    "Thursdays at 8:00 AM server time" when it's pinned to one weekday."""
+    hour = _round_hour(cfg)
+    clock = f"{hour % 12 or 12}:00 {'AM' if hour < 12 else 'PM'} server time"
+    dow = _round_dow(cfg)
+    return clock if dow < 0 else f"{_DOW_NAMES[dow]}s at {clock}"
+
+
+def _queued_msg_scheduled(cfg) -> str:
+    every = "once a day at" if _round_dow(cfg) < 0 else "on"
+    return f"✅ You're in the pool! Matches go out {every} {_round_time_label(cfg)}."
+
+
+def _scheduled_round_due(cfg, now: float, tz_offset_hours: float = 0.0) -> bool:
+    """True once per scheduled day: it's past the configured hour in the guild's
+    own time and that day's round hasn't run yet.
+
+    The hour and the day come from ``auto_round_hour`` / ``auto_round_dow``, and
+    "local" means the guild's ``tz_offset_hours`` — the same offset birthdays,
+    reports and Survivor honour. Compares local dates (not a 24h interval) so a
+    restart after the hour catches up immediately instead of waiting a full day,
+    and so the round never fires twice in the same local day even if the tick
+    interval drifts.
     """
-    local_now = datetime.fromtimestamp(now, tz=_SCHEDULED_MATCH_TZ)
-    if local_now.hour < _SCHEDULED_MATCH_HOUR:
+    local_now = datetime.fromtimestamp(now, tz=timezone.utc) + timedelta(
+        hours=tz_offset_hours
+    )
+    dow = _round_dow(cfg)
+    if dow >= 0 and local_now.weekday() != dow:
+        return False
+    if local_now.hour < _round_hour(cfg):
         return False
     last_at = cfg["last_auto_round_at"] or 0
     if not last_at:
         return True
-    last_local_date = datetime.fromtimestamp(last_at, tz=_SCHEDULED_MATCH_TZ).date()
+    last_local_date = (
+        datetime.fromtimestamp(last_at, tz=timezone.utc)
+        + timedelta(hours=tz_offset_hours)
+    ).date()
     return last_local_date != local_now.date()
 
 
@@ -994,6 +1050,21 @@ async def _create_channel(
     )
 
 
+def _intro_commands_value(max_swaps: int) -> str:
+    """The intro embed's Commands field, quoting the guild's real swap cap.
+
+    The cap is a dashboard dial and is enforced on every swap, so the pinned
+    copy has to follow it — a fixed "(3 max)" told a pair the wrong number the
+    moment an admin moved it. At 0 there are no swaps, so the line goes away
+    rather than advertising a command that always refuses.
+    """
+    lines = []
+    if max_swaps > 0:
+        lines.append(f"`/penpals new-question` — swap the prompt ({max_swaps} max)")
+    lines.append("`/penpals end` — leave this chat early")
+    return "\n".join(lines)
+
+
 async def _post_intro(
     channel: discord.TextChannel,
     user1: discord.Member,
@@ -1003,6 +1074,7 @@ async def _post_intro(
     color: "discord.Color | None" = None,
     visibility: str = DEFAULT_ROOM_VISIBILITY,
     intro_message: str = "",
+    max_swaps: int = _MAX_SWAPS,
 ) -> None:
     if color is None:
         color = discord.Color.blurple()
@@ -1021,10 +1093,7 @@ async def _post_intro(
     )
     embed.add_field(
         name="Commands",
-        value=(
-            "`/penpals new-question` — swap the prompt (3 max)\n"
-            "`/penpals end` — leave this chat early"
-        ),
+        value=_intro_commands_value(max_swaps),
         inline=False,
     )
     embed.set_footer(text=_room_footer_text(visibility))
@@ -1157,6 +1226,8 @@ async def _do_pair(
             channel, user1, user2, expiry_at, question,
             color=accent, visibility=visibility,
             intro_message=cfg["intro_message"] if "intro_message" in cfg.keys() else "",
+            max_swaps=int(cfg["max_question_swaps"]) if "max_question_swaps" in cfg.keys()
+            else _MAX_SWAPS,
         )
     except discord.HTTPException as exc:
         log.error("pen_pals: failed to post intro in channel %d: %s", channel.id, exc)
@@ -1527,9 +1598,15 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
             auto_cfgs = conn.execute(
                 "SELECT * FROM pen_pals_config WHERE enabled = 1"
             ).fetchall()
-            return sessions, configs, list(auto_cfgs)
+            # Scheduled rounds fire on the guild's clock, so the offset is read
+            # here alongside the configs rather than per guild inside the loop.
+            offsets = {
+                int(c["guild_id"]): get_tz_offset_hours(conn, int(c["guild_id"]))
+                for c in auto_cfgs
+            }
+            return sessions, configs, list(auto_cfgs), offsets
 
-    sessions, configs, auto_cfgs = await asyncio.to_thread(_load_all)
+    sessions, configs, auto_cfgs, tz_offsets = await asyncio.to_thread(_load_all)
     now = time.time()
 
     for row in sessions:
@@ -1687,12 +1764,12 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
         mode = _normalize_match_mode(cfg["match_mode"] if "match_mode" in cfg.keys() else None)
 
         if mode == MATCH_MODE_SCHEDULED:
-            if not _scheduled_round_due(cfg, now):
+            if not _scheduled_round_due(cfg, now, tz_offsets.get(guild_id, 0.0)):
                 continue
             pairs, left = await _do_round(bot, db_path, guild_id)
             log.info(
-                "pen_pals: scheduled 8am ET round for guild %d — %d pairs, %d left over",
-                guild_id, pairs, left,
+                "pen_pals: scheduled round (%s) for guild %d — %d pairs, %d left over",
+                _round_time_label(cfg), guild_id, pairs, left,
             )
             continue
 
@@ -1743,12 +1820,16 @@ async def _tick(bot: discord.Client, db_path: Path) -> None:
 
 
 def _build_panel_embed(
-    pool_size: int, color: "discord.Color | None" = None, mode: str = DEFAULT_MATCH_MODE
+    pool_size: int,
+    color: "discord.Color | None" = None,
+    mode: str = DEFAULT_MATCH_MODE,
+    schedule_label: str = "",
 ) -> discord.Embed:
     if color is None:
         color = discord.Color.from_str("#5865F2")
+    when = schedule_label or _round_time_label({})
     match_line = (
-        "Matches go out once a day at 8:00 AM Eastern — "
+        f"Matches go out at {when} — "
         "join any time before then to be in the next round."
         if _normalize_match_mode(mode) == MATCH_MODE_SCHEDULED else
         "If someone's already waiting you're matched on the spot — "
@@ -1918,7 +1999,10 @@ async def _handle_join(
         return
 
     if partner_id is None:
-        await interaction.response.send_message(_QUEUED_MSG_SCHEDULED if scheduled else _QUEUED_MSG_INSTANT, ephemeral=True)
+        await interaction.response.send_message(
+            _queued_msg_scheduled(cfg) if scheduled else _QUEUED_MSG_INSTANT,
+            ephemeral=True,
+        )
         await _refresh_panel(interaction.client, guild_id)
         return
 
@@ -2407,7 +2491,10 @@ class PenPalsCog(commands.Cog):
             cfg["match_mode"] if cfg is not None and "match_mode" in cfg.keys() else None
         )
         return PanelContent(
-            embed=_build_panel_embed(pool_size, color=accent, mode=mode),
+            embed=_build_panel_embed(
+                pool_size, color=accent, mode=mode,
+                schedule_label=_round_time_label(cfg if cfg is not None else {}),
+            ),
             view=_build_panel_view(),
         )
 
@@ -2575,7 +2662,8 @@ class PenPalsCog(commands.Cog):
                     mode = _normalize_match_mode(
                         cfg["match_mode"] if cfg and "match_mode" in cfg.keys() else None
                     )
-                    return "pool", (pool.index(user_id) + 1, mode), paused_at
+                    label = _round_time_label(cfg if cfg is not None else {})
+                    return "pool", (pool.index(user_id) + 1, mode, label), paused_at
                 return "none", None, paused_at
 
         status, data, paused_at = await asyncio.to_thread(_check)
@@ -2603,9 +2691,9 @@ class PenPalsCog(commands.Cog):
                 )
             await interaction.response.send_message("\n".join(lines), ephemeral=True)
         elif status == "pool":
-            pos, mode = cast("tuple[int, str]", data)
+            pos, mode, schedule_label = cast("tuple[int, str, str]", data)
             when = (
-                "in the next daily round, at 8:00 AM Eastern"
+                f"in the next round, at {schedule_label}"
                 if mode == MATCH_MODE_SCHEDULED
                 else "as soon as someone eligible joins"
             )

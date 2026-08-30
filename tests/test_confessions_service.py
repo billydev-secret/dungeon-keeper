@@ -313,3 +313,32 @@ def test_retention_off_keeps_confessions_forever(sync_db_path: Path):
 
     with open_db(sync_db_path) as conn:
         assert len(list_events(conn, guild_id, feature=FEATURE_CONFESSIONS)) == 1
+
+
+# ── config round-trip ──────────────────────────────────────────────────
+
+
+def test_config_round_trips_without_an_attachment_dial(sync_db_path: Path):
+    """Confessions are submitted through a Discord modal, which has no
+    attachment path at all — so there is no attachment cap to store. The
+    column survives on live servers; nothing loads or writes it, and the
+    upsert still round-trips every setting that is real."""
+    from bot_modules.services import confessions_service as cs
+
+    assert not hasattr(cs.GuildConfig, "max_attachments")
+    with open_db(sync_db_path) as conn:
+        cs._create_tables(conn)
+    cs.upsert_config(
+        sync_db_path,
+        cs.GuildConfig(
+            guild_id=77, dest_channel_id=11, log_channel_id=22,
+            cooldown_seconds=90, max_chars=500, per_day_limit=3,
+            replies_enabled=False, blocked_user_ids=[5],
+        ),
+    )
+    loaded = cs.get_config(sync_db_path, 77)
+    assert loaded is not None
+    assert (loaded.cooldown_seconds, loaded.max_chars, loaded.per_day_limit) == (90, 500, 3)
+    assert loaded.replies_enabled is False
+    assert loaded.blocked_set() == {5}
+    assert not hasattr(loaded, "max_attachments")

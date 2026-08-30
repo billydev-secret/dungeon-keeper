@@ -20,7 +20,6 @@ from bot_modules.core.utils import jump_url as jump_link
 
 DEFAULT_COOLDOWN_SECONDS = 120
 DEFAULT_MAX_CHARS = 2000
-DEFAULT_MAX_ATTACHMENTS = 4
 THREAD_METADATA_TTL_SECONDS = 7 * 24 * 60 * 60
 MIN_REPLY_COOLDOWN_SECONDS = 30
 CONFESSION_HEADER_LENGTH = 2
@@ -212,7 +211,6 @@ class GuildConfig:
     log_channel_id: int
     cooldown_seconds: int = DEFAULT_COOLDOWN_SECONDS
     max_chars: int = DEFAULT_MAX_CHARS
-    max_attachments: int = DEFAULT_MAX_ATTACHMENTS
     panic: bool = False
     replies_enabled: bool = True
     notify_op_on_reply: bool = False
@@ -238,6 +236,9 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             log_channel_id INTEGER NOT NULL DEFAULT 0,
             cooldown_seconds INTEGER NOT NULL DEFAULT 120,
             max_chars INTEGER NOT NULL DEFAULT 2000,
+            -- Legacy column, kept so a fresh DB matches live servers'. Nothing
+            -- reads or writes it: confessions are submitted through a Discord
+            -- modal, which has no attachment path at all.
             max_attachments INTEGER NOT NULL DEFAULT 4,
             panic INTEGER NOT NULL DEFAULT 0,
             replies_enabled INTEGER NOT NULL DEFAULT 1,
@@ -305,7 +306,6 @@ def _row_to_guild_config(row) -> GuildConfig:
         log_channel_id=row["log_channel_id"],
         cooldown_seconds=row["cooldown_seconds"],
         max_chars=row["max_chars"],
-        max_attachments=row["max_attachments"],
         panic=bool(row["panic"]),
         replies_enabled=bool(row["replies_enabled"]),
         notify_op_on_reply=bool(row["notify_op_on_reply"]),
@@ -337,15 +337,14 @@ def upsert_config(db_path: Path, cfg: GuildConfig) -> None:
         conn.execute("""
             INSERT INTO confession_config (
                 guild_id, dest_channel_id, log_channel_id, cooldown_seconds,
-                max_chars, max_attachments, panic, replies_enabled, notify_op_on_reply,
+                max_chars, panic, replies_enabled, notify_op_on_reply,
                 per_day_limit, launcher_channel_id, launcher_message_id, blocked_user_ids
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(guild_id) DO UPDATE SET
                 dest_channel_id=excluded.dest_channel_id,
                 log_channel_id=excluded.log_channel_id,
                 cooldown_seconds=excluded.cooldown_seconds,
                 max_chars=excluded.max_chars,
-                max_attachments=excluded.max_attachments,
                 panic=excluded.panic,
                 replies_enabled=excluded.replies_enabled,
                 notify_op_on_reply=excluded.notify_op_on_reply,
@@ -355,7 +354,7 @@ def upsert_config(db_path: Path, cfg: GuildConfig) -> None:
                 blocked_user_ids=excluded.blocked_user_ids
         """, (
             cfg.guild_id, cfg.dest_channel_id, cfg.log_channel_id,
-            cfg.cooldown_seconds, cfg.max_chars, cfg.max_attachments,
+            cfg.cooldown_seconds, cfg.max_chars,
             int(cfg.panic), int(cfg.replies_enabled), int(cfg.notify_op_on_reply),
             cfg.per_day_limit, cfg.launcher_channel_id, cfg.launcher_message_id,
             json.dumps(cfg.blocked_user_ids or []),

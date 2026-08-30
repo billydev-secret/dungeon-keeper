@@ -19,6 +19,10 @@ class WhisperConfig:
     launcher_message_id: int = 0
     cooldown_seconds: int = 30
     hourly_cap_per_target: int = 5
+    # How many guesses the recipient gets to unmask the sender. The schema
+    # seeds whispers.guesses_left from this; it is fixed for the life of a
+    # whisper, so changing it only affects ones sent afterwards.
+    guesses_per_whisper: int = 3
 
 
 @dataclass

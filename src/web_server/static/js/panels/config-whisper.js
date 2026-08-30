@@ -59,6 +59,19 @@ export function mount(container) {
           </div>
 
           <div class="card">
+            <div class="section-label">The Game</div>
+            <div class="field">
+              <label for="wh-guesses">Guesses Per Whisper</label>
+              <input type="number" name="guesses_per_whisper" id="wh-guesses" required
+                min="1" max="10" step="1" value="${w.guesses_per_whisper ?? 3}"
+                style="max-width:140px;" />
+              <div class="field-hint">How many tries the recipient gets to name the
+                sender before the whisper stays anonymous forever. Applies to whispers
+                sent after you save — ones already out keep the number they promised.</div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="section-label">Rate Limits</div>
             <div class="field">
               <label for="wh-cooldown">Wait Between Whispers (seconds)</label>
@@ -123,6 +136,13 @@ export function mount(container) {
         return;
       }
 
+      const guesses = parseInt(fd.get("guesses_per_whisper"), 10);
+      if (!Number.isFinite(guesses) || guesses < 1 || guesses > 10) {
+        showStatus(status, false, "Guesses Per Whisper must be a number from 1 to 10");
+        form.querySelector("[name=guesses_per_whisper]").focus();
+        return;
+      }
+
       try {
         await apiPut("/api/config/whisper", {
           // Ids stay strings, same values the plain selects posted.
@@ -131,6 +151,7 @@ export function mount(container) {
           log_channel_id: logChannelPicker.getValue() || "0",
           cooldown_seconds: cooldown,
           hourly_cap_per_target: cap,
+          guesses_per_whisper: guesses,
         });
         showStatus(status, true);
       } catch (err) {

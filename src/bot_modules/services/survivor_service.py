@@ -36,9 +36,10 @@ DEFAULT_CONFIG: dict[str, object] = {
     "missed_pick": "auto_assign",   # auto_assign | eliminate
     "max_auto_assigns": 3,
     "double_pick_start_week": 14,   # 0 = never
-    "double_pick_min_alive": 5,
-    "wipeout_annul_through_week": 13,
-    "accord_max_alive": 6,
+    # No double_pick_min_alive / wipeout_annul_through_week / accord_max_alive
+    # here on purpose: the Tier 2 rules that would enforce them (spec §1.5,
+    # §1.6) are unbuilt, and a stored dial nothing reads is a silent no-op —
+    # they come back with the code that honours them.
     "ghost_streak": True,
     "slate_hour": 9,                # Wed, guild-local
     "lastcall_hour": 18,            # Sat
@@ -82,9 +83,6 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
     "strikes": (0, 2),
     "max_auto_assigns": (0, 18),
     "double_pick_start_week": (0, 18),
-    "double_pick_min_alive": (2, 1000),
-    "wipeout_annul_through_week": (0, 18),
-    "accord_max_alive": (2, 1000),
     "slate_hour": (0, 23),
     "lastcall_hour": (0, 23),
     "reckoning_hour": (0, 23),

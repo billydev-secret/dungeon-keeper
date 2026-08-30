@@ -83,6 +83,9 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 #                                  early-returns for any guild that already has
 #                                  grant_roles rows — i.e. every live guild.
 #   veil_*                       — Veil was renamed to Guess in migration 020
+#   guess_inactivity_ping_hours  — the Guess Who "nudge a quiet round" loop was
+#                                  never built; a value is stored on one live
+#                                  server and no code has ever read it
 _LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
     f"{grant}_{suffix}"
     for grant in ("nsfw", "denizen", "veteran")
@@ -92,6 +95,7 @@ _LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
 DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     "veil_role_id",
     "veil_channel_id",
+    "guess_inactivity_ping_hours",
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -419,8 +423,6 @@ FEATURES: tuple[Feature, ...] = (
             _role("guess_role_id", "Role pinged for new rounds"),
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
-            _num("guess_inactivity_ping_hours", "Hours of silence before a nudge",
-                 minimum=0, maximum=720),
         ),
     ),
     Feature(

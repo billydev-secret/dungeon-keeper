@@ -227,6 +227,14 @@ def test_the_whole_legacy_grant_config_block_is_documented_dead(key):
     assert key in sr.DEAD_KEYS
 
 
+def test_guess_inactivity_ping_hours_is_not_proposable():
+    """The Guess Who nudge loop it describes was never built, so the advisor
+    must not be able to propose (or gap-report) a value for it."""
+    assert sr.get_setting("guess_inactivity_ping_hours") is None
+    assert "guess_inactivity_ping_hours" in sr.DEAD_KEYS
+    assert "guess_inactivity_ping_hours" not in sr.writable_keys(is_admin=True)
+
+
 def test_check_registry_rejects_a_dead_key(monkeypatch):
     monkeypatch.setattr(sr, "FEATURES", (
         sr.Feature(slug="a", label="A", panel="p", blurb="b",
