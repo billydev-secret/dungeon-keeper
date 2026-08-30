@@ -223,9 +223,12 @@ _REGROUPED_ROUTE_IDS = [
     "config-games-quickdraw", "config-games-hotpotato",
     "config-games-hotpotatogroup", "config-games-chicken",
     "config-games-musicalchairs", "photo-challenge",
+    # ...and games-ama, moved here from Question Banks in 2026-08 when its bank
+    # UI came out: AMA questions come from members mid-round, never the bank.
+    "games-ama",
     # Games → Question Banks
     "games-wyr", "games-nhie", "games-mlt", "games-rushmore", "games-price",
-    "games-clapback", "games-ama", "games-ffa", "games-traditional",
+    "games-clapback", "games-ffa", "games-traditional",
     # → the new Social section
     "config-guess", "config-whisper", "pen-pals", "config-confessions",
 ]

@@ -25,6 +25,7 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "guess_submit_max_per_window": "5",
     "guess_submit_window_seconds": "3600",
     "guess_max_guesses_per_round": "5",
+    "guess_inactivity_ping_hours": "0",
 }
 
 
@@ -45,6 +46,7 @@ def get_guess_config(conn: sqlite3.Connection, guild_id: int) -> GuessConfig:
         submit_max_per_window=int(_get("guess_submit_max_per_window") or 5),
         submit_window_seconds=int(_get("guess_submit_window_seconds") or 3600),
         max_guesses_per_round=int(_get("guess_max_guesses_per_round") or 5),
+        inactivity_ping_hours=int(_get("guess_inactivity_ping_hours") or 0),
     )
 
 

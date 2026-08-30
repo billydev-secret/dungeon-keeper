@@ -493,6 +493,7 @@ def _guess_section(conn, guild_id: int) -> dict:
         "submit_max_per_window": gc.submit_max_per_window,
         "submit_window_seconds": gc.submit_window_seconds,
         "max_guesses_per_round": gc.max_guesses_per_round,
+        "inactivity_ping_hours": gc.inactivity_ping_hours,
     }
 
 
@@ -4341,6 +4342,7 @@ class GuessConfigUpdate(BaseModel):
     submit_max_per_window: int | None = None
     submit_window_seconds: int | None = None
     max_guesses_per_round: int | None = None
+    inactivity_ping_hours: int | None = None
 
 
 @router.put("/config/guess")
@@ -4397,6 +4399,8 @@ async def update_guess_config(
                 set_guess_config_value(conn, guild_id, "guess_submit_window_seconds", str(max(1, body.submit_window_seconds)))
             if body.max_guesses_per_round is not None:
                 set_guess_config_value(conn, guild_id, "guess_max_guesses_per_round", str(max(1, body.max_guesses_per_round)))
+            if body.inactivity_ping_hours is not None:
+                set_guess_config_value(conn, guild_id, "guess_inactivity_ping_hours", str(max(0, min(720, body.inactivity_ping_hours))))
         return {"ok": True}
 
     return await run_query(_q)

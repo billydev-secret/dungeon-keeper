@@ -1185,3 +1185,84 @@ def test_ll_template_from_another_guild_is_invisible_and_unowned(open_client, fa
     assert open_client.put(
         f"{BASE}/legitlibs/templates/4242/scope", json={"is_global": True}
     ).status_code == 404
+
+
+# ── Per-game enable toggle (/config/games/{game_type}) ──────────────────────
+
+
+def test_every_schedulable_game_is_settable_via_the_api():
+    """The scheduler's enable gate and the API must agree on every spelling.
+
+    ``_run_scheduled`` calls ``check_game_enabled`` with the schedule's game
+    type (mapped through SCHEDULE_BASE_GAME_TYPE for display variants), so any
+    type the scheduler can gate but the API rejects is an enable toggle nobody
+    can ever reach — the Risky Rolls / LegitLibs defect.
+    """
+    from bot_modules.games.constants import (
+        SCHEDULABLE_GAME_TYPES, SCHEDULE_BASE_GAME_TYPE,
+    )
+    from web_server.routes.games import ALL_GAME_TYPES
+
+    gated = {SCHEDULE_BASE_GAME_TYPE.get(gt, gt) for gt in SCHEDULABLE_GAME_TYPES}
+    assert not (gated - set(ALL_GAME_TYPES)), (
+        "scheduler gates these game types but no dashboard call can set them: "
+        f"{sorted(gated - set(ALL_GAME_TYPES))}"
+    )
+
+
+def test_all_game_types_are_real_game_types():
+    """Every settable type must be one the bot actually knows.
+
+    ``risky_roller`` was a key nothing anywhere read: settable, stored, and
+    invisible to every reader.
+    """
+    from bot_modules.games.constants import GAME_NAMES
+    from web_server.routes.games import ALL_GAME_TYPES
+
+    unknown = [gt for gt in ALL_GAME_TYPES if gt not in GAME_NAMES]
+    assert not unknown, f"settable game types nothing else knows: {unknown}"
+
+
+def test_risky_roll_enable_toggle_round_trips(open_client):
+    resp = open_client.put(f"{BASE}/config/games/risky_roll", json={"enabled": False})
+    assert resp.status_code == 200
+    assert open_client.get(f"{BASE}/config/games/risky_roll").json()["enabled"] is False
+
+
+def test_legitlibs_enable_toggle_round_trips(open_client):
+    resp = open_client.put(f"{BASE}/config/games/legitlibs", json={"enabled": False})
+    assert resp.status_code == 200
+    assert open_client.get(f"{BASE}/config/games/legitlibs").json()["enabled"] is False
+
+
+# ── AMA has no bank ─────────────────────────────────────────────────────────
+
+
+def test_bank_create_rejects_ama(open_client):
+    """AMA questions come from members mid-round; a stored one is never served."""
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "ama", "tags": [], "question_text": "Q?"},
+    )
+    assert resp.status_code == 400
+    assert "no question bank" in resp.json()["detail"]
+
+
+def test_bank_bulk_rejects_ama(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank/bulk", json={"game_type": "ama", "tags": [], "lines": ["Q?"]},
+    )
+    assert resp.status_code == 400
+
+
+def test_bank_import_still_round_trips_ama_rows(open_client):
+    """A full-bank export taken before the bank closed must still import.
+
+    ``ama`` stays in VALID_GAME_TYPES for exactly this: rejecting the row would
+    fail the whole import, not just that line.
+    """
+    resp = open_client.post(
+        f"{BASE}/bank/import",
+        json=[{"game_type": "ama", "question_text": "Legacy row", "tags": []}],
+    )
+    assert resp.status_code == 200 and resp.json()["imported"] == 1

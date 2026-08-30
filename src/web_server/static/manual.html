@@ -565,7 +565,7 @@
       <span class="callout-icon">💡</span>
       <div class="callout-body">
         <strong>Channel allowlist &amp; NSFW</strong>
-        <p>Games only run in channels an admin has allowlisted on the Games Config panel in the web dashboard. Spicier (NSFW) prompts are served only in channels marked age-restricted in Discord; every other channel stays SFW.</p>
+        <p><strong>Party games</strong> only run in channels an admin has allowlisted on the Games Config panel in the web dashboard. <strong>Duels and group elimination games</strong> (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) do not use that list &mdash; each has its own <em>Allowed Channels</em> box on its own panel, and leaving that box empty means the game runs in every channel on the server. Spicier (NSFW) prompts are served only in channels marked age-restricted in Discord; every other channel stays SFW.</p>
       </div>
     </div>
 
@@ -696,7 +696,7 @@
     <div class="cmd-block">
       <span class="cmd-name">/risky start</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels.</span>
+      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels, which also carry the <strong>Available on This Server</strong> switch — turn it off and both <code>/risky start</code> and any scheduled round are refused. <a href="/#/games-legitlibs">LegitLibs</a> has the same switch above its template list.</span>
       <div class="cmd-params">
         Both start commands take optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
       </div>
@@ -768,7 +768,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>The Games pages on the <a href="/#/games-logs">web dashboard</a></strong>
-        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
+        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game that draws from one &mdash; Anonymous AMA does not, since its questions come from members during the round), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
       </div>
     </div>
 
@@ -811,6 +811,7 @@
         <tr><td><code>/guess round round_id:&lt;n&gt;</code></td><td><span class="perm perm-mod">Mod — Manage Guild</span></td><td>Inspect a specific round: submitter, guesses, current state</td></tr>
         <tr><td><code>/guess delete round_id:&lt;n&gt;</code></td><td>Submitter or <span class="perm perm-mod">Mod</span></td><td>Remove a round you submitted, or any round if you're a mod</td></tr>
         <tr><td><strong>Config → Guess Who</strong> → Post Submit Prompt</td><td><span class="perm perm-admin">Admin</span></td><td>Re-post the persistent Submit / Help prompt at the bottom of the Guess channel. It always goes to the configured Guess channel, so there is no channel to pick</td></tr>
+        <tr><td><strong>Config → Guess Who</strong> → Nudge After Silence</td><td><span class="perm perm-admin">Admin</span></td><td>Hours a round may sit with nobody guessing before the bot pings the Guess role once, with a link back to the round. Each round is nudged at most once, however long it stays unsolved, and a solved, deleted or opted-out round is never nudged. 0 turns it off</td></tr>
       </tbody>
     </table>
     <p style="font-size:0.82rem;color:var(--muted)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a>. Any channel may be used — the bot does not require the age-restricted flag and does not check submissions against it, so mark the channel age-restricted in Discord if NSFW submissions are expected, and let your moderators police what gets posted where.</p>

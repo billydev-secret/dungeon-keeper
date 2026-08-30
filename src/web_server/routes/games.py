@@ -29,10 +29,15 @@ GLOBAL_POOL_TYPE = "global"
 # a bank round can serve each player a question in a category they opted into.
 TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 
+# Every game type whose enable toggle / options this API can read and write.
+# Spellings must match ``games.constants`` — the scheduler gates a run by
+# calling ``check_game_enabled`` with the *constants* name, so a type spelled
+# differently here is a toggle nobody can reach (and a stored key nothing
+# reads). Two tripwires in tests/web/test_games_routes.py hold the line.
 ALL_GAME_TYPES = [
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
     "traditional", "mfk", "compliment", "ffa", "photo", "ttl", "hottakes",
-    "story", "fantasies", "risky_roller",
+    "story", "fantasies", "risky_roll", "legitlibs",
 ]
 
 
@@ -128,11 +133,27 @@ def _norm_tags(raw) -> list[str]:
     return out
 
 
+#: Recognised for reading, export and import, but closed to new bank rows: no
+#: code path ever draws them. ``ama`` questions come from members during the
+#: round, so a curated AMA bank row can never be served. Kept out of
+#: ``_check_bank_type`` rather than out of ``VALID_GAME_TYPES`` so an existing
+#: full-bank export containing such a row still round-trips through import.
+BANK_READ_ONLY_GAME_TYPES = frozenset({"ama"})
+
+
 def _check_bank_type(game_type: str) -> None:
     """Reject unknown bank game_types. The global pool is a valid bank slot
     (so full-bank exports containing pool rows round-trip through import)."""
     if game_type not in VALID_GAME_TYPES and game_type != GLOBAL_POOL_TYPE:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {game_type}")
+    if game_type in BANK_READ_ONLY_GAME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{game_type} has no question bank — its questions come from "
+                "members during the round, so a stored one is never served."
+            ),
+        )
 
 
 def _pool_tags(game_type: str, tags: list[str]) -> list[str]:

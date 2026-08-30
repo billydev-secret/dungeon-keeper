@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.games.utils.game_manager import check_game_enabled
 from bot_modules.services.feature_roles import RISKY_PING
 from bot_modules.services.risky_roll import state as rr_state
 from bot_modules.services.risky_roll.formatters import (
@@ -45,6 +46,10 @@ class RiskyRollCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         super().__init__()
+
+    @property
+    def db(self):
+        return self.bot.games_db
 
     async def cog_load(self) -> None:
         rr_state.store = StateStore(self.bot.ctx.db_path)
@@ -171,6 +176,12 @@ class RiskyRollCog(commands.Cog):
         if interaction.guild is None or interaction.channel is None:
             await interaction.response.send_message(
                 "❌ This command can only be used in a server channel.", ephemeral=True
+            )
+            return
+
+        if not await check_game_enabled(self.db, "risky_roll", interaction.guild.id):
+            await interaction.response.send_message(
+                "Risky Rolls is currently disabled on this server.", ephemeral=True
             )
             return
 
