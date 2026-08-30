@@ -302,15 +302,35 @@ def test_games_audit_channel_hint_does_not_promise_a_game_log():
     assert "Anonymous submissions" in src
 
 
-def test_the_scheduler_only_toggles_are_labelled_as_such():
-    """Risky Rolls and LegitLibs store an enabled flag only the scheduler
-    reads — their own start commands never consult it — so the switch is
-    labelled for what it does rather than borrowing the games-wide
-    "Available on This Server"."""
-    for panel, game_type in (
-        ("config-risky-rolls.js", "risky_roll"),
-        ("games-legitlibs.js", "legitlibs"),
-    ):
-        src = (_PANELS / panel).read_text(encoding="utf-8")
-        assert f'gameType: "{game_type}"' in src, f"{panel}: no enable toggle"
+# panel file -> (game_type, the cog file owning that game's start command)
+_ENABLE_TOGGLE_PANELS = {
+    "config-risky-rolls.js": ("risky_roll", "risky_roll_cog.py"),
+    "games-legitlibs.js": ("legitlibs", "games_legitlibs/__init__.py"),
+}
+
+_COGS = _ROOT / "src" / "bot_modules" / "cogs"
+
+
+@pytest.mark.parametrize("panel", sorted(_ENABLE_TOGGLE_PANELS))
+def test_a_switch_is_labelled_for_everything_that_reads_it(panel: str):
+    """"Include in Scheduled Games" is only honest while the scheduler is the
+    switch's *only* reader. LegitLibs' start command started consulting it on
+    2026-08-29, so an admin unticking that box to keep LegitLibs out of the
+    schedule was silently killing /games play legitlibs for every member. Its
+    panel now says "Available on This Server", the same words the Global Config
+    list uses for the same row. Risky Rolls' start command still ignores the
+    switch, so its panel keeps the narrower label."""
+    game_type, cog_path = _ENABLE_TOGGLE_PANELS[panel]
+    src = (_PANELS / panel).read_text(encoding="utf-8")
+    cog = (_COGS / cog_path).read_text(encoding="utf-8")
+    assert f'gameType: "{game_type}"' in src, f"{panel}: no enable toggle"
+
+    gates_its_command = f'check_game_enabled(self.db, "{game_type}"' in cog
+    if gates_its_command:
+        assert "Include in Scheduled Games" not in src, (
+            f"{panel} calls the switch scheduler-only, but {cog_path} refuses the "
+            "start command when it is off — the label hides that from the admin"
+        )
+        assert 'statusLabel: "Available on This Server"' in src, panel
+    else:
         assert 'statusLabel: "Include in Scheduled Games"' in src, panel

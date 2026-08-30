@@ -119,10 +119,15 @@ These settings are **live and enforced** but are configured from the web dashboa
   and never called the check, and `legitlibs` was missing from the list so its
   PUT 404'd; the list also carried a phantom `risky_roller` while the scheduler
   asked about `risky_roll`. The six duel/group games use the same store, keyed
-  by each cog's `GAME_KEY`, checked at both creation entrypoints. For
-  `risky_roll` and `legitlibs` the only reader is the scheduler's enable gate,
-  so their panels label the switch "Include in Scheduled Games" rather than
-  promising more than it does.
+  by each cog's `GAME_KEY`, checked at both creation entrypoints. **A panel
+  labels the switch for everything that reads it.** `risky_roll`'s only reader
+  is the scheduler's enable gate — `/risky start` never consults it — so its
+  panel says "Include in Scheduled Games" rather than promising more than it
+  does. `legitlibs` wore that same label until 2026-08-29 and kept it for one
+  commit after its start command began gating on the switch, which made an
+  admin unticking it to trim the schedule silently kill `/games play legitlibs`;
+  its panel now says "Available on This Server", the same words the Global
+  Config list uses for the same row.
 - **Player limits are offered only where there is a lobby.** Most Likely To and
   Mt. Rushmore Draft create their game with `state="joining"`, so a floor and a
   ceiling have somewhere to apply; every other game goes straight to
