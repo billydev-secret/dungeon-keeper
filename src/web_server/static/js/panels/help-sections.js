@@ -104,6 +104,7 @@ export const HELP_GROUPS = [
     { page: "help-intake",         anchor: "intake",            label: "Intake Cards" },
     { page: "help-hidden",         anchor: "hidden-channels",   label: "Hidden Channels" },
     { page: "help-network",        anchor: "network-analytics", label: "Network Analytics" },
+    { page: "help-ping-response",  anchor: "ping-response",     label: "Ping Response" },
   ]},
 ];
 

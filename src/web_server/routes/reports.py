@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.core.db_utils import get_tz_offset_hours
-from bot_modules.services import activity_graphs, reports_data
+from bot_modules.services import activity_graphs, ping_tracker_service, reports_data
 from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.member_quality_score import (
@@ -41,6 +42,7 @@ from web_server.schemas import (
     NsfwGenderResponse,
     NsfwTagMixResponse,
     OneSidedAttentionResponse,
+    PingResponseResponse,
     QualityScoreResponse,
     RetentionResponse,
     TimeToLevel5Response,
@@ -435,6 +437,100 @@ async def greeter_response(
         ("user_id", "user_name"),
         ("greeter_id", "greeter_name"),
     )
+    return result
+
+
+# ── Ping response ───────────────────────────────────────────────────────
+
+
+@router.get("/ping-response", response_model=PingResponseResponse)
+async def ping_response(
+    request: Request,
+    days: int = 30,
+    window_minutes: int = ping_tracker_service.DEFAULT_WINDOW_MINUTES,
+    sent_by: str = "all",
+    include_bots: bool = False,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """How many people turned up after each role ping.
+
+    ``window_minutes`` is a live control rather than a stored setting: nothing
+    is precomputed, so changing it re-counts against the retained messages and
+    reactions instead of invalidating a column.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot is not None else None
+
+    days = max(1, min(3650, days))
+    window = ping_tracker_service.clamp_window_minutes(window_minutes)
+    sources = ping_tracker_service.resolve_sources(sent_by)
+    since_ts = time.time() - days * 86400
+
+    # Role names have no table — role_events stores names, not ids — so they
+    # come off the live guild here, on the event loop, before the DB thread.
+    # An id with no live role (deleted since it was pinged) keeps its numeric
+    # label rather than vanishing from the breakdown.
+    role_names: dict[int, str] = (
+        {r.id: r.name for r in guild.roles} if guild is not None else {}
+    )
+
+    def _q():
+        with ctx.open_db() as conn:
+            tz = get_tz_offset_hours(conn, guild_id)
+            pings = ping_tracker_service.query_pings(
+                conn, guild_id, since_ts=since_ts, sources=sources
+            )
+            posters, reactors = ping_tracker_service.query_responders(
+                conn,
+                guild_id,
+                since_ts=since_ts,
+                window_minutes=window,
+                include_bots=include_bots,
+                sources=sources,
+            )
+            channel_names = get_known_channels_bulk(
+                conn, guild_id, sorted({p["channel_id"] for p in pings})
+            )
+            game_players = ping_tracker_service.query_game_player_counts(
+                conn,
+                (
+                    p["ref"]
+                    for p in pings
+                    if p["source"] == ping_tracker_service.SOURCE_GAME_START
+                ),
+            )
+
+        return ping_tracker_service.build_ping_report(
+            pings,
+            posters,
+            reactors,
+            window_minutes=window,
+            window_label=f"Last {days} Days",
+            role_names=role_names,
+            channel_names=channel_names,
+            game_players=game_players,
+            tz_offset_hours=tz,
+        )
+
+    # No 404 on an empty result. "Nothing has been pinged yet" is a legitimate
+    # answer for a report whose table starts empty, and the panel renders it as
+    # an empty state with the backfill hint. Reporting it as an error is what
+    # put the one other report that does this onto the browser sweep's
+    # known-failures allowlist.
+    result = await cached_run_query(
+        "ping-response",
+        guild_id,
+        {
+            "days": days,
+            "window_minutes": window,
+            "sent_by": sent_by,
+            "include_bots": include_bots,
+        },
+        _q,
+    )
+    await _resolve_names(ctx, guild, result["entries"], ("author_id", "author_name"))
     return result
 
 

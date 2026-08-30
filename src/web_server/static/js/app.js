@@ -67,6 +67,7 @@ const SECTIONS = [
       ]},
       { heading: "Engagement", items: [
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
+        { id: "ping-response",        label: "Ping Response",        module: "./panels/ping-response.js", keywords: "role ping mention announcement turnout replies who showed up everyone here", related: ["chat-revive", "games-scheduling"], help: "help-ping-response" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
         { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js", keywords: "voice usage peak hours top users", related: ["config-voice-master"] },
         { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js", keywords: "levels rank experience", related: ["config-xp"], help: "help-community" },

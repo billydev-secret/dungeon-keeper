@@ -347,6 +347,11 @@ _HTML_COLUMNS = {
     ("music-playlist.js", "id"),
     # Set Active button keyed by the card's DB row id, Number()-coerced into data-activate
     ("mahjong.js", "row_id"),
+    # "Open" anchor to the pinging message: href is jumpLink() over two
+    # server-issued snowflakes (channel_id, message_id), esc()'d again on the
+    # way in, and the link text is the fixed literal "Open" — no member text
+    # reaches this cell
+    ("ping-response.js", "message_id"),
 }
 
 

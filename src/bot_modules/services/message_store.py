@@ -14,6 +14,8 @@ import logging
 import sqlite3
 from collections.abc import Sequence
 
+from bot_modules.services import ping_tracker_service
+
 log = logging.getLogger(__name__)
 
 # ── Per-guild message-content storage levels ──────────────────────────
@@ -188,6 +190,35 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_mentions_user ON message_mentions (user_id)"
+    )
+
+    # Role pings. Deliberately a separate table rather than rows in
+    # message_mentions: that table is keyed on user_id and a role has none,
+    # which is exactly why role pings were invisible before this existed.
+    # Schema owned by migration 198 — mirrored here like every other table in
+    # this function so a fresh test database is complete.
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ping_events (
+            message_id  INTEGER PRIMARY KEY,
+            guild_id    INTEGER NOT NULL,
+            channel_id  INTEGER NOT NULL,
+            author_id   INTEGER NOT NULL,
+            role_ids    TEXT    NOT NULL DEFAULT '[]',
+            everyone    INTEGER NOT NULL DEFAULT 0,
+            source      TEXT    NOT NULL DEFAULT 'member',
+            ref         TEXT,
+            ts          REAL    NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ping_events_guild_ts "
+        "ON ping_events (guild_id, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ping_events_author "
+        "ON ping_events (guild_id, author_id)"
     )
 
     conn.execute(
@@ -480,6 +511,9 @@ def store_message(
     embeds: Sequence[dict] = (),
     retain_content: bool = True,
     media_kind: str | None = None,
+    role_mention_ids: Sequence[int] = (),
+    mention_everyone: bool = False,
+    ping_source: str = ping_tracker_service.SOURCE_MEMBER,
 ) -> None:
     """Store a message and its related data. Silently skips if already stored.
 
@@ -494,6 +528,11 @@ def store_message(
     @-mention edges are persisted, leaving a content-less record that still
     reconstructs a Discord deep link. ``media_kind`` is metadata (an attachment
     classification, not a URL), so it is retained regardless of storage level.
+
+    ``role_mention_ids`` / ``mention_everyone`` describe the role pings the
+    message fired, recorded into ``ping_events``. They come from Discord's
+    structured mention lists rather than the text, so ping tracking survives
+    ``retain_content=False`` — the whole point of deriving metadata at ingest.
     """
     if not retain_content:
         content = None
@@ -545,6 +584,17 @@ def store_message(
             "INSERT OR IGNORE INTO message_mentions (message_id, user_id) VALUES (?, ?)",
             (message_id, user_id),
         )
+    ping_tracker_service.record_ping_event(
+        conn,
+        message_id=message_id,
+        guild_id=guild_id,
+        channel_id=channel_id,
+        author_id=author_id,
+        role_ids=role_mention_ids,
+        everyone=mention_everyone,
+        source=ping_source,
+        ts=ts,
+    )
     for idx, embed in enumerate(embeds):
         conn.execute(
             """

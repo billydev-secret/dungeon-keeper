@@ -31,6 +31,16 @@ export function mount(container) {
       <hr style="margin:20px 0;">
 
       <div class="form">
+        <h3>Role Pings</h3>
+        <p class="field-hint">Find role pings the server sent before ping tracking existed, so the Ping Response report opens with history instead of an empty chart. Finishes in seconds and is safe to re-run — pings already recorded are skipped.</p>
+        <p class="field-hint">This finds less than live tracking does: it can only see channels where message text was kept, and it can’t tell a real <code>@everyone</code> from someone simply typing the word. Pings sent from now on are recorded properly as they happen.</p>
+        <button class="btn btn-primary" data-action="pings">Run Ping Backfill</button>
+        <div data-status="pings" style="margin-top:8px;"></div>
+      </div>
+
+      <hr style="margin:20px 0;">
+
+      <div class="form">
         <h3>Interaction Graph</h3>
         <p class="field-hint">Read back through replies and mentions so the Connection Web and Interaction Heatmap have history. Turn on Reset first if the counts look inflated from an earlier run.</p>
         <label>Days to Scan (0 scans everything available)
@@ -103,7 +113,23 @@ export function mount(container) {
     }
   }
 
+  async function runPings() {
+    const s = statusEl("pings");
+    const btn = actionBtn("pings");
+    btn.disabled = true;
+    s.textContent = "Running…";
+    try {
+      const r = await apiPost("/api/admin/backfill-pings", {});
+      s.textContent = r.message || "Done.";
+    } catch (err) {
+      s.textContent = `Error: ${err.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   container.querySelector('[data-action="roles"]').addEventListener("click", runRoles);
+  container.querySelector('[data-action="pings"]').addEventListener("click", runPings);
   container.querySelector('[data-action="xp"]').addEventListener("click", runXp);
   container.querySelector('[data-action="interactions"]').addEventListener("click", runInteractions);
 

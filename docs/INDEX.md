@@ -95,6 +95,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 |---|---|---|
 | [announcements.md](announcements.md) | Announcements: dashboard-queued one-shot channel posts (embed + ping line, live preview, guild-local schedule, sent history, self-assign role buttons) | Built 2026-07-19, role buttons 2026-07-20; awaiting live testing; plan in [plans/timed-announcements.md](plans/timed-announcements.md) |
 | [auto_delete_spec.md](auto_delete_spec.md) | Auto-delete message rules | |
+| [ping_tracker_spec.md](ping_tracker_spec.md) | Ping Response: records every role ping (`@Gamers`, `@everyone`, the bot's own game-start announcement) and reports how many distinct people turned up afterwards. Records the stimulus only — turnout is computed at read time from the retained `messages`/`reaction_log`, so the response window is a live panel control and backfilled history is measured by the same code as the present | v1 built 2026-08-30; migration 198; dashboard report `ping-response` under Reports → Engagement, no slash commands |
 | [chat_revive_spec.md](chat_revive_spec.md) | Chat Revive ("Ember"): rhythm-aware lull questions | v1 built; dashboard-managed (no slash commands); plan in [plans/chat-revive.md](plans/chat-revive.md) |
 | [beta_tools_spec.md](beta_tools_spec.md) | Beta tools: synthetic activity for testers | Built |
 | [DUNGEON_KEEPER_TEST_ENV_SPEC.md](DUNGEON_KEEPER_TEST_ENV_SPEC.md) | Test env with beta puppets | Built |

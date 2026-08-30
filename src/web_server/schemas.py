@@ -136,6 +136,60 @@ class GreeterResponseResponse(BaseModel):
     entries: list[GreeterResponseEntry] = []
 
 
+# ── Ping response ─────────────────────────────────────────────────────
+
+
+class PingEntrySchema(BaseModel):
+    message_id: str
+    channel_id: str
+    channel_name: str = ""
+    author_id: str
+    author_name: str = ""
+    role_ids: list[str] = []
+    role_labels: list[str] = []
+    everyone: bool = False
+    source: str = "member"
+    ref: str | None = None
+    ts: float
+    turnout: int = 0
+    messages: int = 0
+    reactors: int = 0
+    # None (not 0) when the ping named no game, or named one that left no
+    # roster behind — "we don't know" must not render as "nobody came".
+    players: int | None = None
+
+
+class PingBreakdownSchema(BaseModel):
+    id: str
+    label: str
+    pings: int
+    mean_turnout: float
+    median_turnout: float
+    silent_pings: int
+    silent_pct: float
+
+
+class PingSeriesPointSchema(BaseModel):
+    day: str
+    pings: int
+    mean_turnout: float
+
+
+class PingResponseResponse(BaseModel):
+    window_label: str
+    window_minutes: int
+    total_pings: int
+    total_turnout: int
+    median_turnout: float
+    mean_turnout: float
+    silent_pings: int
+    silent_pct: float
+    series: list[PingSeriesPointSchema] = []
+    by_role: list[PingBreakdownSchema] = []
+    by_channel: list[PingBreakdownSchema] = []
+    entries: list[PingEntrySchema] = []
+
+
 # ── Intake report ─────────────────────────────────────────────────────
 
 
