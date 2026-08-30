@@ -157,9 +157,43 @@ const EMOJI_FIELDS = [
   }],
 ];
 
+// Custom shop items: the items themselves are curated on Shop & Perks, but the
+// refund window for an order nobody has fulfilled is a number like every other
+// review window on this page, so it lives with them.
+const SHOP_ITEM_FIELDS = [
+  ["shop_item_expire_days", "Custom Item Order Window (days)", {
+    hint: "A custom item order that staff have not marked delivered within this many days is cancelled on its own and the member gets their coins back. 0 leaves orders waiting forever.",
+    max: 365,
+  }],
+];
+
+// Live auctions. There is no on switch — an auction only exists once a
+// moderator starts one — so these are guard-rails on what any auction can be:
+// the opening floor, the step each new bid must clear, the anti-snipe window,
+// and the longest a moderator may run one for.
+const AUCTION_FIELDS = [
+  ["auction_min_bid", "Opening Bid", {
+    hint: "The lowest first bid any auction will accept. Must be at least 1.",
+    min: 1,
+  }],
+  ["auction_min_increment", "Minimum Raise", {
+    hint: "How far a new bid must beat the standing high bid. Must be at least 1.",
+    min: 1,
+  }],
+  ["auction_soft_close_seconds", "Anti-Snipe Window (seconds)", {
+    hint: "A bid landing this close to the end pushes the finish out by the same amount, so an auction cannot be won at the buzzer. 300 is five minutes; 0 turns the extension off.",
+    max: 3600,
+  }],
+  ["auction_max_duration_hours", "Longest Auction (hours)", {
+    hint: "The most hours a moderator may set when starting an auction — 168 is a week. They are still free to run a shorter one.",
+    min: 1,
+    max: 168,
+  }],
+];
+
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
-  ...QOTD_FIELDS, ...DEMURRAGE_FIELDS,
+  ...QOTD_FIELDS, ...DEMURRAGE_FIELDS, ...SHOP_ITEM_FIELDS, ...AUCTION_FIELDS,
 ];
 
 // Every numeric field is capped somewhere so a typo can't create a price no
@@ -183,8 +217,8 @@ function fieldMin(opts) {
  *
  * Only the eight switchable shop lines have one, and their keys line up by
  * construction (`price_role_icon` -> `shop_role_icon_enabled`). Anything else
- * — rakes, sponsor prices, room prices — is priced but not switchable, and
- * returns null so it renders exactly as before.
+ * — rakes, sponsor prices, auction guard-rails — is priced but not switchable,
+ * and returns null so it renders exactly as before.
  */
 function saleKeyFor(key) {
   const SWITCHABLE = new Set([
@@ -327,6 +361,32 @@ function render(container, cfg, pricing) {
           <div class="section-label">Sponsored QOTD</div>
           <div class="field-row" style="flex-wrap:wrap;">
             ${QOTD_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">Custom Shop Items</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${SHOP_ITEM_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+          <div class="field-hint">
+            The items themselves — what they are called, what they cost and how many
+            there are — are set up under Custom Items on
+            <a href="#/economy-sinks">Shop &amp; Perks</a>. This is only how long an
+            order waits on staff before it refunds itself.
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-label">Live Auctions</div>
+          <div class="field-row" style="flex-wrap:wrap;">
+            ${AUCTION_FIELDS.map(([k, l, o]) => numField(k, l, o, pricing, cfg)).join("")}
+          </div>
+          <div class="field-hint">
+            There is nothing to switch on here: an auction exists only while a
+            moderator is running one. These are the limits every auction inherits when
+            it starts, so changing them affects the next auction, not one already live.
+            The winning bid is spent, which makes an auction a coin sink.
           </div>
         </div>
 

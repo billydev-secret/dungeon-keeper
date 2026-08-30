@@ -649,10 +649,13 @@ def build_leaderboard_embed(
         # Members never face the whole pool: each draws a personal board of
         # board_size quests per cadence. Summarize the draw instead of
         # listing a menu nobody actually has.
+        # Personal-board cadences only. Monthly quests are guild-wide goals —
+        # build_leaderboard_data routes them into `community`, never into
+        # `quests` — so there is no monthly board to size and the loop below
+        # skips the cadence on an empty pool.
         sizes = {
             "daily": settings.quest_board_daily,
             "weekly": settings.quest_board_weekly,
-            "monthly": settings.quest_board_monthly,
         }
         label_width = max(len(v) for v in _QTYPE_LABELS.values())
         # cadence | description | payment rows; the first two columns are

@@ -192,9 +192,12 @@ class EconSettings:
     # pool. Tuning these down is how a guild makes the board feel smaller
     # without deactivating library quests; 0 turns the cadence off entirely
     # (nothing shows, nothing pays). Capped at POOL_CAP by the dashboard.
+    # (No monthly size: a monthly quest is a guild-wide goal, never a personal
+    # board row, so quest_board_monthly sized nothing. It was dropped rather
+    # than left as a dial the panel no longer offers and no draw ever reads;
+    # any stored econ_quest_board_monthly row is ignored by the loader.)
     quest_board_daily: int = 2
     quest_board_weekly: int = 2
-    quest_board_monthly: int = 2
     # Community-weekly beat sheets (kickoff / tier crossed / final-24h /
     # resolution) DM this member so they can host the event in their own
     # voice — the bot posts nothing publicly (2026-07-18 decision). 0 =
@@ -333,8 +336,7 @@ class EconSettings:
     # Voice-style lease (sinks round 3, stage 3): Voice Control rename + user
     # limit become leased while this is > 0 AND the economy is enabled. The
     # 0 default is the dark launch — controls stay free until an admin prices
-    # the lease on the Sinks page (suggested ≈ 30). Distinct from
-    # price_voice_room (stage-6 private rooms).
+    # the lease on the Sinks page (suggested ≈ 30).
     price_voice_style: int = 0
     # Staff perk comp: while on, anyone `is_mod` counts as (configured mod or
     # admin role, or Discord manage_guild/administrator) is entitled to every
@@ -354,8 +356,10 @@ class EconSettings:
     price_emoji_animated: int = 90
     emoji_sponsor_slots: int = 5
     emoji_sponsor_expire_days: int = 14
-    price_text_room: int = 200
-    price_voice_room: int = 200
+    # (price_text_room / price_voice_room lived here for the stage-6 private
+    # rooms that were never built. Nothing ever charged them, so they are gone
+    # rather than left advertising a price members could not spend. Any stored
+    # econ_price_*_room row is simply ignored by the loader.)
     # Custom shop items (docs/plans/economy-shop-items.md): admin-defined
     # items sold beside the built-in perks. A manual item escrows the price
     # and files a todo; this is how long that order waits for staff before the

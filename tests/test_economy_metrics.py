@@ -133,8 +133,9 @@ def test_pricing_hints_default_ratios_at_median_100():
     # when the colours moved to the shop (todo #76).
     assert hints["price_role_preset"] == 80
     assert hints["price_role_gradient"] == 240
-    assert hints["price_text_room"] == 200
-    assert hints["price_voice_room"] == 200
+    # The private-room prices were retired with the never-built rooms feature,
+    # so nothing suggests a price for a thing that cannot be bought.
+    assert "price_text_room" not in hints and "price_voice_room" not in hints
 
 
 def test_pricing_hints_scales_with_median():

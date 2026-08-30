@@ -143,7 +143,6 @@ class EconomyConfigUpdate(BaseModel):
     # can't exceed it, and a board >= the pool is just "the whole pool").
     quest_board_daily: int | None = Field(default=None, ge=0, le=POOL_CAP)
     quest_board_weekly: int | None = Field(default=None, ge=0, le=POOL_CAP)
-    quest_board_monthly: int | None = Field(default=None, ge=0, le=POOL_CAP)
     # Community-weekly beat sheets DM this member (0 = guild owner). Sent as
     # a string from the panel so the snowflake survives JS number precision.
     community_host_user_id: int | None = Field(default=None, ge=0)
@@ -175,8 +174,6 @@ class EconomyConfigUpdate(BaseModel):
     price_emoji_animated: int | None = Field(default=None, ge=0)
     emoji_sponsor_slots: int | None = Field(default=None, ge=0)
     emoji_sponsor_expire_days: int | None = Field(default=None, ge=0)
-    price_text_room: int | None = Field(default=None, ge=0)
-    price_voice_room: int | None = Field(default=None, ge=0)
     raffle_enabled: bool | None = None
     price_raffle_ticket: int | None = Field(default=None, ge=0)
     raffle_max_tickets: int | None = Field(default=None, ge=0)
@@ -203,6 +200,20 @@ class EconomyConfigUpdate(BaseModel):
     # Clamped in the service too (1..168); bounded here so the dashboard
     # refuses the absurd value rather than silently clamping it.
     theme_hours: int | None = Field(default=None, ge=1, le=168)
+    # Live auctions. All four are enforced on every auction (opening floor,
+    # bid step, anti-snipe window, and the ceiling on what a mod may set for
+    # the duration), so they belong on the page, not in the config table.
+    # The service floors min_bid/min_increment/duration at 1, so 0 is refused
+    # here rather than silently clamped; the soft close is the one that may be
+    # 0 (no anti-snipe extension at all).
+    auction_min_bid: int | None = Field(default=None, ge=1)
+    auction_min_increment: int | None = Field(default=None, ge=1)
+    auction_soft_close_seconds: int | None = Field(default=None, ge=0, le=3600)
+    auction_max_duration_hours: int | None = Field(default=None, ge=1, le=168)
+    # Custom shop items: how long an unfulfilled manual order waits for staff
+    # before its escrowed coins are refunded. 0 disables the sweep entirely
+    # (matching the emoji/QOTD sponsor windows above).
+    shop_item_expire_days: int | None = Field(default=None, ge=0)
     bounty_min_stake: int | None = Field(default=None, ge=0)
     bounty_max_open: int | None = Field(default=None, ge=0)
     bounty_expire_days: int | None = Field(default=None, ge=0)

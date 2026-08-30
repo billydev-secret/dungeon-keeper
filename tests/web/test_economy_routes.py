@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_service import load_econ_settings
 from web_server.auth import DiscordOAuthAuth, SESSION_COOKIE
+from web_server.routes.economy import EconomyConfigUpdate
 from web_server.server import create_app
 
 
@@ -251,6 +253,81 @@ def test_put_rejects_negative_host_bounty_cap(authed_client):
     assert resp.status_code == 422
 
 
+def test_put_auction_guard_rails_roundtrip(authed_client, fake_ctx):
+    """The four auction dials are enforced on every bid but had no write path:
+    absent from the whitelist and from every panel, they could only be changed
+    by hand-editing the config table."""
+    resp = authed_client.put(
+        "/api/economy/config",
+        json={
+            "auction_min_bid": 25,
+            "auction_min_increment": 10,
+            "auction_soft_close_seconds": 120,
+            "auction_max_duration_hours": 72,
+        },
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.auction_min_bid == 25
+    assert cfg.auction_min_increment == 10
+    assert cfg.auction_soft_close_seconds == 120
+    assert cfg.auction_max_duration_hours == 72
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({"auction_max_duration_hours": 0}, id="duration-zero"),
+        pytest.param({"auction_max_duration_hours": 169}, id="duration-over-a-week"),
+        pytest.param({"auction_min_bid": -1}, id="negative-min-bid"),
+    ],
+)
+def test_put_rejects_out_of_range_auction_dials(authed_client, payload):
+    assert authed_client.put("/api/economy/config", json=payload).status_code == 422
+
+
+def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx):
+    """The custom-item order refund window is swept by the economy loop but was
+    the one review window with no dashboard control; 0 disables the sweep."""
+    resp = authed_client.put(
+        "/api/economy/config", json={"shop_item_expire_days": 0}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).shop_item_expire_days == 0
+
+
+def test_every_pricing_panel_box_is_writable_and_readable(authed_client):
+    """Each numeric box on Pricing must be a field the PUT accepts *and* the GET
+    returns — a box the model rejects 422s the whole Save, and one the GET omits
+    renders blank and then refuses to submit."""
+    import re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "web_server"
+        / "static"
+        / "js"
+        / "panels"
+        / "pricing.js"
+    ).read_text(encoding="utf-8")
+    keys: set[str] = set()
+    for block in re.findall(r"const [A-Z_]+_FIELDS = \[(.*?)\n\];", src, re.S):
+        keys |= set(re.findall(r'\["([a-z0-9_]+)"', block))
+    assert "auction_min_bid" in keys and "shop_item_expire_days" in keys
+    model_fields = set(EconomyConfigUpdate.model_fields)
+    assert not keys - model_fields, (
+        f"Pricing boxes the config PUT would reject: {sorted(keys - model_fields)}"
+    )
+    cfg = authed_client.get("/api/economy/config").json()
+    assert not keys - set(cfg), (
+        f"Pricing boxes the config GET never returns: {sorted(keys - set(cfg))}"
+    )
+
+
 def test_put_rejects_booster_multiplier_below_one(authed_client):
     resp = authed_client.put(
         "/api/economy/config", json={"booster_multiplier": 0.5}
@@ -317,8 +394,10 @@ def test_metrics_hints_from_latest_week_only(authed_client, fake_ctx):
     # curated colours arrived (todo #76) — the hints track the spec defaults.
     assert hints["price_role_preset"] == 80
     assert hints["price_role_gradient"] == 240
-    assert hints["price_text_room"] == 200
-    assert hints["price_voice_room"] == 200
+    assert hints["price_voice_style"] == 30
+    # The private-room prices were retired with their never-built feature, so
+    # no hint suggests a price for something nobody can buy.
+    assert "price_text_room" not in hints and "price_voice_room" not in hints
 
 
 def test_metrics_requires_admin(fake_ctx):
