@@ -72,11 +72,17 @@ def test_ready_but_off_sorts_first(open_client, fake_ctx):
 
 
 def test_partial_reports_only_what_is_still_missing(open_client, fake_ctx):
-    _set(fake_ctx, "ticket_panel_channel_id", CH)
+    """Half-wired reads as partial, and only the unset half is reported.
+
+    Was keyed on tickets until 2026-08-30, when ticket_panel_channel_id joined
+    DEAD_KEYS — the live panel record has lived in the ticket_panels table
+    since migration 023 — leaving that feature with a single required setting
+    and nothing to be partial about."""
+    _set(fake_ctx, "voice_master_hub_channel_id", CH)
     body = open_client.get("/api/help/suggestions?limit=10").json()
-    tickets = next(s for s in body["suggestions"] if s["slug"] == "tickets")
-    assert tickets["status"] == "partial"
-    assert [m["key"] for m in tickets["missing"]] == ["ticket_category_id"]
+    voice = next(s for s in body["suggestions"] if s["slug"] == "voice_master")
+    assert voice["status"] == "partial"
+    assert [m["key"] for m in voice["missing"]] == ["voice_master_category_id"]
 
 
 def test_suggestions_rejects_an_unauthenticated_caller(authed_client):
