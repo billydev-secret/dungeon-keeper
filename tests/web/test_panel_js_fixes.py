@@ -857,3 +857,72 @@ def test_the_clamp_still_wraps_at_phone_width(browser, dashboard):
     finally:
         ctx.close()
 
+
+
+# ── A schedule whose channel or announce role was deleted in Discord ─────
+#
+# games-scheduling builds its channel/role <select>s empty and assigns the
+# saved id afterwards, in startEdit. That is the shape the Activity picker was
+# fixed for (dd06d880): assigning a <select> a value it has no option for
+# selects nothing at all. The channel select is built with `allowNone: false`,
+# so there is not even a "(none)" row to fall back to — `.value` reads "" and
+# the save posts the whole column set, blanking the schedule's channel.
+
+_DEAD_CHANNEL = "1471642282771087400"
+_DEAD_ROLE = "1472628220338766016"
+
+_SCHEDULE_ROUTES = {
+    "/api/meta/channels": {
+        "body": [{"id": "900000000000000001", "name": "games", "type": "text"}],
+    },
+    "/api/meta/roles": {"body": [{"id": "900000000000000002", "name": "Players"}]},
+    "/api/games/schedule/options": {
+        "body": {"games": [{"type": "ffa", "name": "Free For All", "icon": "🎲"}]}
+    },
+    "/api/games/schedule": {
+        "body": [
+            {
+                "id": 4,
+                "guild_id": "1",
+                "game_type": "ffa",
+                "game_name": "Free For All",
+                "game_icon": "🎲",
+                "channel_id": _DEAD_CHANNEL,
+                "announce_role_id": _DEAD_ROLE,
+                "announce": True,
+                "recurrence": "weekly",
+                "recur_days": [1],
+                "time_of_day": 43200,
+                "start_date": None,
+                "enabled": True,
+                "options": {},
+            }
+        ]
+    },
+}
+
+_EDIT_SCHEDULE = """
+async () => {
+  const btn = document.querySelector('[data-act="edit"]');
+  if (!btn) return { error: 'no edit button' };
+  btn.click();
+  await new Promise((r) => setTimeout(r, 60));
+  const q = (s) => document.querySelector(s);
+  return {
+    channel: q('[data-ctrl="channel"]').value,
+    role: q('[data-ctrl="role"]').value,
+  };
+}
+"""
+
+
+def test_editing_a_schedule_keeps_a_deleted_channel_and_role(page):
+    """Before the fix the channel select read "" (no option, nothing selected)
+    and the role select fell to "0" — and the save posts every column, so
+    opening a schedule to change its *time* silently wiped where it posts."""
+    _fresh_meta(page)
+    _mount(page, "/static/js/panels/games-scheduling.js", _SCHEDULE_ROUTES)
+    out = page.evaluate(_EDIT_SCHEDULE)
+    assert out.get("error") is None, out
+    assert out["channel"] == _DEAD_CHANNEL
+    assert out["role"] == _DEAD_ROLE

@@ -223,6 +223,21 @@ use them:
 - **`table.js` escapes every cell.** A column opts into markup with
   `html: true` and then owns its own escaping — that opt-in is the whole
   security boundary.
+- **A picker never silently drops the value it was given.** Assigning a
+  `<select>` a value it has no `<option>` for selects *nothing* — the control
+  renders blank, or falls to whatever sits first (usually "(none)"), and is
+  then indistinguishable from one nobody ever set. Config panels save the whole
+  form at once, so the next save of an unrelated field writes that blank over a
+  real setting. Two sources put a value outside the option list: an id whose
+  role/channel was **deleted in Discord**, and a stored number outside the
+  presets a panel happens to offer. Build role/channel/category options with
+  the `config-helpers.js` builders (`roleSelect`, `channelSelect`, the `Multi`
+  variants) or the `mount*Picker` wrappers, which keep an unmatched id selected
+  and label it `⚠ Missing role (id …)`; where a value is assigned *after* the
+  options are built — a mode/resolution change, or an edit form populating
+  itself — use `selectValueOrAdd`. `tests/web/test_shared_js_safety.py` holds
+  the invariant, and `tests/web/test_activity_compare_picker.py` the
+  rebuild-on-mode-change case.
 - **Config panels mount through `mountAsync`**, so a failed first fetch
   renders an error with a retry instead of a permanent spinner. **Let the
   rejection reach it.** Five panels wrapped their loader's own fetch in a

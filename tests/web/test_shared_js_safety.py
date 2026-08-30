@@ -667,3 +667,194 @@ def test_md_link_text_cannot_become_the_href(page):
 def test_md_link_rejects_a_non_http_scheme_outright(page):
     """No match, no anchor — the text is left as escaped plain markdown."""
     assert page.evaluate(_MD, {"src": "[click](javascript:alert(1))"}) is None
+
+
+# ── Dangling ids: a saved role/channel the guild no longer has ───────────
+#
+# A saved id whose role or channel was deleted in Discord is not in the meta
+# list any more. The legacy `<select>` builders emit no `selected` attribute in
+# that case, so the browser selects the first option — `(none)` — and the
+# picker becomes indistinguishable from a genuinely unset one. The panels that
+# use these builders save the whole form at once (intake-settings.js reads
+# `fd.get("channel_id") || "0"`), so the next save of any unrelated field on
+# the same form writes 0 and the setting is destroyed with no warning.
+#
+# The invariant: a non-zero saved id always stays selected and always names
+# itself, whether or not the list still contains it.
+
+_DANGLING = """
+async ({ builder, options, selected }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  const host = document.createElement('select');
+  host.innerHTML = cfg[builder](options, selected);
+  document.body.appendChild(host);
+  const chosen = host.options[host.selectedIndex];
+  const out = {
+    value: host.value,
+    label: chosen ? chosen.textContent.trim() : null,
+  };
+  host.remove();
+  return out;
+}
+"""
+
+_LIVE_ROLE = "1000000000000000001"
+_DEAD_ROLE = "1487814583300128941"
+_ROLES = [{"id": _LIVE_ROLE, "name": "Denizen"}]
+_LIVE_CHAN = "1000000000000000002"
+_DEAD_CHAN = "1525522177951137954"
+_CHANNELS = [{"id": _LIVE_CHAN, "name": "general", "type": "text"}]
+
+
+def test_role_select_keeps_a_deleted_role_selected(page):
+    """The bug: the picker silently reads `(none)`, and the form's next save
+    writes 0 over a setting the admin never touched."""
+    out = page.evaluate(
+        _DANGLING,
+        {"builder": "roleSelect", "options": _ROLES, "selected": _DEAD_ROLE},
+    )
+    assert out["value"] == _DEAD_ROLE
+    assert _DEAD_ROLE in out["label"]
+
+
+def test_channel_select_keeps_a_deleted_channel_selected(page):
+    out = page.evaluate(
+        _DANGLING,
+        {"builder": "channelSelect", "options": _CHANNELS, "selected": _DEAD_CHAN},
+    )
+    assert out["value"] == _DEAD_CHAN
+    assert _DEAD_CHAN in out["label"]
+
+
+def test_a_dangling_id_is_visibly_flagged_not_silently_normal(page):
+    """It has to read as *wrong*, not as an ordinary choice — an admin who
+    cannot tell the difference will not go fix it."""
+    out = page.evaluate(
+        _DANGLING,
+        {"builder": "roleSelect", "options": _ROLES, "selected": _DEAD_ROLE},
+    )
+    assert "⚠" in out["label"]
+
+
+def test_a_live_role_is_untouched(page):
+    """The guard must not disturb the ordinary case."""
+    out = page.evaluate(
+        _DANGLING,
+        {"builder": "roleSelect", "options": _ROLES, "selected": _LIVE_ROLE},
+    )
+    assert out["value"] == _LIVE_ROLE
+    assert out["label"] == "@Denizen"
+
+
+def test_unset_stays_unset(page):
+    """`0` is a real value meaning "(none)" and must never be flagged."""
+    out = page.evaluate(
+        _DANGLING,
+        {"builder": "roleSelect", "options": _ROLES, "selected": "0"},
+    )
+    assert out["value"] == "0"
+    assert out["label"] == "(none)"
+
+
+_DANGLING_MULTI = """
+async ({ builder, options, selected }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  const host = document.createElement('select');
+  host.multiple = true;
+  host.innerHTML = cfg[builder](options, selected);
+  document.body.appendChild(host);
+  const out = Array.from(host.selectedOptions).map((o) => o.value);
+  host.remove();
+  return out;
+}
+"""
+
+
+def test_multi_select_keeps_a_deleted_channel_in_the_list(page):
+    """The multi builders emitted no option at all for a missing id, so the
+    next save posted the remainder — a five-channel list silently became four."""
+    out = page.evaluate(
+        _DANGLING_MULTI,
+        {
+            "builder": "channelSelectMulti",
+            "options": _CHANNELS,
+            "selected": [_LIVE_CHAN, _DEAD_CHAN],
+        },
+    )
+    assert set(out) == {_LIVE_CHAN, _DEAD_CHAN}
+
+
+_PICKER_LABEL = """
+async ({ roles, value }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  const slot = document.createElement('div');
+  document.body.appendChild(slot);
+  const picker = cfg.mountRolePicker(slot, roles, value, { label: 'Role' });
+  const out = { shown: picker.getInput().value, saved: picker.getValue() };
+  picker.el.remove();
+  return out;
+}
+"""
+
+
+def test_modern_picker_names_a_deleted_role(page):
+    """filterSelect already kept the id (so nothing was destroyed here), but it
+    showed a bare snowflake — which reads as data, not as a problem."""
+    out = page.evaluate(_PICKER_LABEL, {"roles": _ROLES, "value": _DEAD_ROLE})
+    assert out["saved"] == _DEAD_ROLE
+    assert "⚠" in out["shown"] and _DEAD_ROLE in out["shown"]
+
+
+def test_modern_picker_leaves_a_live_role_alone(page):
+    out = page.evaluate(_PICKER_LABEL, {"roles": _ROLES, "value": _LIVE_ROLE})
+    assert out["shown"] == "@Denizen"
+    assert out["saved"] == _LIVE_ROLE
+
+
+def test_modern_picker_does_not_flag_while_the_list_is_empty(page):
+    """An empty list is "still loading" or "the fetch failed" — flagging every
+    saved id there would send admins to fix settings that are fine."""
+    out = page.evaluate(_PICKER_LABEL, {"roles": [], "value": _DEAD_ROLE})
+    assert "⚠" not in out["shown"]
+    assert out["saved"] == _DEAD_ROLE
+
+
+_SELECT_OR_ADD = """
+async ({ options, value }) => {
+  const cfg = await import('/static/js/config-helpers.js');
+  const sel = document.createElement('select');
+  for (const v of options) {
+    const o = document.createElement('option');
+    o.value = v; o.textContent = v + ' days';
+    sel.append(o);
+  }
+  document.body.appendChild(sel);
+  cfg.selectValueOrAdd(sel, value, (v) => v + ' days');
+  const chosen = sel.options[sel.selectedIndex];
+  const out = { value: sel.value, label: chosen ? chosen.textContent : null };
+  sel.remove();
+  return out;
+}
+"""
+
+
+def test_select_value_or_add_keeps_an_off_list_value(page):
+    """The anon-audit route accepts 0-3650 but the panel offers five windows —
+    a 60-day window set by any other means blanked the control."""
+    out = page.evaluate(_SELECT_OR_ADD, {"options": ["30", "90", "365"], "value": 60})
+    assert out["value"] == "60"
+    assert out["label"] == "60 days"
+
+
+def test_select_value_or_add_uses_the_existing_option_when_there_is_one(page):
+    out = page.evaluate(_SELECT_OR_ADD, {"options": ["30", "90", "365"], "value": 90})
+    assert out["value"] == "90"
+    assert page.evaluate(
+        "async ({options, value}) => {"
+        " const cfg = await import('/static/js/config-helpers.js');"
+        " const sel = document.createElement('select');"
+        " for (const v of options) { const o = document.createElement('option');"
+        " o.value = v; sel.append(o); }"
+        " cfg.selectValueOrAdd(sel, value); return sel.options.length; }",
+        {"options": ["30", "90", "365"], "value": 90},
+    ) == 3

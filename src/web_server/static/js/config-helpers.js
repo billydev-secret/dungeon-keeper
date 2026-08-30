@@ -131,13 +131,33 @@ function _failedSelectOptions(kind, selected, noneLabel) {
   return html;
 }
 
+// A saved id whose role/channel/category the guild no longer has is not in the
+// meta list, so no <option> carries `selected` and the browser falls back to
+// the first one — "(none)". That reads exactly like a setting nobody ever
+// made, and because these panels save the whole form at once, the next save of
+// any unrelated field writes 0 over it. Keep the id selected and say what it
+// is: the setting survives an unrelated save, and the admin can see there is
+// something to fix. Same shape as _failedSelectOptions, which does this for
+// the other reason a list can't name an id (the fetch failed).
+function _isDangling(options, selected) {
+  const id = String(selected == null ? "" : selected);
+  if (!id || id === "0") return false;           // "0" is a real "(none)"
+  return !options.some((o) => String(o.id) === id);
+}
+
+function _danglingOption(kind, selected) {
+  const id = esc(String(selected));
+  return `<option value="${id}" selected>\u26a0 Missing ${kind} (id ${id})</option>`;
+}
+
 export function categorySelect(categories, selected, { allowNone = true } = {}) {
   if (_metaFailed.has("categories") && !categories.length) {
     return _failedSelectOptions("Categories", selected, "(none)");
   }
-  let html = allowNone ? '<option value="0">(none)</option>' : "";
+  let html = _isDangling(categories, selected) ? _danglingOption("category", selected) : "";
+  html += allowNone ? '<option value="0">(none)</option>' : "";
   for (const c of categories) {
-    const sel = c.id === selected ? " selected" : "";
+    const sel = c.id === String(selected) ? " selected" : "";
     html += `<option value="${c.id}"${sel}>${esc(c.name)}</option>`;
   }
   return html;
@@ -632,19 +652,56 @@ export function onPickerChange(fs, cb) {
   });
 }
 
+// filterSelect keeps an unmatched id as its own label, so these pickers never
+// blanked the way the legacy <select> builders did — but a bare snowflake in
+// the box doesn't tell an admin the role was deleted either. Name it, on the
+// same terms as the <select> path.
+//
+// Only when the list actually loaded: an empty list means "still loading" or
+// "the fetch failed", and flagging every saved id there would be a lie. It is
+// also why the primary guild's own ids are safe — a dial inherited from the
+// guild-0 row genuinely does not resolve on the guild reading it, and saying so
+// is the honest render, not a false alarm.
+function _withDanglingOption(options, value, kind) {
+  if (!options.length || !_isDangling(options, value)) return options;
+  return [...options, { id: String(value), label: `\u26a0 Missing ${kind} (id ${String(value)})` }];
+}
+
+/**
+ * Select `value` on a native <select>, keeping it visible when the option list
+ * doesn't offer it.
+ *
+ * Assigning a <select> a value it has no <option> for silently blanks it, and a
+ * blank picker sitting over a form is indistinguishable from an unset one. This
+ * is the third shape of that bug (see roleSelect/channelSelect for the other
+ * two): the stored value is a *number* the server accepts across a far wider
+ * range than the preset list the panel offers, so any value set outside the
+ * panel — an API call, an older preset list — renders as nothing at all.
+ */
+export function selectValueOrAdd(sel, value, label) {
+  const v = String(value);
+  if (!Array.from(sel.options).some((o) => o.value === v)) {
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = label ? label(v) : v;
+    sel.append(o);
+  }
+  sel.value = v;
+}
+
 // Typed conveniences — build the option list and the right empty sentinel.
 // Single-pickers default to emptyValue "0" (the unset id config uses) so
 // getValue() returns "0" when cleared, matching the old <select> behavior.
 export function mountChannelPicker(slotEl, channels, value, opts = {}) {
-  return mountPicker(slotEl, toChannelOptions(channels), value,
+  return mountPicker(slotEl, _withDanglingOption(toChannelOptions(channels), value, "channel"), value,
     { emptyValue: "0", emptyLabel: "(disabled)", ...opts });
 }
 export function mountRolePicker(slotEl, roles, value, opts = {}) {
-  return mountPicker(slotEl, toRoleOptions(roles), value,
+  return mountPicker(slotEl, _withDanglingOption(toRoleOptions(roles), value, "role"), value,
     { emptyValue: "0", emptyLabel: "(none)", ...opts });
 }
 export function mountCategoryPicker(slotEl, categories, value, opts = {}) {
-  return mountPicker(slotEl, toCategoryOptions(categories), value,
+  return mountPicker(slotEl, _withDanglingOption(toCategoryOptions(categories), value, "category"), value,
     { emptyValue: "0", emptyLabel: "(none)", ...opts });
 }
 export function mountChannelMultiPicker(slotEl, channels, values, opts = {}) {
@@ -711,9 +768,10 @@ export function channelSelect(channels, selected, { allowNone = true } = {}) {
   if (_metaFailed.has("channels") && !channels.length) {
     return _failedSelectOptions("Channels", selected, "(disabled)");
   }
-  let html = allowNone ? '<option value="0">(disabled)</option>' : "";
+  let html = _isDangling(channels, selected) ? _danglingOption("channel", selected) : "";
+  html += allowNone ? '<option value="0">(disabled)</option>' : "";
   for (const ch of channels) {
-    const sel = ch.id === selected ? " selected" : "";
+    const sel = ch.id === String(selected) ? " selected" : "";
     html += `<option value="${ch.id}"${sel}>#${esc(ch.name)}</option>`;
   }
   return html;
@@ -723,9 +781,10 @@ export function roleSelect(roles, selected, { allowNone = true } = {}) {
   if (_metaFailed.has("roles") && !roles.length) {
     return _failedSelectOptions("Roles", selected, "(none)");
   }
-  let html = allowNone ? '<option value="0">(none)</option>' : "";
+  let html = _isDangling(roles, selected) ? _danglingOption("role", selected) : "";
+  html += allowNone ? '<option value="0">(none)</option>' : "";
   for (const r of roles) {
-    const sel = r.id === selected ? " selected" : "";
+    const sel = r.id === String(selected) ? " selected" : "";
     html += `<option value="${r.id}"${sel}>@${esc(r.name)}</option>`;
   }
   return html;
@@ -753,7 +812,12 @@ export function channelSelectMulti(channels, selected) {
   if (_metaFailed.has("channels") && !channels.length) {
     return _failedMultiOptions("Channels", selectedIds);
   }
+  // Ids the guild no longer has would otherwise vanish from the list — no
+  // option, nothing selected, and the next save posts the remainder.
   let html = "";
+  for (const id of selectedIds) {
+    if (!channels.some((o) => String(o.id) === id)) html += _danglingOption("channel", id);
+  }
   for (const ch of channels) {
     const sel = selectedIds.has(ch.id) ? " selected" : "";
     html += `<option value="${ch.id}"${sel}>#${esc(ch.name)}</option>`;
@@ -772,7 +836,12 @@ export function roleSelectMulti(roles, selected) {
   if (_metaFailed.has("roles") && !roles.length) {
     return _failedMultiOptions("Roles", selectedIds);
   }
+  // Ids the guild no longer has would otherwise vanish from the list — no
+  // option, nothing selected, and the next save posts the remainder.
   let html = "";
+  for (const id of selectedIds) {
+    if (!roles.some((o) => String(o.id) === id)) html += _danglingOption("role", id);
+  }
   for (const r of roles) {
     const sel = selectedIds.has(r.id) ? " selected" : "";
     html += `<option value="${r.id}"${sel}>@${esc(r.name)}</option>`;

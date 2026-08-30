@@ -215,7 +215,10 @@ def test_shortening_the_anon_audit_window_is_confirmed():
     assert "confirmDialog" in src, "shortening retention still saves silently"
     # 0 disables purging, so picking it is a lengthening and must not prompt.
     assert "next !== 0" in src, "picking 'keep forever' would prompt as a shortening"
-    assert "sel.value = String(current)" in src, "a declined change must roll back"
+    # Rolls back through setRetention rather than a bare assignment: the route
+    # accepts 0-3650 while this panel offers five windows, and assigning a
+    # <select> a value it has no option for selects nothing at all.
+    assert "setRetention(sel, current)" in src, "a declined change must roll back"
 
 
 # ── a control has to say what it does ───────────────────────────────────
