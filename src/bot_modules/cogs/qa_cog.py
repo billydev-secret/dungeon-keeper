@@ -18,7 +18,7 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -31,11 +31,11 @@ from bot_modules.services.qa_service import (
     QASettings,
     archive_test,
     get_test,
-    list_stale_passed,
     list_verdicts,
     load_qa_settings,
     record_verdict,
     set_test_thread,
+    sweepable_passed,
 )
 
 if TYPE_CHECKING:
@@ -52,9 +52,9 @@ _GUILD_ONLY_MSG = "❌ This only works in a server."
 
 _VERDICT_LABELS = {"fail": "Failed", "blocked": "Blocked"}
 
-# A passed card is decluttered from the channel once it's stayed verified this
-# long, and the sweep re-checks at this cadence. See qa_archive_sweep_loop.
-ARCHIVE_SWEEP_DELAY = timedelta(minutes=10)
+# How long a passed card lingers before the declutter sweep takes it is a
+# per-guild dial (``QASettings.linger_minutes``); this is only how often the
+# sweep looks. See qa_archive_sweep_loop.
 ARCHIVE_SWEEP_INTERVAL_SECONDS = 60
 
 
@@ -386,22 +386,25 @@ async def _sweep_stale_card(bot: Bot, db_path: Path, test: dict) -> None:
 
 
 async def qa_archive_sweep_loop(bot: Bot) -> None:
-    """Delete cards that have sat verified for ``ARCHIVE_SWEEP_DELAY``.
+    """Delete cards that have sat verified past their guild's linger window.
 
-    Registered as a bot startup task; guild-agnostic, matching the
-    ``scheduled_games_loop`` polling pattern. Declutters the testing channel
-    without touching the audit trail — verdicts and payouts stay in the DB.
+    Registered as a bot startup task; the *loop* is guild-agnostic, matching
+    the ``scheduled_games_loop`` polling pattern, but which rows it may take is
+    decided per guild by ``qa_service.sweepable_passed`` — a guild with the
+    tracker switched off keeps its cards, and each guild sets its own linger.
+    Declutters the testing channel without touching the audit trail — verdicts
+    and payouts stay in the DB.
     """
     await bot.wait_until_ready()
     db_path = bot.ctx.db_path
 
     while not bot.is_closed():
         try:
-            cutoff = (datetime.now(timezone.utc) - ARCHIVE_SWEEP_DELAY).isoformat()
+            now = datetime.now(timezone.utc)
 
             def _load() -> list[dict]:
                 with open_db(db_path) as conn:
-                    return [dict(r) for r in list_stale_passed(conn, cutoff)]
+                    return sweepable_passed(conn, now)
 
             for test in await asyncio.to_thread(_load):
                 try:

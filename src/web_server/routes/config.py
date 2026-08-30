@@ -3635,24 +3635,21 @@ async def update_voice_transcription_config(
     guild_id = get_active_guild_id(request)
     model = body.model_name if body.model_name in _VT_VALID_MODELS else _VT_DEFAULT_MODEL
     channel_ids = tuple(int(c) for c in body.channel_ids if c)
+    # The panel promises a model has to read "Downloaded" before it can be used,
+    # and the bot loads models offline (local_files_only), so an un-downloaded
+    # one fails silently on every voice message. Refuse to switch transcription
+    # on with a model that isn't there yet — but never block turning it *off*,
+    # or a wiped cache would trap an admin in a broken setting. Only meaningful
+    # when faster-whisper is installed; without it nothing is cached and the
+    # panel already says nothing gets transcribed.
+    if body.enabled and _vt_is_available() and not _vt_model_is_cached(model):
+        raise HTTPException(
+            400,
+            f"{model} isn't downloaded yet — download it under Model Files first.",
+        )
 
     def _q() -> dict:
         with ctx.open_db() as conn:
-            current = _vt_get_config(conn, guild_id)
-            # The panel's rule ("has to read Downloaded before you can choose
-            # it") is enforced here, not just hinted: an uncached model loads
-            # offline-only and fails every clip with a log line no member sees.
-            # Switching *to* a model is what's gated — a guild whose stored
-            # model has fallen out of the cache can still edit its other
-            # settings (and switch transcription off).
-            if (current is None or model != current.model_name) and not (
-                _vt_model_is_cached(model)
-            ):
-                raise HTTPException(
-                    400,
-                    f"{model} isn't downloaded yet — press Download beside it "
-                    "first, then save.",
-                )
             _vt_set_config(
                 conn,
                 guild_id,

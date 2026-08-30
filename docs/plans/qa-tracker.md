@@ -203,9 +203,8 @@ tests in `tests/web/test_qa_routes.py`.
 
 **Stage 4 — polish.** ✅ Archive sweep shipped
 (2026-07-18): `qa_archive_sweep_loop` (`qa_cog.py`, registered as a startup
-task) polls every 60s for tests `status='passed'` whose `verified_at` is 10+
-minutes old (`qa_service.list_stale_passed`) and deletes the card from the
-channel — the audit trail (verdicts, payouts) stays in the DB, only the
+task) polls every 60s for tests `status='passed'` that their own guild is done
+with (`qa_service.sweepable_passed`) and deletes the card from the channel — the audit trail (verdicts, payouts) stays in the DB, only the
 Discord message goes. Best-effort on the Discord side: a message someone
 already deleted, or a channel the bot can no longer see, still gets marked
 `archived` (nothing left to clean up); a transient Discord error leaves the
@@ -214,6 +213,15 @@ row `passed` for the next sweep to retry. Reuses the existing terminal
 card's jump-link in the board will 404 since the message is gone, unlike a
 manually-archived card which keeps its (dimmed) message. Bounty idea still
 open, revisit with real usage data.
+
+Which rows the sweep may take became per-guild on 2026-08-30
+(`qa_service.sweepable_passed`, wrapping the still guild-agnostic
+`list_stale_passed`): a guild with `qa_enabled` off is skipped entirely — the
+panel's "off … existing cards stay put" has to cover the sweep too, or a card
+an admin deliberately left up is deleted anyway — and the 10-minute window is
+now the `linger_minutes` dial on the panel (0 = never sweep, cards stay until
+someone archives one by hand). Cutoffs are still compared as ISO strings, the
+same rule `list_stale_passed`'s `WHERE` clause uses.
 
 ## Addendum — `docs/TESTING_QUEUE.md` retired (2026-07-18)
 

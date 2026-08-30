@@ -268,14 +268,17 @@ export function mount(container, initialParams = {}) {
       <section class="card" data-board-card style="margin-top:20px">
         <div class="section-label">Discord Board</div>
         <div class="field-hint" style="margin-bottom:8px">
-          A live board pinned to the bottom of a channel, with ➕ Add and ✅ Complete
-          buttons. It updates itself as tasks come and go, and hops back down when
-          people chat. The buttons are moderator-only.
+          A live board pinned to the bottom of a channel, with ➕ Add, ✅ Complete,
+          ✍️ Sign-Offs and 🧾 Approvals buttons. It updates itself as tasks come and
+          go, and hops back down when people chat. Add and Complete are
+          moderator-only; Sign-Offs and Approvals hand out currency, so they ask for
+          Discord's Administrator permission or the economy manager role instead.
         </div>
         <div class="field-hint" style="margin-bottom:8px">
-          It shows <b>today's chores</b> first — who ticked each one and how many
-          days running it's been kept up — then everything else outstanding. Put it
-          in a mod channel if the chores are for the mod team.
+          It leads with whatever a member is waiting on — quest sign-offs, then paid
+          requests — then <b>today's chores</b>, who ticked each one and how many
+          days running it's been kept up, and finally everything else outstanding.
+          Put it in a mod channel if the chores are for the mod team.
         </div>
         <div data-board-body>${renderLoading("Loading board…")}</div>
       </section>

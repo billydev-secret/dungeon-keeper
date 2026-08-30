@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from bot_modules.economy.logic import local_day_bounds
@@ -45,6 +45,10 @@ class QASettings:
     # Paid verdicts per tester per guild-local day; further fresh verdicts
     # still record, they just pay nothing. 0 = never pay.
     daily_cap: int = 4
+    # How long a passed (green) card stays in the channel before the declutter
+    # sweep deletes its message and archives the row. 0 = never sweep, so cards
+    # stay visible until an admin archives one by hand.
+    linger_minutes: int = 10
 
 
 DEFAULT_QA_SETTINGS = QASettings()
@@ -258,6 +262,43 @@ def list_stale_passed(conn: sqlite3.Connection, cutoff_iso: str) -> list[sqlite3
         """,
         (cutoff_iso,),
     ).fetchall()
+
+
+def sweepable_passed(
+    conn: sqlite3.Connection, now: datetime | None = None
+) -> list[dict]:
+    """The passed cards the declutter sweep may act on *right now*.
+
+    ``list_stale_passed`` is guild-agnostic and knows nothing about the
+    per-guild dials, so both guild-level promises the dashboard makes are
+    applied here rather than in SQL:
+
+    * a guild with the tracker switched **off** is skipped entirely — "off
+      pauses verdict buttons; existing cards stay put" has to include the
+      sweep, or a card an admin deliberately left up is deleted anyway;
+    * each guild's own ``linger_minutes`` decides how long its passed cards sit
+      in the channel first, and ``0`` means never sweep at all.
+
+    Cutoffs are compared as ISO strings, exactly as ``list_stale_passed``'s
+    ``WHERE`` clause does, so a row is judged by the same rule either way.
+    """
+    now = now or datetime.now(timezone.utc)
+    rows = list_stale_passed(conn, now.isoformat())
+    cutoffs: dict[int, str | None] = {}
+    out: list[dict] = []
+    for row in rows:
+        guild_id = int(row["guild_id"])
+        if guild_id not in cutoffs:
+            settings = load_qa_settings(conn, guild_id)
+            cutoffs[guild_id] = (
+                None
+                if not settings.enabled or settings.linger_minutes <= 0
+                else (now - timedelta(minutes=settings.linger_minutes)).isoformat()
+            )
+        cutoff = cutoffs[guild_id]
+        if cutoff is not None and str(row["verified_at"]) <= cutoff:
+            out.append(dict(row))
+    return out
 
 
 # ── verdicts: record (pay on fresh insert) + void (clawback) ─────────

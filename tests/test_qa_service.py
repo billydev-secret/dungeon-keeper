@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -30,6 +31,7 @@ from bot_modules.services.qa_service import (
     record_verdict,
     save_qa_settings,
     set_test_message,
+    sweepable_passed,
     void_verdict,
 )
 from tests.db_template import migrated_db
@@ -82,6 +84,7 @@ def test_defaults_when_unconfigured(db):
     assert settings.channel_id == 0
     assert settings.reward == 15
     assert settings.daily_cap == 4
+    assert settings.linger_minutes == 10
 
 
 def test_save_load_roundtrip(db):
@@ -91,6 +94,7 @@ def test_save_load_roundtrip(db):
         "channel_id": 777,
         "reward": 25,
         "daily_cap": 2,
+        "linger_minutes": 45,
     }
     with open_db(db) as conn:
         save_qa_settings(conn, GUILD, values)
@@ -102,6 +106,7 @@ def test_save_load_roundtrip(db):
     assert settings.channel_id == 777
     assert settings.reward == 25
     assert settings.daily_cap == 2
+    assert settings.linger_minutes == 45
 
 
 def test_partial_save_keeps_defaults(db):
@@ -251,6 +256,47 @@ def test_list_stale_passed_filters_status_message_and_cutoff(db):
         # Archiving drops it out of the sweep (no longer 'passed').
         archive_test(conn, stale)
         assert list_stale_passed(conn, cutoff) == []
+
+
+def test_sweepable_passed_skips_disabled_guilds_and_honours_linger(db):
+    """The per-guild dials the raw (guild-agnostic) query can't see.
+
+    Off must freeze the sweep too — the panel promises existing cards stay put
+    — and each guild sets how long a passed card lingers, 0 meaning never.
+    """
+    other = GUILD + 1
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    with open_db(db) as conn:
+        mine = _mk_test(conn, 1)
+        theirs = create_test(
+            conn, other, "Entry 9", "Entry 9 title", "- [ ] check the thing",
+            commit_sha="abc9999", commit_subject="Feature 9",
+        )
+        _record(conn, S, mine, USER, "pass")
+        record_verdict(conn, S, theirs, other, USER, "pass", None, local_day=DAY)
+        set_test_message(conn, mine, 10, 100)
+        set_test_message(conn, theirs, 11, 200)
+        conn.execute(
+            "UPDATE qa_tests SET verified_at = ?",
+            ((now - timedelta(minutes=30)).isoformat(),),
+        )
+
+        # Unconfigured guilds: enabled, 10-minute linger — both are ready.
+        assert {r["id"] for r in sweepable_passed(conn, now)} == {mine, theirs}
+
+        # Tracker switched off: that guild's card stays in its channel.
+        save_qa_settings(conn, other, {"enabled": False})
+        assert [r["id"] for r in sweepable_passed(conn, now)] == [mine]
+
+        # A longer linger holds a card until its own window has passed.
+        save_qa_settings(conn, GUILD, {"linger_minutes": 60})
+        assert sweepable_passed(conn, now) == []
+        later = now + timedelta(minutes=31)
+        assert [r["id"] for r in sweepable_passed(conn, later)] == [mine]
+
+        # 0 = never swept; an admin archives it by hand or it stays.
+        save_qa_settings(conn, GUILD, {"linger_minutes": 0})
+        assert sweepable_passed(conn, now + timedelta(days=7)) == []
 
 
 # ── record_verdict: pay on fresh insert ───────────────────────────────

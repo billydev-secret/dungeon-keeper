@@ -106,6 +106,14 @@ export function mount(container) {
       "Nothing recorded yet. Anonymous submissions in AMA, Free For All, Hot Takes, Fantasies, Clapback, Would You Rather and Spin the Compliment land here.",
     filters: [
       { name: "feature", label: "Feature", options: [{ value: "", label: "All features" }] },
+      // Narrows the feed to one person. The endpoint has always supported it;
+      // without a control the only way to ask was to hand-type a URL. The id
+      // for a row is on its Actor cell as a tooltip, since the cell itself
+      // shows the resolved name whenever there is one.
+      {
+        name: "actor_id", label: "Actor ID", type: "text",
+        placeholder: "Discord user ID", inputmode: "numeric",
+      },
     ],
     columns: [
       {
@@ -120,7 +128,13 @@ export function mount(container) {
           ? badge(prettyEvent(e.event), "badge-warning")
           : prettyEvent(e.event)),
       },
-      { label: "Actor", render: (e) => e.actor_name || e.actor_id },
+      {
+        label: "Actor",
+        render: (e) => e.actor_name || e.actor_id,
+        // The raw id even when a name resolved, so it can be copied into the
+        // Actor ID filter above.
+        title: (e) => e.actor_id,
+      },
       {
         label: "Subject",
         render: (e) => (e.target_id ? (e.target_name || e.target_id) : "—"),

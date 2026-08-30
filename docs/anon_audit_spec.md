@@ -143,7 +143,10 @@ admin-only).
 
 - `GET /api/moderation/anon-audit` — `limit`, `offset`, `feature`, `actor_id`.
   Reads through `list_events`/`count_events` rather than its own SQL, so the
-  filter logic has one definition. Returns entries plus the filter options,
+  filter logic has one definition. Both filters have a control on the panel:
+  the feature dropdown, and an **Actor ID** box (the shared `auditPanel`'s
+  `type: "text"` filter). Until 2026-08-30 `actor_id` was reachable only by
+  hand-typing the URL. Returns entries plus the filter options,
   built from `KNOWN_FEATURES` and labelled from `games.constants.GAME_NAMES` so
   the panel names each game the way the rest of the dashboard does.
 - `GET|PUT /api/moderation/anon-audit/retention`.
