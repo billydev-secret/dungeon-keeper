@@ -210,6 +210,65 @@ def full_run_triggers(changed: list[str], added: set[str]) -> list[str]:
     return [c for c in changed if forces_full_run(c, c in added)]
 
 
+#: Lightweight tag marking the last commit a full local run went green on.
+#: Local only and never pushed — it records what *this* machine has verified,
+#: which is the question the nag asks. Moved by a full `gate.py`, read by
+#: `dk_session.py teardown`.
+FULL_GATE_TAG = "last-full-gate"
+
+
+def mark_full_gate(cwd: Path | str | None = None) -> str | None:
+    """Point FULL_GATE_TAG at HEAD after a full run went green.
+
+    Only from the prod checkout on ``main``: a green branch says nothing about
+    the tree the merges land on, and pointing the tag at a branch tip would let
+    a work branch clear main's backlog without main ever being run.
+    """
+    root = Path(cwd) if cwd is not None else ROOT
+    try:
+        if in_linked_worktree(root):
+            return None
+        branch = subprocess.run(
+            ["git", "branch", "--show-current"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        if branch != "main":
+            return None
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "tag", "-f", FULL_GATE_TAG, head],
+            cwd=root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None  # a missing tag is a missing nag, never a failed gate
+    print(f"── marked {FULL_GATE_TAG} at {head[:8]} " + "─" * 20)
+    return head
+
+
+def ungated_merges(cwd: Path | str | None = None) -> int | None:
+    """How many commits main has taken since its last green full run.
+
+    ``None`` when the tag has never been set — "unknown", which reads
+    differently from "zero" and should be reported differently.
+    """
+    root = Path(cwd) if cwd is not None else ROOT
+    try:
+        subprocess.run(
+            ["git", "rev-parse", "--verify", f"{FULL_GATE_TAG}^{{commit}}"],
+            cwd=root, capture_output=True, text=True, check=True,
+        )
+        out = subprocess.run(
+            ["git", "rev-list", "--count", f"{FULL_GATE_TAG}..main"],
+            cwd=root, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        return int(out)
+    except (subprocess.CalledProcessError, OSError, ValueError):
+        return None
+
+
 def in_linked_worktree(cwd: Path | str | None = None) -> bool:
     """True when *cwd* is a `git worktree`, i.e. a dk-session branch.
 
@@ -511,6 +570,7 @@ def main() -> None:
         return
 
     run_pytest(py, *pytest_args)
+    mark_full_gate()
     print("GATE OK")
 
 
