@@ -116,3 +116,26 @@ def test_find_expired_policy_votes_scopes_to_guild(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
         expired_other = find_expired_policy_votes(conn, GUILD + 1, timeout_seconds=3600)
     assert expired_other == []
+
+
+async def test_vote_timeout_sweep_consults_every_guild(sync_db_path: Path, monkeypatch):
+    """One timeout pass per guild, keyed by that guild's id. The loop used to
+    consult only ctx.guild_id, which made the dashboard's per-guild voting
+    deadline a silent no-op off the home guild (IA audit 2026-08-29)."""
+    from types import SimpleNamespace
+
+    from bot_modules.commands import jail_commands
+
+    seen: list[int] = []
+
+    def _record(conn, guild_id, *, timeout_seconds):
+        seen.append(guild_id)
+        return []
+
+    monkeypatch.setattr(jail_commands, "find_expired_policy_votes", _record)
+    ctx = SimpleNamespace(open_db=lambda: open_db(sync_db_path), guild_id=GUILD)
+    for gid in (GUILD, 9002):
+        await jail_commands._policy_vote_timeout_pass(
+            SimpleNamespace(), ctx, SimpleNamespace(id=gid)
+        )
+    assert seen == [GUILD, 9002]

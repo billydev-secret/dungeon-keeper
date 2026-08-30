@@ -73,6 +73,7 @@ def test_moderator_can_read_config(fake_ctx):
         ("/api/config/prune", {"role_id": "0", "inactivity_days": 5}),
         ("/api/config/bulk-cleanup", {"enabled": True, "age_days": 1}),
         ("/api/config/birthday", {"birthday_channel_id": "0"}),
+        ("/api/config/policy", {"vote_timeout_hours": 72}),
     ],
 )
 def test_moderator_cannot_write_config(fake_ctx, path, payload):
@@ -86,6 +87,7 @@ def test_moderator_cannot_write_config(fake_ctx, path, payload):
     [
         ("/api/config/xp", {"level_curve_factor": 99.0}),
         ("/api/config/prune", {"role_id": "0", "inactivity_days": 5}),
+        ("/api/config/policy", {"vote_timeout_hours": 72}),
     ],
 )
 def test_admin_can_still_write_config(fake_ctx, path, payload):

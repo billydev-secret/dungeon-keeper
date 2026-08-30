@@ -1259,6 +1259,16 @@ function recordPanelView(pageId) {
 const MOVED_PAGES = {
   "channel-panels": "economy-config",
   "economy-qotd": "economy-qotd-submissions",
+  // config-policy-tickets: retired 2026-07-28 when its one field (the voting
+  // deadline) folded into the queue page — the only retirement that never got
+  // a redirect until the 2026-08-29 IA audit found its dead deep links.
+  "config-policy-tickets": "mod-policy-tickets",
+  // health-composite-score: dropped 2026-08-26 (e6c06624), the blend
+  // dissolved into its six metrics; DAU/MAU is the first of them.
+  "health-composite-score": "health-dau-mau",
+  // config-booster-roles: booster colors became the rentable Palette perk
+  // (2a83904b), sold from Shop & Perks.
+  "config-booster-roles": "economy-sinks",
 };
 
 /** Rewrite a retired page's hash to its successor. True if it redirected. */
