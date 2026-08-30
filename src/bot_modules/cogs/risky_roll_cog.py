@@ -28,6 +28,7 @@ from bot_modules.services.risky_roll.views import (
     QuestionReplyView,
     RiskyRollView,
     SixtyNineQuestionView,
+    auto_close_round,
     disable_pending_question_message,
     disable_round_message,
     schedule_auto_close,
@@ -315,6 +316,38 @@ class RiskyRollCog(commands.Cog):
             s.channel_id == channel_id for s in rr_state.active_games.values()
         )
 
+    async def close_channel_rounds(self, channel_id: int) -> bool:
+        """Resolve every open round in this channel now. Returns whether any did.
+
+        The counterpart to :meth:`channel_has_active_round`, registered as
+        ``bot.game_channel_closers['risky_roll']`` so the feature rotation can
+        end this room's game when the room stops being the featured one —
+        rounds live in ``rr_state.active_games``, so the rotation's
+        games_active_games lookup cannot see them.
+
+        Deliberately routed through ``auto_close_round`` rather than dropping
+        the state: that is the round's real resolution, so the winner is picked,
+        the no-contact gate is consulted before anything is settled, and the
+        question prompts go out. Closing early is the same event as the timer
+        running out, just sooner.
+        """
+        game_ids = [
+            gid for gid, s in rr_state.active_games.items()
+            if s.channel_id == channel_id and s.is_open
+        ]
+        closed = False
+        for game_id in game_ids:
+            task = rr_state.auto_close_tasks.pop(game_id, None)
+            if task is not None:
+                task.cancel()
+            try:
+                await auto_close_round(self.bot, game_id)
+            except Exception:
+                log.exception("Risky Rolls: failed to close round %s early", game_id)
+                continue
+            closed = True
+        return closed
+
     async def launch(
         self,
         *,
@@ -456,3 +489,4 @@ async def setup(bot: Bot) -> None:
     await bot.add_cog(cog)
     bot.game_launchers["risky_roll"] = cog.launch
     bot.game_busy_checks["risky_roll"] = cog.channel_has_active_round
+    bot.game_channel_closers["risky_roll"] = cog.close_channel_rounds

@@ -61,11 +61,17 @@ class ConfigBody(BaseModel):
 
 
 #: Game keys a pool room may be told to run when it is the featured room.
-#: Deliberately a short allow-list rather than every schedulable game. Risky
-#: Rolls is absent on purpose: it already auto-launches from its own daily
-#: schedules, so a rotation launch would be a third round competing with them —
-#: the rotation gates *those* schedules on hidden days instead.
-LAUNCHABLE_GAMES: tuple[str, ...] = ("ama",)
+#: Deliberately a short allow-list rather than every schedulable game: these are
+#: the two that have a real session to open and close. The other seeded rooms
+#: are continuous submission streams, or (guess-who) carry rounds that belong to
+#: individual members and stay open until solved.
+#:
+#: A room set to Risky Rolls can end up with more rounds than its own on its
+#: featured day, since Scheduled Games may also be pointed at that channel. That
+#: is a configuration to check rather than something to block here — the
+#: rotation refuses to launch on top of a round that is already running, and the
+#: scheduler skips a hidden room, so the two cannot collide, only stack.
+LAUNCHABLE_GAMES: tuple[str, ...] = ("ama", "risky_roll")
 
 
 class RoomBody(BaseModel):

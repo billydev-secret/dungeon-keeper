@@ -117,3 +117,97 @@ async def test_start_allowed_under_configured_cap():
         for call in interaction.response.send_message.call_args_list
     )
     assert not rejected
+
+
+# ── closing a channel's rounds from outside ──────────────────────────────────
+#
+# The feature rotation ends a room's game when the room stops being the
+# featured one. Risky Rolls keeps rounds in rr_state.active_games rather than
+# the shared games_active_games table, so this closer is the only way the
+# rotation can reach them.
+
+
+@pytest.mark.asyncio
+async def test_closing_a_channel_resolves_its_round_rather_than_dropping_it(
+    monkeypatch,
+):
+    """Routed through auto_close_round on purpose: that is the round's real
+    resolution, so a winner is picked and the no-contact gate is consulted.
+    Dropping the state would strand the players with no result."""
+    from bot_modules.cogs import risky_roll_cog as rr
+
+    resolved = []
+
+    async def fake_auto_close(client, game_id):
+        resolved.append(game_id)
+        rr_state.active_games.pop(game_id, None)
+
+    monkeypatch.setattr(rr, "auto_close_round", fake_auto_close)
+
+    rr_state.active_games["live"] = RiskyRollState(
+        game_id="live", channel_id=CHANNEL_ID, guild_id=GUILD_ID, opener_id=2002,
+    )
+
+    cog = _make_cog()
+    assert await cog.close_channel_rounds(CHANNEL_ID) is True
+    assert resolved == ["live"]
+
+
+@pytest.mark.asyncio
+async def test_closing_a_channel_leaves_other_channels_rounds_alone(monkeypatch):
+    from bot_modules.cogs import risky_roll_cog as rr
+
+    resolved = []
+
+    async def fake_auto_close(client, game_id):
+        resolved.append(game_id)
+
+    monkeypatch.setattr(rr, "auto_close_round", fake_auto_close)
+
+    rr_state.active_games["mine"] = RiskyRollState(
+        game_id="mine", channel_id=CHANNEL_ID, guild_id=GUILD_ID, opener_id=2002,
+    )
+    rr_state.active_games["theirs"] = RiskyRollState(
+        game_id="theirs", channel_id=CHANNEL_ID + 1, guild_id=GUILD_ID, opener_id=2002,
+    )
+
+    cog = _make_cog()
+    await cog.close_channel_rounds(CHANNEL_ID)
+    assert resolved == ["mine"]
+
+
+@pytest.mark.asyncio
+async def test_closing_a_channel_with_no_round_reports_nothing_closed():
+    cog = _make_cog()
+    assert await cog.close_channel_rounds(CHANNEL_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_closing_cancels_the_pending_auto_close_timer(monkeypatch):
+    """Otherwise the sleeping timer fires later on a round already resolved."""
+    import asyncio
+    import contextlib
+
+    from bot_modules.cogs import risky_roll_cog as rr
+
+    async def fake_auto_close(client, game_id):
+        rr_state.active_games.pop(game_id, None)
+
+    monkeypatch.setattr(rr, "auto_close_round", fake_auto_close)
+
+    async def _sleep_forever():
+        await asyncio.sleep(3600)
+
+    task = asyncio.create_task(_sleep_forever())
+    rr_state.active_games["live"] = RiskyRollState(
+        game_id="live", channel_id=CHANNEL_ID, guild_id=GUILD_ID, opener_id=2002,
+    )
+    rr_state.auto_close_tasks["live"] = task
+
+    cog = _make_cog()
+    await cog.close_channel_rounds(CHANNEL_ID)
+
+    assert "live" not in rr_state.auto_close_tasks
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    assert task.cancelled()

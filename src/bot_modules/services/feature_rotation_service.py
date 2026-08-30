@@ -189,37 +189,59 @@ async def apply_day(bot, guild: discord.Guild, day: RotationDay, reason: str) ->
 # ── the game lifecycle ───────────────────────────────────────────────────────
 
 
-async def end_room_game(bot, guild: discord.Guild, channel_id: int) -> bool:
+async def end_room_game(
+    bot, guild: discord.Guild, channel_id: int, game_key: str = ""
+) -> bool:
     """End whatever game is running in one room. Returns whether one ended.
 
-    Two ways out, in preference order. A view that exposes ``close_now`` is
-    asked to close itself, which is the game's own completion site — an AMA
-    posts its recap embed and pays its roster exactly as if the host had
-    pressed the button. Anything else falls back to ``force_end_active_game``,
-    the same path ``/games end`` takes: it archives and pays, but posts no
-    recap. Duck-typing the closer rather than branching on ``game_type`` keeps
-    this working for the next game that grows one.
+    Three ways out, all tried, because the two games in scope keep their state
+    in different places.
 
-    ``end_game``'s DELETE is the exactly-once claim, so racing the 24-hour
-    expiry sweep costs at worst a missing recap, never a double payout.
+    1. A **registered channel closer** (``bot.game_channel_closers[game_key]``)
+       for a game whose rounds live outside ``games_active_games`` — Risky
+       Rolls keeps its in memory, so no table lookup can see them. Its closer
+       routes through the round's real resolution, so a winner is picked and
+       the prompts go out; closing early is the same event as the timer running
+       out, just sooner.
+    2. A **view that exposes** ``close_now`` for a game in that table: the
+       game's own completion site, so an AMA posts its recap embed and pays its
+       roster exactly as if the host had pressed the button.
+    3. ``force_end_active_game`` otherwise — the ``/games end`` path, which
+       archives and pays but posts no recap. This is the after-a-restart case,
+       where the row outlived its view.
+
+    Duck-typing ``close_now`` rather than branching on ``game_type`` keeps this
+    working for the next game that grows one. ``end_game``'s DELETE is the
+    exactly-once claim, so racing the 24-hour expiry sweep costs at worst a
+    missing recap, never a double payout.
     """
+    ended = False
+
+    closer = getattr(bot, "game_channel_closers", {}).get(game_key) if game_key else None
+    if closer is not None:
+        try:
+            ended = bool(await closer(channel_id))
+        except Exception:
+            log.exception(
+                "Rotation: registered closer for %s failed in %s", game_key, channel_id
+            )
+
     db = getattr(bot, "games_db", None)
     if db is None:
-        return False
+        return ended
     from bot_modules.games.utils.game_manager import force_end_active_game
 
     rows = await db.fetchall(
         "SELECT game_id FROM games_active_games WHERE channel_id = ?", (channel_id,)
     )
     channel = guild.get_channel(channel_id)
-    ended = False
     for row in rows:
         game_id = str(row["game_id"])
         view = getattr(bot, "active_views", {}).get(game_id)
-        closer = getattr(view, "close_now", None)
+        view_closer = getattr(view, "close_now", None)
         try:
-            if closer is not None and channel is not None:
-                await closer(channel)
+            if view_closer is not None and channel is not None:
+                await view_closer(channel)
             else:
                 await force_end_active_game(bot, db, game_id)
         except Exception:
@@ -290,8 +312,8 @@ async def start_room_game(
 async def apply_game_ends(bot, guild: discord.Guild, plan: GamePlan) -> int:
     """End the games in every room that is not featured today."""
     ended = 0
-    for channel_id in plan.end:
-        if await end_room_game(bot, guild, channel_id):
+    for channel_id, game_key in plan.end:
+        if await end_room_game(bot, guild, channel_id, game_key):
             ended += 1
     return ended
 

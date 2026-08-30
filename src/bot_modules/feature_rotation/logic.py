@@ -55,7 +55,7 @@ class GamePlan:
     """
 
     start: tuple[tuple[int, str], ...] = ()
-    end: tuple[int, ...] = ()
+    end: tuple[tuple[int, str], ...] = ()
 
     def is_empty(self) -> bool:
         return not self.start and not self.end
@@ -205,6 +205,11 @@ def plan_games(rooms: list[Room], featured: list[int]) -> GamePlan:
     others, so a room like whisper or confessions keeps the "out of sight,
     still running" behaviour the feature shipped with.
 
+    Both lists carry ``(channel_id, game_key)``: the key is what tells the
+    ender which of ``bot.game_channel_closers`` to consult, for a game like
+    Risky Rolls whose rounds live in memory rather than in
+    ``games_active_games`` and are therefore invisible to a table lookup.
+
     **Start** is the featured rooms that declare a game. **End** is every other
     room that declares one — keyed on "not featured today" rather than on "this
     flip hid it", for two reasons. A room with ``hide_when_off`` unticked never
@@ -226,7 +231,7 @@ def plan_games(rooms: list[Room], featured: list[int]) -> GamePlan:
         if r.launch_game and r.channel_id in featured_set
     )
     end = tuple(
-        r.channel_id
+        (r.channel_id, r.launch_game)
         for r in rooms
         if r.launch_game and r.channel_id not in featured_set
     )

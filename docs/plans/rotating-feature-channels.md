@@ -380,7 +380,7 @@ question room by room collapsed the work rather than expanding it:
 | 🤫│whisper | no — a continuous stream of ephemeral panels, no round |
 | 🤐│confessions | no — same, `/confess` submissions |
 | 🤷│guess-who | rounds exist, but they belong to individual members and stay open until solved (26 open, aged 2–106 days). Force-resolving someone else's round is not a lifecycle, it's a deletion |
-| 🎲│risky-rolls | yes, but it already auto-launches — see below |
+| 🎲│risky-rolls | **yes** — `bot.game_launchers["risky_roll"]` to start, its own `auto_close_round` to resolve. Rounds live in memory, not `games_active_games` |
 | 🙋‍♂️│ama | **yes** — `bot.game_launchers["ama"]` to start, `AMAView` to close |
 
 **Decided (Billy):** scope is AMA and risky-rolls only. A generic
@@ -395,7 +395,8 @@ Migration 197 adds `launch_game` (a key from `GAME_NAMES`, `''` for none) and
 `launch_options` (the launcher's options dict as JSON, the same
 `SCHEDULE_OPTION_SCHEMA` fields `games_scheduled.options` carries). Setting it
 means both halves, deliberately symmetric: started on the room's featured day,
-ended on every day it isn't.
+ended on every day it isn't. The picker offers **AMA and Risky Rolls** — the
+two rooms with a real session to open and close.
 
 The flip runs **end → hide → show → start**, inside the existing `claim_flip`
 guard so a restart mid-flip can't double-fire:
@@ -412,13 +413,27 @@ module derives the day from an ordinal precisely so a bot that was offline for
 three days returns to the right room — an end that required having *observed*
 yesterday's flip would give that property up.
 
-Ending prefers the game's own completion site: `end_room_game` duck-types
-`close_now` on whatever view is registered in `bot.active_views` (AMA grew one,
-wrapping `_do_close`), so the recap embed posts and the roster is paid exactly
-as if the host had pressed the button. Anything without one falls back to
-`force_end_active_game`, which archives and pays but posts no recap — the
-after-a-restart case. `end_game`'s DELETE is the exactly-once claim, so racing
-the 24-hour expiry sweep costs at worst a missing recap, never a double payout.
+**Ending is not one mechanism, because the two games keep their state in
+different places.** `GamePlan.end` therefore carries `(channel_id, game_key)`,
+not a bare channel id, and `end_room_game` tries three things:
+
+1. a **registered channel closer**, `bot.game_channel_closers[game_key]` — the
+   counterpart to the existing `game_busy_checks`, for a game whose rounds live
+   outside `games_active_games`. Risky Rolls keeps its in `rr_state.active_games`,
+   so no table lookup can see them; its closer routes through `auto_close_round`,
+   the round's real resolution, so a winner is picked, the no-contact gate is
+   consulted, and the prompts go out. Closing early is the same event as the
+   timer running out, just sooner — and the pending auto-close task is cancelled
+   so it can't fire later on a resolved round.
+2. a view exposing **`close_now`** for a game in that table — the game's own
+   completion site. AMA grew one wrapping `_do_close`, so the recap embed posts
+   and the roster is paid as if the host had pressed the button.
+3. **`force_end_active_game`** otherwise — the `/games end` path, which archives
+   and pays but posts no recap. The after-a-restart case, where the row outlived
+   its view.
+
+`end_game`'s DELETE is the exactly-once claim, so racing the 24-hour expiry
+sweep costs at worst a missing recap, never a double payout.
 
 Two economy details worth recording. The launch is hosted by **nobody**
 (`host_id=0`, which reaches `pay_game_rewards` as `host_id=None`), so an
@@ -439,9 +454,18 @@ consequences killed the obvious design:
 * a risky-roll round never survives to midnight under those windows, so "end at
   midnight" would be a no-op for that room anyway.
 
-**Decided (Billy):** don't add a third launch — gate the existing schedules.
-`_process_due` now skips a slot whose channel the rotation currently has
-hidden, recording `skipped_hidden` and rolling a recurring row to its next slot.
+**Decided (Billy):** gate the existing schedules — and, on a second pass,
+**also offer Risky Rolls in the room picker**. `_process_due` now skips a slot
+whose channel the rotation currently has hidden, recording `skipped_hidden` and
+rolling a recurring row to its next slot.
+
+The two mechanisms **stack rather than collide**: a room set to launch Risky
+Rolls opens its own round at midnight, and schedules #4 and #6 still fire on
+that room's open day (they are only silenced on its hidden days). They cannot
+double-launch — the rotation refuses to launch onto a running round via the
+registered busy-check, and the scheduler skips a hidden room — but three rounds
+on the featured day is a real possibility, so the panel says so next to the
+dial and the schedules are worth retiring by hand if one round is what's wanted.
 Because the announcement is downstream of a successful launch, that one check
 also suppresses the role ping — which closes **open risk #1** from Part 1 ("a
 member @-mentioned in a hidden channel gets a notification that opens
@@ -456,11 +480,11 @@ with the rotation off or a channel outside the pool is never gated. It fails
 
 | Question | Answer |
 |---|---|
-| Which rooms | **AMA and risky-rolls only** — the other three have no lifecycle to run |
+| Which rooms | **AMA and risky-rolls only** — the other three have no lifecycle to run; both are offered in the picker |
 | When | **Both at midnight**, with the flip ordered end → hide → show → start |
 | Where the result is seen | **In-room only** — the recap stays where the game puts it; the morning announcement is unchanged |
 | Mid-flight round when the room rotates out | **Forced resolution** through the game's own close path (recap + payout), not a void |
-| Risky-rolls | **Gate its existing schedules**, don't launch a third round |
+| Risky-rolls | **Gate its existing schedules** on hidden days, *and* offer it in the picker (revised — the first pass gated only) |
 | AMA mode/format | Panel dials, defaulting to `/ama`'s own defaults (unfiltered, hot seat) |
 
 ## Not done, deliberately
@@ -468,10 +492,10 @@ with the rotation off or a channel outside the pool is never gated. It fails
 * **`pause_when_off`** (stage 3) is still absent, column and all. This part
   ends and starts games; it does not gate submissions, and CLAUDE.md forbids
   shipping the toggle before the enforcement.
-* **Risky Rolls is not offered in the room's game picker.** The picker's
-  allow-list is `("ama",)`. Offering it would recreate the competing-launch
-  problem the gate exists to avoid; the route drops an unsupported key *and its
-  options*, so a stale save can't leave a dial looking set while doing nothing.
+* **The picker is still an allow-list**, `("ama", "risky_roll")`, not every
+  schedulable game — the rest have no room in the pool that owns them. The route
+  drops an unsupported key *and its options*, so a stale save can't leave a dial
+  looking set while doing nothing.
 
 ## Tests
 
@@ -484,7 +508,13 @@ pre-197 rows, and `is_hidden_by_rotation` including the two never-gated cases.
 Service (`tests/cogs/test_feature_rotation_games.py`): the closer preference and
 its fallback, a raising closer not stopping the other rooms, host id 0, the
 no-stomp and busy-check refusals, the **end → hide → show → start** ordering,
-the day claim covering the new work, and the AMA `close_now` wiring assertion.
+the day claim covering the new work, the registered-closer path (including a
+game the table cannot see, a raising closer still letting the table path run,
+and one game's closer never being used for another), and the AMA `close_now`
+and Risky Rolls registration wiring assertions. Risky Rolls' own closer
+(`tests/cogs/test_risky_roll_cog.py`): resolving rather than dropping, leaving
+other channels alone, reporting nothing closed, and cancelling the pending
+auto-close timer.
 Scheduler (`tests/cogs/test_scheduled_games_loop.py`): hidden skips and
 advances, no role ping, visible launches, no-rotation guilds unaffected, a
 one-off staying due, and a read failure failing open.

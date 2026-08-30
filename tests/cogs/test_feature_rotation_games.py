@@ -139,7 +139,7 @@ async def test_a_closer_that_raises_does_not_stop_the_other_rooms(sync_db_path):
     bot.active_views[bad] = _Boom()
 
     ended = await svc.apply_game_ends(
-        bot, bot.guild, GamePlan(end=(CLOSING_ROOM, OPEN_ROOM))
+        bot, bot.guild, GamePlan(end=((CLOSING_ROOM, "ama"), (OPEN_ROOM, "ama")))
     )
     assert ended == 1  # the healthy room still closed
 
@@ -262,7 +262,7 @@ async def test_the_flip_ends_before_hiding_and_starts_after_showing(monkeypatch,
         order.append(("show", channel_id))
         return True
 
-    async def fake_end(bot, guild, channel_id):
+    async def fake_end(bot, guild, channel_id, game_key=""):
         order.append(("end", channel_id))
         return True
 
@@ -364,3 +364,85 @@ async def test_the_ama_view_exposes_the_closer_the_rotation_looks_for():
     view._closed = True
     await view.close_now("channel")
     assert closed == ["channel"]
+
+
+# ── games whose rounds the table cannot see ──────────────────────────────────
+#
+# Risky Rolls keeps rounds in rr_state.active_games, not games_active_games, so
+# the rotation would end nothing at all for that room without the registered
+# closer. Its cog registers one next to its existing busy-check.
+
+
+async def test_a_registered_closer_ends_a_game_the_table_cannot_see(sync_db_path):
+    seen = []
+
+    async def closer(channel_id):
+        seen.append(channel_id)
+        return True
+
+    bot = _Bot(sync_db_path, {CLOSING_ROOM: _Chan(CLOSING_ROOM)})
+    bot.game_channel_closers = {"risky_roll": closer}
+
+    # Nothing in games_active_games for this channel — the closer is the only
+    # thing that can end it.
+    assert await svc.end_room_game(bot, bot.guild, CLOSING_ROOM, "risky_roll") is True
+    assert seen == [CLOSING_ROOM]
+
+
+async def test_a_closer_reporting_nothing_open_is_not_counted(sync_db_path):
+    async def closer(channel_id):
+        return False
+
+    bot = _Bot(sync_db_path, {CLOSING_ROOM: _Chan(CLOSING_ROOM)})
+    bot.game_channel_closers = {"risky_roll": closer}
+
+    assert await svc.end_room_game(bot, bot.guild, CLOSING_ROOM, "risky_roll") is False
+
+
+async def test_a_raising_closer_still_lets_the_table_path_run(sync_db_path):
+    async def closer(channel_id):
+        raise RuntimeError("kaboom")
+
+    bot = _Bot(sync_db_path, {CLOSING_ROOM: _Chan(CLOSING_ROOM)})
+    bot.game_channel_closers = {"risky_roll": closer}
+    gid = await _active_game(bot.games_db, CLOSING_ROOM)
+
+    assert await svc.end_room_game(bot, bot.guild, CLOSING_ROOM, "risky_roll") is True
+    assert await bot.games_db.fetchone(
+        "SELECT 1 FROM games_active_games WHERE game_id = ?", (gid,)
+    ) is None
+
+
+async def test_a_rooms_closer_is_not_used_for_a_different_game(sync_db_path):
+    async def closer(channel_id):
+        raise AssertionError("wrong game's closer")
+
+    bot = _Bot(sync_db_path, {CLOSING_ROOM: _Chan(CLOSING_ROOM)})
+    bot.game_channel_closers = {"risky_roll": closer}
+
+    assert await svc.end_room_game(bot, bot.guild, CLOSING_ROOM, "ama") is False
+
+
+async def test_the_risky_roll_cog_registers_both_halves_of_the_pair():
+    """The wiring assertion. A busy-check without a closer would leave the
+    rotation silently unable to end that room's game — the table lookup sees
+    nothing for Risky Rolls, so the closer is the only path there is."""
+    import bot_modules.cogs.risky_roll_cog as rr
+
+    class _StubBot:
+        def __init__(self):
+            self.game_launchers = {}
+            self.game_busy_checks = {}
+            self.game_channel_closers = {}
+            self.added = []
+
+        async def add_cog(self, cog):
+            self.added.append(cog)
+
+    bot = _StubBot()
+    await rr.setup(bot)
+
+    assert "risky_roll" in bot.game_busy_checks
+    assert "risky_roll" in bot.game_channel_closers
+    cog = bot.added[0]
+    assert bot.game_channel_closers["risky_roll"] == cog.close_channel_rounds

@@ -56,10 +56,23 @@ function gameControls(room) {
     <div data-game-options="${room.channel_id}" style="margin-top:6px;">${gameOptionFields(room)}</div>`;
 }
 
+// Advisory copy for a game whose lifecycle has a wrinkle the dial can't show.
+// Guidance, never a block — the same stance the pool picker takes.
+const GAME_NOTES = {
+  risky_roll:
+    "A round also closes itself once the limits above are reached, so it may well resolve long before midnight — the flip only steps in if one is still open. Check the Scheduling panel too: a scheduled Risky Rolls pointed at this channel still runs on this room's open day, on top of this one.",
+};
+
+function gameNote(key) {
+  const note = GAME_NOTES[key];
+  return note ? `<div class="field-hint" style="margin-top:6px;">${esc(note)}</div>` : "";
+}
+
 function gameOptionFields(room, overrideKey) {
   const key = overrideKey === undefined ? (room.launch_game || "") : overrideKey;
   const game = launchableGames.find((g) => g.type === key);
-  if (!game || !(game.fields || []).length) return "";
+  if (!game) return "";
+  if (!(game.fields || []).length) return gameNote(key);
   const values = room.launch_options || {};
   const fields = game.fields
     .map((f) => {
@@ -82,7 +95,7 @@ function gameOptionFields(room, overrideKey) {
       return `<div style="flex:1; min-width:200px;"><label>${esc(f.label)} ${control}</label></div>`;
     })
     .join("");
-  return `<div style="display:flex; flex-wrap:wrap; gap:12px;">${fields}</div>`;
+  return `<div style="display:flex; flex-wrap:wrap; gap:12px;">${fields}</div>${gameNote(key)}`;
 }
 
 function kindLabel(kind) {

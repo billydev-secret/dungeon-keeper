@@ -38,13 +38,22 @@
 -- the same SCHEDULE_OPTION_SCHEMA fields games_scheduled.options carries (for
 -- AMA: mode and format). '' means "the launcher's own defaults".
 --
--- Deliberately NOT here: risky-rolls. It already auto-launches twice daily
--- from games_scheduled (05:13 and 12:53 in TGM), so a third rotation launch at
--- midnight would still be open at 05:13 and push that schedule into
--- skipped_active. Instead the scheduler learned to skip a launch into a room
--- the rotation currently has hidden -- which also stops it pinging a role
--- about a game in a channel nobody can open. That gate needs no schema: it
--- reads feature_rotation_pool.hidden_at, which 192 already keeps.
+-- The scheduler also learned to skip a launch into a room the rotation
+-- currently has hidden, which stops it pinging a role about a game in a
+-- channel nobody can open. That gate needs no schema: it reads
+-- feature_rotation_pool.hidden_at, which 192 already keeps. It matters most for
+-- risky-rolls, which already auto-launches twice daily from games_scheduled
+-- (05:13 and 12:53 in TGM) -- a room set to launch Risky Rolls here therefore
+-- STACKS with those schedules on its open day rather than replacing them. The
+-- two cannot collide (the rotation refuses to launch onto a running round, and
+-- the scheduler skips a hidden room), but the schedules are worth retiring by
+-- hand if a single rotation-driven round is what is wanted.
+--
+-- Ending is not one mechanism either. AMA lives in games_active_games and is
+-- closed through its own view; Risky Rolls keeps rounds in memory, invisible to
+-- that table, so it registers bot.game_channel_closers['risky_roll'] alongside
+-- its existing busy-check. That is why GamePlan.end carries (channel, game_key)
+-- rather than a bare channel id.
 --
 -- Still no per-user data: neither column names a member, so no
 -- docs/data_register.md row.

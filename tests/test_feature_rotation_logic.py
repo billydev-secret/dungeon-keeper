@@ -302,7 +302,7 @@ def test_a_room_that_is_not_featured_has_its_game_ended():
     ordinal = next(o for o in range(3) if AMA not in _featured_on(rooms, o))
     games = plan_games(rooms, _featured_on(rooms, ordinal))
     assert games.start == ()
-    assert games.end == (AMA,)
+    assert games.end == ((AMA, "ama"),)
 
 
 def test_rooms_without_a_game_are_never_started_or_ended():
@@ -312,9 +312,8 @@ def test_rooms_without_a_game_are_never_started_or_ended():
     rooms = _game_pool()
     for ordinal in range(6):
         games = plan_games(rooms, _featured_on(rooms, ordinal))
-        assert WHISPER not in games.end
-        assert CONF not in games.end
-        assert all(cid == AMA for cid, _ in games.start)
+        touched = {cid for cid, _ in games.end} | {cid for cid, _ in games.start}
+        assert touched <= {AMA}
 
 
 def test_a_room_that_never_hides_still_has_its_game_ended():
@@ -328,7 +327,8 @@ def test_a_room_that_never_hides_still_has_its_game_ended():
     ordinal = next(o for o in range(4) if AMA not in _featured_on(rooms, o))
     plan = plan_visibility(rooms, _featured_on(rooms, ordinal))
     assert AMA not in plan.hide          # never hidden …
-    assert plan_games(rooms, _featured_on(rooms, ordinal)).end == (AMA,)  # … still ended
+    # … and still ended:
+    assert plan_games(rooms, _featured_on(rooms, ordinal)).end == ((AMA, "ama"),)
 
 
 def test_a_room_taken_out_of_rotation_still_has_its_game_ended():
@@ -339,7 +339,7 @@ def test_a_room_taken_out_of_rotation_still_has_its_game_ended():
         Room(AMA, position=2, launch_game="ama", in_rotation=False),
     ]
     games = plan_games(rooms, _featured_on(rooms, 0))
-    assert games.end == (AMA,)
+    assert games.end == ((AMA, "ama"),)
     assert games.start == ()
 
 
@@ -390,3 +390,16 @@ def test_empty_launch_options_store_as_blank():
     # '' rather than '{}' so "no options" is one value in the column, not two.
     assert format_launch_options({}) == ""
     assert format_launch_options("") == ""
+
+
+def test_the_end_plan_names_each_rooms_game():
+    """The key is what tells the ender which registered closer to consult —
+    Risky Rolls keeps its rounds in memory, invisible to a table lookup."""
+    rooms = [
+        Room(WHISPER, position=1, launch_game="risky_roll"),
+        Room(AMA, position=2, launch_game="ama"),
+    ]
+    featured = _featured_on(rooms, 0)
+    ended = dict(plan_games(rooms, featured).end)
+    for channel_id, key in ended.items():
+        assert key == next(r.launch_game for r in rooms if r.channel_id == channel_id)
