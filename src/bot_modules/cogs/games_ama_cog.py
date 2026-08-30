@@ -1002,6 +1002,20 @@ class AMAView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["ama"], ephemeral=True)
 
+    async def close_now(self, channel):
+        """Close this AMA from outside its own buttons, recap and payout intact.
+
+        The handle the feature rotation looks for when a room stops being the
+        featured one: it duck-types ``close_now`` on whatever view is registered
+        for the game, so ending a room's game goes through the game's real
+        completion site rather than ``force_end_active_game``, which archives
+        and pays but posts no recap. Idempotent — a second call after the view
+        has closed finds ``_closed`` set and does nothing.
+        """
+        if self._closed:
+            return
+        await self._do_close(channel)
+
     async def _do_close(self, channel):
         self._closed = True
         if self._hot_seat_timer_task and not self._hot_seat_timer_task.done():

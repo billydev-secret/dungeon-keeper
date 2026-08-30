@@ -29,6 +29,7 @@ from bot_modules.feature_rotation.store import (
     featured_quest_kinds_on,
     get_config,
     get_room_snapshot,
+    is_hidden_by_rotation,
     list_pool,
     list_pool_state,
     mark_hidden,
@@ -191,6 +192,55 @@ def test_pool_round_trips_including_kind_lists(conn):
     assert room.label == "Guess Who"
     assert room.quest_kinds == ("guess", "guess_win")
     assert room.blocked_kinds == ("guess",)
+
+
+def test_launch_game_and_options_round_trip(conn):
+    upsert_room(
+        conn, GUILD,
+        Room(GUESS, launch_game="ama",
+             launch_options='{"mode": "screened", "format": "panel"}'),
+    )
+    (room,) = list_pool(conn, GUILD)
+    assert room.launch_game == "ama"
+    assert json.loads(room.launch_options) == {"mode": "screened", "format": "panel"}
+
+
+def test_a_room_with_no_game_stores_blank_not_null(conn):
+    # Every row written before migration 197 reads as "no game", which is the
+    # pre-existing behaviour and the safe default.
+    upsert_room(conn, GUILD, Room(GUESS))
+    (room,) = list_pool(conn, GUILD)
+    assert room.launch_game == ""
+    assert room.launch_options == ""
+
+
+def test_clearing_a_rooms_game_clears_it(conn):
+    upsert_room(conn, GUILD, Room(GUESS, launch_game="ama", launch_options='{"mode": "screened"}'))
+    upsert_room(conn, GUILD, Room(GUESS))
+    (room,) = list_pool(conn, GUILD)
+    assert room.launch_game == ""
+
+
+def test_is_hidden_by_rotation_tracks_the_observed_state(conn):
+    # The scheduler consults this to decide whether to launch into a room, so
+    # it must answer for the state members actually see, not a derived plan.
+    upsert_room(conn, GUILD, Room(GUESS))
+    assert is_hidden_by_rotation(conn, GUILD, GUESS) is False
+
+    mark_hidden(conn, GUILD, GUESS, [], 123.0)
+    assert is_hidden_by_rotation(conn, GUILD, GUESS) is True
+
+    mark_visible(conn, GUILD, GUESS)
+    assert is_hidden_by_rotation(conn, GUILD, GUESS) is False
+
+
+def test_a_channel_outside_the_pool_is_never_hidden_by_the_rotation(conn):
+    # This is what makes the scheduler safe to gate unconditionally: a guild
+    # that never turns the rotation on can never have a game silently skipped.
+    upsert_room(conn, GUILD, Room(GUESS))
+    mark_hidden(conn, GUILD, GUESS, [], 123.0)
+    assert is_hidden_by_rotation(conn, GUILD, WHISPER) is False
+    assert is_hidden_by_rotation(conn, GUILD + 1, GUESS) is False
 
 
 def test_upsert_updates_rather_than_duplicates(conn):

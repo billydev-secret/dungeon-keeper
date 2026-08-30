@@ -357,3 +357,164 @@ revive rather than restrict. Not seeded; one click to add.
 If the announce channel is itself in the pool, the announcement would post into a
 room nobody can see on the days it's hidden. Cheapest fix: on flip, never hide
 the configured announce channel, and say so in the panel.
+
+
+---
+
+# Part 4 — the games end and start with the flip
+
+Added at Billy's request: *"on the channel rotation, can the games be ended and
+started when the channel is moved"*. Built 2026-08-30, migration 197.
+
+Stage 1 shipped the rotation as a **pure visibility operation** — `hide_room` /
+`show_room` deny and restore `view_channel` and touch no game state at all.
+This part gives a pool row the option of owning a game's lifecycle too.
+
+## What "the games" turned out to mean
+
+There is no uniform game object across the five seeded rooms, and asking the
+question room by room collapsed the work rather than expanding it:
+
+| room | is there a game to start and end? |
+|---|---|
+| 🤫│whisper | no — a continuous stream of ephemeral panels, no round |
+| 🤐│confessions | no — same, `/confess` submissions |
+| 🤷│guess-who | rounds exist, but they belong to individual members and stay open until solved (26 open, aged 2–106 days). Force-resolving someone else's round is not a lifecycle, it's a deletion |
+| 🎲│risky-rolls | **yes** — `bot.game_launchers["risky_roll"]` to start, its own `auto_close_round` to resolve. Rounds live in memory, not `games_active_games` |
+| 🙋‍♂️│ama | **yes** — `bot.game_launchers["ama"]` to start, `AMAView` to close |
+
+**Decided (Billy):** scope is AMA and risky-rolls only. A generic
+`start()`/`end()` hook across five features that don't share a lifecycle was the
+trap; the two that are really games already had matched machinery.
+
+## The two halves
+
+### 1. Rotation-driven start/end — `launch_game` on a pool row
+
+Migration 197 adds `launch_game` (a key from `GAME_NAMES`, `''` for none) and
+`launch_options` (the launcher's options dict as JSON, the same
+`SCHEDULE_OPTION_SCHEMA` fields `games_scheduled.options` carries). Setting it
+means both halves, deliberately symmetric: started on the room's featured day,
+ended on every day it isn't. The picker offers **AMA and Risky Rolls** — the
+two rooms with a real session to open and close.
+
+The flip runs **end → hide → show → start**, inside the existing `claim_flip`
+guard so a restart mid-flip can't double-fire:
+
+* the end goes first, while the outgoing room is still visible, so its recap
+  lands where members can still read it;
+* the start goes last, after the show, so the game's first message posts into a
+  channel that is already open.
+
+`plan_games` keys the end on **"not featured today"**, not on "this flip hid
+it". Two reasons, both load-bearing: a room with `hide_when_off` unticked never
+appears in the hide plan yet still stops being the featured room, and the whole
+module derives the day from an ordinal precisely so a bot that was offline for
+three days returns to the right room — an end that required having *observed*
+yesterday's flip would give that property up.
+
+**Ending is not one mechanism, because the two games keep their state in
+different places.** `GamePlan.end` therefore carries `(channel_id, game_key)`,
+not a bare channel id, and `end_room_game` tries three things:
+
+1. a **registered channel closer**, `bot.game_channel_closers[game_key]` — the
+   counterpart to the existing `game_busy_checks`, for a game whose rounds live
+   outside `games_active_games`. Risky Rolls keeps its in `rr_state.active_games`,
+   so no table lookup can see them; its closer routes through `auto_close_round`,
+   the round's real resolution, so a winner is picked, the no-contact gate is
+   consulted, and the prompts go out. Closing early is the same event as the
+   timer running out, just sooner — and the pending auto-close task is cancelled
+   so it can't fire later on a resolved round.
+2. a view exposing **`close_now`** for a game in that table — the game's own
+   completion site. AMA grew one wrapping `_do_close`, so the recap embed posts
+   and the roster is paid as if the host had pressed the button.
+3. **`force_end_active_game`** otherwise — the `/games end` path, which archives
+   and pays but posts no recap. The after-a-restart case, where the row outlived
+   its view.
+
+`end_game`'s DELETE is the exactly-once claim, so racing the 24-hour expiry
+sweep costs at worst a missing recap, never a double payout.
+
+Two economy details worth recording. The launch is hosted by **nobody**
+(`host_id=0`, which reaches `pay_game_rewards` as `host_id=None`), so an
+auto-launched game pays no host bounty — a real member there would collect one
+every featured day for hosting nothing. And a launch is **refused** rather than
+stomping a game already running in the room, checking both
+`games_active_games` and the game's registered busy-check.
+
+### 2. Scheduled games skip a hidden room
+
+Measured in prod before designing this: 🎲│risky-rolls **already auto-launches
+twice daily** from `games_scheduled` — id 4 at 05:13 (350-minute window) and id
+6 at 12:53 (240-minute window), both pinging role `1472628220338766016`. Two
+consequences killed the obvious design:
+
+* a rotation launch at 00:00 would be a **third** daily round, still open at
+  05:13, pushing schedule #4 into `skipped_active`;
+* a risky-roll round never survives to midnight under those windows, so "end at
+  midnight" would be a no-op for that room anyway.
+
+**Decided (Billy):** gate the existing schedules — and, on a second pass,
+**also offer Risky Rolls in the room picker**. `_process_due` now skips a slot
+whose channel the rotation currently has hidden, recording `skipped_hidden` and
+rolling a recurring row to its next slot.
+
+The two mechanisms **stack rather than collide**: a room set to launch Risky
+Rolls opens its own round at midnight, and schedules #4 and #6 still fire on
+that room's open day (they are only silenced on its hidden days). They cannot
+double-launch — the rotation refuses to launch onto a running round via the
+registered busy-check, and the scheduler skips a hidden room — but three rounds
+on the featured day is a real possibility, so the panel says so next to the
+dial and the schedules are worth retiring by hand if one round is what's wanted.
+Because the announcement is downstream of a successful launch, that one check
+also suppresses the role ping — which closes **open risk #1** from Part 1 ("a
+member @-mentioned in a hidden channel gets a notification that opens
+nothing"), for scheduled games at least.
+
+The gate reads the *observed* `hidden_at`, not a re-derived plan, so a guild
+with the rotation off or a channel outside the pool is never gated. It fails
+**open**: a wrong `False` costs one game posted into a hidden room, a wrong
+`True` costs a game that silently never runs.
+
+## Decisions taken
+
+| Question | Answer |
+|---|---|
+| Which rooms | **AMA and risky-rolls only** — the other three have no lifecycle to run; both are offered in the picker |
+| When | **Both at midnight**, with the flip ordered end → hide → show → start |
+| Where the result is seen | **In-room only** — the recap stays where the game puts it; the morning announcement is unchanged |
+| Mid-flight round when the room rotates out | **Forced resolution** through the game's own close path (recap + payout), not a void |
+| Risky-rolls | **Gate its existing schedules** on hidden days, *and* offer it in the picker (revised — the first pass gated only) |
+| AMA mode/format | Panel dials, defaulting to `/ama`'s own defaults (unfiltered, hot seat) |
+
+## Not done, deliberately
+
+* **`pause_when_off`** (stage 3) is still absent, column and all. This part
+  ends and starts games; it does not gate submissions, and CLAUDE.md forbids
+  shipping the toggle before the enforcement.
+* **The picker is still an allow-list**, `("ama", "risky_roll")`, not every
+  schedulable game — the rest have no room in the pool that owns them. The route
+  drops an unsupported key *and its options*, so a stale save can't leave a dial
+  looking set while doing nothing.
+
+## Tests
+
+Pure (`test_feature_rotation_logic.py`): start/end membership across the cycle,
+a room that never hides still being ended, a room taken out of rotation still
+being ended, two featured rooms both starting, `resolve_day` carrying the plan,
+and the lenient launch-options round trip. Storage
+(`test_feature_rotation_store.py`): the column round trip, blank-not-null for
+pre-197 rows, and `is_hidden_by_rotation` including the two never-gated cases.
+Service (`tests/cogs/test_feature_rotation_games.py`): the closer preference and
+its fallback, a raising closer not stopping the other rooms, host id 0, the
+no-stomp and busy-check refusals, the **end → hide → show → start** ordering,
+the day claim covering the new work, the registered-closer path (including a
+game the table cannot see, a raising closer still letting the table path run,
+and one game's closer never being used for another), and the AMA `close_now`
+and Risky Rolls registration wiring assertions. Risky Rolls' own closer
+(`tests/cogs/test_risky_roll_cog.py`): resolving rather than dropping, leaving
+other channels alone, reporting nothing closed, and cancelling the pending
+auto-close timer.
+Scheduler (`tests/cogs/test_scheduled_games_loop.py`): hidden skips and
+advances, no role ping, visible launches, no-rotation guilds unaffected, a
+one-off staying due, and a read failure failing open.

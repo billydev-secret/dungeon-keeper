@@ -18,7 +18,13 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from bot_modules.economy.quests import TRIGGER_KINDS
-from bot_modules.feature_rotation.logic import Room, local_day, restore_all
+from bot_modules.feature_rotation.logic import (
+    Room,
+    format_launch_options,
+    local_day,
+    parse_launch_options,
+    restore_all,
+)
 from bot_modules.feature_rotation.store import (
     RotationConfig,
     delete_room,
@@ -29,6 +35,11 @@ from bot_modules.feature_rotation.store import (
     rotation_tz,
     save_config,
     upsert_room,
+)
+from bot_modules.games.constants import (
+    GAME_ICONS,
+    GAME_NAMES,
+    SCHEDULE_OPTION_SCHEMA,
 )
 from bot_modules.services.feature_rotation_service import (
     apply_day,
@@ -49,6 +60,20 @@ class ConfigBody(BaseModel):
     rooms_per_day: int = Field(1, ge=1, le=10)
 
 
+#: Game keys a pool room may be told to run when it is the featured room.
+#: Deliberately a short allow-list rather than every schedulable game: these are
+#: the two that have a real session to open and close. The other seeded rooms
+#: are continuous submission streams, or (guess-who) carry rounds that belong to
+#: individual members and stay open until solved.
+#:
+#: A room set to Risky Rolls can end up with more rounds than its own on its
+#: featured day, since Scheduled Games may also be pointed at that channel. That
+#: is a configuration to check rather than something to block here — the
+#: rotation refuses to launch on top of a round that is already running, and the
+#: scheduler skips a hidden room, so the two cannot collide, only stack.
+LAUNCHABLE_GAMES: tuple[str, ...] = ("ama", "risky_roll")
+
+
 class RoomBody(BaseModel):
     position: int = Field(0, ge=0, le=999)
     label: str = Field("", max_length=100)
@@ -58,6 +83,44 @@ class RoomBody(BaseModel):
     announce: bool = True
     quest_kinds: list[str] = Field(default_factory=list)
     blocked_kinds: list[str] = Field(default_factory=list)
+    launch_game: str = Field("", max_length=40)
+    launch_options: dict = Field(default_factory=dict)
+
+
+def _clean_launch(game: str, options: dict) -> tuple[str, str]:
+    """Normalise the launch pair, dropping anything the schema doesn't know.
+
+    An unsupported game key clears the options with it — storing options for a
+    game that will never run is how a dial ends up looking set while doing
+    nothing. Unknown option names and values outside a choice field's list are
+    dropped rather than rejected, matching ``_clean_kinds``: a schema that moved
+    on between page load and save should cost the admin the stale field, not
+    the whole save.
+    """
+    key = (game or "").strip()
+    if key not in LAUNCHABLE_GAMES:
+        return "", ""
+    cleaned: dict = {}
+    for field in SCHEDULE_OPTION_SCHEMA.get(key, []):
+        name = field["name"]
+        if name not in options:
+            continue
+        value = options[name]
+        if field["type"] == "choice":
+            allowed = {str(c["value"]) for c in field.get("choices", [])}
+            if str(value) not in allowed:
+                continue
+            cleaned[name] = str(value)
+        elif field["type"] == "bool":
+            cleaned[name] = bool(value)
+        elif field["type"] == "int":
+            try:
+                cleaned[name] = int(value)
+            except (TypeError, ValueError):
+                continue
+        else:
+            cleaned[name] = str(value)[:200]
+    return key, format_launch_options(cleaned)
 
 
 def _clean_kinds(kinds: list[str]) -> tuple[str, ...]:
@@ -88,6 +151,8 @@ def _room_payload(room: Room, hidden: bool, featured: bool) -> dict:
         "announce": room.announce,
         "quest_kinds": list(room.quest_kinds),
         "blocked_kinds": list(room.blocked_kinds),
+        "launch_game": room.launch_game,
+        "launch_options": parse_launch_options(room.launch_options),
         "hidden_now": hidden,
         "featured_today": featured,
     }
@@ -143,6 +208,15 @@ async def get_rotation(
                 "trigger_kinds": [
                     {"kind": k, "label": v} for k, v in sorted(TRIGGER_KINDS.items())
                 ],
+                "launchable_games": [
+                    {
+                        "type": g,
+                        "name": GAME_NAMES.get(g, g),
+                        "icon": GAME_ICONS.get(g, "🎲"),
+                        "fields": SCHEDULE_OPTION_SCHEMA.get(g, []),
+                    }
+                    for g in LAUNCHABLE_GAMES
+                ],
             }
 
     return await run_query(_q)
@@ -185,6 +259,7 @@ async def put_room(
     """Add or update one pool row."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+    launch_game, launch_options = _clean_launch(body.launch_game, body.launch_options)
     room = Room(
         channel_id=channel_id,
         position=body.position,
@@ -195,6 +270,8 @@ async def put_room(
         announce=body.announce,
         quest_kinds=_clean_kinds(body.quest_kinds),
         blocked_kinds=_clean_kinds(body.blocked_kinds),
+        launch_game=launch_game,
+        launch_options=launch_options,
     )
 
     def _q() -> None:

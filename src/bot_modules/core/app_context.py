@@ -101,6 +101,9 @@ GameRecoverer: TypeAlias = Callable[
 # Optional "channel busy" check for games that track active rounds outside
 # the games_active_games table (e.g. risky_roll, in-memory).
 GameBusyCheck: TypeAlias = Callable[[int], Coroutine[Any, Any, bool]]
+# Optional "close whatever is running in this channel" handler, for the same
+# games — the counterpart to GameBusyCheck. Returns whether anything closed.
+GameChannelCloser: TypeAlias = Callable[[int], Coroutine[Any, Any, bool]]
 # Mid-game roster handler: (channel, game_id, member) -> (ok, user_message).
 GameRosterHandler: TypeAlias = Callable[
     [Any, str, discord.Member],
@@ -138,6 +141,12 @@ class Bot(commands.Bot):
         # scheduler can see they're busy and skip the occurrence instead of
         # pinging then failing.
         self.game_busy_checks: dict[str, GameBusyCheck] = {}
+        # Optional "close the round in this channel" handlers, keyed by
+        # game_type — the counterpart to game_busy_checks, for the same games
+        # whose rounds the games_active_games table cannot see. The feature
+        # rotation calls these to resolve a room's game when the room stops
+        # being the featured one.
+        self.game_channel_closers: dict[str, GameChannelCloser] = {}
         # Mid-game roster handlers, keyed by game_type. Roster-based games
         # register async add/remove callbacks here in setup(); /games join and
         # /games leave dispatch to them so people can join or leave a game

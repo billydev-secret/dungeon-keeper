@@ -22,6 +22,7 @@ from bot_modules.feature_rotation.logic import (
     Room,
     RotationDay,
     format_kinds,
+    format_launch_options,
     local_day,
     parse_kinds,
     resolve_day,
@@ -104,6 +105,8 @@ def _row_to_room(row: sqlite3.Row) -> Room:
         announce=bool(row["announce"]),
         quest_kinds=parse_kinds(str(row["quest_kinds"])),
         blocked_kinds=parse_kinds(str(row["blocked_kinds"])),
+        launch_game=str(row["launch_game"] or ""),
+        launch_options=str(row["launch_options"] or ""),
     )
 
 
@@ -130,14 +133,35 @@ def list_pool_state(conn: sqlite3.Connection, guild_id: int) -> dict[int, bool]:
     }
 
 
+def is_hidden_by_rotation(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int
+) -> bool:
+    """Is this channel hidden by the rotation right now?
+
+    Deliberately reads the *observed* state (``hidden_at``) rather than
+    re-deriving today's plan. Callers outside the rotation — the game scheduler
+    — want to know whether members can actually open the channel, and only a
+    flip that really landed makes that false. A guild with the rotation off,
+    or a channel outside the pool, is never hidden by it, which is what makes
+    this safe to consult unconditionally.
+    """
+    row = conn.execute(
+        "SELECT hidden_at FROM feature_rotation_pool "
+        "WHERE guild_id = ? AND channel_id = ?",
+        (guild_id, channel_id),
+    ).fetchone()
+    return row is not None and row["hidden_at"] is not None
+
+
 def upsert_room(conn: sqlite3.Connection, guild_id: int, room: Room) -> None:
     """Add or update one pool row, never touching its hidden-state columns."""
     conn.execute(
         """
         INSERT INTO feature_rotation_pool
             (guild_id, channel_id, position, label, blurb, in_rotation,
-             hide_when_off, announce, quest_kinds, blocked_kinds)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             hide_when_off, announce, quest_kinds, blocked_kinds,
+             launch_game, launch_options)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(guild_id, channel_id) DO UPDATE SET
             position = excluded.position,
             label = excluded.label,
@@ -146,7 +170,9 @@ def upsert_room(conn: sqlite3.Connection, guild_id: int, room: Room) -> None:
             hide_when_off = excluded.hide_when_off,
             announce = excluded.announce,
             quest_kinds = excluded.quest_kinds,
-            blocked_kinds = excluded.blocked_kinds
+            blocked_kinds = excluded.blocked_kinds,
+            launch_game = excluded.launch_game,
+            launch_options = excluded.launch_options
         """,
         (
             guild_id,
@@ -159,6 +185,8 @@ def upsert_room(conn: sqlite3.Connection, guild_id: int, room: Room) -> None:
             int(room.announce),
             format_kinds(room.quest_kinds),
             format_kinds(room.blocked_kinds),
+            room.launch_game.strip(),
+            format_launch_options(room.launch_options),
         ),
     )
 

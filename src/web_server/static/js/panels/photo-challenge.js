@@ -23,6 +23,7 @@ const STATUS_LABEL = {
   launched: "✅ Posted", skipped_active: "⏭️ Skipped — channel was busy",
   skipped_disabled: "🚫 Skipped — Photo Challenge is off",
   skipped_giveup: "⌛ Gave up — channel stayed busy",
+  skipped_hidden: "🙈 Skipped — the room was hidden that day",
   error: "⚠️ Failed", launching: "▶️ Posting now",
 };
 

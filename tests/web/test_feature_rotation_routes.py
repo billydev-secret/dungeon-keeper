@@ -110,3 +110,101 @@ def test_removing_a_visible_room_still_works(open_client, fake_ctx):
     assert open_client.delete(f"/api/feature-rotation/rooms/{ROOM}").status_code == 200
     with fake_ctx.open_db() as conn:
         assert list_pool(conn, GID) == []
+
+
+# ── the launch pair ──────────────────────────────────────────────────────────
+
+
+def test_the_panel_offers_the_launchable_games_with_their_option_fields(
+    open_client, fake_ctx
+):
+    _wire(fake_ctx, None)
+    body = open_client.get("/api/feature-rotation").json()
+    games = {g["type"]: g for g in body["launchable_games"]}
+    assert {"ama", "risky_roll"} <= set(games)
+    assert {f["name"] for f in games["ama"]["fields"]} == {"mode", "format"}
+    # Each game brings its own option fields, straight from the schedule schema.
+    assert {f["name"] for f in games["risky_roll"]["fields"]} == {
+        "auto_close_players", "auto_close_minutes",
+    }
+
+
+def test_saving_a_game_and_its_options_round_trips(open_client, fake_ctx):
+    _wire(fake_ctx, None)
+    res = open_client.put(
+        f"/api/feature-rotation/rooms/{ROOM}",
+        json={
+            "position": 1,
+            "label": "AMA",
+            "blurb": "",
+            "in_rotation": True,
+            "hide_when_off": True,
+            "announce": True,
+            "quest_kinds": [],
+            "blocked_kinds": [],
+            "launch_game": "ama",
+            "launch_options": {"mode": "screened", "format": "panel"},
+        },
+    )
+    assert res.status_code == 200
+
+    room = open_client.get("/api/feature-rotation").json()["rooms"][0]
+    assert room["launch_game"] == "ama"
+    assert room["launch_options"] == {"mode": "screened", "format": "panel"}
+
+
+def test_risky_rolls_keeps_its_numeric_options(open_client, fake_ctx):
+    _wire(fake_ctx, None)
+    open_client.put(
+        f"/api/feature-rotation/rooms/{ROOM}",
+        json={
+            "position": 1, "label": "", "blurb": "",
+            "in_rotation": True, "hide_when_off": True, "announce": True,
+            "quest_kinds": [], "blocked_kinds": [],
+            "launch_game": "risky_roll",
+            "launch_options": {"auto_close_minutes": 600, "auto_close_players": 30},
+        },
+    )
+    room = open_client.get("/api/feature-rotation").json()["rooms"][0]
+    assert room["launch_game"] == "risky_roll"
+    assert room["launch_options"] == {
+        "auto_close_minutes": 600, "auto_close_players": 30,
+    }
+
+
+def test_a_game_outside_the_allow_list_is_dropped_with_its_options(
+    open_client, fake_ctx
+):
+    """Storing options for a game that will never run is how a dial ends up
+    looking set while doing nothing — CLAUDE.md's unenforced-toggle rule."""
+    _wire(fake_ctx, None)
+    open_client.put(
+        f"/api/feature-rotation/rooms/{ROOM}",
+        json={
+            "position": 1, "label": "", "blurb": "",
+            "in_rotation": True, "hide_when_off": True, "announce": True,
+            "quest_kinds": [], "blocked_kinds": [],
+            "launch_game": "clapback",
+            "launch_options": {"rounds": 3},
+        },
+    )
+    room = open_client.get("/api/feature-rotation").json()["rooms"][0]
+    assert room["launch_game"] == ""
+    assert room["launch_options"] == {}
+
+
+def test_an_option_value_outside_its_choice_list_is_dropped(open_client, fake_ctx):
+    _wire(fake_ctx, None)
+    open_client.put(
+        f"/api/feature-rotation/rooms/{ROOM}",
+        json={
+            "position": 1, "label": "", "blurb": "",
+            "in_rotation": True, "hide_when_off": True, "announce": True,
+            "quest_kinds": [], "blocked_kinds": [],
+            "launch_game": "ama",
+            "launch_options": {"mode": "nonsense", "format": "panel", "bogus": 1},
+        },
+    )
+    room = open_client.get("/api/feature-rotation").json()["rooms"][0]
+    assert room["launch_game"] == "ama"
+    assert room["launch_options"] == {"format": "panel"}

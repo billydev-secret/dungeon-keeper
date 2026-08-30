@@ -17,6 +17,13 @@ Hiding is an in-place ``view_channel`` deny on ``@everyone``, keeping every
 other overwrite. That preserves the channel's position and category (a daily
 category move would reshuffle every member's sidebar twice a day) and leaves
 role-level grants intact, so staff keep eyes on a hidden room.
+
+A pool row that names a ``launch_game`` also has its game's lifecycle ridden by
+the flip, in the order **end → hide → show → start**: the outgoing room's game
+is ended while its channel is still visible, so its recap lands where members
+can still read it, and the incoming room's game launches once its channel is
+open. Rooms that name no game are untouched — the rotation manages only the
+lifecycles it was told about.
 """
 
 from __future__ import annotations
@@ -31,12 +38,14 @@ import discord
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.feature_rotation.logic import (
+    GamePlan,
     Room,
     RotationDay,
     VisibilityPlan,
     build_announcement,
     local_day,
     local_hour,
+    parse_launch_options,
 )
 from bot_modules.feature_rotation.store import (
     RotationConfig,
@@ -177,6 +186,153 @@ async def apply_day(bot, guild: discord.Guild, day: RotationDay, reason: str) ->
     return await apply_plan(bot, guild, day.plan, reason)
 
 
+# ── the game lifecycle ───────────────────────────────────────────────────────
+
+
+async def end_room_game(
+    bot, guild: discord.Guild, channel_id: int, game_key: str = ""
+) -> bool:
+    """End whatever game is running in one room. Returns whether one ended.
+
+    Three ways out, all tried, because the two games in scope keep their state
+    in different places.
+
+    1. A **registered channel closer** (``bot.game_channel_closers[game_key]``)
+       for a game whose rounds live outside ``games_active_games`` — Risky
+       Rolls keeps its in memory, so no table lookup can see them. Its closer
+       routes through the round's real resolution, so a winner is picked and
+       the prompts go out; closing early is the same event as the timer running
+       out, just sooner.
+    2. A **view that exposes** ``close_now`` for a game in that table: the
+       game's own completion site, so an AMA posts its recap embed and pays its
+       roster exactly as if the host had pressed the button.
+    3. ``force_end_active_game`` otherwise — the ``/games end`` path, which
+       archives and pays but posts no recap. This is the after-a-restart case,
+       where the row outlived its view.
+
+    Duck-typing ``close_now`` rather than branching on ``game_type`` keeps this
+    working for the next game that grows one. ``end_game``'s DELETE is the
+    exactly-once claim, so racing the 24-hour expiry sweep costs at worst a
+    missing recap, never a double payout.
+    """
+    ended = False
+
+    closer = getattr(bot, "game_channel_closers", {}).get(game_key) if game_key else None
+    if closer is not None:
+        try:
+            ended = bool(await closer(channel_id))
+        except Exception:
+            log.exception(
+                "Rotation: registered closer for %s failed in %s", game_key, channel_id
+            )
+
+    db = getattr(bot, "games_db", None)
+    if db is None:
+        return ended
+    from bot_modules.games.utils.game_manager import force_end_active_game
+
+    rows = await db.fetchall(
+        "SELECT game_id FROM games_active_games WHERE channel_id = ?", (channel_id,)
+    )
+    channel = guild.get_channel(channel_id)
+    for row in rows:
+        game_id = str(row["game_id"])
+        view = getattr(bot, "active_views", {}).get(game_id)
+        view_closer = getattr(view, "close_now", None)
+        try:
+            if view_closer is not None and channel is not None:
+                await view_closer(channel)
+            else:
+                await force_end_active_game(bot, db, game_id)
+        except Exception:
+            log.exception("Rotation: failed to end game %s in %s", game_id, channel_id)
+            continue
+        ended = True
+    return ended
+
+
+async def start_room_game(
+    bot,
+    guild: discord.Guild,
+    channel_id: int,
+    game_key: str,
+    options: dict,
+) -> str | None:
+    """Launch this room's game. Returns the new game id, or None.
+
+    Hosted by nobody on purpose: ``host_id=0`` reaches ``pay_game_rewards`` as
+    ``host_id=None``, so an auto-launched game pays no host bounty. A real
+    member there would collect one every featured day for hosting nothing.
+
+    Refuses when the channel already has a game running, the same courtesy the
+    scheduler extends — a rotation flip must not stomp a session someone is
+    mid-way through.
+    """
+    launcher = getattr(bot, "game_launchers", {}).get(game_key)
+    if launcher is None:
+        log.error("Rotation: no launcher registered for %s", game_key)
+        return None
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.abc.Messageable):
+        log.warning("Rotation: cannot launch %s, channel %s missing", game_key, channel_id)
+        return None
+
+    db = getattr(bot, "games_db", None)
+    if db is not None:
+        from bot_modules.games.utils.game_manager import get_active_game
+
+        if await get_active_game(db, channel_id) is not None:
+            log.info(
+                "Rotation: %s already has a game running; not launching %s",
+                channel_id,
+                game_key,
+            )
+            return None
+    busy_check = getattr(bot, "game_busy_checks", {}).get(game_key)
+    if busy_check is not None:
+        try:
+            if await busy_check(channel_id):
+                return None
+        except Exception:
+            log.exception("Rotation: busy-check for %s raised", game_key)
+
+    try:
+        return await launcher(
+            channel=channel,
+            host_id=0,
+            host_name="Today's feature",
+            guild_id=guild.id,
+            options=dict(options),
+        )
+    except Exception:
+        log.exception("Rotation: launcher %s raised in channel %s", game_key, channel_id)
+        return None
+
+
+async def apply_game_ends(bot, guild: discord.Guild, plan: GamePlan) -> int:
+    """End the games in every room that is not featured today."""
+    ended = 0
+    for channel_id, game_key in plan.end:
+        if await end_room_game(bot, guild, channel_id, game_key):
+            ended += 1
+    return ended
+
+
+async def apply_game_starts(
+    bot, guild: discord.Guild, plan: GamePlan, rooms: list[Room]
+) -> int:
+    """Launch today's game in every featured room that declares one."""
+    options_by_channel = {r.channel_id: parse_launch_options(r.launch_options) for r in rooms}
+    started = 0
+    for channel_id, game_key in plan.start:
+        gid = await start_room_game(
+            bot, guild, channel_id, game_key, options_by_channel.get(channel_id, {})
+        )
+        if gid:
+            started += 1
+    return started
+
+
 async def post_announcement(bot, guild: discord.Guild, day: RotationDay) -> bool:
     """Post today's feature card. Returns whether a message was sent."""
 
@@ -258,19 +414,34 @@ async def _tick_guild(bot, guild: discord.Guild, now: float) -> None:
                 return claim_flip(conn, guild.id, today)
 
         if await asyncio.to_thread(_claim_flip):
+
+            def _read_rooms() -> list[Room]:
+                with bot.ctx.open_db() as conn:
+                    return list_pool(conn, guild.id)
+
             try:
+                # end → hide → show → start. The ends run while their rooms are
+                # still visible so a recap lands somewhere members can see it,
+                # and the starts run after the show so the game's first message
+                # posts into a channel that is already open.
+                ended = await apply_game_ends(bot, guild, day.games)
                 shown, hidden = await apply_day(
                     bot, guild, day, reason=f"Feature rotation — {today}"
                 )
+                rooms = await asyncio.to_thread(_read_rooms)
+                started = await apply_game_starts(bot, guild, day.games, rooms)
             except Exception:
                 await asyncio.to_thread(_release, bot, guild.id, release_flip, today)
                 raise
             log.info(
-                "Rotation %s: %s featured, %d shown, %d hidden",
+                "Rotation %s: %s featured, %d shown, %d hidden, %d games started, "
+                "%d ended",
                 guild.id,
                 ", ".join(str(c) for c in day.featured) or "none",
                 shown,
                 hidden,
+                started,
+                ended,
             )
 
     if (
@@ -320,9 +491,13 @@ async def feature_rotation_loop(bot) -> None:
 
 __all__ = [
     "apply_day",
+    "apply_game_ends",
+    "apply_game_starts",
     "apply_plan",
+    "end_room_game",
     "feature_rotation_loop",
     "hide_room",
     "post_announcement",
     "show_room",
+    "start_room_game",
 ]
