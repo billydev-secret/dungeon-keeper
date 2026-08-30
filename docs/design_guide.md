@@ -370,7 +370,13 @@ Same commit, not a follow-up.
 ## Gates
 
 - [ ] `python scripts/gate.py --scoped` — runs automatically in the pre-commit
-      hook (ruff + pyright, then the tests mapped to the staged diff).
+      hook (ruff + pyright, then the tests mapped to the staged diff). In a
+      session worktree a shared-file edit no longer fans out to the whole suite;
+      the gate names the paths whose full run it **deferred** to main.
+- [ ] `python scripts/gate.py` on **main**, once a batch of merges is complete —
+      this is where the deferred runs are paid, and where a clean merge between
+      two parallel sessions is caught leaving main red. One run covers every
+      branch merged since the last one; it is not a per-ship step.
 - [ ] Dashboard assets touched ⇒ `npx eslint` and `npx stylelint`, the exact
       commands the blocking CI job runs.
 - [ ] Full suite green before a **push to origin** — CI on that push satisfies

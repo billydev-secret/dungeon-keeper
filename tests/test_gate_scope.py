@@ -6,6 +6,7 @@ which new files it refuses to let through untested — so each branch gets a cas
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -229,3 +230,69 @@ def test_no_cog_reads_self_ctx_anywhere():
         "a cog has no self.ctx — read self.bot.ctx instead:\n  "
         + "\n  ".join(sorted(set(offenders)))
     )
+
+
+# ── the work-branch deferral ─────────────────────────────────────────────
+#
+# A shared-file edit used to cost the whole suite on every commit, on every
+# branch. On a work branch that run is redundant: the branch merges into main,
+# and main is gated afterwards. So the fallback is deferred there and kept in
+# the prod checkout, which has no later gate to inherit.
+
+
+def test_full_run_triggers_names_the_paths_that_force_a_full_run():
+    assert gate.full_run_triggers(
+        ["src/bot_modules/core/db_utils.py", "docs/INDEX.md"], set()
+    ) == ["src/bot_modules/core/db_utils.py"]
+    assert gate.full_run_triggers(["docs/INDEX.md"], set()) == []
+
+
+def test_deferring_maps_a_shared_file_instead_of_fanning_out():
+    """The point of the deferral: real targets, not an empty full-suite run."""
+    targets, _, run_full = gate.select_tests(
+        ["src/bot_modules/core/db_utils.py"], set(), defer_full=True
+    )
+    assert run_full is False
+    assert targets, "a deferred shared file must still map to its own tests"
+
+
+def test_not_deferring_keeps_the_fallback():
+    _, _, run_full = gate.select_tests(
+        ["src/bot_modules/core/db_utils.py"], set(), defer_full=False
+    )
+    assert run_full is True
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def test_in_linked_worktree_tells_a_worktree_from_its_main_checkout(tmp_path):
+    """Guards the deferral's own gate: prod must never defer to itself.
+
+    Built as a real repo plus a real `git worktree` rather than asserting
+    against the ambient checkout, because the ambient answer differs by where
+    the suite runs — False in prod, True in any dk-session worktree. A test
+    pinning one of those passes in prod, goes green in CI (a fresh clone is not
+    a worktree), and fails for every developer running it from a session.
+    """
+    main = tmp_path / "main"
+    main.mkdir()
+    _git(main, "init", "-q", "-b", "main")
+    _git(main, "config", "user.email", "gate@example.com")
+    _git(main, "config", "user.name", "gate")
+    (main / "f.txt").write_text("hi", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-qm", "init")
+
+    linked = tmp_path / "session"
+    _git(main, "worktree", "add", "-q", "-b", "feature", str(linked))
+
+    assert gate.in_linked_worktree(main) is False
+    assert gate.in_linked_worktree(linked) is True
+
+
+def test_somewhere_that_is_not_a_repo_does_not_defer(tmp_path):
+    """The safe default: if git can't answer, run the full suite rather than
+    silently skip it."""
+    assert gate.in_linked_worktree(tmp_path) is False

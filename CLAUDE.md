@@ -111,7 +111,10 @@ SQLite-backed. Tests in `tests/`.
   on every commit: ruff + pyright, then only the tests mapped to the staged
   diff (git diff vs HEAD + untracked). Touching a broadly-shared file (`core/`,
   `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
-  the full suite, so those commits pause longer; changed source with no
+  the full suite **in the prod checkout only**; in a session worktree that
+  fallback is **deferred** — the diff maps normally and the gate prints which
+  paths it skipped the full run for. The deferred run is not lost: gate main
+  after merging (below). Changed source with no
   matching test prints "unmapped (CI/nightly covers it)". A **new**
   logic-layer file (`logic.py`/`store.py`/`service.py`/`*_logic.py`/
   `*_service.py`) with no mapped test is a hard failure, not a
@@ -119,7 +122,10 @@ SQLite-backed. Tests in `tests/`.
   genuinely covered by an existing test under another name). `git commit
   --no-verify` bypasses the hook.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
-  single test). Full-suite green is required before a **push to origin**, but
+  single test). **Run it on `main` once a batch of merges is complete** — that
+  is where the work branches' deferred full runs are paid, and where a clean
+  merge between two parallel sessions is caught leaving main red. Full-suite
+  green is required before a **push to origin**, but
   CI on that push satisfies it — a local full run is optional. If
   you do run it locally, run it **solo**: a parallel full run alongside other
   work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors

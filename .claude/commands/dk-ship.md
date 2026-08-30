@@ -33,6 +33,11 @@ Steps:
    Do NOT proceed until the rebase completes cleanly.
 4. **Scoped regression** (skip only if `--no-test` was passed):
    `python scripts/gate.py --scoped`. If it fails, STOP — show the failures, do not merge.
+   In a session worktree this never fans out to the whole suite: a shared-file edit
+   (`core/`, `models/`, an edited migration, deps, `gate.py`) prints the paths whose
+   full run was **deferred** instead of running it. That run is paid on main — see
+   step 6 — so a ship is fast and the coverage still happens, once, on the tree that
+   actually matters.
 5. **Integrate** — one ship at a time, since every session merges into the same prod
    checkout. Take the lock and run these under it:
    `flock "$MAIN/.git/dk-ship.lock" -c '<the commands below>'`
@@ -48,7 +53,11 @@ Steps:
 
    If the lock is held, say so — a blocked ship looks identical to a hung one, and
    the user should know another session is mid-merge rather than assume a stall.
-6. Report what merged and whether main was pushed.
+6. Report what merged and whether main was pushed. If step 4 printed **deferred**
+   full-run paths, say so and tell the user main needs `python scripts/gate.py`
+   (~10 min, from the prod checkout) once their current batch of ships is done —
+   one run covers every branch merged since the last one, so don't run it per ship.
+   Offer to start it; don't block the teardown on it.
 7. **Tear the session down** (skip if `--keep` was passed, or if this checkout is not
    under `dk-sessions/` — a branch made directly in prod has no session to remove):
 

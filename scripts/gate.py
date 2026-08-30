@@ -205,10 +205,53 @@ def forces_full_run(path: str, is_new: bool) -> bool:
     return path.startswith(FULL_RUN_IF_MODIFIED_PREFIXES) and not is_new
 
 
-def select_tests(changed: list[str], new: set[str] | None = None) -> tuple[list[str], list[str], bool]:
-    """Return (test targets, unmapped source files, run_full)."""
+def full_run_triggers(changed: list[str], added: set[str]) -> list[str]:
+    """The changed paths that would, on their own, force the whole suite."""
+    return [c for c in changed if forces_full_run(c, c in added)]
+
+
+def in_linked_worktree(cwd: Path | str | None = None) -> bool:
+    """True when *cwd* is a `git worktree`, i.e. a dk-session branch.
+
+    A linked worktree's own git dir sits under the prod checkout's
+    `.git/worktrees/<name>`, so `--git-dir` and `--git-common-dir` differ; in
+    the prod checkout they are the same path. That is the distinction we want
+    — not the branch name, which a session is free to change.
+
+    Defaults to this checkout. The parameter exists so the behaviour can be
+    tested from either side: a test that pinned the *ambient* checkout would
+    assert one answer in prod and the opposite in a session worktree, and so
+    could only ever pass in one of the two places this runs.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute",
+             "--git-dir", "--git-common-dir"],
+            cwd=cwd if cwd is not None else ROOT,
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+    except (subprocess.CalledProcessError, OSError):
+        return False  # not a repo, or git missing — behave like prod
+    return len(out) == 2 and Path(out[0]).resolve() != Path(out[1]).resolve()
+
+
+def select_tests(
+    changed: list[str],
+    new: set[str] | None = None,
+    *,
+    defer_full: bool = False,
+) -> tuple[list[str], list[str], bool]:
+    """Return (test targets, unmapped source files, run_full).
+
+    ``defer_full`` drops the whole-suite fallback and maps the diff normally
+    instead. Work branches pass it: a shared-file edit there paid ~10 minutes on
+    every commit, which is the ordinary price of touching `core/` or a
+    migration, and the run it bought is re-done on main after the merge anyway.
+    The prod checkout never defers — a commit landing straight on main has no
+    later gate to inherit.
+    """
     added = new if new is not None else new_paths()
-    if any(forces_full_run(c, c in added) for c in changed):
+    if full_run_triggers(changed, added) and not defer_full:
         return [], [], True
 
     all_tests = _test_files()
@@ -420,7 +463,12 @@ def main() -> None:
 
     if scoped:
         changed = changed_paths()
-        targets, unmapped, run_full = select_tests(changed)
+        added = new_paths()
+        triggers = full_run_triggers(changed, added)
+        defer_full = bool(triggers) and in_linked_worktree()
+        targets, unmapped, run_full = select_tests(
+            changed, added, defer_full=defer_full
+        )
         if unmapped:
             print("── scope: unmapped source (covered only by CI/nightly) " + "─" * 6)
             for f in unmapped:
@@ -429,9 +477,8 @@ def main() -> None:
         # coverage must land in the same commit as the feature. Escape hatch:
         # `git commit --no-verify` (for a genuine false positive — e.g. a new
         # module exercised only through an existing test under another name).
-        new = new_paths()
         missing = sorted(
-            f for f in unmapped if f in new and requires_test(f)
+            f for f in unmapped if f in added and requires_test(f)
         )
         if missing:
             print("── scope: NEW logic/service file(s) with no test " + "─" * 12, file=sys.stderr)
@@ -444,6 +491,11 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        if defer_full:
+            print("── scope: shared file changed → full suite DEFERRED to main " + "─" * 1)
+            for t in triggers:
+                print(f"   ~ {t}")
+            print("   run `python scripts/gate.py` on main once your merge lands")
         if run_full:
             print("── scope: shared file changed → running FULL suite " + "─" * 10)
             run_pytest(py, *pytest_args)
