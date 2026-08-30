@@ -300,7 +300,7 @@ branch's single QA card along with the stage 1-4 Testing sections.
 - [ ] Reload the Pressure Cooker page — the word you saved is still in the "Extra Banned Words" box.
 - [ ] Open any duel game's settings page — there is no longer a notice claiming the game cannot be played anywhere, and the Allowed Channels hint says leaving the list empty allows the game anywhere.
 - [ ] On the Risky Rolls page, untick "Include in Scheduled Games", press Save in that box, then reload the page — it comes back unticked.
-- [ ] On the LegitLibs Templates page, tick and untick "Include in Scheduled Games" and Save — it saves and survives a reload, and the template list below still loads and edits normally.
+- [ ] On the LegitLibs Templates page, tick and untick "Available on This Server" and Save — it saves and survives a reload, and the template list below still loads and edits normally.
 - [ ] Read the Audit Channel description on Games → Global Config — it says anonymous submissions are copied there with the author attached, and no longer claims every game that starts or finishes is recorded.
 - [ ] On the Todo List page, read the Discord Board card's description: it names all four board buttons and says Sign-Offs and Approvals need admin or the economy manager role.
 - [ ] Open the QA Tracker page, set "Passed Cards Linger (minutes)" to 0, save, and confirm a green passed card stays in the testing channel instead of vanishing.

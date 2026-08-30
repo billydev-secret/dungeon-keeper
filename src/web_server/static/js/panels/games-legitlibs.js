@@ -82,9 +82,11 @@ export function mount(container) {
     gameType: "legitlibs",
     gameName: "LegitLibs",
     bare: true,
-    statusLabel: "Include in Scheduled Games",
-    statusHint: "When off, a scheduled LegitLibs round is skipped when its time comes"
-      + " round. Templates below stay editable either way.",
+    statusLabel: "Available on This Server",
+    statusHint: "When off, nobody can start a LegitLibs round and a scheduled one is"
+      + " skipped when its time comes round. Rounds already running finish normally,"
+      + " and the templates below stay editable either way. This is the same switch as"
+      + " LegitLibs in Available on This Server on Games → Global Config.",
   });
 
   // -- Blanks table helpers ---------------------------------------------------
