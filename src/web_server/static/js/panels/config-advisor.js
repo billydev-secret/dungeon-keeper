@@ -80,6 +80,20 @@ export function mount(container) {
                 access rather than answering.
               </div>
             </div>
+            <div class="field">
+              <label style="display:flex; gap:6px; align-items:center;">
+                <input type="checkbox" name="config_tools" ${cfg.config_tools ? "checked" : ""} />
+                Let ${name} look up settings when an admin asks
+              </label>
+              <div class="field-hint">
+                <strong>On by default.</strong> When an admin or moderator asks about
+                a feature, ${name} fetches that feature's current settings on demand
+                and can offer a change for them to confirm in Discord. Unchecked, it
+                is handed a fixed summary of the server's setup instead — older,
+                blunter, and unable to propose anything. Members never get either:
+                this only affects people who can already see the config.
+              </div>
+            </div>
           </div>
 
           <div style="display:flex; gap:8px; align-items:center;">
@@ -112,6 +126,7 @@ export function mount(container) {
           model: form.querySelector('select[name="model"]').value,
           staff_model: form.querySelector('select[name="staff_model"]').value,
           server_context: form.querySelector('input[name="server_context"]').checked,
+          config_tools: form.querySelector('input[name="config_tools"]').checked,
         });
         showStatus(status, true);
       } catch (err) {

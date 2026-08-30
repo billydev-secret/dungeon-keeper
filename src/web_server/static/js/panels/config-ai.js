@@ -17,22 +17,11 @@ export function mount(container) {
     const phaseLabel = { ready: "Ready", downloading: "Downloading…", loading: "Loading model…", error: "Error", idle: "Not started" };
     const phaseClass = { ready: "chip-success", downloading: "chip-warning", loading: "chip-warning", error: "chip-danger", idle: "chip-neutral" };
 
-    const modelOptions = (models, selected, { allowGlobal = false } = {}) => {
-      let html = allowGlobal ? `<option value=""${!selected ? " selected" : ""}>(use the server-wide default)</option>` : "";
-      for (const m of models) {
-        html += `<option value="${m}"${m === selected ? " selected" : ""}>${m}</option>`;
-      }
-      return html;
-    };
-
     let promptCards = "";
     for (const p of data.prompts) {
       const badge = p.is_override
         ? `<span class="chip chip-warning">Edited</span>`
         : `<span class="chip chip-neutral">Original</span>`;
-      const modelBadge = p.model_is_override
-        ? `<span class="chip chip-warning">Own model</span>`
-        : `<span class="chip chip-neutral">Server default</span>`;
       const key = esc(p.key);
       promptCards += `
         <div class="ai-prompt-card" data-key="${key}">
@@ -40,15 +29,6 @@ export function mount(container) {
             <strong>${esc(p.label)}</strong> ${badge}
             <div class="field-hint">${esc(p.description)}</div>
           </div>
-          <div class="ai-model-row" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <label for="ai-model-${key}">Model ${modelBadge}</label>
-            <select class="ai-cmd-model" id="ai-model-${key}">
-              ${modelOptions(data.known_models, p.model_is_override ? p.model : "", { allowGlobal: true })}
-            </select>
-            <button type="button" class="btn btn-primary btn-sm" data-action="save-model">Save Model</button>
-            <span class="save-status" data-model-status></span>
-          </div>
-          <div class="field-hint">Which model answers this command. Leave it on the server-wide default unless this one command needs something different.</div>
           <label for="ai-prompt-${key}" style="display:block;margin-top:8px;">Instructions Given to the Model</label>
           <textarea class="ai-prompt-text" id="ai-prompt-${key}" rows="8">${esc(p.text)}</textarea>
           <div class="field-hint">The standing instructions sent with every use of this command. Changing them changes how the bot answers straight away.</div>
@@ -89,31 +69,13 @@ export function mount(container) {
 
         <div style="margin-bottom:16px;">${apiKeyNote}</div>
 
-        <div class="section-label">Which Model Each Job Uses</div>
-        <form class="form card" data-models-form style="max-width:none;">
-          <div class="field-hint" style="margin-bottom:8px;">Every command starts from these unless you give it its own model further down.</div>
-          <div class="field-row">
-            <div class="field">
-              <label for="ai-mod-model">Moderation Model</label>
-              <select name="mod_model" id="ai-mod-model">
-                ${modelOptions(data.known_models, data.mod_model)}
-              </select>
-              <div class="field-hint">Used by <code>/ai review</code>, <code>scan</code>, <code>channel</code>, <code>query</code>, and <code>watch</code>.</div>
-            </div>
-            <div class="field">
-              <label for="ai-wellness-model">Wellness Model</label>
-              <select name="wellness_model" id="ai-wellness-model">
-                ${modelOptions(data.known_models, data.wellness_model)}
-              </select>
-              <div class="field-hint">Used for the weekly encouragement notes sent to your team.</div>
-            </div>
-          </div>
-          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
-            <button type="submit" class="btn btn-primary">Save</button><span data-status></span>
-          </div>
-        </form>
-
         <div class="section-label">AI Commands</div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          One model runs on this machine at a time — the one named under
+          <strong>Where the Model Comes From</strong> above — and every job below uses it.
+          What you can change per job is the instructions it is given. These
+          instructions apply to every server this bot is in.
+        </div>
         <div class="ai-prompts-list">
           ${promptCards}
         </div>
@@ -281,33 +243,12 @@ export function mount(container) {
       _startPolling();
     }
 
-    // ── Models form ────────────────────────────────────────────────
-    const modelsForm = container.querySelector("[data-models-form]");
-    const modelsStatus = modelsForm.querySelector("[data-status]");
-    guardForm(modelsForm);
-    modelsForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const fd = new FormData(modelsForm);
-      try {
-        await apiPut("/api/config/ai/models", {
-          mod_model: fd.get("mod_model"),
-          wellness_model: fd.get("wellness_model"),
-        });
-        showStatus(modelsStatus, true);
-      } catch (err) {
-        showStatus(modelsStatus, false, err.message);
-      }
-    });
-
     // ── Prompt cards ───────────────────────────────────────────────
     for (const card of container.querySelectorAll(".ai-prompt-card")) {
       const key = card.dataset.key;
       const textarea = card.querySelector(".ai-prompt-text");
       const status = card.querySelector("[data-prompt-status]");
       const badge = card.querySelector(".ai-prompt-header .chip");
-      const modelSelect = card.querySelector(".ai-cmd-model");
-      const modelStatus = card.querySelector("[data-model-status]");
-      const modelBadge = card.querySelector(".ai-model-row .chip");
       const testArea = card.querySelector(".ai-test-area");
       const testInput = card.querySelector(".ai-test-input");
       const testOutput = card.querySelector(".ai-test-output");
@@ -316,22 +257,6 @@ export function mount(container) {
       card.addEventListener("click", async (e) => {
         const action = e.target.dataset?.action;
         if (!action) return;
-
-        if (action === "save-model") {
-          try {
-            await apiPut(`/api/config/ai/prompts/${key}/model`, { model: modelSelect.value });
-            if (modelSelect.value) {
-              modelBadge.className = "chip chip-warning";
-              modelBadge.textContent = "Own model";
-            } else {
-              modelBadge.className = "chip chip-neutral";
-              modelBadge.textContent = "Server default";
-            }
-            showStatus(modelStatus, true);
-          } catch (err) {
-            showStatus(modelStatus, false, err.message);
-          }
-        }
 
         if (action === "save") {
           try {

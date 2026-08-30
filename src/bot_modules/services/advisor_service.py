@@ -127,6 +127,12 @@ ADVISOR_TOOLS_KEY = "advisor_config_tools"
 def get_advisor_tools_enabled(conn: sqlite3.Connection, guild_id: int = 0) -> bool:
     """Whether admin asks use config tools instead of the inline settings dump."""
     return parse_bool(get_config_value(conn, ADVISOR_TOOLS_KEY, "1", guild_id), True)
+
+
+def set_advisor_tools_enabled(
+    conn: sqlite3.Connection, enabled: bool, guild_id: int = 0
+) -> None:
+    set_config_value(conn, ADVISOR_TOOLS_KEY, "1" if enabled else "0", guild_id)
 MAX_QUESTION_CHARS = 500
 MAX_TOKENS = 800
 # History is untrusted client input on the web surface — cap turns and size.

@@ -394,7 +394,6 @@ def reload(db_path: Path | None = None) -> None:
 
 async def chat(
     *,
-    model: str = "",  # ignored — only one model is loaded at a time
     system: str,
     user_content: str,
     max_tokens: int = 2048,
@@ -404,11 +403,11 @@ async def chat(
 
     Waits for the model to finish loading if it hasn't yet.
 
-    The ``model`` argument is accepted but **ignored** on both backends: only
-    one model is served at a time. It is deliberately not forwarded to the
-    remote server — some guild rows carry hosted model IDs (e.g. a Claude
-    model name) left over from an abandoned cloud switch, and honouring those
-    would silently route moderation content off-box.
+    There is deliberately **no** model argument: exactly one model is served at
+    a time, chosen by the model-source settings (``llm_model_path`` /
+    ``llm_hf_repo`` / ``llm_hf_file``) and loaded at startup. The remote
+    backend is asked for ``"local"`` and the in-process backend uses the loaded
+    singleton, so no caller can steer moderation content at a hosted model.
     """
     if _ready_event is None:
         raise RuntimeError("LLM not initialised — start_loading() was never called.")
