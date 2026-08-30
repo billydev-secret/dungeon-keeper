@@ -23,6 +23,7 @@ from bot_modules.services.activity_graphs import (
     MIN_BAND_PERIODS,
     OverlayPeriod,
     Resolution,
+    overlay_weekday_name,
     query_activity_overlay,
     query_dropoff_profiles,
     query_message_activity,
@@ -525,6 +526,10 @@ class ActivityData(TypedDict):
     band_mid: list[float]
     band_high: list[float]
     periods_sampled: int
+    #: What the band is a band *of* — "Typical week", "Typical Tuesday".
+    #: Overlay views only; "" elsewhere. Named here rather than assembled in
+    #: the panel because only the server knows the guild-local weekday.
+    band_label: str
 
 
 def get_activity_data(
@@ -538,6 +543,7 @@ def get_activity_data(
     exclude_user_ids: set[int] | None = None,
     exclude_channel_ids: set[int] | None = None,
     compare_periods: int = 12,
+    same_weekday: bool = False,
 ) -> ActivityData:
     tz_label = f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC"
     show_members = user_id is None
@@ -551,6 +557,7 @@ def get_activity_data(
             tz_label,
             mode=mode,
             compare_periods=compare_periods,
+            same_weekday=same_weekday,
             user_id=user_id,
             channel_id=channel_id,
             exclude_user_ids=exclude_user_ids,
@@ -649,6 +656,7 @@ def get_activity_data(
         "band_mid": [],
         "band_high": [],
         "periods_sampled": 0,
+        "band_label": "",
     }
     return result
 
@@ -662,6 +670,7 @@ def _get_overlay_data(
     *,
     mode: Literal["messages", "xp"],
     compare_periods: int,
+    same_weekday: bool,
     user_id: int | None,
     channel_id: int | None,
     exclude_user_ids: set[int] | None,
@@ -676,6 +685,13 @@ def _get_overlay_data(
     """
     period = _OVERLAY_PERIODS[resolution]
     subject, unit = _OVERLAY_NOUNS[resolution]
+    if same_weekday and period == "day":
+        # "Days" becomes "Tuesdays" — a proper noun, so it keeps its capital in
+        # the sentences below where the generic units are lowercased.
+        unit = overlay_weekday_name(datetime.now(timezone.utc), utc_offset_hours) + "s"
+        unit_lower = unit
+    else:
+        unit_lower = unit.lower()
 
     result_ov = query_activity_overlay(
         conn,
@@ -683,6 +699,7 @@ def _get_overlay_data(
         period,
         mode=mode,
         compare_periods=compare_periods,
+        same_weekday=same_weekday,
         user_id=user_id,
         channel_id=channel_id,
         exclude_user_ids=exclude_user_ids,
@@ -696,11 +713,11 @@ def _get_overlay_data(
         # Some history, but too little to summarise honestly. Parenthetical
         # rather than a dash: the caption already joins on one.
         window_label = (
-            f"{subject} (needs {MIN_BAND_PERIODS} past {unit.lower()} to "
+            f"{subject} (needs {MIN_BAND_PERIODS} past {unit_lower} to "
             f"compare, has {result_ov.periods_sampled})"
         )
     else:
-        window_label = f"{subject} (no past {unit.lower()} to compare against yet)"
+        window_label = f"{subject} (no past {unit_lower} to compare against yet)"
 
     if result_ov.clamped and result_ov.periods_requested > result_ov.periods_sampled:
         window_label = xp_histogram_window_label(window_label)
@@ -721,6 +738,8 @@ def _get_overlay_data(
         "band_mid": result_ov.band_mid,
         "band_high": result_ov.band_high,
         "periods_sampled": result_ov.periods_sampled,
+        # Singular: the band is what one of these periods usually looks like.
+        "band_label": f"Typical {unit_lower.removesuffix('s')}",
     }
 
 

@@ -195,3 +195,46 @@ count and wrong for a percentile).
 **Docs**: `manual.html` (Help → Reports → Activity) gets the new view and states
 the 12-week XP reach; `docs/INDEX.md` unchanged (no new spec); no new table, so
 no `data_register.md` row.
+
+---
+
+## Follow-up: the same-weekday basis (todo #137, built 2026-08-30)
+
+Billy's ask: *"when comparing against previous days, can there be an option for
+the last n of the same weekday instead of all days?"* The point is real — a
+Tuesday read against a band with weekends in it mostly measures the weekend,
+because weekday seasonality is the loudest thing in a server's rhythm.
+
+**Shape.** Not a new resolution and not a checkbox beside the window picker:
+the existing **Compare to** picker grows a second option group. *Every day*
+holds the windows it always had; *Same weekday* holds 4 / 8 / 12 / 26. Option
+values became `basis:n` (`all:28`, `weekday:8`). Only `day_overlay` has two
+bases — a week is already every seventh day — so `week_overlay` keeps a flat
+list and the route drops the flag anywhere else, which also stops the response
+cache forking on a no-op.
+
+**Query.** `query_activity_overlay` gained a *stride*: the period index divides
+by `stride x 86400` while the hour within a period still divides by the period,
+and a `WHERE elapsed % stride_secs < period_secs` clause keeps only the first
+day of each seven-day block. Because the window is anchored at a local midnight
+a whole number of weeks back, that first day is always today's weekday — so no
+weekday arithmetic appears in the SQL at all, which is the same trick that
+keeps the timezone out of the original query.
+
+**Reach.** A same-weekday day spans a week, so it is capped like a week and not
+like a day: 26 back in messages mode, 12 in XP (12 x 7 = 84 days fits inside the
+90-day raw `xp_events` retention; 13 does not). `overlay_period_cap` now takes
+the basis, and the retention clamp counts whole strides rather than days.
+
+**Naming.** The band is "Typical Tuesday", the caption "Today vs Last 8
+Tuesdays" — assembled server-side and passed down as a new `band_label` field,
+because only the server knows the guild-local weekday. At 18:00 on a Saturday
+in the main guild (UTC-7) it is already Sunday in UTC, and a band labelled
+"Sundays" over Saturday data is the exact misread this view exists to prevent.
+
+**A bug found on the way.** Carrying the reader's window across a resolution
+change assigned the `<select>` a value it had no option for ("Last 7 days" has
+no counterpart in weeks), which silently blanks a select: an empty picker over
+a chart drawn to the server's default window. The picker now always settles on
+one of its own *enabled* options, and `tests/web/test_activity_compare_picker.py`
+holds that invariant.
