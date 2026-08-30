@@ -802,6 +802,138 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
     _assert_fits(res_replay, "Connection Graph replay")
 
 
+_TAG_MIX_STUB = {
+    "resolution": "week",
+    "window_label": "Last 12 Weeks",
+    "labels": [f"Wk {i}" for i in range(1, 13)],
+    # The WHOLE vocabulary, seven labels against six palette slots — so the
+    # widest legend the page can produce and the overflow-neutral slot are both
+    # on screen. A six-series stub would never exercise either.
+    "series": [
+        {"label": "FEMALE_BREAST_EXPOSED", "display": "Female chest", "order": 0,
+         "counts": [4, 9, 6, 7, 3, 8, 5, 6, 9, 4, 7, 5]},
+        {"label": "MALE_BREAST_EXPOSED", "display": "Male chest", "order": 1,
+         "counts": [2, 3, 1, 4, 2, 3, 2, 5, 1, 3, 2, 4]},
+        {"label": "FEMALE_GENITALIA_EXPOSED", "display": "Female genitalia", "order": 2,
+         "counts": [0, 1, 0, 0, 2, 0, 1, 0, 0, 1, 0, 0]},
+        {"label": "MALE_GENITALIA_EXPOSED", "display": "Male genitalia", "order": 3,
+         "counts": [3, 5, 2, 6, 4, 3, 5, 2, 4, 6, 3, 5]},
+        {"label": "BUTTOCKS_EXPOSED", "display": "Buttocks", "order": 4,
+         "counts": [1, 4, 3, 2, 5, 3, 2, 4, 3, 2, 5, 3]},
+        {"label": "SEX_ACT", "display": "Sex act", "order": 5,
+         "counts": [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]},
+        {"label": "ANUS_EXPOSED", "display": "Anus", "order": 6,
+         "counts": [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0]},
+    ],
+}
+
+
+def test_nsfw_by_tag_breakdown_fits_on_phone(dashboard, browser):
+    """The tag chart lives behind the Breakdown select, so a plain load never
+    draws it — the panel's default is the gender split.
+
+    Six stacked series is the widest this page ever gets: the legend carries
+    six named swatches and the table below it six columns, and neither exists
+    until the select changes. The sweep sees only the gender view.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/reports/nsfw-tag-mix*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_TAG_MIX_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/nsfw-gender")
+        page.wait_for_timeout(400)
+        page.select_option('[data-control="breakdown"]', "tag")
+        page.select_option('[data-control="display"]', "bar")
+        page.wait_for_function(
+            "() => document.querySelector('[data-heading]')"
+            "?.textContent.includes('Tag')"
+        )
+        _settle(page)
+        heading = page.text_content("[data-heading]")
+        swatches = page.eval_on_selector_all(
+            "[data-legend] *", "els => els.length"
+        )
+        # Colour is keyed off each label's vocabulary position, so the six
+        # palette slots are all distinct and only the 7th repeats the neutral.
+        colors = page.eval_on_selector_all(
+            ".chart-legend__swatch",
+            "els => els.map(e => getComputedStyle(e).backgroundColor)",
+        )
+        # The unfiltered total spans spoiler-required channels the dropdown
+        # cannot name, so it must not call itself NSFW-only.
+        all_opt = page.text_content("[data-all-option]")
+        # media_only is not sent under By tag, but dropping it from the URL
+        # would silently re-tick the box on reload.
+        url = page.url
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    assert all_opt == "All tagged channels", (
+        f"the channel control still claims an NSFW-only scope (got {all_opt!r})"
+    )
+    assert "media_only=" in url, f"media_only fell out of the URL: {url}"
+    assert heading and "Tag" in heading, (
+        f"heading did not follow the breakdown select (got {heading!r})"
+    )
+    assert swatches, "the legend never rendered — stub shape drift?"
+    # Seven series, seven distinguishable bands: the six validated hues plus
+    # the overflow neutral, which is not itself one of them. A repeat here
+    # would mean two labels had been given the same identity.
+    assert len(colors) == 7 and len(set(colors)) == 7, (
+        f"tag bands are not all distinguishable: {colors}"
+    )
+    _assert_fits(res, "NSFW by Tag")
+
+
+def test_nsfw_breakdown_chrome_never_outruns_its_chart(dashboard, browser):
+    """Switch away from By tag while its request is still in flight.
+
+    The heading, subtitle and Media Only state change synchronously; the chart
+    arrives from an await. A late tag response painting body-part series under
+    the "NSFW by Gender" heading is a mislabelled chart over exactly the rows
+    that are admin-gated for being sensitive, so the render is sequenced.
+    """
+    import json
+    import time as _time
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["desktop"], "height": 900})
+    try:
+        page = context.new_page()
+
+        def _slow_tags(route):
+            _time.sleep(1.5)
+            route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_TAG_MIX_STUB),
+            )
+
+        page.route("**/api/reports/nsfw-tag-mix*", _slow_tags)
+        _goto_panel(page, f"{dashboard.base}/#/nsfw-gender")
+        page.wait_for_timeout(400)
+        page.select_option('[data-control="breakdown"]', "tag")
+        # Back again well before the tag response can land.
+        page.select_option('[data-control="breakdown"]', "gender")
+        page.wait_for_timeout(2500)  # outlast the stubbed delay
+        heading = page.text_content("[data-heading]")
+        body = page.inner_text(".panel")
+    finally:
+        context.close()
+    assert heading == "NSFW by Gender", f"heading drifted to {heading!r}"
+    assert "Female chest" not in body, (
+        "a superseded tag response rendered under the gender heading"
+    )
+
+
 def test_activity_overlay_fits_on_phone(dashboard, browser):
     """Switch the Activity panel to the week overlay.
 

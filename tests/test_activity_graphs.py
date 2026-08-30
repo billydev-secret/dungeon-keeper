@@ -38,6 +38,7 @@ from bot_modules.services.activity_graphs import (
     query_message_histogram,
     query_message_rate_drops,
     query_nsfw_gender_activity,
+    query_nsfw_tag_activity,
     query_xp_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram,
@@ -618,6 +619,150 @@ def test_query_nsfw_gender_activity_media_only_filters_by_media_kind(db_conn):
     # Only message 2 counts: 'media' is included, 'gif' and text are excluded.
     total = sum(sum(v) for v in by_gender.values())
     assert total == 1
+
+
+# ── query_nsfw_tag_activity ──────────────────────────────────────────
+
+
+def _seed_classification(
+    conn,
+    *,
+    message_id,
+    label,
+    guild_id=10,
+    channel_id=999,
+    created_at=None,
+    verdict=1,
+    marqo_score=0.9,
+):
+    """One nsfw_classifications row.
+
+    `label=None` = classified but never tagged; `marqo_score=None` = a row
+    written before the Marqo swap (migration 147).
+    """
+    if created_at is None:
+        created_at = int(datetime.now(timezone.utc).timestamp() - 60)
+    conn.execute(
+        """
+        INSERT INTO nsfw_classifications
+            (message_id, attachment_id, guild_id, channel_id, verdict,
+             marqo_score, top_label, top_score, model, threshold, label_set,
+             inference_ms, bytes, created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (message_id, 1, guild_id, channel_id, verdict, marqo_score, label,
+         0.8 if label else None, "320n", 0.5, "", 12, 1024, created_at),
+    )
+
+
+def test_query_nsfw_tag_activity_buckets_by_label(db_conn):
+    _seed_classification(db_conn, message_id=1, label="FEMALE_BREAST_EXPOSED")
+    _seed_classification(db_conn, message_id=2, label="FEMALE_BREAST_EXPOSED")
+    _seed_classification(db_conn, message_id=3, label="BUTTOCKS_EXPOSED")
+    db_conn.commit()
+
+    labels, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    assert len(labels) == 30
+    assert sum(by_tag["FEMALE_BREAST_EXPOSED"]) == 2
+    assert sum(by_tag["BUTTOCKS_EXPOSED"]) == 1
+    # Every series spans the full bucket sequence, or the stack misaligns.
+    assert all(len(counts) == 30 for counts in by_tag.values())
+
+
+def test_query_nsfw_tag_activity_excludes_untagged_rows(db_conn):
+    """Marqo writes a verdict for every image; NudeNet a label only where it ran.
+
+    An untagged row is not "tagged, but nothing qualified" — it is an image
+    outside this report's scope, and counting it would put the majority of the
+    table into a band the chart has nothing true to say about.
+    """
+    _seed_classification(db_conn, message_id=1, label="SEX_ACT")
+    _seed_classification(db_conn, message_id=2, label=None)
+    _seed_classification(db_conn, message_id=3, label="")
+    db_conn.commit()
+
+    _, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    assert set(by_tag) == {"SEX_ACT"}
+    assert sum(sum(c) for c in by_tag.values()) == 1
+
+
+def test_query_nsfw_tag_activity_excludes_pre_swap_rows(db_conn):
+    """Rows written before the Marqo swap carry a NULL marqo_score.
+
+    /api/moderation/nsfw-tags drops them, and this report is documented as
+    showing the same labels — so a total that silently disagreed with the panel
+    next door would be worse than the handful of rows it costs. Only a 12-month
+    window reaches back far enough to contain any.
+    """
+    _seed_classification(db_conn, message_id=1, label="BUTTOCKS_EXPOSED")
+    _seed_classification(db_conn, message_id=2, label="BUTTOCKS_EXPOSED", marqo_score=None)
+    db_conn.commit()
+
+    _, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    assert sum(by_tag["BUTTOCKS_EXPOSED"]) == 1
+
+
+def test_query_nsfw_tag_activity_orders_by_taxonomy_not_volume(db_conn):
+    """Series order is fixed, so a series keeps its colour across windows.
+
+    Ordering by observed volume would repaint every band whenever a different
+    label happened to lead — the exact instability the fixed list prevents.
+    """
+    for i in range(5):
+        _seed_classification(db_conn, message_id=100 + i, label="BUTTOCKS_EXPOSED")
+    _seed_classification(db_conn, message_id=1, label="FEMALE_BREAST_EXPOSED")
+    db_conn.commit()
+
+    _, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    # BUTTOCKS_EXPOSED leads on volume 5:1 and still sorts after the chest label.
+    assert list(by_tag) == ["FEMALE_BREAST_EXPOSED", "BUTTOCKS_EXPOSED"]
+
+
+def test_query_nsfw_tag_activity_reports_labels_outside_the_known_order(db_conn):
+    """The vocabulary is the detector's. An unfamiliar label is appended, never dropped."""
+    _seed_classification(db_conn, message_id=1, label="FEMALE_BREAST_EXPOSED")
+    _seed_classification(db_conn, message_id=2, label="ZZ_NEW_LABEL")
+    db_conn.commit()
+
+    _, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    assert list(by_tag) == ["FEMALE_BREAST_EXPOSED", "ZZ_NEW_LABEL"]
+
+
+def test_query_nsfw_tag_activity_channel_filter_narrows(db_conn):
+    _seed_classification(db_conn, message_id=1, label="SEX_ACT", channel_id=999)
+    _seed_classification(db_conn, message_id=2, label="SEX_ACT", channel_id=888)
+    db_conn.commit()
+
+    _, all_ch = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+    _, one_ch = query_nsfw_tag_activity(
+        db_conn, guild_id=10, resolution="day", channel_ids=[999]
+    )
+
+    assert sum(all_ch["SEX_ACT"]) == 2
+    assert sum(one_ch["SEX_ACT"]) == 1
+
+
+def test_query_nsfw_tag_activity_is_scoped_to_one_guild(db_conn):
+    _seed_classification(db_conn, message_id=1, label="SEX_ACT", guild_id=10)
+    _seed_classification(db_conn, message_id=2, label="SEX_ACT", guild_id=11)
+    db_conn.commit()
+
+    _, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="day")
+
+    assert sum(by_tag["SEX_ACT"]) == 1
+
+
+def test_query_nsfw_tag_activity_empty_table_returns_bucket_labels(db_conn):
+    """No rows is not no chart: the axis still spans the window, with no series."""
+    labels, by_tag = query_nsfw_tag_activity(db_conn, guild_id=10, resolution="week")
+
+    assert len(labels) == 12
+    assert by_tag == {}
 
 
 # ── query_greeter_response_times ─────────────────────────────────────

@@ -54,7 +54,7 @@ const SECTIONS = [
       // analytics read with a moderation eye, not an engagement metric.
       { heading: "Moderation", items: [
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
-        { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
+        { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js", keywords: "nsfw tags labels image guard tag mix nudity breakdown over time trend chart", related: ["nsfw-tags"] },
         { id: "mod-coverage",           label: "Mod Coverage",       module: "./panels/mod-coverage.js", keywords: "moderator presence coverage gaps overnight rota busy hours", related: ["activity"] },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
         { id: "health-mod-engagement",  label: "Mod Engagement",     module: "./panels/health-mod-engagement.js" },
@@ -115,7 +115,7 @@ const SECTIONS = [
       ]},
       { heading: "Image Guard", items: [
         { id: "nsfw-blocks",       label: "Image Guard Blocks", module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "blocked images nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
-        { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler"] },
+        { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler", "nsfw-gender"] },
       ]},
       { heading: "Audit Logs", items: [
         { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },

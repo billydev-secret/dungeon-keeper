@@ -1569,8 +1569,10 @@ async def nsfw_tags_report(
 ):
     """What the tagger saw, and where it disagreed with the verdict engine.
 
-    Age-gated channels only — that is the sole scope NudeNet runs in, so it is
-    the sole scope this can describe.
+    Age-gated and spoiler-required channels — that is the scope NudeNet runs
+    in, so it is the sole scope this can describe. It was age-gated channels
+    alone until the bare-chest spoiler rule widened it (see
+    nsfw_classifier_service's module docstring); the report never said so.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
