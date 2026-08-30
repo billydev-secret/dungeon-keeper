@@ -272,6 +272,19 @@ def purge_user_data(
         table="risky_posted_questions",
     )
 
+    # Ping Response (migration 198): the erased member's own role pings.
+    # Purged, not preserved — this is an analytics table about how a ping
+    # landed, and "we wanted the numbers" is not an Art 17(3) ground. Their
+    # pings drop out of the report; everyone else's turnout is unaffected,
+    # since turnout is counted from messages and reactions at read time and
+    # never denormalized onto the ping row.
+    _delete(
+        conn,
+        "DELETE FROM ping_events WHERE guild_id = ? AND author_id = ?",
+        (guild_id, user_id),
+        table="ping_events",
+    )
+
     # Survivor (migration 167): purged across every season, live or archived
     # — a game record has no Art 17(3) ground to outlive the member (register
     # rows: docs/data_register.md). guild_id is denormalized onto both tables

@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 
 import discord
 
+from bot_modules.core.db_utils import open_db
 from bot_modules.core.utils import jump_url, resolve_bot_channel
 from bot_modules.feature_rotation.store import is_hidden_by_rotation
 from bot_modules.games.constants import (
@@ -40,6 +41,7 @@ from bot_modules.games.utils.game_manager import (
     get_active_game_by_id,
     resolve_name,
 )
+from bot_modules.services import ping_tracker_service
 from bot_modules.services.game_start_ping_service import (
     mark_start_ping_sent,
     send_start_ping,
@@ -83,6 +85,35 @@ def build_launch_announcement(
     if message_id is None:
         return line
     return f"{line}\n{jump_url(guild_id, channel_id, message_id)}"
+
+
+async def _record_launch_ping(
+    games_db,
+    *,
+    message_id: int,
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    role_id: int,
+    game_id: str,
+    ts: float,
+) -> None:
+    """Log the launch announcement's role ping against the game it launched."""
+
+    def _write() -> None:
+        with open_db(games_db.db_path) as conn:
+            ping_tracker_service.record_game_start_ping(
+                conn,
+                message_id=message_id,
+                guild_id=guild_id,
+                channel_id=channel_id,
+                author_id=author_id,
+                role_ids=[role_id],
+                game_id=game_id,
+                ts=ts,
+            )
+
+    await asyncio.to_thread(_write)
 
 
 # ── Pure time math ──────────────────────────────────────────────────────────
@@ -430,7 +461,7 @@ async def _process_due(bot, games_db, row, now: float) -> None:
             message_id = board["message_id"] if board else None
             role_id = row["announce_role_id"]
             try:
-                await channel.send(
+                announcement = await channel.send(
                     build_launch_announcement(
                         game_type,
                         role_id=role_id,
@@ -451,6 +482,30 @@ async def _process_due(bot, games_db, row, now: float) -> None:
                 )
             except Exception:
                 log.warning("Scheduled game %s: announce failed in channel %s", sched_id, channel_id)
+            else:
+                # Tie the ping to the game it announced. The generic ingest
+                # path will also see this message, but all it can tell is "a
+                # bot pinged a role" — only here do we know *which game*, and
+                # that link is what lets the Ping Response report say how many
+                # people actually joined rather than only how many talked.
+                # Never allowed to break a launch that already succeeded.
+                if role_id:
+                    try:
+                        await _record_launch_ping(
+                            games_db,
+                            message_id=announcement.id,
+                            guild_id=guild_id,
+                            channel_id=channel_id,
+                            author_id=announcement.author.id,
+                            role_id=int(role_id),
+                            game_id=gid,
+                            ts=announcement.created_at.timestamp(),
+                        )
+                    except Exception:
+                        log.warning(
+                            "Scheduled game %s: ping tracking failed", sched_id,
+                            exc_info=True,
+                        )
 
         # A lobby game posts its lobby and waits for a human to press start —
         # nobody would otherwise know that's pending. Nudge the person who

@@ -66,6 +66,7 @@ from bot_modules.services.message_store import (
     upsert_known_channel,
     upsert_known_user,
 )
+from bot_modules.services import ping_tracker_service
 from bot_modules.services.message_xp_service import (
     award_image_reaction_xp,
     award_message_xp,
@@ -697,6 +698,24 @@ class EventsCog(commands.Cog):
         reply_to_id: int | None = None
         if message.reference and message.reference.message_id:
             reply_to_id = message.reference.message_id
+
+        # Role pings, read off Discord's structured mention lists rather than
+        # the text — so the Ping Response report keeps working in guilds that
+        # don't retain content, and so a member typing "@everyone" without the
+        # permission to use it isn't recorded as having pinged the server.
+        # Derived here, once, because all three persistence paths below want
+        # it and only this scope still has the discord.Message.
+        role_ping_ids, ping_everyone = ping_tracker_service.role_pings_from_message(
+            message
+        )
+        # Three-way, not two: most role pings in a busy server come from
+        # unrelated third-party bots, and lumping those in with our own
+        # announcements makes the report unreadable.
+        _self_id = getattr(self.bot.user, "id", 0)
+        ping_source = ping_tracker_service.ingest_source(
+            is_bot=is_bot_author,
+            is_self=bool(_self_id) and message.author.id == _self_id,
+        )
         attachment_urls = [a.url for a in message.attachments] if retain else []
         # media_kind is metadata (an attachment classification, not a URL), so it
         # is recorded regardless of storage level to keep media metrics working.
@@ -738,6 +757,9 @@ class EventsCog(commands.Cog):
                         else (),
                         retain_content=retain,
                         media_kind=media_kind,
+                        role_mention_ids=role_ping_ids,
+                        mention_everyone=ping_everyone,
+                        ping_source=ping_source,
                     )
                     if sentiment is not None:
                         conn.execute(
@@ -810,6 +832,9 @@ class EventsCog(commands.Cog):
                         else (),
                         retain_content=retain,
                         media_kind=media_kind,
+                        role_mention_ids=role_ping_ids,
+                        mention_everyone=ping_everyone,
+                        ping_source=ping_source,
                     )
                     upsert_known_user(
                         conn,
@@ -950,6 +975,9 @@ class EventsCog(commands.Cog):
                     else (),
                     retain_content=retain,
                     media_kind=media_kind,
+                    role_mention_ids=role_ping_ids,
+                    mention_everyone=ping_everyone,
+                    ping_source=ping_source,
                 )
 
                 if sentiment is not None:

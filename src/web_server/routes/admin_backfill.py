@@ -14,13 +14,20 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from bot_modules.services import ping_tracker_service
 from bot_modules.services.backfill_jobs import (
     backfill_interactions_async,
     backfill_roles_sync,
     backfill_xp_async,
 )
 from web_server.auth import AuthenticatedUser
-from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.deps import (
+    get_active_guild_id,
+    get_ctx,
+    invalidate_report_cache,
+    require_perms,
+    run_query,
+)
 from web_server.schemas import BackfillRequest, BackfillStartedResponse, OkResponse
 
 router = APIRouter()
@@ -57,6 +64,46 @@ async def backfill_roles_endpoint(
             f"Role backfill complete. "
             f"Grants added: {stats['grants_added']}, "
             f"removes added: {stats['removes_added']}."
+        ),
+    }
+
+
+@router.post("/backfill-pings", response_model=OkResponse)
+async def backfill_pings_endpoint(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Recover historical role pings from stored message text.
+
+    Synchronous: one indexed-free scan of ``messages`` for the handful of rows
+    containing a role mention, which measures in seconds even on a full
+    history. Re-runnable — ``ping_events`` is keyed on the message id, so a
+    second run records nothing.
+
+    This finds strictly less than live capture does: only channels whose
+    content was retained, and it cannot tell a real ``@everyone`` from someone
+    typing the words without the permission to ping. The panel says so.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    self_id = getattr(getattr(bot, "user", None), "id", 0) or 0
+
+    def _q():
+        with ctx.open_db() as conn:
+            bots = ping_tracker_service.known_bot_ids(conn, guild_id)
+            return ping_tracker_service.backfill_ping_events(
+                conn, guild_id, bot_ids=bots, self_id=self_id
+            )
+
+    stats = await run_query(_q)
+    invalidate_report_cache(guild_id=guild_id)
+    log.info("backfill-pings done: %s", stats)
+    return {
+        "ok": True,
+        "message": (
+            f"Ping backfill complete. Messages scanned: {stats['scanned']}, "
+            f"pings recorded: {stats['recorded']}."
         ),
     }
 

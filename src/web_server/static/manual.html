@@ -1747,6 +1747,7 @@
         <tr><td><strong>Anonymous features</strong> — Whisper, Confessions, Guess, and the anonymous party games</td><td>See the box below — "anonymous" means anonymous to other members, not to moderators</td><td>Varies; see below</td></tr>
         <tr><td><strong>Moderation records</strong> — warnings, jails, tickets and their transcripts, notes about rule-breaking, and flags raised by the automated Rules Watch</td><td>The record of moderation decisions, and the ability to justify one if challenged</td><td>Indefinitely</td></tr>
         <tr><td><strong>Image checks</strong> — for pictures you post in <strong>age-gated channels and spoiler-required channels</strong>, a score for how explicit the picture is, plus which body parts were detected and roughly where in the frame. Elsewhere, only the score, and only while a rule is deciding what to do — nothing is written down. Every removal is recorded wherever it happens</td><td>Enforcing the spoiler rule and keeping explicit images out of SFW channels. All of it runs on the bot's own machine; no picture is ever uploaded anywhere</td><td>Indefinitely. Admin-only — never shown to other members</td></tr>
+        <tr><td><strong>Role pings you send</strong> — when you ping a role or <code>@everyone</code>, the fact that you did it, in which channel, and which role. Never what you wrote alongside it</td><td>The <a href="#ping-response">Ping Response</a> report, so moderators can see which roles still bring people and which have been tuned out</td><td>Indefinitely; cleared in full by an erasure request. Nobody is recorded for <em>answering</em> a ping — turnout is counted from messages and reactions already held, and only ever as a number</td></tr>
         <tr><td><strong>Command and panel usage</strong> — which slash commands you run and which dashboard pages you open</td><td>Finding features nobody uses. See <a href="#usage-telemetry">Command &amp; Panel Usage</a></td><td>Indefinitely</td></tr>
         <tr><td><strong>A gender label</strong>, applied by moderators rather than by you</td><td>Aggregate server demographics only. It is not shown to members and is not used to decide anything about you</td><td>Indefinitely — ask a mod to change or remove yours</td></tr>
       </tbody>
@@ -2709,6 +2710,37 @@
       <div class="callout-body">
         <strong>Configure via the <a href="/#/chat-revive">web dashboard</a></strong>
         <p>The Chat Revive panel covers eligible channels and their question flavors, the ping role, quiet hours and budgets, the question bank (add, bulk-import, retire), a "would it fire right now?" explainer per channel, a manual Fire button, posting the opt-in button, and a scoreboard of which questions actually spark conversation.</p>
+      </div>
+    </div>
+
+    <h3 id="ping-response">Ping Response</h3>
+    <p>Answers one question: <strong>when the server pings a role, does anybody actually turn up?</strong> Every role ping — <code>@Gamers</code> typed by a mod, <code>@everyone</code>, the bot&rsquo;s own &ldquo;game starting now&rdquo; announcement — is recorded when it is sent, and the report counts who responded.</p>
+
+    <h4>What &ldquo;turned up&rdquo; means</h4>
+    <p><strong>Turnout</strong> is the number of <em>distinct people</em> who, within the response window, either posted in that channel or reacted to the ping itself. Someone who does both counts once. Someone who posts ten times counts once. Whoever sent the ping is never counted as their own response, and bots are left out unless you tick the box.</p>
+    <p>A second column, <strong>Messages</strong>, shows the raw volume next to it — one person saying forty things and forty people saying one thing are very different nights, and a single number can&rsquo;t tell them apart.</p>
+    <p>For a ping the bot sent to launch a game, a <strong>Played</strong> column shows the game&rsquo;s actual roster. That is the honest answer to whether the ping worked: not how many people talked, but how many played. It&rsquo;s blank when no game was attached to the ping, or when the game left no roster behind — blank means &ldquo;we don&rsquo;t know&rdquo;, never &ldquo;nobody came&rdquo;.</p>
+
+    <h4>Whose pings you&rsquo;re looking at</h4>
+    <p>Most role pings on a busy server aren&rsquo;t yours — on this one, roughly seven in ten come from other bots doing their own thing. The <strong>Sent by</strong> control narrows the report to what you actually mean: everything, just Dungeon Keeper (its game announcements and nudges), just members, or just other bots.</p>
+    <p>That&rsquo;s a different question from the <strong>Count bots as turnout</strong> tick-box, which is about who counts as having <em>answered</em>. Leave that off unless you&rsquo;re specifically interested in bot chatter.</p>
+
+    <h4>The response window</h4>
+    <p>The window is a control on the panel, not a setting someone has to decide once. Nothing is worked out in advance, so changing it genuinely re-counts rather than estimating — and it should change, because &ldquo;a game is starting <em>now</em>&rdquo; and &ldquo;here&rsquo;s an announcement for today&rdquo; deserve very different answers. Widening the window from five minutes to three hours will typically move the numbers a lot; that is the report working, not a glitch.</p>
+
+    <h4>Reading it</h4>
+    <ul>
+      <li><strong>By role</strong> — which roles actually bring people, and which ones everyone has muted. The most useful column is usually <em>Ignored</em>: a role that is pinged often and answered rarely is a role that has stopped meaning anything.</li>
+      <li><strong>By channel</strong> — the same question per room.</li>
+      <li><strong>Recent pings</strong> — every ping with a link straight to the message, so you can go and look at what actually happened.</li>
+    </ul>
+    <p>A ping that names two roles is counted once in the totals but appears under <em>both</em> roles in the by-role table, so those counts can add up to more than the headline number. That&rsquo;s intended — both roles really were pinged.</p>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">ℹ️</span>
+      <div class="callout-body">
+        <strong>History has a gap</strong>
+        <p>Tracking begins when the feature is switched on. Past pings can be recovered with the <strong>Ping Backfill</strong> button on the <a href="/#/admin-backfill">Admin Backfill</a> panel, but that recovery sees less than live tracking does: it can only find pings in channels where message text was kept, and it can&rsquo;t tell a real <code>@everyone</code> from someone simply typing the word. Pings sent from now on are recorded properly as they happen, so the further you get from the switch-on date the more trustworthy the numbers.</p>
       </div>
     </div>
 
