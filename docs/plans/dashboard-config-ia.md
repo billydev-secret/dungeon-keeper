@@ -981,6 +981,11 @@ medium = divergence that will bite on the next touch, low = latent debris.
    and can never suggest the real control; its blurb ('Points members at the
    server guide when they ask a rules question') describes behavior the
    monitor does not have.
+   *Fixed; the follow-up caught in review: taking `server_guide_channel_id`
+   off rules-watch left it in no feature at all, which is the one state the
+   registry must never be in — it is live (both the welcome and the leave
+   embed expand `{server_guide}` from it) and the Welcome panel writes it. It
+   now sits with the `welcome` feature, optional and writable.*
 
 67. **[medium]** All four live-auction dials (auction_min_bid,
    auction_min_increment, auction_soft_close_seconds,

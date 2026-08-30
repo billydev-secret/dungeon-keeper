@@ -246,21 +246,30 @@ def archive_test(conn: sqlite3.Connection, test_id: int) -> bool:
     return (cur.rowcount or 0) > 0
 
 
-def list_stale_passed(conn: sqlite3.Connection, cutoff_iso: str) -> list[sqlite3.Row]:
+def list_stale_passed(
+    conn: sqlite3.Connection, cutoff_iso: str, guild_id: int | None = None
+) -> list[sqlite3.Row]:
     """Passed, posted cards verified at or before ``cutoff_iso``.
 
     Feeds the sweep that auto-deletes long-verified cards from the channel
-    (``qa_cog.qa_archive_sweep_loop``) — guild-agnostic, like the other
-    startup-task polling loops (e.g. ``scheduled_games_service``).
+    (``qa_cog.qa_archive_sweep_loop``). Guild-agnostic by default, like the
+    other startup-task polling loops (e.g. ``scheduled_games_service``);
+    ``sweepable_passed`` narrows it to one guild so each guild's own cutoff
+    does the filtering in SQL.
     """
+    where = ""
+    params: tuple = (cutoff_iso,)
+    if guild_id is not None:
+        where = " AND guild_id = ?"
+        params = (cutoff_iso, guild_id)
     return conn.execute(
-        """
+        f"""
         SELECT * FROM qa_tests
         WHERE status = 'passed' AND verified_at IS NOT NULL AND verified_at <= ?
-          AND channel_id IS NOT NULL AND message_id IS NOT NULL
+          AND channel_id IS NOT NULL AND message_id IS NOT NULL{where}
         ORDER BY id
         """,
-        (cutoff_iso,),
+        params,
     ).fetchall()
 
 
@@ -269,9 +278,8 @@ def sweepable_passed(
 ) -> list[dict]:
     """The passed cards the declutter sweep may act on *right now*.
 
-    ``list_stale_passed`` is guild-agnostic and knows nothing about the
-    per-guild dials, so both guild-level promises the dashboard makes are
-    applied here rather than in SQL:
+    ``list_stale_passed`` knows nothing about the per-guild dials, so both
+    guild-level promises the dashboard makes are applied here:
 
     * a guild with the tracker switched **off** is skipped entirely — "off
       pauses verdict buttons; existing cards stay put" has to include the
@@ -279,25 +287,33 @@ def sweepable_passed(
     * each guild's own ``linger_minutes`` decides how long its passed cards sit
       in the channel first, and ``0`` means never sweep at all.
 
+    The guild's cutoff is pushed into the query rather than compared in
+    Python afterwards. This loop runs once a minute forever, and a "cutoff =
+    now" scan would match every passed card the server has ever posted — the
+    whole archive, growing without bound, since a guild that never sweeps
+    (``linger_minutes = 0``, or the tracker off) never removes a row from it.
     Cutoffs are compared as ISO strings, exactly as ``list_stale_passed``'s
     ``WHERE`` clause does, so a row is judged by the same rule either way.
     """
     now = now or datetime.now(timezone.utc)
-    rows = list_stale_passed(conn, now.isoformat())
-    cutoffs: dict[int, str | None] = {}
+    guild_ids = [
+        int(r["guild_id"])
+        for r in conn.execute(
+            """
+            SELECT DISTINCT guild_id FROM qa_tests
+            WHERE status = 'passed' AND verified_at IS NOT NULL
+              AND channel_id IS NOT NULL AND message_id IS NOT NULL
+            """
+        ).fetchall()
+    ]
     out: list[dict] = []
-    for row in rows:
-        guild_id = int(row["guild_id"])
-        if guild_id not in cutoffs:
-            settings = load_qa_settings(conn, guild_id)
-            cutoffs[guild_id] = (
-                None
-                if not settings.enabled or settings.linger_minutes <= 0
-                else (now - timedelta(minutes=settings.linger_minutes)).isoformat()
-            )
-        cutoff = cutoffs[guild_id]
-        if cutoff is not None and str(row["verified_at"]) <= cutoff:
-            out.append(dict(row))
+    for guild_id in guild_ids:
+        settings = load_qa_settings(conn, guild_id)
+        if not settings.enabled or settings.linger_minutes <= 0:
+            continue
+        cutoff = (now - timedelta(minutes=settings.linger_minutes)).isoformat()
+        out.extend(dict(r) for r in list_stale_passed(conn, cutoff, guild_id))
+    out.sort(key=lambda r: r["id"])
     return out
 
 

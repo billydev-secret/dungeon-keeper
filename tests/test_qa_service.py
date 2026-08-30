@@ -16,6 +16,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
 )
+from bot_modules.services import qa_service
 from bot_modules.services.qa_service import (
     DEFAULT_QA_SETTINGS,
     QA_PREFIX,
@@ -297,6 +298,50 @@ def test_sweepable_passed_skips_disabled_guilds_and_honours_linger(db):
         # 0 = never swept; an admin archives it by hand or it stays.
         save_qa_settings(conn, GUILD, {"linger_minutes": 0})
         assert sweepable_passed(conn, now + timedelta(days=7)) == []
+
+
+def test_sweepable_passed_scans_only_each_guilds_own_window(db, monkeypatch):
+    """The per-tick query is bounded by the guild's linger, not by "now".
+
+    The sweep loop runs this every minute forever. A scan cut off at *now*
+    matches every passed, posted card the server has ever put in the channel —
+    and a guild that never sweeps (linger 0, or the tracker off) never removes
+    one from that result, so the set only grows.
+    """
+    now = datetime(2026, 8, 30, 12, 0, tzinfo=timezone.utc)
+    calls: list[tuple] = []
+    real = qa_service.list_stale_passed
+
+    def _spy(conn, cutoff_iso, guild_id=None):
+        calls.append((cutoff_iso, guild_id))
+        return real(conn, cutoff_iso, guild_id)
+
+    monkeypatch.setattr(qa_service, "list_stale_passed", _spy)
+
+    with open_db(db) as conn:
+        ancient = _mk_test(conn, 1)
+        _record(conn, S, ancient, USER, "pass")
+        set_test_message(conn, ancient, 10, 100)
+        conn.execute(
+            "UPDATE qa_tests SET verified_at = ?", ("2000-01-01T00:00:00+00:00",)
+        )
+
+        assert [r["id"] for r in sweepable_passed(conn, now)] == [ancient]
+        assert calls, "the sweep still has to query"
+        # Every scan stops a full linger short of now, and names its guild.
+        assert all(cutoff < now.isoformat() for cutoff, _ in calls), calls
+        assert all(guild_id is not None for _, guild_id in calls), calls
+
+        # A guild that never sweeps isn't scanned at all.
+        calls.clear()
+        save_qa_settings(conn, GUILD, {"linger_minutes": 0})
+        assert sweepable_passed(conn, now) == []
+        assert calls == []
+
+        # Nor is one with the tracker switched off.
+        save_qa_settings(conn, GUILD, {"linger_minutes": 10, "enabled": False})
+        assert sweepable_passed(conn, now) == []
+        assert calls == []
 
 
 # ── record_verdict: pay on fresh insert ───────────────────────────────

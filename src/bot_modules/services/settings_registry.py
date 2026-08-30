@@ -218,6 +218,13 @@ FEATURES: tuple[Feature, ...] = (
             _role("unverified_role_id", "Unverified role", admin_only=True,
                   help="Losing this role is what counts as passing the gate — "
                        "full admin only."),
+            # Set on the Welcome panel and read by both the welcome and the
+            # leave embed, so it lives with the feature that owns the panel
+            # rather than being listed twice.
+            _ch("server_guide_channel_id", "Server guide channel",
+                help="What the {server_guide} placeholder expands to in the "
+                     "welcome and leave messages. Unset, the placeholder "
+                     "renders as nothing."),
         ),
     ),
     Feature(
