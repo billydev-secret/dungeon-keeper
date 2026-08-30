@@ -39,6 +39,16 @@ spelling the scheduler actually reads), two wrote the same policy-sweep fix
 (composed: a whole-sweep entry point over a per-guild pass), and two chose
 different auction-duration ceilings (kept 720h — the dial is itself a
 guard-rail, and 168h remains its default).
+
+**One defect fix was itself walked back** by the review pass over this branch.
+Making Saveable Fields bite on the *restore* side is right for the room's look
+(name, limit, access, trust list) but was extended to the block list too, so an
+admin unticking "Block list" quietly stopped enforcing a block a member had
+already set — while `/voice lock`, `hide` and `spectate` went on enforcing it,
+because those paths never consulted the whitelist. Blocks are now save-side
+only: unticking refuses new ones to the member's face and leaves existing ones
+enforced everywhere. Panel hint, manual and `voice_master_spec.md` say so.
+
 Written 2026-08-29 on branch `dashboard-config-ia-review`. Produced by a
 110-agent audit workflow plus a 14-agent gap-close pass; every defect claim was
 independently re-derived by an adversarial verifier before landing here.

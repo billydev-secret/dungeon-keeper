@@ -754,3 +754,65 @@ async def test_apply_limit_blocked_and_passes_with_gifted_lease(ctx, voice_chann
     inter = _wire_interaction(ctx)
     await _apply_limit(inter, voice_channel, row, new_limit=5)
     voice_channel.edit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_hub_join_enforces_own_blocks_even_when_block_list_unsaveable(ctx, db):
+    """Unticking "Block list" must not disarm a block a member already set.
+
+    The Saveable Fields boxes govern what a room owner may *persist*; they
+    used to also decide whether a stored block was applied at channel create,
+    so an admin unticking one silently let a blocked member walk into the
+    blocker's room. Every other enforcement site (/voice lock, hide,
+    spectate) never consulted the whitelist, so the block also came back the
+    instant the owner locked the room.
+    """
+    from bot_modules.cogs.voice_master_cog import VoiceMasterCog
+    from bot_modules.services.voice_master_service import (
+        add_blocked,
+        load_voice_master_config,
+        set_voice_master_config_value,
+    )
+
+    blocked_id = 4242
+    with open_db(db) as conn:
+        add_blocked(conn, GUILD, OWNER, blocked_id)
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_hub_channel_id", "777"
+        )
+        # Everything saveable EXCEPT the block list.
+        set_voice_master_config_value(
+            conn, GUILD, "voice_master_saveable_fields", "access,limit,name,trusted"
+        )
+        cfg = load_voice_master_config(conn, GUILD)
+
+    guild = MagicMock()
+    guild.id = GUILD
+    guild.name = "Test Guild"
+    guild.members = []
+    guild.bitrate_limit = 96000
+    guild.default_role = MagicMock()
+    guild.default_role.id = 0
+    guild.get_channel = MagicMock(return_value=None)
+    # Stop the flow right after the overwrites are built.
+    guild.create_voice_channel = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "no")
+    )
+
+    member = MagicMock(spec=discord.Member)
+    member.id = OWNER
+    member.bot = False
+    member.display_name = "Owner"
+    member.name = "owner_user"
+    member.guild = guild
+
+    _bot = MagicMock()
+    _bot.ctx = ctx
+    cog = VoiceMasterCog(_bot)
+    spy = MagicMock(return_value=({}, []))
+    cog._build_initial_overwrites = spy
+
+    await cog._handle_hub_join(member, cfg)
+
+    spy.assert_called_once()
+    assert spy.call_args.kwargs["blocked_ids"] == [blocked_id]

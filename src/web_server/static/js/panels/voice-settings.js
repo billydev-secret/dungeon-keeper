@@ -137,7 +137,7 @@ export function mount(outer) {
                     <input type="checkbox" name="saveable_fields" value="${value}"${(cfg.saveable_fields || []).includes(value) ? " checked" : ""} /> ${esc(label)}
                   </label>`).join("")}
               </div>
-              <div class="field-hint">Which parts of a room's setup owners may persist. "Room access" covers the single open / NSFW / locked / spectator state. Unticking a box also stops anything already saved for it coming back — the next room uses your defaults instead. Untick them all and nothing persists.</div>
+              <div class="field-hint">Which parts of a room's setup owners may persist. "Room access" covers the single open / NSFW / locked / spectator state. Unticking a box also stops anything already saved for it coming back — the next room uses your defaults instead. Untick them all and nothing persists. One exception: unticking "Block list" stops owners saving <em>new</em> blocks (they're told so when they try), but anyone a member has already blocked stays shut out of their rooms — that's a safety choice of theirs, not part of the room's look.</div>
             </div>
           </div>
 

@@ -149,3 +149,63 @@ async def test_settings_panel_select_has_no_default_before_anyone_is_picked():
     view = _settings_view()
     view._sync_select_default()
     assert view.user_select.default_values == []
+
+
+@pytest.mark.asyncio
+async def test_expiry_sweep_never_opens_the_db_on_the_event_loop(sync_db_path):
+    """The sweep must not call get_request_limits() from the coroutine.
+
+    ``expire_stale_pending_requests`` runs in a worker thread, but the loop
+    that DMs each requester used to reach back for the guild's expiry window
+    with a synchronous ``open_db()`` — under a hot WAL lock that stalls the
+    whole bot. The window now travels on the expired row, so a
+    ``get_request_limits`` that explodes on contact must never be reached.
+    """
+    import time
+    from types import SimpleNamespace
+
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.dm_perms_service import (
+        init_db,
+        set_request_limits,
+        upsert_request,
+    )
+
+    init_db(sync_db_path)
+    upsert_request(sync_db_path, 5, 100, 200, "dm", "", 1, None)
+    with open_db(sync_db_path) as conn:
+        conn.execute("UPDATE dm_requests SET created_at = ?", (time.time() - 6 * 3600,))
+        set_request_limits(conn, 5, expiry_hours=2)
+
+    requester = MagicMock(spec=discord.Member)
+    requester.id = 100
+    target = MagicMock(spec=discord.Member)
+    target.id = 200
+    guild = MagicMock()
+    guild.id = 5
+    guild.name = "Test Guild"
+    guild.get_member = lambda uid: requester if uid == 100 else target
+
+    bot = MagicMock()
+    bot.ctx = SimpleNamespace(db_path=sync_db_path)
+    bot.get_guild = lambda _gid: guild
+
+    from bot_modules.cogs.dm_perms_cog import DmPermsCog
+
+    cog = DmPermsCog(bot)
+    sent = AsyncMock()
+    with patch("bot_modules.cogs.dm_perms_cog.write_audit_log"), \
+            patch.object(DmPermsCog, "_post_audit", new=AsyncMock()), \
+            patch("bot_modules.cogs.dm_perms_cog._dm", new=sent), \
+            patch(
+                "bot_modules.cogs.dm_perms_cog.get_request_limits",
+                side_effect=AssertionError("blocking DB open on the event loop"),
+            ):
+        await cog._expire_stale_now()
+
+    # The requester was still told, with their guild's own 2-hour window.
+    assert sent.await_count == 1
+    embed = sent.await_args.kwargs["embed"]
+    assert "2 hours" in (embed.description or "") + " ".join(
+        f.value or "" for f in embed.fields
+    )

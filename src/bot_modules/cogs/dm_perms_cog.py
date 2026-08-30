@@ -973,7 +973,6 @@ class DmPermsCog(commands.Cog):
             expire_stale_pending_requests,
             self.bot.ctx.db_path,
         )
-        expiry_labels: dict[int, str] = {}
         for row in expired:
             gid = row["guild_id"]
             self._drop_request_from_memory(gid, row["requester_id"], row["target_id"])
@@ -996,15 +995,14 @@ class DmPermsCog(commands.Cog):
                 audit_line_expired(requester_name, target_name, type_label),
             )
             if requester:
-                if gid not in expiry_labels:
-                    expiry_labels[gid] = request_expiry_label(
-                        get_request_limits(self.bot.ctx.db_path, gid)["expiry_hours"]
-                    )
+                # The sweep hands back each guild's window with the row: a
+                # get_request_limits() here would open SQLite synchronously on
+                # the event loop, once per expired request.
                 exp_embed = build_expired_embed(
                     target_display_name=target_name,
                     guild_name=guild.name,
                     type_label=type_label,
-                    request_timeout_label=expiry_labels[gid],
+                    request_timeout_label=request_expiry_label(row["expiry_hours"]),
                 )
                 await _dm(requester, self.bot.ctx.db_path, guild, embed=exp_embed)
 
