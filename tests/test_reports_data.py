@@ -9,7 +9,7 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.interaction_graph import init_interaction_tables, record_interactions
 from bot_modules.services.message_store import init_member_events_table, init_message_tables, record_member_event, store_message
 from bot_modules.services.channel_rollup import build_resolver
-from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_one_sided_attention_data
+from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_interaction_series, get_one_sided_attention_data
 from tests.db_template import migrated_db
 
 
@@ -329,3 +329,187 @@ def test_comparison_ranks_by_the_folded_total(cc_conn):
     rows = _compare(cc_conn, [CH, 200])["channels"]
 
     assert [r["channel_id"] for r in rows] == [str(CH), "200"]
+
+
+# ── Interaction series (the Connection Graph's replay) ─────────────────────
+
+
+def _series_pairs(data):
+    return {(p["a"], p["b"]): p["w"] for p in data["pairs"]}
+
+
+def test_interaction_series_bins_weekly_and_merges_direction(ig_conn):
+    """Rows land in the right weekly bin, and both directions of a pair merge
+    into one undirected weight vector."""
+    now = int(time.time())
+    wk = 7 * 86400
+    # Three interactions this week, split across both directions.
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now - 100, message_id=2)
+    record_interactions(ig_conn, guild_id=1, from_user_id=2, to_user_ids=[1], ts=now - 200, message_id=3)
+    # Two more safely inside the bin two weeks back (ts exactly on a bin edge
+    # belongs to the later bin, so keep clear of the boundary).
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now - 2 * wk + 100, message_id=4)
+    record_interactions(ig_conn, guild_id=1, from_user_id=2, to_user_ids=[1], ts=now - 2 * wk + 200, message_id=5)
+
+    data = get_interaction_series(ig_conn, guild_id=1, weeks=8)
+    assert data["weeks"] == 8
+    assert data["bin_seconds"] == wk
+    vec = _series_pairs(data)[("1", "2")]
+    assert len(vec) == 8
+    # Bin indices are derived from the payload's own `start`, not from when
+    # the test happens to run: a wall-clock-relative assertion would pass or
+    # fail on which side of a week boundary `now` fell.
+    def _bin(ts):
+        return min(int((ts - data["start"]) // wk), data["weeks"] - 1)
+
+    assert vec[_bin(now)] == 3           # this week, incl. the now-edge fold
+    assert vec[_bin(now - 2 * wk + 100)] == 2
+    assert sum(vec) == 5
+    assert sum(vec[: _bin(now - 2 * wk + 100)]) == 0   # nothing earlier
+
+
+def test_interaction_series_excludes_bots(ig_conn):
+    """The same bot-endpoint exclusion as the live graph query."""
+    now = int(time.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=2)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now, message_id=3)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[99], ts=now, message_id=4)
+    _mark_bot(ig_conn, 1, 99)
+
+    data = get_interaction_series(ig_conn, guild_id=1)
+    assert {n["user_id"] for n in data["nodes"]} == {"1", "2"}
+    assert ("1", "99") not in _series_pairs(data)
+
+
+def test_interaction_series_roster_limit_drops_pairs_outside_it(ig_conn):
+    """Only the top-`limit` members by span total stay, and pairs touching a
+    dropped member go with them."""
+    now = int(time.time())
+    mid = 0
+    def talk(a, b, n):
+        nonlocal mid
+        for _ in range(n):
+            mid += 1
+            record_interactions(ig_conn, guild_id=1, from_user_id=a, to_user_ids=[b], ts=now, message_id=mid)
+    talk(1, 2, 8)   # totals: 1=8, 2=8…
+    talk(3, 4, 4)   # 3=4, 4=4
+    talk(3, 5, 3)   # 3=7, 5=3
+    talk(2, 6, 2)   # 2=10, 6=2 — 6 sits alone below the cut
+    data = get_interaction_series(ig_conn, guild_id=1, limit=10)
+    assert {n["user_id"] for n in data["nodes"]} == {"1", "2", "3", "4", "5", "6"}
+    assert ("2", "6") in _series_pairs(data)
+
+    # limit clamps to a floor of 5 (the live panel's own Max Nodes minimum),
+    # so six members against limit=5 is the smallest cut this can show.
+    data = get_interaction_series(ig_conn, guild_id=1, limit=5)
+    assert {n["user_id"] for n in data["nodes"]} == {"1", "2", "3", "4", "5"}
+    assert ("2", "6") not in _series_pairs(data)
+
+
+def test_interaction_series_floors_one_off_pairs(ig_conn):
+    """A pair with a single interaction across the whole span is noise the
+    payload does not carry."""
+    now = int(time.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=2)
+    record_interactions(ig_conn, guild_id=1, from_user_id=2, to_user_ids=[3], ts=now, message_id=3)
+
+    data = get_interaction_series(ig_conn, guild_id=1)
+    pairs = _series_pairs(data)
+    assert ("1", "2") in pairs
+    assert ("2", "3") not in pairs
+
+
+def test_interaction_series_attaches_join_leave_stamps(ig_conn):
+    """Roster members carry their in-span member_events stamps, sorted; other
+    event types and non-roster members are ignored."""
+    init_member_events_table(ig_conn)
+    now = int(time.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=2)
+    ev = [
+        # Deliberately out of chronological order: the payload must sort, and
+        # an insertion-ordered result would pass without sorting at all.
+        (1, 1, "join", now - 1000),
+        (1, 1, "leave", now - 2000),
+        (1, 1, "join", now - 3000),
+        (1, 1, "ban", now - 500),        # unrelated type: ignored
+        (1, 2, "ban", now - 400),        # 2 has events, none of them join/leave
+        (1, 777, "join", now - 100),     # not on the roster: ignored
+    ]
+    ig_conn.executemany(
+        "INSERT INTO member_events (guild_id, user_id, event_type, ts) VALUES (?, ?, ?, ?)", ev
+    )
+
+    data = get_interaction_series(ig_conn, guild_id=1)
+    by_id = {n["user_id"]: n for n in data["nodes"]}
+    assert by_id["1"]["joins"] == [now - 3000, now - 1000]
+    assert by_id["1"]["leaves"] == [now - 2000]
+    # 2 HAS a member_events row, just not a membership one — so an empty list
+    # here means "filtered by type", not "no rows existed".
+    assert by_id["2"]["joins"] == []
+    assert by_id["2"]["leaves"] == []
+    assert "777" not in by_id
+
+
+def test_interaction_series_clamps_weeks_and_gives_clusters(ig_conn):
+    """weeks clamps to [4, 60]; every roster member gets an integer cluster."""
+    now = int(time.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=2)
+
+    data = get_interaction_series(ig_conn, guild_id=1, weeks=500)
+    assert data["weeks"] == 60
+    assert all(len(p["w"]) == 60 for p in data["pairs"])
+
+    data = get_interaction_series(ig_conn, guild_id=1, weeks=1)
+    assert data["weeks"] == 4
+
+
+def test_interaction_series_separates_disconnected_groups(ig_conn):
+    """Two groups that never talk to each other get different cluster ids.
+
+    `isinstance(cluster_id, int)` would hold for a partition that collapsed
+    every member into one group, which is exactly the failure worth catching:
+    replay colours are the legend.
+    """
+    now = int(time.time())
+    mid = 0
+
+    def talk(a, b, n):
+        nonlocal mid
+        for _ in range(n):
+            mid += 1
+            record_interactions(ig_conn, guild_id=1, from_user_id=a, to_user_ids=[b], ts=now, message_id=mid)
+
+    talk(1, 2, 5)
+    talk(2, 3, 5)      # group A: 1-2-3
+    talk(10, 11, 5)
+    talk(11, 12, 5)    # group B: 10-11-12, no edge to A
+
+    data = get_interaction_series(ig_conn, guild_id=1)
+    by_id = {n["user_id"]: n["cluster_id"] for n in data["nodes"]}
+    group_a = {by_id["1"], by_id["2"], by_id["3"]}
+    group_b = {by_id["10"], by_id["11"], by_id["12"]}
+    assert len(group_a) == 1 and len(group_b) == 1, "a connected group split apart"
+    assert group_a != group_b, "two disconnected groups share a cluster id"
+
+
+def test_interaction_series_drops_members_whose_every_pair_is_floored(ig_conn):
+    """A member kept by the roster shortlist but with no surviving pair must
+    not ship as a node.
+
+    They could never be drawn (the client shows only members with a pair in
+    the window) and would default to cluster_id 0 — which is the LARGEST real
+    community, not an unclustered sentinel — inflating that community's chip.
+    """
+    now = int(time.time())
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=1)
+    record_interactions(ig_conn, guild_id=1, from_user_id=1, to_user_ids=[2], ts=now, message_id=2)
+    # 3's only pair is a one-off, floored out of `pairs`.
+    record_interactions(ig_conn, guild_id=1, from_user_id=3, to_user_ids=[4], ts=now, message_id=3)
+
+    data = get_interaction_series(ig_conn, guild_id=1)
+    assert {n["user_id"] for n in data["nodes"]} == {"1", "2"}

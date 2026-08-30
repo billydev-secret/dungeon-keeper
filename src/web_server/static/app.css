@@ -1283,6 +1283,43 @@ textarea.field-input { resize: vertical; }
   min-width: 0;
 }
 
+/* Plain-button chips (Replay) share the popover summary's look. */
+.graph-chipbar > .graph-chip {
+  background: var(--bg-card);
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--t-2);
+  cursor: pointer;
+}
+.graph-chipbar > .graph-chip:hover { color: var(--ink); background: var(--bg-card-hover); }
+.graph-chipbar > .graph-chip:disabled { opacity: 0.6; cursor: default; }
+.graph-chipbar > .graph-chip.is-active {
+  color: var(--ink);
+  border-color: var(--gold);
+  background: var(--bg-card-hover);
+}
+
+/* Transient notice: an add-on failed, but what is drawn is still valid — so
+   it says so beside the graph instead of veiling it. */
+.graph-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  z-index: 5;
+  max-width: calc(100% - 32px);
+  padding: var(--s-1) var(--s-3);
+  font-size: var(--t-2);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--bg-floor) 88%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  text-align: center;
+}
+.graph-notice[hidden] { display: none; }
+
 .graph-tuning { position: relative; }
 .graph-tuning > summary {
   list-style: none;
@@ -1401,6 +1438,48 @@ textarea.field-input { resize: vertical; }
   border: 2px solid transparent;
 }
 .graph-cluster-chip.is-hidden { color: var(--ink-mute); }
+
+/* Replay transport — overlaid top-centre inside the wrap so it rides along
+   into fullscreen. Kept narrow enough to clear the ⛶ button at top-right. */
+.graph-replaybar {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  /* Wraps rather than overflowing: at phone width the transport's own
+     min-content (buttons + date + speed) exceeds any fixed width, so it goes
+     to two rows instead of pushing content off-canvas. */
+  flex-wrap: wrap;
+  justify-content: center;
+  width: max-content;
+  max-width: calc(100% - 96px);
+  padding: var(--s-1) var(--s-2);
+  background: color-mix(in srgb, var(--bg-floor) 78%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+}
+.graph-replaybar[hidden] { display: none; }
+.graph-replaybar input[type="range"] { flex: 1 1 120px; min-width: 60px; }
+.graph-replaybar button,
+.graph-replaybar select {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: var(--t-2);
+  cursor: pointer;
+}
+.graph-replaybar span {
+  font-size: var(--t-1);
+  color: var(--ink-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 
 .graph-hint {
   position: absolute;
