@@ -227,12 +227,15 @@ def test_the_whole_legacy_grant_config_block_is_documented_dead(key):
     assert key in sr.DEAD_KEYS
 
 
-def test_guess_inactivity_ping_hours_is_not_proposable():
-    """The Guess Who nudge loop it describes was never built, so the advisor
-    must not be able to propose (or gap-report) a value for it."""
-    assert sr.get_setting("guess_inactivity_ping_hours") is None
-    assert "guess_inactivity_ping_hours" in sr.DEAD_KEYS
-    assert "guess_inactivity_ping_hours" not in sr.writable_keys(is_admin=True)
+def test_guess_inactivity_ping_hours_is_a_real_setting_again():
+    """It was a dead key for as long as the nudge loop was unbuilt. The loop
+    landed on 2026-08-30 (`guess_nudge_service`), so the key has a reader and
+    the advisor may propose it — a dial with a reader must not stay on the
+    dead list, or gap detection goes on ignoring a feature that is now real."""
+    setting = sr.get_setting("guess_inactivity_ping_hours")
+    assert setting is not None
+    assert "guess_inactivity_ping_hours" not in sr.DEAD_KEYS
+    assert "guess_inactivity_ping_hours" in sr.writable_keys(is_admin=True)
 
 
 @pytest.mark.parametrize("key", [

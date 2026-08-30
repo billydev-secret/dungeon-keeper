@@ -28,6 +28,7 @@ import time
 from dataclasses import dataclass
 
 from bot_modules.core.db_utils import get_config_value, set_config_value
+from bot_modules.core.utils import jump_url
 
 #: Config key holding the id of the round this guild was last nudged about.
 #: Internal state, not an admin dial — no panel surfaces it.
@@ -139,8 +140,5 @@ def build_nudge_content(stalled: StalledRound, *, guild_id: int) -> str:
         " nobody has cracked it yet."
     ]
     if stalled.message_id:
-        parts.append(
-            "https://discord.com/channels/"
-            f"{guild_id}/{stalled.channel_id}/{stalled.message_id}"
-        )
+        parts.append(jump_url(guild_id, stalled.channel_id, stalled.message_id))
     return " ".join(parts)
