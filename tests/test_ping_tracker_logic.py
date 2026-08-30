@@ -135,6 +135,33 @@ def test_role_pings_from_message_tolerates_a_bare_object():
     assert pts.role_pings_from_message(types.SimpleNamespace()) == ([], False)
 
 
+def test_role_pings_from_message_believes_only_real_values():
+    """A duck-typed stand-in must not invent a ping.
+
+    Both fields are read off whatever object the caller holds. A truthy
+    non-boolean is *unknown*, not "the server got pinged" — reading it loosely
+    made every mocked message in the cog suite record a phantom @everyone.
+    """
+    class Truthy:
+        def __bool__(self):
+            return True
+
+    message = types.SimpleNamespace(
+        role_mentions=Truthy(),      # not a real sequence
+        mention_everyone=Truthy(),   # truthy, but not True
+    )
+    assert pts.role_pings_from_message(message) == ([], False)
+
+
+def test_role_pings_from_message_rejects_a_boolean_role_id():
+    """`bool` subclasses `int`, so a bare True would otherwise become role 1."""
+    message = types.SimpleNamespace(
+        role_mentions=[types.SimpleNamespace(id=True), types.SimpleNamespace(id=ROLE_A)],
+        mention_everyone=False,
+    )
+    assert pts.role_pings_from_message(message) == ([ROLE_A], False)
+
+
 @pytest.mark.parametrize(
     "roles, everyone, expected",
     [((), False, False), ((ROLE_A,), False, True), ((), True, True)],

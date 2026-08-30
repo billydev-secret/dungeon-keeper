@@ -144,15 +144,26 @@ def role_pings_from_message(message: Any) -> tuple[list[int], bool]:
     Discord only populates these when the ping actually fired, so a member
     typing ``@everyone`` without the permission to use it is correctly not
     recorded as having pinged the server.
+
+    Both fields are read **strictly**: an id must be a real ``int`` and the
+    everyone flag must be exactly ``True``. This function is handed a
+    duck-typed object, and only a genuine boolean is evidence that a ping
+    fired — anything else (a stand-in, a placeholder, a lazily-resolved
+    attribute) is unknown, and unknown must not be recorded as "the server
+    got pinged". Loose truthiness here would invent pings out of any object
+    that happens to be truthy.
     """
     role_ids: list[int] = []
     seen: set[int] = set()
-    for role in getattr(message, "role_mentions", None) or ():
-        rid = getattr(role, "id", None)
-        if isinstance(rid, int) and rid not in seen:
-            seen.add(rid)
-            role_ids.append(rid)
-    return role_ids, bool(getattr(message, "mention_everyone", False))
+    raw_roles = getattr(message, "role_mentions", None)
+    if isinstance(raw_roles, (list, tuple)):
+        for role in raw_roles:
+            rid = getattr(role, "id", None)
+            # bool is an int subclass; a True here would mean role id 1.
+            if isinstance(rid, int) and not isinstance(rid, bool) and rid not in seen:
+                seen.add(rid)
+                role_ids.append(rid)
+    return role_ids, getattr(message, "mention_everyone", False) is True
 
 
 def is_ping(role_ids: Sequence[int], everyone: bool) -> bool:
