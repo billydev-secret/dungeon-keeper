@@ -61,7 +61,7 @@ const SECTIONS = [
         { id: "health-gini",            label: "Participation Gini", module: "./panels/health-gini.js" },
         { id: "retention",            label: "Activity Drops",        module: "./panels/retention.js", keywords: "retention churn drop-off" },
         { id: "voice-activity",       label: "Voice Activity",        module: "./panels/voice-activity.js", keywords: "voice usage peak hours top users", related: ["config-voice-master"] },
-        { id: "xp-leaderboard",       label: "XP & Leveling",        module: "./panels/xp.js", keywords: "levels rank experience xp settings curve", help: "help-community" },
+        { id: "xp-leaderboard",       label: "XP Leaderboard",       module: "./panels/xp-leaderboard.js", keywords: "levels rank experience", related: ["config-xp"], help: "help-community" },
         { id: "quality-score",        label: "Quality Score",        module: "./panels/quality-score.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
       ]},
@@ -76,7 +76,7 @@ const SECTIONS = [
         { id: "health-newcomer-funnel", label: "Newcomer Funnel",    module: "./panels/health-newcomer-funnel.js" },
         { id: "health-cohort-retention",label: "Cohort Retention",   module: "./panels/health-cohort-retention.js" },
         { id: "greeter-response",     label: "Greeter Response",     module: "./panels/greeter-response.js" },
-        { id: "intake-report",        label: "Intake",               module: "./panels/intake.js", keywords: "intake queue cards welcome procedure steps" },
+        { id: "intake-report",        label: "Intake Queue",         module: "./panels/intake-report.js", keywords: "intake queue cards welcome", related: ["config-intake"] },
         { id: "time-to-level5",       label: "Time to Level 5",      module: "./panels/time-to-level5.js" },
         { id: "invite-effectiveness", label: "Invite Effectiveness", module: "./panels/invite-effectiveness.js" },
         { id: "join-times",           label: "Join Times",           module: "./panels/join-times.js" },
@@ -86,7 +86,7 @@ const SECTIONS = [
       ]},
       { heading: "Member Lists", items: [
         { id: "inactive-report",      label: "Inactive Report",      module: "./panels/inactive-report.js", keywords: "inactive members role list oldest sfw report", related: ["config-inactive", "config-prune"] },
-        { id: "birthday-calendar",    label: "Birthdays",            module: "./panels/birthday.js", keywords: "birthday calendar report announcements settings" },
+        { id: "birthday-calendar",    label: "Birthday Calendar",    module: "./panels/birthday-calendar.js", keywords: "birthdays report", related: ["config-birthday"] },
       ]},
     ],
   },
@@ -98,7 +98,7 @@ const SECTIONS = [
       { id: "mod-tickets",    label: "Tickets",        module: "./panels/mod-tickets.js", help: "help-tickets", keywords: "post panel support ticket panel open ticket button" },
       { id: "mod-warnings",   label: "Warnings",       module: "./panels/mod-warnings.js", help: "help-tickets" },
       { id: "mod-policy-tickets", label: "Policy Tickets", module: "./panels/policy-tickets.js", help: "help-policies", keywords: "policy proposals votes deadline settings" },
-      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch-page.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger settings" },
+      { id: "rules-watch",    label: "Rules Watch",    module: "./panels/rules-watch.js", help: "help-rules-watch", keywords: "rules watch alerts queue ledger", related: ["config-rules-watch"] },
       { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
       { id: "no-contact",     label: "No-Contact List", module: "./panels/no-contact.js", help: "help-no-contact", keywords: "block harassment separate pair safety whisper ama confession stalking" },
     ],
@@ -138,7 +138,13 @@ const SECTIONS = [
       ]},
       { heading: "Members", items: [
         { id: "config-welcome",    label: "Welcome & Leave",  module: "./panels/config-welcome.js", adminOnly: true, keywords: "greeting join leave messages" },
+        // Intake / XP / Birthdays: revived 2026-08-29 with their pre-merge ids
+        // (deleted by the 2026-07-28 merges with no MOVED_PAGES entries), so
+        // old deep links resolve again and each id's telemetry series resumes.
+        { id: "config-intake",     label: "Intake Cards",      module: "./panels/intake-settings.js", adminOnly: true, keywords: "intake cards steps procedure reference codes stale nudge", related: ["intake-report"] },
+        { id: "config-xp",         label: "XP & Leveling",     module: "./panels/xp-settings.js", adminOnly: true, keywords: "xp levels settings curve rewards", related: ["xp-leaderboard"], help: "help-community" },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true },
+        { id: "config-birthday",   label: "Birthdays",         module: "./panels/birthday-settings.js", adminOnly: true, keywords: "birthday announcements channel message pin", related: ["birthday-calendar"] },
         { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
         { id: "config-prune",      label: "Auto-Remove Role (Inactive)", module: "./panels/config-prune.js", adminOnly: true, keywords: "prune inactive role removal", related: ["inactive-report"] },
@@ -146,6 +152,9 @@ const SECTIONS = [
       ]},
       { heading: "Moderation & Safety", items: [
         { id: "config-moderation", label: "Moderation",        module: "./panels/config-moderation.js", adminOnly: true, help: "help-moderation" },
+        // Revived 2026-08-29 with its pre-merge id (deleted by d2348dbf with
+        // no MOVED_PAGES entry) — same treatment as config-intake above.
+        { id: "config-rules-watch", label: "Rules Watch",      module: "./panels/rules-watch-settings.js", adminOnly: true, help: "help-rules-watch", keywords: "rules watch alerts settings", related: ["rules-watch"] },
         { id: "config-greeting-watch", label: "Greeting Watch",  module: "./panels/config-greeting-watch.js", adminOnly: true, help: "help-greeting-watch" },
         { id: "config-spoiler",      label: "Image Guard",       module: "./panels/config-spoiler.js", adminOnly: true, keywords: "spoiler nsfw nudity explicit classifier" },
         { id: "config-dms",        label: "DM Permissions",   module: "./panels/config-dms.js", adminOnly: true, help: "help-dms" },

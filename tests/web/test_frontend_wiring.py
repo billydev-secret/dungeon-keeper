@@ -258,13 +258,6 @@ def test_mod_workflow_panels_keep_url_state(filename, page_id):
     assert f'syncHash("{page_id}"' in src, f"{filename} stopped mirroring state into the URL"
 
 
-def test_rules_watch_page_forwards_hash_params_to_its_queue():
-    """rules-watch-page is the routed panel; the queue that owns the state is
-    mounted inside it, so a deep link only works if params are handed down."""
-    src = (_PANELS / "rules-watch-page.js").read_text(encoding="utf-8")
-    assert re.search(r"mountQueue\(.*initialParams", src), src[:200]
-
-
 # ── table.js column contract (S1 follow-through) ────────────────────────────
 #
 # table.js escapes every cell by default; a column that deliberately renders

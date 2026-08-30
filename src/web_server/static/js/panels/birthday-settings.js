@@ -130,10 +130,24 @@ function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }
 }
 
 /**
- * The settings half of the Birthdays page. Mounted into a region by
- * panels/birthday.js, below the calendar, and locked read-only for non-admins.
- * Not a nav page in its own right.
+ * Birthdays — the announcement settings (Config → Members, id
+ * config-birthday, adminOnly). The calendar lives on Reports → Member Lists
+ * → Birthday Calendar, cross-linked via `related:`. lockUnlessAdmin stays as
+ * defense in depth; writes are refused server-side regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Birthdays</h2>
+        <div class="subtitle">How the bot announces birthdays</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   clearChildren(container);
   appendLoading(container);

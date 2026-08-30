@@ -227,7 +227,7 @@ channel's history, oldest first; refuses a non-empty editor.
 | Reference blocks/render/diff/sync/import | `services/intake_reference_service.py` |
 | Hooks | `cogs/events_cog.py` (join/remove/ban/member-update/message), `dungeonkeeper/__main__.py` (warm + `add_dynamic_items` + loop) |
 | Routes | `web_server/routes/config.py`, `web_server/routes/reports.py` |
-| Panels | `static/js/panels/intake.js` (composes `intake-report.js` + `intake-settings.js`) |
+| Panels | `static/js/panels/intake-report.js` (queue, Reports → Greeter) + `intake-settings.js` (Intake Cards config, Config → Members) — split pages since 2026-08-29 |
 | Tests | `tests/test_intake_logic.py`, `test_intake_views.py`, `test_intake_reference_logic.py`, `tests/web/test_config_routes.py`, `test_reports_routes.py` |
 
 See also: [greeting_watch_spec.md](greeting_watch_spec.md),

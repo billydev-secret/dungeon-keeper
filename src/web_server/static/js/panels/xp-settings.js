@@ -31,10 +31,25 @@ const LIST_FIELDS = [
 ];
 
 /**
- * The settings half of the XP page. Mounted into a region by panels/xp.js,
- * below the leaderboard, and locked read-only for non-admins by the caller —
- * see lockUnlessAdmin in config-helpers.js. Not a nav page in its own right.
+ * XP & Leveling — the curve and reward settings (Config → Members,
+ * id config-xp, adminOnly). The leaderboard they shape lives on
+ * Reports → Engagement → XP Leaderboard, cross-linked via `related:`.
+ * lockUnlessAdmin stays as defense in depth; writes are refused server-side
+ * regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>XP &amp; Leveling</h2>
+        <div class="subtitle">The rules that decide how XP is earned and what levels award</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading XP settings…</div>`;
 

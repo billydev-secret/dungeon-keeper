@@ -10,10 +10,25 @@ const AUTO_KINDS = [
 ];
 
 /**
- * The settings half of the Intake page — card behaviour and the bot-synced
- * procedure reference. Mounted into a region by panels/intake.js, below the
- * queue, and locked read-only for non-admins. Not a nav page in its own right.
+ * Intake Cards — card behaviour and the bot-synced procedure reference
+ * (Config → Members, id config-intake, adminOnly). The queue those cards
+ * form lives on Reports → Greeter → Intake Queue, cross-linked via
+ * `related:`. lockUnlessAdmin stays as defense in depth; writes are refused
+ * server-side regardless.
  */
+export function mount(outer) {
+  outer.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Intake Cards</h2>
+        <div class="subtitle">The procedure newcomers follow, and the card that tracks it</div>
+      </header>
+      <section data-region="settings"></section>
+    </div>
+  `;
+  return mountSettings(outer.querySelector('[data-region="settings"]'));
+}
+
 export function mountSettings(container) {
   container.innerHTML = `<div class="empty">Loading config…</div>`;
 

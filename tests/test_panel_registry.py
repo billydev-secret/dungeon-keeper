@@ -167,8 +167,9 @@ def _module_for_page(page_id: str) -> str:
     """The panel module a nav page id mounts, per app.js.
 
     Page id and filename used to be the same string, so this could be assumed.
-    Merged pages broke that: "xp-leaderboard" now mounts panels/xp.js, which
-    composes the old report and settings modules.
+    Merged pages broke that: "mod-policy-tickets" mounts panels/policy-tickets.js,
+    which composes the queue and settings modules (the other merged pages were
+    split back apart 2026-08-29, but the mechanism stays).
     """
     for m in _NAV_MODULE_RE.finditer(_read(_APP_JS)):
         if m.group("id") == page_id:

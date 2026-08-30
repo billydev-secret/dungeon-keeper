@@ -1,15 +1,13 @@
-"""Merged report+settings pages: the server is the enforcement, not the UI.
+"""Config permission boundary: the server is the enforcement, not the UI.
 
-Pages like XP & Leveling now put a moderator-level report and its admin-level
-settings on one pane, with the settings half rendered read-only for non-admins
-(``lockUnlessAdmin`` in static/js/config-helpers.js). That lock is a courtesy —
-it stops a moderator filling in a form whose save could never land. These tests
-pin the half that actually matters:
+Written when report+settings pages were merged panes (XP & Leveling and
+friends); the 2026-08-29 IA split moved those settings back to adminOnly
+Config pages, but the boundary these tests pin outlives the layout — Policy
+Tickets still uses the merged pattern, and the split pages' in-page
+``lockUnlessAdmin`` remains as defense in depth. What matters either way:
 
-* ``GET /api/config`` stays readable by a moderator, which is *why* the merged
-  page can show real values instead of blanking them. If this ever tightened to
-  admin, the settings section would render empty for the audience it was merged
-  for, and the merge would be pointless.
+* ``GET /api/config`` stays readable by a moderator — read-only views (and
+  the remaining merged pane) show real values instead of blanking them.
 * Config writes stay refused for a moderator, so stripping ``disabled`` in
   devtools buys nothing.
 
@@ -74,6 +72,7 @@ def test_moderator_can_read_config(fake_ctx):
         ("/api/config/xp", {"level_curve_factor": 99.0}),
         ("/api/config/prune", {"role_id": "0", "inactivity_days": 5}),
         ("/api/config/bulk-cleanup", {"enabled": True, "age_days": 1}),
+        ("/api/config/birthday", {"birthday_channel_id": "0"}),
     ],
 )
 def test_moderator_cannot_write_config(fake_ctx, path, payload):

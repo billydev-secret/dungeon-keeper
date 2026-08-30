@@ -11,9 +11,27 @@ import { renderError } from "../states.js";
 const MAX_TABLE_ROWS = 200;
 
 /**
- * The leaderboard half of the XP page. Mounted into a region by panels/xp.js,
- * above the settings. Moderator-level information — no gating applies here.
- * Returns an object with unmount() so the caller can destroy the charts.
+ * XP Leaderboard — the level/rank report (Reports → Engagement).
+ * Moderator-level information — no gating applies here. The curve and reward
+ * dials live on Config → Members → XP & Leveling (config-xp), cross-linked
+ * via `related:`.
+ */
+export function mount(container, initialParams = {}) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>XP Leaderboard</h2>
+        <div class="subtitle">Who is earning XP, and where members rank</div>
+      </header>
+      <section data-region="leaderboard"></section>
+    </div>
+  `;
+  return mountLeaderboard(container.querySelector('[data-region="leaderboard"]'), initialParams);
+}
+
+/**
+ * The leaderboard body. Returns an object with unmount() so the caller can
+ * destroy the charts.
  */
 export function mountLeaderboard(container, initialParams) {
   container.innerHTML = `

@@ -4,9 +4,24 @@ import { renderSortableTable } from "../table.js";
 import { renderError } from "../states.js";
 
 /**
- * The queue half of the Intake page. Mounted into a region by panels/intake.js,
- * above the settings. Moderator-level information — no gating applies here.
+ * Intake Queue — the open welcome cards (Reports → Greeter).
+ * Moderator-level information — no gating applies here. The procedure and
+ * card behaviour live on Config → Members → Intake Cards (config-intake),
+ * cross-linked via `related:`.
  */
+export function mount(container, initialParams = {}) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Intake Queue</h2>
+        <div class="subtitle">Open welcome cards, and how intakes are going</div>
+      </header>
+      <section data-region="queue"></section>
+    </div>
+  `;
+  return mountQueue(container.querySelector('[data-region="queue"]'), initialParams);
+}
+
 export function mountQueue(container, initialParams) {
   container.innerHTML = `
     <div>
@@ -46,8 +61,9 @@ export function mountQueue(container, initialParams) {
       if (!data.enabled) {
         statsEl.textContent =
           "Intake cards aren't running — nobody gets a card when they join. "
-          + "Switch them on in Card Settings, below; they also stay off until a "
-          + "card channel is set there (or a greeter chat channel in Welcome & Leave).";
+          + "An admin can switch them on under Config → Intake Cards; they also "
+          + "stay off until a card channel is set there (or a greeter chat "
+          + "channel in Welcome & Leave).";
       } else {
         const c = data.counts || {};
         const parts = [

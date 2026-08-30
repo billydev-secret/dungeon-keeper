@@ -15,20 +15,22 @@ is narrower, and until 2026-08 it was written nowhere a user could see it:
 > report or a queue keeps its dials at the bottom of that page, one pane. A
 > feature with no such page keeps them under **Config**.
 
-Five features are on the first side of that line — their settings pages were
-merged into their report/queue panels, with the settings half rendered
-read-only for non-admins (`lockUnlessAdmin`), because two nav entries with the
-same label were the clearest possible sign the split was noise. (Voice was
-un-merged 2026-08-29 — see `docs/plans/dashboard-config-ia.md`; its settings
-page revived its pre-merge id `config-voice-master` under Config → Voice.)
+One feature remains on the first side of that line: **Policy Tickets**, whose
+settings half is a single field (the voting deadline) that never justified a
+page of its own — it renders read-only for non-admins (`lockUnlessAdmin`) at
+the bottom of the proposal queue, Moderation → Policy Tickets.
 
-| Feature | Where its settings are |
-|---|---|
-| XP & Leveling | Reports → Engagement → XP & Leveling |
-| Birthdays | Reports → Member Lists → Birthdays |
-| Intake | Reports → Greeter → Intake |
-| Rules Watch | Moderation → Rules Watch |
-| Policy Tickets | Moderation → Policy Tickets |
+The other five merged pages (XP & Leveling, Voice, Birthdays, Intake, Rules
+Watch) were **split back apart 2026-08-29** by owner decision — see
+`docs/plans/dashboard-config-ia.md` for the audit and rationale. Each split
+revived the settings page's pre-merge id (`config-xp`, `config-voice-master`,
+`config-birthday`, `config-intake`, `config-rules-watch`; the 2026-07-28
+merges had deleted those ids with no MOVED_PAGES redirect, killing their deep
+links), filed the settings under Config, and left the report/queue half on
+the frozen merged-page id in its original section. The halves cross-link via
+`related:` chips, and `lockUnlessAdmin` stays in the settings modules as
+defense in depth. The accepted cost: moderators no longer get the read-only
+settings view the merges provided.
 
 Roughly thirty other features keep their settings under **Config**, grouped by
 theme (Server, Roles, Members, Moderation & Safety, Channels & Messages, Voice,

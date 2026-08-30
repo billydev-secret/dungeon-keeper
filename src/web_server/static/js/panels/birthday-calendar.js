@@ -36,10 +36,24 @@ function el(tag, styles, text) {
 }
 
 /**
- * The calendar half of the Birthdays page. Mounted into a region by
- * panels/birthday.js, above the settings. Moderator-level information — no
- * gating applies here.
+ * Birthday Calendar — whose birthday is coming up (Reports → Member Lists).
+ * Moderator-level information — no gating applies here. The announcement
+ * settings live on Config → Members → Birthdays (config-birthday),
+ * cross-linked via `related:`.
  */
+export function mount(container) {
+  container.innerHTML = `
+    <div class="panel">
+      <header>
+        <h2>Birthday Calendar</h2>
+        <div class="subtitle">Whose birthday is coming up</div>
+      </header>
+      <section data-region="calendar"></section>
+    </div>
+  `;
+  return mountCalendar(container.querySelector('[data-region="calendar"]'));
+}
+
 export function mountCalendar(container) {
   const panel = el("div");
   container.innerHTML = "";
