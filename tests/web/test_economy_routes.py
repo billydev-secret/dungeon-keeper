@@ -227,16 +227,23 @@ def test_put_refuses_an_auction_dial_the_service_would_clamp(authed_client, payl
     assert authed_client.put("/api/economy/config", json=payload).status_code == 422
 
 
-def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx):
+@pytest.mark.parametrize(
+    "days",
+    [
+        pytest.param(5, id="a-review-window"),
+        pytest.param(0, id="zero-disables-the-sweep"),
+    ],
+)
+def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx, days):
     """Audit finding 68: the custom-item order sweep read this hourly, but every
     sibling review window was editable and this one was not."""
     resp = authed_client.put(
-        "/api/economy/config", json={"shop_item_expire_days": 5}
+        "/api/economy/config", json={"shop_item_expire_days": days}
     )
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
         cfg = load_econ_settings(conn, fake_ctx.guild_id)
-    assert cfg.shop_item_expire_days == 5
+    assert cfg.shop_item_expire_days == days
 
 
 @pytest.mark.parametrize(
@@ -357,17 +364,6 @@ def test_put_auction_guard_rails_roundtrip(authed_client, fake_ctx):
 )
 def test_put_rejects_out_of_range_auction_dials(authed_client, payload):
     assert authed_client.put("/api/economy/config", json=payload).status_code == 422
-
-
-def test_put_shop_item_expire_days_roundtrips(authed_client, fake_ctx):
-    """The custom-item order refund window is swept by the economy loop but was
-    the one review window with no dashboard control; 0 disables the sweep."""
-    resp = authed_client.put(
-        "/api/economy/config", json={"shop_item_expire_days": 0}
-    )
-    assert resp.status_code == 200
-    with open_db(fake_ctx.db_path) as conn:
-        assert load_econ_settings(conn, fake_ctx.guild_id).shop_item_expire_days == 0
 
 
 def test_every_pricing_panel_box_is_writable_and_readable(authed_client):
