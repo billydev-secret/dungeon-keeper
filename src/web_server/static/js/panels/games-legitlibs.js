@@ -125,6 +125,25 @@ export function mount(container) {
   function syncBlanksEmpty(blanksSection) {
     const empty = !blanksSection.querySelector(".blanks-tbody").rows.length;
     blanksSection.querySelector(".blanks-empty").style.display = empty ? "" : "none";
+    syncPlayerRange(blanksSection.closest(".form"));
+  }
+
+  // How many players a template fits is arithmetic on its blanks — each player
+  // is meant to fill 5 to 10 of them — and the server derives it on every save.
+  // The form used to offer it as two typed numbers that were then thrown away,
+  // so the card could advertise a range nobody had ever agreed to. Mirrors
+  // _players_from_blanks in routes/games.py.
+  function derivePlayerRange(blankCount) {
+    if (!blankCount) return null;
+    return [Math.ceil(blankCount / 10), Math.max(1, Math.floor(blankCount / 5))];
+  }
+
+  function syncPlayerRange(formEl) {
+    if (!formEl) return;
+    const el = formEl.querySelector('[data-ctrl$="-player_range"]');
+    if (!el) return;
+    const range = derivePlayerRange((gatherBlanksFromTable(formEl) || []).length);
+    el.textContent = range ? `${range[0]}–${range[1]} players` : "—";
   }
 
   function addBlankRow(blanksSection, id, pos, domain, form) {
@@ -138,6 +157,9 @@ export function mount(container) {
     inp.style.cssText = "font-family:monospace;font-size:12px;width:80px;";
     inp.value = id || ""; inp.placeholder = "b1";
     inp.setAttribute("aria-label", "Blank marker, e.g. b1");
+    // A row only counts once it has a marker, so the player range moves as
+    // markers are typed, not only as rows are added and removed.
+    inp.addEventListener("input", () => syncPlayerRange(blanksSection.closest(".form")));
     tdId.appendChild(inp);
 
     const tdPos = document.createElement("td");
@@ -509,8 +531,6 @@ export function mount(container) {
     ef("tier").value = t.tier || 1;
     ef("status").value = t.status || "draft";
     ef("tags").value = Array.isArray(t.tags) ? t.tags.join(", ") : (t.tags || "");
-    ef("player_min").value = t.player_min || "";
-    ef("player_max").value = t.player_max || "";
     ef("notes").value = t.notes || "";
 
     initBlanksTable(editDiv, prefix);
@@ -571,8 +591,6 @@ export function mount(container) {
       tier: parseInt(fv("tier")) || 1,
       tags: fv("tags") || "",
       status: fv("status") || "draft",
-      player_min: parseInt(fv("player_min")) || null,
-      player_max: parseInt(fv("player_max")) || null,
       blanks: blanks ? JSON.stringify(blanks) : null,
       notes: fv("notes") || null,
     };
@@ -610,10 +628,9 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
         <label>Status<select data-ctrl="${prefix}-status">${statusOptions}</select></label>
       </div>
       <div class="field">
-        <label>Minimum Players<input type="number" data-ctrl="${prefix}-player_min" style="width:70px;" min="2" /></label>
-      </div>
-      <div class="field">
-        <label>Maximum Players<input type="number" data-ctrl="${prefix}-player_max" style="width:70px;" /></label>
+        <label>Players</label>
+        <div data-ctrl="${prefix}-player_range" style="padding-top:6px;font-weight:600;">—</div>
+        <div class="field-hint">Worked out from the blanks below — each player fills 5 to 10 of them.</div>
       </div>
     </div>
     <div class="field">

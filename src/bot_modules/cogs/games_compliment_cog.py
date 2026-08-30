@@ -15,6 +15,7 @@ from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
+    check_game_enabled,
     create_game,
     update_game_message,
     get_game_payload,
@@ -202,6 +203,12 @@ class ComplimentCog(commands.Cog):
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
+                ephemeral=True,
+            )
+            return
+        if not await check_game_enabled(self.db, "compliment", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "Spin the Compliment is currently disabled on this server.",
                 ephemeral=True,
             )
             return

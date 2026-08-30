@@ -5,7 +5,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, get_active_game, finish_launch_response, end_game
+from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, check_game_enabled, get_active_game, finish_launch_response, end_game
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -59,6 +59,12 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         if not await check_allowed_channel(self.db, interaction.channel_id):
             await interaction.response.send_message(
                 "This channel isn't set up for games. An admin can enable it from the web dashboard.",
+                ephemeral=True,
+            )
+            return
+        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "LegitLibs is currently disabled on this server.",
                 ephemeral=True,
             )
             return

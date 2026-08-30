@@ -45,6 +45,7 @@ from ..rendering import (
     render_filled_body_attributed,
 )
 from ..modals import make_fill_modal
+from ..validation import lobby_is_full
 from ..views import (
     JoinView, ClassicFillView, ClassicRescueView, ClassicRescueFillView,
 )
@@ -122,6 +123,14 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             if uid in payload["players"]:
                 await action_interaction.response.send_message(
                     "You're already in!", ephemeral=True)
+                return
+            if lobby_is_full(payload["players"], template["player_max"]):
+                await action_interaction.response.send_message(
+                    f"This round is full — **{template['player_max']}** players "
+                    "are already in. This template doesn't have enough blanks "
+                    "to give anyone else a turn.",
+                    ephemeral=True,
+                )
                 return
             def _add(p):
                 cl_add_player(p, uid)

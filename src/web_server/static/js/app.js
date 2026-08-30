@@ -276,6 +276,9 @@ const SECTIONS = [
       // One page per game: the dials for a game that runs live in a channel.
       { heading: "Live Games", items: [
         { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js" },
+        // AMA sat under Question Banks until its bank came off: every AMA
+        // question is typed by a member mid-game, so there was never one to fill.
+        { id: "games-ama",          label: "AMA",               module: "./panels/games-ama.js" },
         { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
         { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
         { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
@@ -298,7 +301,6 @@ const SECTIONS = [
         { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
         { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
         { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
-        { id: "games-ama",      label: "AMA",               module: "./panels/games-ama.js" },
         { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
         { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
       ]},

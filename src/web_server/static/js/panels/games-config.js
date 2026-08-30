@@ -68,6 +68,16 @@ export function mount(container) {
         </section>
 
         <section>
+          <div class="section-label">Available on This Server</div>
+          <div class="field-hint">Untick a game to take it off the menu here: the
+            command refuses to start it and the scheduler skips it. Games already
+            running finish normally. Each game with its own settings page carries
+            the same switch — this is the whole list in one place, including the
+            games that have no page of their own.</div>
+          <div data-region="availability" style="margin-top:10px;"><div class="empty">Loading…</div></div>
+        </section>
+
+        <section>
           <div class="section-label">Audit Channel</div>
           <div class="field-hint">Every game that starts, finishes, or is canceled is
             recorded here, so moderators can look back at what happened. Leave it unset
@@ -182,6 +192,50 @@ export function mount(container) {
       }
     }
 
+    // Photo Challenge is addressed by the same config row, but it has its own
+    // page (Photo Challenge → Setup & Schedule) where the switch sits beside
+    // its channel and schedule, so it isn't repeated here.
+    const AVAILABILITY_SKIP = new Set(["photo"]);
+
+    async function loadAvailability() {
+      const el = region("availability");
+      try {
+        const data = await api("/api/games/config/games");
+        const games = data.games || {};
+        const names = Object.keys(games)
+          .filter((gt) => !AVAILABILITY_SKIP.has(gt))
+          .sort((a, b) => (games[a].label || a).localeCompare(games[b].label || b));
+        if (!names.length) { el.innerHTML = `<div class="empty">No games registered.</div>`; return; }
+        el.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:8px 24px;">` + names.map((gt) => `
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;min-width:220px;">
+            <input type="checkbox" data-game="${esc(gt)}" style="width:16px;height:16px;cursor:pointer;"
+                   ${games[gt].enabled === false ? "" : "checked"} />
+            <span>${esc(games[gt].label || gt)}</span>
+            <span class="save-status" data-game-status="${esc(gt)}" style="font-size:12px;"></span>
+          </label>`).join("") + `</div>`;
+
+        // Each switch commits on its own change — there is nothing else on the
+        // row to fill in, so a Save button would only add a step to forget.
+        el.querySelectorAll("[data-game]").forEach((box) => {
+          box.addEventListener("change", async () => {
+            const gt = box.dataset.game;
+            const st = el.querySelector(`[data-game-status="${CSS.escape(gt)}"]`);
+            try {
+              // No options in the payload: this must not disturb the dials set
+              // on the game's own page.
+              await apiPut(`/api/games/config/games/${encodeURIComponent(gt)}`, { enabled: box.checked });
+              showStatus(st, true, box.checked ? "On" : "Off");
+            } catch (err) {
+              box.checked = !box.checked;
+              showStatus(st, false, err.message);
+            }
+          });
+        });
+      } catch (err) {
+        el.innerHTML = `<div class="error">The game list failed to load: ${esc(err.message)}</div>`;
+      }
+    }
+
     async function loadEditorRole() {
       const el = region("editor-role-current");
       try {
@@ -262,6 +316,7 @@ export function mount(container) {
     });
 
     loadAllowedChannels();
+    loadAvailability();
     loadEditorRole();
     loadAudit();
   }, { errorMsg: "Couldn’t load the games global config." });

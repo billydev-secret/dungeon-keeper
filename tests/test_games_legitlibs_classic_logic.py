@@ -28,6 +28,7 @@ from bot_modules.cogs.games_legitlibs.classic_logic import (
     store_round1_fills,
     store_rescue_fills,
 )
+from bot_modules.cogs.games_legitlibs.validation import lobby_is_full
 
 
 # ── Sample template ──────────────────────────────────────────────────
@@ -127,6 +128,28 @@ def test_remove_player_noop_when_missing():
 def test_remove_player_safe_on_empty_payload():
     p: dict = {}
     assert remove_player(p, 1) is False
+
+
+# ── lobby_is_full ────────────────────────────────────────────────────
+# The shared join ceiling (validation.lobby_is_full), used by both Classic
+# and Quiplash. A template's player_max is derived from its blank count —
+# each player is meant to fill 5–10 blanks — so past that many joiners the
+# round hands people one blank each, or none. The lobby used to accept
+# everyone and only ever checked the floor.
+
+
+@pytest.mark.parametrize(
+    "players,player_max,expected",
+    [
+        ([1, 2], 4, False),
+        ([1, 2, 3, 4], 4, True),      # exactly at the ceiling: no more room
+        ([1, 2, 3, 4, 5], 4, True),   # over it (a template edited mid-lobby)
+        ([1, 2, 3], None, False),     # no ceiling stored → no cap
+        ([1, 2, 3], 0, False),        # 0 is "unset", not "nobody may join"
+    ],
+)
+def test_lobby_is_full(players, player_max, expected):
+    assert lobby_is_full(players, player_max) is expected
 
 
 # ── claim_start ──────────────────────────────────────────────────────
