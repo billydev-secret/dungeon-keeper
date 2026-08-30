@@ -286,3 +286,31 @@ def test_mod_audit_fills_its_filter_from_the_server():
     # The static list must be just the placeholder now.
     block = src.split("filters: [", 1)[1].split("],", 1)[0]
     assert block.count("value:") == 1, "the hand-kept options are back"
+
+
+# ── the games audit channel says what it actually collects ──────────────
+
+
+def test_games_audit_channel_hint_does_not_promise_a_game_log():
+    """It promised "Every game that starts, finishes, or is canceled is
+    recorded here". Nothing writes a lifecycle event: the only writer to the
+    games audit channel is the anonymous-submission mirror in
+    games/utils/audit.py, reached from the seven question-bank cogs when a
+    submission carries content. Duel games and Risky Rolls never touch it."""
+    src = (_PANELS / "games-config.js").read_text(encoding="utf-8")
+    assert "starts, finishes, or is canceled" not in src
+    assert "Anonymous submissions" in src
+
+
+def test_the_scheduler_only_toggles_are_labelled_as_such():
+    """Risky Rolls and LegitLibs store an enabled flag only the scheduler
+    reads — their own start commands never consult it — so the switch is
+    labelled for what it does rather than borrowing the games-wide
+    "Available on This Server"."""
+    for panel, game_type in (
+        ("config-risky-rolls.js", "risky_roll"),
+        ("games-legitlibs.js", "legitlibs"),
+    ):
+        src = (_PANELS / panel).read_text(encoding="utf-8")
+        assert f'gameType: "{game_type}"' in src, f"{panel}: no enable toggle"
+        assert 'statusLabel: "Include in Scheduled Games"' in src, panel

@@ -4,7 +4,7 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { toast, confirmDialog } from "../ui.js";
 // The heat tiers are shared with games-config, which sets the same ceiling
 // per channel and used to render it as a bare 1/2/3/4.
-import { TIER_LABELS, TIER_EMOJI } from "./games-panel-shared.js";
+import { TIER_LABELS, TIER_EMOJI, mountGamePanel } from "./games-panel-shared.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -28,6 +28,8 @@ export function mount(container) {
         <h2>LegitLibs Templates</h2>
         <div class="subtitle">Fill-in-the-blank stories players complete together. Write the story, mark each gap as {b1}, {b2} and so on, then publish it so games can draw it.</div>
       </header>
+
+      <div data-region="status"></div>
 
       <section>
         <div class="section-label">Filters</div>
@@ -75,6 +77,15 @@ export function mount(container) {
 
   function ctrl(name) { return container.querySelector(`[data-ctrl="${name}"]`); }
   function region(name) { return container.querySelector(`[data-region="${name}"]`); }
+
+  mountGamePanel(region("status"), {
+    gameType: "legitlibs",
+    gameName: "LegitLibs",
+    bare: true,
+    statusLabel: "Include in Scheduled Games",
+    statusHint: "When off, a scheduled LegitLibs round is skipped when its time comes"
+      + " round. Templates below stay editable either way.",
+  });
 
   // -- Blanks table helpers ---------------------------------------------------
 

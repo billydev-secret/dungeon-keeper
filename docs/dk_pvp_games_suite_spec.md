@@ -257,7 +257,10 @@ chosen nick and to custom stakes)
 
 - Length cap (`max_nick_length`, default 32; `max_stakes_length`, default 200).
 - Per-guild `nick_denylist` (JSON array), plus checks against impersonating admins/mods and
-  duplicating other members' display names.
+  duplicating other members' display names. The configured extras are matched as
+  **case-insensitive substrings**, not regexes — they are typed into the "Extra Banned Words"
+  box on each game's dashboard panel, and admin-typed regex punctuation would either raise or
+  silently never match. The built-in `DEFAULT_NICK_DENYLIST` patterns are still regexes.
 
 **Anti-grief**
 
@@ -323,7 +326,10 @@ Group games add per-user cooldowns and per-game config knobs on top of this shar
 `channel_allowlist`, `max_nick_length`, and `max_stakes_length` are enforced generically for
 all six games in `duels/base_duel.py` / `base_game.py`, and are configurable per game from
 the web dashboard's Games nav section (one "Config" panel per game) — see §8.
-`nick_denylist` remains unexposed anywhere; it's a future feature.
+`nick_denylist` is set from the same panels as of 2026-08-29 ("Extra Banned Words",
+comma-separated; stored lowercased and de-duplicated, capped at 40 entries of 64 characters).
+`allow_early_revert` is a column no code reads — it is deliberately absent from
+`duels/db.py._CONFIG_DEFAULTS` so nothing mistakes it for a setting.
 
 **Per-game state tables** (one migration each)
 
@@ -394,9 +400,9 @@ cancelled via timeout (60s) or the lobby's `🚫` button, W/L stats and Hot Pota
 had no way to be viewed, and the nickname "early revert" toggle (`allow_early_revert`) had no
 command to exercise it, on any game, ever. Rather than wire these up, the dead command methods
 and their now-orphaned db-layer stats/revert-shim functions were deleted outright — they
-weren't needed for these short-lived games. `allow_early_revert` and `nick_denylist` remain
-unused columns on the shared `duel_config` table (see §10) but are no longer surfaced
-anywhere. A pending challenge still self-expires after 60s (see §7's stale-game reaper) so
+weren't needed for these short-lived games. `allow_early_revert` remains an
+unused column on the shared `duel_config` table (see §10) and is not surfaced anywhere;
+`nick_denylist` was always enforced and is now settable from each game's dashboard panel. A pending challenge still self-expires after 60s (see §7's stale-game reaper) so
 dropping `cancel` has no user-facing gap.
 
 **Per-game config — web dashboard only.** Settings (cooldowns, sentence duration,
@@ -620,15 +626,26 @@ out the wait-then-press rule.
 - `cooldown_hours` 48 · `sentence_hours` 24
 - `channel_allowlist` `[]` · `max_nick_length` 32 · `max_stakes_length` 200
 - `challenge_limit_per_hour` 30 (0 = no limit)
-- `allow_early_revert` 0 · `nick_denylist` `[]` — real columns, but unused: no command or
-  web panel reads or writes either one (the games that carried a `revert` command never had
-  it wired into the live tree — see §8)
+- `nick_denylist` `[]` — extra banned words, enforced on every nickname and every line of
+  stakes text, set from each game's dashboard panel ("Extra Banned Words")
+- `allow_early_revert` — a real column, but unused: nothing reads or writes it (the games that
+  carried a `revert` command never had it wired into the live tree — see §8), so it is not in
+  `_CONFIG_DEFAULTS` either. Same story for `quickdraw_config.void_on_double_noshow` (a draw
+  nobody answers is always voided), `hp_group_config.shake_threshold` / `pass_mode` (the shake
+  threshold is fixed in `game.shake_emoji`; passing is always clockwise), and `lobby_timeout`
+  on all three group tables (the stale-lobby sweep uses its own fixed window)
 
 **Rate limit:** `challenge_limit_per_hour` challenges/starts per user per hour, per game
 (in-memory sliding window, per-guild dial on each game's dashboard Config panel).
 
-**Per-game knobs:** see each §9 entry's "Config knobs" line. Group games also default
-`lobby_timeout` to 60.0s.
+**Per-game knobs:** see each §9 entry's "Config knobs" line.
+
+**Enable switch:** each game's panel carries "Available on This Server", stored as a
+`games_game_config` row under the cog's `GAME_KEY` — the same store and the same
+`check_game_enabled` gate the question-bank games use. No row means enabled. It is checked at
+both creation entrypoints (`_base_challenge`, `_base_lobby`). The global
+`games_allowed_channels` list is **not** consulted by any duel or lobby path: a game's own
+`channel_allowlist` is its only channel rule, and empty means everywhere.
 
 ---
 

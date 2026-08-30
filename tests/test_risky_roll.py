@@ -49,6 +49,7 @@ from bot_modules.services.risky_roll.logic import (
     build_one_rule_prompt_state,
     collect_channel_state_ids,
     deserialize_user_ids,
+    effective_min_game_seconds,
     normalize_auto_close_options,
     run_tie_rolloff,
     serialize_user_ids,
@@ -983,8 +984,21 @@ def test_state_message_lock_and_game_lock_are_independent_caches():
     assert g is not c and c is not m and g is not m
 
 
-def test_state_default_min_game_seconds_is_30min():
-    assert state.DEFAULT_MIN_GAME_SECONDS == 1800
+def test_unset_minimum_round_length_means_no_wait_for_either_close_path():
+    """An unset dial reads as 0 on the dashboard, so it must mean 0 here.
+
+    Auto-close (once enough players have rolled) used to fall back to a
+    30-minute default while the host's Close Round button treated the same
+    missing value as "no minimum" — so a guild whose panel showed 0 still
+    watched a full round sit open for half an hour.
+    """
+    assert effective_min_game_seconds({}, 7) == 0
+    assert effective_min_game_seconds({7: 1200}, 7) == 1200
+    assert effective_min_game_seconds({7: 1200}, 8) == 0
+
+
+def test_skip_min_game_time_overrides_a_configured_minimum():
+    assert effective_min_game_seconds({7: 1200}, 7, skip_min_game_time=True) == 0
 
 
 # ── store integration tests (sync_db_path fixture from conftest) ─────

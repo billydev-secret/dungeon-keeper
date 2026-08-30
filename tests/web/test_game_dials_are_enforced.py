@@ -117,3 +117,57 @@ def test_wyr_reveal_voters_is_documented() -> None:
     manual = (_ROOT / "src" / "web_server" / "static" / "manual.html").read_text(encoding="utf-8")
     assert "Reveal Voters" in manual
     assert "Reveal Voters" in _cog("wyr")
+
+
+# ── Duel panels: the promises they make about being switched off ─────────────
+# All six duel panels used to open with "No channels are allowed to host party
+# games yet, so this game cannot be played anywhere", and their Allowed Channels
+# hint pointed at "every channel that may host party games". Both describe the
+# global games_allowed_channels list, which no duel or lobby code path reads —
+# with an empty per-game allowlist a duel game runs everywhere. The banner was
+# also the only off switch these games were ever advertised as having.
+
+# panel stem -> (cog module path, GAME_KEY)
+DUEL_PANELS = {
+    "pressure": ("pressure_cooker/cog.py", "pressure"),
+    "quickdraw": ("quickdraw/cog.py", "quickdraw"),
+    "hotpotato": ("hot_potato/cog.py", "hot_potato"),
+    "hotpotatogroup": ("hot_potato_group/cog.py", "hot_potato_group"),
+    "chicken": ("chicken/cog.py", "chicken"),
+    "musicalchairs": ("musical_chairs/cog.py", "musical_chairs"),
+}
+
+
+def _duel_panel(stem: str) -> str:
+    return (_PANELS / f"config-games-{stem}.js").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("stem", sorted(DUEL_PANELS))
+def test_duel_panel_does_not_blame_the_global_games_channel_list(stem: str) -> None:
+    src = _duel_panel(stem)
+    for lie in ("may host party games", "cannot be played anywhere"):
+        assert lie not in src, (
+            f"config-games-{stem}.js still tells admins the Games › Global Config "
+            f"channel list governs this game; no duel code path reads it"
+        )
+
+
+@pytest.mark.parametrize("stem", sorted(DUEL_PANELS))
+def test_duel_panel_offers_an_enable_toggle_under_the_cogs_game_key(stem: str) -> None:
+    """The toggle must write the key the cog's enable check reads."""
+    cog_path, game_key = DUEL_PANELS[stem]
+    cog = (_COGS / cog_path).read_text(encoding="utf-8")
+    assert f'GAME_KEY = "{game_key}"' in cog
+
+    src = _duel_panel(stem)
+    assert "mountGamePanel(" in src, f"config-games-{stem}.js has no enable toggle"
+    assert f'gameType: "{game_key}"' in src
+
+
+@pytest.mark.parametrize("stem", sorted(DUEL_PANELS))
+def test_duel_panel_exposes_the_nickname_denylist(stem: str) -> None:
+    """nick_denylist is enforced on every nickname and every line of stakes
+    text; before this it could only be set by editing the database."""
+    src = _duel_panel(stem)
+    assert 'name="nick_denylist"' in src
+    assert "payload.nick_denylist" in src

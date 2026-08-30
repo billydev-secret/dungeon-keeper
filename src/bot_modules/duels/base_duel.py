@@ -78,6 +78,9 @@ class BaseDuel(BaseGame):
             )
             return
 
+        if await self._refuse_if_disabled(interaction, guild.id):
+            return
+
         cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
         allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
         if allowlist and interaction.channel_id not in allowlist:

@@ -21,6 +21,7 @@ from .logic import (
     build_main_prompt_state,
     build_one_rule_prompt_state,
     choose_roll,
+    effective_min_game_seconds,
     has_blocked_edge,
 )
 from .models import (
@@ -30,8 +31,6 @@ from .models import (
     RiskyRollState,
     RoundResult,
 )
-from .state import DEFAULT_MIN_GAME_SECONDS
-
 log = logging.getLogger(__name__)
 
 # Shared by the ordinary path and the no-contact path, deliberately. Both
@@ -368,7 +367,9 @@ class RiskyRollView(BaseRiskyRollView):
                 if task:
                     task.cancel()
                 elapsed = time.time() - state.created_at
-                min_secs = 0 if state.skip_min_game_time else app_state.min_game_seconds.get(state.guild_id, DEFAULT_MIN_GAME_SECONDS)
+                min_secs = effective_min_game_seconds(
+                    app_state.min_game_seconds, state.guild_id, state.skip_min_game_time
+                )
                 delay = max(0.0, min_secs - elapsed)
                 app_state.auto_close_tasks[self.game_id] = asyncio.create_task(
                     schedule_auto_close(interaction.client, self.game_id, delay)
@@ -420,8 +421,10 @@ class RiskyRollView(BaseRiskyRollView):
                 )
                 return
 
-            min_secs = app_state.min_game_seconds.get(state.guild_id)
-            if min_secs and not state.skip_min_game_time:
+            min_secs = effective_min_game_seconds(
+                app_state.min_game_seconds, state.guild_id, state.skip_min_game_time
+            )
+            if min_secs:
                 elapsed = time.time() - state.created_at
                 remaining = math.ceil(min_secs - elapsed)
                 if remaining > 0:

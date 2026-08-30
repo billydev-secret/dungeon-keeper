@@ -29,10 +29,18 @@ GLOBAL_POOL_TYPE = "global"
 # a bank round can serve each player a question in a category they opted into.
 TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 
+# Game types whose on/off switch lives in games_game_config. Each entry must be
+# spelled the way the bot reads it (check_game_enabled / the scheduler's enable
+# gate) — "risky_roller" used to sit here, a key nothing anywhere read, while
+# the scheduler was asking about "risky_roll" and could never be answered.
 ALL_GAME_TYPES = [
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
     "traditional", "mfk", "compliment", "ffa", "photo", "ttl", "hottakes",
-    "story", "fantasies", "risky_roller",
+    "story", "fantasies", "risky_roll", "legitlibs",
+    # Duel-style games. Their settings live on their own panels, but the
+    # enable switch is stored here like every other game's.
+    "pressure", "quickdraw", "hot_potato", "hot_potato_group", "chicken",
+    "musical_chairs",
 ]
 
 

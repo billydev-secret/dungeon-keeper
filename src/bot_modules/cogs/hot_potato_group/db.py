@@ -82,11 +82,13 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "min_fuse": 20.0,
         "max_fuse": 60.0,
         "min_hold": 2.0,
-        "shake_threshold": 0.70,
-        "pass_mode": "clockwise",
         "min_players": 2,
         "max_players": 10,
-        "lobby_timeout": 60.0,
+        # hp_group_config also carries shake_threshold, pass_mode and
+        # lobby_timeout. None of them is read: the shake threshold is a fixed
+        # parameter of game.shake_emoji, passing is always clockwise, and the
+        # stale-lobby sweep uses its own fixed window. They stay out of the
+        # defaults so nothing treats them as settings.
     }
     if row:
         defaults.update(dict(row))

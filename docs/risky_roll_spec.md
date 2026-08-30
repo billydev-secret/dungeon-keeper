@@ -69,7 +69,13 @@ the outcome".
 
 ### Cooldown / minimum game time
 
-A configurable min-game-time floor (default 30 minutes) prevents premature closes. Opening the round with `ping:false` bypasses it.
+A configurable min-game-time floor prevents premature closes. **It is unset by default,
+which means no floor** — the dashboard's "Minimum Round Length" shows 0 for a guild that has
+never set it, and both close paths honour that. The one lookup is
+`logic.effective_min_game_seconds`, shared by the host's **Close Round** button and by the
+auto-close that fires once enough players have rolled; auto-close used to fall back to 1800s
+on its own, so a guild reading 0 on the panel still watched a full round sit open for half an
+hour. Opening the round with `ping:false` bypasses the floor entirely.
 
 ### Persistence and restarts
 
@@ -152,7 +158,7 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 | Key | Default | Purpose |
 |---|---|---|
 | Ping role | unset | Optional role to ping on `/risky start` (not when `ping:false`). Setting it to "no role" clears the row |
-| Min game seconds | 1800 (30 min) | Floor on round duration; blocks early **Close Round**. `ping:false` bypasses |
+| Min game seconds | unset = 0 (no floor) | Floor on round duration; blocks an early **Close Round** and delays auto-close by the same amount. Saving 0 clears the row. `ping:false` bypasses |
 
 Per-round only (not persisted as config):
 - **Auto-close after N players** — default 25 (must be ≥ 2).

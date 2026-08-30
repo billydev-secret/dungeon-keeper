@@ -69,9 +69,11 @@ export function mount(container) {
 
         <section>
           <div class="section-label">Audit Channel</div>
-          <div class="field-hint">Every game that starts, finishes, or is canceled is
-            recorded here, so moderators can look back at what happened. Leave it unset
-            to keep no record.</div>
+          <div class="field-hint">Anonymous submissions &mdash; the answers, hot takes,
+            compliments, fantasies and AMA questions members send without their name on
+            them &mdash; are mirrored here with the author attached, so moderators can
+            trace anything that crosses a line. Nothing else is logged: this is not a
+            record of games starting or finishing. Leave it unset to keep no record.</div>
           <div data-region="audit-current" style="margin-bottom:10px;"><div class="empty">Loading…</div></div>
           <div class="form" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;max-width:none;">
             <div class="field" style="margin:0;flex:1;min-width:220px;max-width:280px;">

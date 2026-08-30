@@ -81,7 +81,9 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "false_start_elim": 1,
         "min_players": 3,
         "max_players": 10,
-        "lobby_timeout": 60.0,
+        # `lobby_timeout` is a column nothing reads — the stale-lobby sweep in
+        # fetch_sweepable_games uses its own fixed window — so it is left out
+        # of the defaults rather than posing as a dial.
     }
     if row:
         defaults.update(dict(row))

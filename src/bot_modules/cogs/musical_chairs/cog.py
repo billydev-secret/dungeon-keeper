@@ -99,9 +99,9 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     async def _db_fetch_sweepable(self, now: float) -> list[MusicalChairsGame]:
         return await mcdb.fetch_sweepable_games(self.db, now)
 
-    async def get_lobby_params(self, guild_id: int) -> tuple[int, int, float]:
+    async def get_lobby_params(self, guild_id: int) -> tuple[int, int]:
         cfg = await mcdb.get_config(self.db, guild_id)
-        return int(cfg["min_players"]), int(cfg["max_players"]), float(cfg["lobby_timeout"])
+        return int(cfg["min_players"]), int(cfg["max_players"])
 
     # ── Timer helpers ─────────────────────────────────────────────────────────
 

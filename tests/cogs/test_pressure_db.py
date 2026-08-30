@@ -321,7 +321,9 @@ async def test_get_config_defaults_for_missing(db):
     cfg = await pdb.get_config(db, 9999)
     assert cfg["cooldown_hours"] == 48
     assert cfg["sentence_hours"] == 24
-    assert cfg["allow_early_revert"] == 0
+    # allow_early_revert is a duel_config column nothing has ever read (early
+    # nickname revert was never built), so it is not offered as a default.
+    assert "allow_early_revert" not in cfg
 
 
 async def test_upsert_config_stores_fields(db):

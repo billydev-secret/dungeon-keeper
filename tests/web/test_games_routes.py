@@ -1185,3 +1185,64 @@ def test_ll_template_from_another_guild_is_invisible_and_unowned(open_client, fa
     assert open_client.put(
         f"{BASE}/legitlibs/templates/4242/scope", json={"is_global": True}
     ).status_code == 404
+
+
+# ── Enable switch vocabulary ──────────────────────────────────────────────────
+# games_game_config is keyed by the game_type string the *bot* reads. The
+# dashboard's whitelist once spelled Risky Rolls "risky_roller", a key nothing
+# anywhere read, while the scheduler's enable gate asked about "risky_roll" and
+# could never be answered — two live schedules with no reachable off switch. The
+# duel games weren't in the vocabulary at all, so they had no off switch either.
+
+
+@pytest.mark.parametrize(
+    "game_type",
+    [
+        "risky_roll", "legitlibs",
+        "pressure", "quickdraw", "hot_potato", "hot_potato_group",
+        "chicken", "musical_chairs",
+    ],
+)
+def test_enable_switch_is_settable_for_every_game_the_bot_gates(
+    open_client, fake_ctx, game_type
+):
+    """A PUT lands under the exact game_type the bot's enable check reads."""
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is True
+
+    resp = open_client.put(
+        f"{BASE}/config/games/{game_type}", json={"enabled": False, "options": {}}
+    )
+    assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT enabled FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+            (fake_ctx.guild_id, game_type),
+        ).fetchone()
+    assert row is not None and row[0] == 0
+    assert open_client.get(f"{BASE}/config/games/{game_type}").json()["enabled"] is False
+
+
+def test_risky_roller_is_not_a_settable_game_type(open_client):
+    """The misspelled key is gone: nothing read it, so nothing may write it."""
+    assert open_client.get(f"{BASE}/config/games/risky_roller").status_code == 404
+    assert open_client.put(
+        f"{BASE}/config/games/risky_roller", json={"enabled": False}
+    ).status_code == 404
+
+
+def test_every_settable_game_type_is_read_by_the_bot():
+    """No entry in the whitelist may be a key with no reader.
+
+    Each type must be one the bot actually asks about — a cog's own
+    check_game_enabled call, the scheduler's list, or a duel cog's GAME_KEY.
+    """
+    from bot_modules.games.constants import SCHEDULABLE_GAME_TYPES
+    from web_server.routes.games import ALL_GAME_TYPES
+
+    known = set(SCHEDULABLE_GAME_TYPES) | {
+        "photo", "traditional", "mfk", "compliment", "ttl",
+        "pressure", "quickdraw", "hot_potato", "hot_potato_group",
+        "chicken", "musical_chairs",
+    }
+    assert not set(ALL_GAME_TYPES) - known

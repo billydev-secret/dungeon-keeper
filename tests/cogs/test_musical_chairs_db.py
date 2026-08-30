@@ -67,6 +67,9 @@ async def test_config_defaults_and_upsert(db):
     cfg = await mcdb.get_config(db, GUILD)
     assert cfg["min_players"] == 3
     assert cfg["scramble_window"] == pytest.approx(8.0)
+    # lobby_timeout is a column with no reader — the stale-lobby sweep uses its
+    # own window — so get_config must not hand it out as a setting.
+    assert "lobby_timeout" not in cfg
     await mcdb.upsert_config(db, GUILD, min_players=5, scramble_window=4.0)
     cfg2 = await mcdb.get_config(db, GUILD)
     assert cfg2["min_players"] == 5
