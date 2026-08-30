@@ -111,11 +111,43 @@ def test_get_config_returns_persisted_values(authed_client, fake_ctx):
 # ── POST /voice-master/config ────────────────────────────────────────
 
 
-def test_post_config_rejects_unknown_saveable_fields(authed_client):
-    payload = _config_payload(saveable_fields=["name", "bogus"])
+@pytest.mark.parametrize(
+    "bad_field",
+    [
+        "bogus",
+        # Dead vocabulary: the panel never offered these and nothing enforces
+        # them, so accepting them only let a save wipe the real fields.
+        "locked",
+        "hidden",
+        "spectator",
+    ],
+)
+def test_post_config_rejects_unknown_saveable_fields(authed_client, bad_field):
+    payload = _config_payload(saveable_fields=["name", bad_field])
     resp = authed_client.post("/api/voice-master/config", json=payload)
     assert resp.status_code == 400
-    assert "bogus" in resp.json()["detail"]
+    assert bad_field in resp.json()["detail"]
+
+
+def test_post_config_accepts_room_access_field(authed_client):
+    """"Room access" is a checkbox the panel offers and the bot enforces."""
+    payload = _config_payload(saveable_fields=["name", "limit", "access"])
+    resp = authed_client.post("/api/voice-master/config", json=payload)
+    assert resp.status_code == 200
+
+    body = authed_client.get("/api/voice-master/config").json()
+    assert body["saveable_fields"] == ["access", "limit", "name"]
+
+
+def test_post_config_persists_an_empty_saveable_list(authed_client):
+    """Unchecking every box must stick, not snap back to the defaults."""
+    resp = authed_client.post(
+        "/api/voice-master/config", json=_config_payload(saveable_fields=[])
+    )
+    assert resp.status_code == 200
+
+    body = authed_client.get("/api/voice-master/config").json()
+    assert body["saveable_fields"] == []
 
 
 def test_post_config_rejects_non_numeric_channel_id(authed_client):

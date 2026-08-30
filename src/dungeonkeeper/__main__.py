@@ -356,6 +356,7 @@ def main() -> None:
             db_path,
             _handle_level_progress_cb,
             settings_for=lambda gid: ctx.guild_config(gid).xp_settings,
+            excluded_for=lambda gid: ctx.guild_config(gid).xp_excluded_channel_ids,
         )
     )
 

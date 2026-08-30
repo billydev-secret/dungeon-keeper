@@ -851,7 +851,11 @@ async def time_to_level_5(
     from collections import Counter
     from datetime import datetime, timedelta, timezone
 
-    from bot_modules.core.xp_system import get_time_to_level_details, xp_required_for_level
+    from bot_modules.core.xp_system import (
+        get_time_to_level_details,
+        load_xp_settings,
+        xp_required_for_level,
+    )
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -863,9 +867,15 @@ async def time_to_level_5(
 
     def _q():
         with ctx.open_db() as conn:
+            # The guild's own XP dials, not the defaults: Level Curve Factor
+            # decides what "level 5" costs, so reading the defaults here
+            # detected crossings at the wrong XP and understated the wait.
+            settings = load_xp_settings(conn, guild_id)
+            target_level = settings.role_grant_level
             details = get_time_to_level_details(
-                conn, guild_id, 5, since_ts=since_ts
+                conn, guild_id, target_level, since_ts=since_ts, settings=settings
             )
+        xp_required = xp_required_for_level(target_level, settings)
 
         if not details:
             return {
@@ -875,7 +885,7 @@ async def time_to_level_5(
                 "median_days": 0.0,
                 "stddev_days": 0.0,
                 "mode_days": 0,
-                "xp_required": xp_required_for_level(5),
+                "xp_required": xp_required,
                 "histogram": [],
                 "members": [],
             }
@@ -921,7 +931,7 @@ async def time_to_level_5(
             "median_days": round(median_d, 1),
             "stddev_days": round(stddev_d, 1),
             "mode_days": mode_d,
-            "xp_required": xp_required_for_level(5),
+            "xp_required": xp_required,
             "histogram": histogram,
             "members": members,
         }

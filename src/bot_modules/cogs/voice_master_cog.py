@@ -70,6 +70,7 @@ from bot_modules.services.voice_master_service import (
     remove_blocked,
     remove_trusted,
     resolve_channel_name,
+    restorable_profile,
     save_profile,
     set_owner,
     set_owner_left_at,
@@ -796,18 +797,37 @@ class VoiceMasterCog(commands.Cog):
                     if active_channel_count(conn, guild_id, member_id) >= cfg.max_per_member:
                         return True, default_profile(), [], [], []
                     # Saves disabled? Treat every member as having no profile.
+                    # Saveable Fields is enforced on this restore side too: a
+                    # field the admin unchecked stops coming back, not just
+                    # stops being written.
                     if cfg.disable_saves:
                         profile_ = default_profile()
                         trusted_ids_: list[int] = []
-                        blocked_ids_: list[int] = []
-                    else:
-                        profile_ = (
-                            load_profile(conn, guild_id, member_id) or default_profile()
+                        # No-contact is never a saved preference: partners stay
+                        # denied even with profile saves switched off.
+                        blocked_ids_: list[int] = effective_blocked(
+                            conn, guild_id, member_id, include_own=False
                         )
-                        trusted_ids_ = list_trusted(conn, guild_id, member_id)
+                    else:
+                        profile_ = restorable_profile(
+                            load_profile(conn, guild_id, member_id)
+                            or default_profile(),
+                            disable_saves=False,
+                            saveable_fields=cfg.saveable_fields,
+                        )
+                        trusted_ids_ = (
+                            list_trusted(conn, guild_id, member_id)
+                            if "trusted" in cfg.saveable_fields
+                            else []
+                        )
                         # Enforcement site: the effective list, so a
                         # no-contact partner is denied on channel create.
-                        blocked_ids_ = effective_blocked(conn, guild_id, member_id)
+                        blocked_ids_ = effective_blocked(
+                            conn,
+                            guild_id,
+                            member_id,
+                            include_own="blocked" in cfg.saveable_fields,
+                        )
                     # Voice-style lease (economy sinks round 3, stage 3): the
                     # saved name/limit only re-apply while leased — the profile
                     # stays stored (dormant), so re-renting restores the setup.
