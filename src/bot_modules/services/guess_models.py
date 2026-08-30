@@ -50,6 +50,9 @@ class GuessConfig:
     submit_max_per_window: int = 5
     submit_window_seconds: int = 3600
     max_guesses_per_round: int = 5
+    #: Hours a round may sit without a guess before the Guess role is
+    #: pinged once about it. 0 turns the nudge off.
+    inactivity_ping_hours: int = 0
 
 
 @dataclass

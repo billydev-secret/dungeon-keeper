@@ -418,6 +418,18 @@ for all six games, not
 just Pressure Cooker as the old (dead) commands had it — they were always enforced
 generically in the shared base classes, so this closes a real gap rather than adding scope.
 
+**`channel_allowlist` is the *only* channel gate these games have.** The party-game
+allowlist (`games_allowed_channels`, set on Games → Global Config) does not apply:
+no duel or lobby code path calls `check_allowed_channel`, so an empty per-game
+`channel_allowlist` — which is what every guild has, `duel_config` being empty in
+production — means the game runs in **every** channel on the server, allowlisted for
+party games or not. Until 2026-08-30 all six panels said otherwise, both in a field
+hint ("every channel that may host party games") and in a banner that claimed the
+game "cannot be played anywhere" while the global list was empty. Both were wrong and
+were rewritten; the banner was deleted outright. Wiring these games to the global list
+instead is a live option, but it is a behaviour change — duels playable anywhere today
+would stop working outside the allowlisted channels — so it is a decision, not a fix.
+
 **In-embed controls** (built): `✅ Accept` / `❌ Decline` (duel challenge); `✋ Join` /
 `🚪 Leave` / `▶️ Start` / `🚫 Cancel` (lobby); the game's own button(s) (`💨 PUMP`,
 `🔫 FIRE`, `🤲 Pass`, `🐔 BAIL`, `🪑 SIT`); `📝 Name the loser` (winner-only, on

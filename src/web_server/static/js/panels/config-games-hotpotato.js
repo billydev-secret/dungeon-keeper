@@ -1,23 +1,8 @@
-import { api } from "../api.js";
 import {
   loadConfig, loadChannels, mountChannelMultiPicker, apiPut, showStatus,
   guardForm, renderMetaWarning,
   mountAsync,
 } from "../config-helpers.js";
-
-// Party games only run in the channels allow-listed on Games › Global Config.
-async function gameChannelsBanner() {
-  try {
-    const data = await api("/api/games/config/channels");
-    if ((data.channels || []).length) return "";
-  } catch (_) {
-    return "";
-  }
-  return `<div class="empty" role="status" style="margin-bottom:12px;">
-    No channels are allowed to host party games yet, so this game cannot be played
-    anywhere. Add one under <a href="#/games-config">Games › Global Config</a> —
-    the settings below start applying as soon as you do.</div>`;
-}
 
 const numField = (name, label, value, hint, { min, max, step = "1" }) => `
   <div class="field">
@@ -31,9 +16,7 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   return mountAsync(container, async () => {
-    const [config, channels, banner] = await Promise.all([
-      loadConfig(), loadChannels(), gameChannelsBanner(),
-    ]);
+    const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     // `|| {}`: a config payload missing this section (a fresh guild, a partial
     // response) used to throw on the first cfg.<field> read, and the panel hung
     // on "Loading configuration…" forever. Undefined fields render blank instead.
@@ -45,8 +28,7 @@ export function mount(container) {
           <h2>Hot Potato</h2>
           <div class="subtitle">Two players pass a ticking bomb back and forth — whoever is holding it when it goes off takes the forfeit</div>
         </header>
-        ${banner}
-        ${renderMetaWarning()}
+                ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Bomb Timer</div>
@@ -82,7 +64,9 @@ export function mount(container) {
               <label>Allowed Channels</label>
               <div data-picker="channel_allowlist"></div>
               <div class="field-hint">Restrict this game to these channels. Leave the
-                list empty to allow it in every channel that may host party games.</div>
+                list empty to allow it in <strong>every channel on the server</strong> —
+                unlike the party games, duels do not consult the Games &rsaquo; Global
+                Config channel list.</div>
             </div>
           </div>
 

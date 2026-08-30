@@ -8,6 +8,7 @@ import {
   mountRolePicker,
   mountAsync,
 } from "../config-helpers.js";
+import { mountGamePanel } from "./games-panel-shared.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -25,6 +26,7 @@ export function mount(container) {
           <div class="subtitle">A dice game members start with <code>/risky start</code></div>
         </header>
         ${renderMetaWarning()}
+        <div class="card" data-region="status"></div>
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Announcements</div>
@@ -65,8 +67,15 @@ export function mount(container) {
       </div>
     `;
 
+    // The on/off switch lives in games_game_config, not the risky config row,
+    // so it rides the shared game-panel status section like every other game.
+    mountGamePanel(container.querySelector('[data-region="status"]'), {
+      gameType: "risky_roll", gameName: "Risky Rolls", gameIcon: "🎰",
+      hasBank: false, bare: true,
+    });
+
     const form = container.querySelector("[data-form]");
-    const status = container.querySelector("[data-status]");
+    const status = container.querySelector('[data-form] [data-status]');
 
     const rolePicker = mountRolePicker(
       form.querySelector('[data-picker="ping_role_id"]'),

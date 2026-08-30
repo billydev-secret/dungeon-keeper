@@ -268,15 +268,16 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 | Knob | Default | Purpose |
 |---|---|---|
-| Per-game `enabled` | on | Toggle a game on/off for the guild |
+| Per-game `enabled` | on | Toggle a game on/off for the guild. The settable set is `ALL_GAME_TYPES` in `web_server/routes/games.py`, and its spellings must match `games/constants.py` — the scheduler gates a run by calling `check_game_enabled` with the *constants* name, so a type spelled differently there is a toggle nobody can reach. `risky_roller` was exactly that (fixed 2026-08-30: it is `risky_roll`, and `legitlibs` was missing altogether); two tripwires in `tests/web/test_games_routes.py` hold the line. Risky Rolls and LegitLibs now also carry the switch on their own panels and honour it at slash-command entry, not just in the scheduler |
 | Per-game `options` | empty | Per-game knob bag. **Every dial a panel offers must be a key its cog reads** — `tests/web/test_game_dials_are_enforced.py` fails otherwise. Read by clapback, price, rushmore, ttl, photo and mlt; wyr, ama and nhie read none, so their panels offer none. |
+| Question bank | per game | Only for games that actually draw from it. **AMA has no bank** — every question comes from members during the round and nothing in `games_ama_cog` reads `games_question_bank` — so its panel shipped a curation UI for rows the game could never serve. The bank UI was removed 2026-08-30 and the panel moved from the *Question Banks* nav group to *Live Games* (route id `games-ama` unchanged; ids are frozen). The API refuses new `ama` bank rows too (`BANK_READ_ONLY_GAME_TYPES` in `routes/games.py`), but still lists, exports and **imports** them, so a full-bank export taken before the closure round-trips instead of failing wholesale |
 | Audit channel | unset | Mirror anonymous submissions here with original authors visible (the DB trail is always written either way) |
 | Editor / Game Host role | unset | Role whose holders pass the Game Host check on the dashboard and can move other players |
 | External tracking watches | unset | One or more (bot, channel, kind) pairs whose result messages are banked (set on Games → External Tracking); the same bot may appear in several channels |
 
 ### Per-channel (dashboard)
 
-- **Channel allowlist** — only allowlisted channels accept any game command.
+- **Channel allowlist** — only allowlisted channels accept any **party**-game command. It does not reach the duels and group elimination games, which gate on their own per-game `channel_allowlist` in `duel_config` and nothing else; their six panels claimed otherwise until 2026-08-30. See `dk_pvp_games_suite_spec.md`.
 - **LegitLibs `max_tier`** — hard cap on tier (default 4); higher requests silently downgrade.
 
 ### Environment / files

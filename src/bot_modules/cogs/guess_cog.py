@@ -43,6 +43,11 @@ from bot_modules.services.guess_pipeline import (
 )
 from bot_modules.services.guess_crop_renderer import render_crop, render_crop_editor, render_reveal
 from bot_modules.services.quote_renderer import render_quote
+from bot_modules.services.guess_nudge_service import (
+    build_nudge_content,
+    find_stalled_round,
+    record_nudge,
+)
 from bot_modules.services.guess_repo import (
     clear_round_original_path,
     count_guesses_for_round,
@@ -145,6 +150,16 @@ def _validate_dimensions(image_bytes: bytes, min_px: int) -> tuple[bool, int, in
 
 
 # ── DB helpers (sync, called via asyncio.to_thread) ──────────────────────────
+
+def _do_find_stalled_round(db_path: Path, guild_id: int):
+    with open_db(db_path) as conn:
+        return find_stalled_round(conn, guild_id)
+
+
+def _do_record_nudge(db_path: Path, guild_id: int, round_id: int) -> None:
+    with open_db(db_path) as conn:
+        record_nudge(conn, guild_id, round_id)
+
 
 def _load_config(db_path: Path, guild_id: int) -> GuessConfig:
     with open_db(db_path) as conn:
@@ -1841,9 +1856,11 @@ class GuessCog(commands.Cog):
         log.info("guess: re-registered %d persistent GameViews (cap %d)",
                  len(round_ids), _COG_LOAD_VIEW_CAP)
         self._age_out_loop.start()
+        self._inactivity_nudge_loop.start()
 
     async def cog_unload(self) -> None:
         self._age_out_loop.cancel()
+        self._inactivity_nudge_loop.cancel()
         self.prompt_panel.cancel_all()
 
     @tasks.loop(hours=24)
@@ -1856,6 +1873,55 @@ class GuessCog(commands.Cog):
                 log.info("guess: aged out %d stale cached originals", cleared)
         except Exception:
             log.exception("guess: original age-out sweep failed")
+
+    @tasks.loop(minutes=15)
+    async def _inactivity_nudge_loop(self) -> None:
+        """Ping the Guess role about a round that has gone quiet.
+
+        Backs ``guess_inactivity_ping_hours``. Every guard lives in
+        ``guess_nudge_service.find_stalled_round`` — an unset dial, an unset
+        channel or role, and an already-nudged round all come back as None, so
+        this loop is a thin poster. One nudge per round, per guild.
+        """
+        db_path = self.bot.ctx.db_path
+        for guild in list(self.bot.guilds):
+            try:
+                stalled = await asyncio.to_thread(
+                    _do_find_stalled_round, db_path, guild.id
+                )
+                if stalled is None:
+                    continue
+                channel = guild.get_channel_or_thread(stalled.channel_id)
+                # Threads count: the Guess prompt can live in one, and so can
+                # the rounds posted under it.
+                if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+                    continue
+                perms = channel.permissions_for(guild.me)
+                if not perms.send_messages:
+                    continue
+                await channel.send(
+                    build_nudge_content(stalled, guild_id=guild.id),
+                    # The role ping is the whole point, and it is the one the
+                    # admin picked — nothing else in the content may mention.
+                    allowed_mentions=discord.AllowedMentions.none().merge(
+                        discord.AllowedMentions(roles=[discord.Object(stalled.role_id)])
+                    ),
+                )
+                # Record only after a successful post, so a failed send retries
+                # on the next tick rather than silently burning the round.
+                await asyncio.to_thread(
+                    _do_record_nudge, db_path, guild.id, stalled.round_id
+                )
+                log.info(
+                    "guess: nudged guild %s about round %s (quiet %.1fh)",
+                    guild.id, stalled.round_id, stalled.quiet_hours,
+                )
+            except Exception:
+                log.exception("guess: inactivity nudge failed for guild %s", guild.id)
+
+    @_inactivity_nudge_loop.before_loop
+    async def _before_inactivity_nudge_loop(self) -> None:
+        await self.bot.wait_until_ready()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
