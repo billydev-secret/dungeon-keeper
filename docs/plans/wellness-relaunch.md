@@ -64,12 +64,16 @@ Each with logic-layer tests (failing-first where it's a bug fix).
 
 ## Stage D — Provisioning Activate card (decision 5)
 
-`wellness-admin.js`: when `role_id`/`channel_id` are 0, show an Activate
-Wellness card — role picker with auto-create (role-autocreate stage-1
-pattern; wellness role is a safe kind) + channel picker; saved via existing
-`upsert_wellness_config`. After activation, show current role/channel with
-change buttons. Admin routes gain the two setters (`require_manage_server`).
-Guild B's all-zero row becomes reachable instead of dead.
+**Built 2026-08-29** (branch `wellness-config-gates`, todo #147 — landed ahead
+of B/C because the todo-board sweep picked it up as the config-audit's HIGH
+finding #61). `wellness-admin.js`: when `role_id`/`channel_id` are 0 *or no
+longer resolve*, show an Activate Wellness card — role picker with
+auto-create via `core/role_provision.ensure_feature_role` (adopt-by-name
+included) + text-channel picker; saved via existing `upsert_wellness_config`.
+After activation, show current role/channel with change buttons. Admin routes
+gained `GET /provision` + the two setters (`require_manage_server`); D11's
+error copy now names the card's location. Guild B's all-zero row becomes
+reachable instead of dead.
 
 ## Stage E — Goal payouts (decision 9; review §6b)
 

@@ -1,22 +1,26 @@
 """Tests for /api/wellness/admin/* — the wellness admin JSON API.
 
 Covers snowflake-precision (ids must serialise as strings, never bare numbers
-JS would round) and the pause/resume 404-on-no-match contract.
+JS would round), the pause/resume 404-on-no-match contract, and the
+provisioning routes that write the `role_id`/`channel_id` keys gating the
+whole feature (docs/plans/wellness-relaunch.md Stage D).
 """
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.wellness_service import (
     add_exempt_channel,
+    get_wellness_config,
     opt_in_user,
 )
 
 # A snowflake larger than 2**53 — a bare JSON number here would lose precision.
 BIG_USER = 1234567890123456789
 BIG_CHANNEL = 8123456789012345678
+BIG_ROLE = 9123456789012345678
 
 
 def _opt_in(fake_ctx, user_id: int, *, timezone: str = "UTC"):
@@ -101,9 +105,6 @@ def test_admin_pause_and_resume_known_user_ok(authed_client, fake_ctx):
 # either, so that message pointed at a control that did not exist and a fresh
 # guild could never switch the programme on.
 
-BIG_ROLE = 7123456789012345678
-
-
 def test_admin_defaults_saves_the_role_and_channel(authed_client, fake_ctx):
     from bot_modules.services.wellness_service import get_wellness_config
 
@@ -159,3 +160,184 @@ def test_admin_defaults_rejects_a_non_numeric_id(authed_client):
     )
     assert resp.status_code == 400
     assert resp.json()["ok"] is False
+# ── provisioning (role_id / channel_id — the keys that gate the feature) ─
+
+
+def _mk_role(rid: int, name: str, *, managed: bool = False) -> MagicMock:
+    role = MagicMock()
+    role.id = rid
+    role.name = name
+    role.managed = managed
+    return role
+
+
+def _mk_channel(cid: int, name: str) -> MagicMock:
+    ch = MagicMock()
+    ch.id = cid
+    ch.name = name
+    return ch
+
+
+def _wire_guild(fake_ctx, *, roles=(), channels=()) -> MagicMock:
+    guild = MagicMock()
+    guild.id = fake_ctx.guild_id
+    guild.roles = list(roles)
+    guild.text_channels = list(channels)
+    guild.get_role = lambda rid: next(
+        (r for r in guild.roles if r.id == rid), None
+    )
+    guild.get_channel = lambda cid: next(
+        (c for c in guild.text_channels if c.id == cid), None
+    )
+    guild.create_role = AsyncMock()
+    bot = MagicMock()
+    bot.get_guild = MagicMock(return_value=guild)
+    fake_ctx.bot = bot
+    return guild
+
+
+def _stored_config(fake_ctx):
+    with open_db(fake_ctx.db_path) as conn:
+        return get_wellness_config(conn, fake_ctx.guild_id)
+
+
+def test_provision_get_without_bot_reports_disconnected(authed_client, fake_ctx):
+    body = authed_client.get("/api/wellness/admin/provision").json()
+    assert body["bot_connected"] is False
+    assert body["role_id"] == "0"
+    assert body["role_name"] is None
+    assert body["role_options"] == []
+
+
+def test_provision_get_stringifies_option_ids(authed_client, fake_ctx):
+    # @everyone (id == guild.id) and managed roles can't be handed out, so
+    # neither may appear as an option.
+    _wire_guild(
+        fake_ctx,
+        roles=[
+            _mk_role(fake_ctx.guild_id, "@everyone"),
+            _mk_role(BIG_ROLE, "Wellness Guardian"),
+            _mk_role(4242, "SomeBot", managed=True),
+        ],
+        channels=[_mk_channel(BIG_CHANNEL, "wellness")],
+    )
+    body = authed_client.get("/api/wellness/admin/provision").json()
+    assert body["bot_connected"] is True
+    assert [r["id"] for r in body["role_options"]] == [str(BIG_ROLE)]
+    assert [c["id"] for c in body["channel_options"]] == [str(BIG_CHANNEL)]
+
+
+def test_provision_get_resolves_stored_ids(authed_client, fake_ctx):
+    _wire_guild(
+        fake_ctx,
+        roles=[_mk_role(BIG_ROLE, "Wellness Guardian")],
+        channels=[_mk_channel(BIG_CHANNEL, "wellness")],
+    )
+    authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": str(BIG_ROLE)}
+    )
+    authed_client.post(
+        "/api/wellness/admin/provision/channel",
+        json={"channel_id": str(BIG_CHANNEL)},
+    )
+    body = authed_client.get("/api/wellness/admin/provision").json()
+    assert body["role_id"] == str(BIG_ROLE)
+    assert body["role_name"] == "Wellness Guardian"
+    assert body["channel_id"] == str(BIG_CHANNEL)
+    assert body["channel_name"] == "wellness"
+
+
+def test_provision_role_pick_existing_stores_id(authed_client, fake_ctx):
+    _wire_guild(fake_ctx, roles=[_mk_role(BIG_ROLE, "Zen")])
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": str(BIG_ROLE)}
+    )
+    assert resp.json()["ok"] is True
+    assert resp.json()["role_id"] == str(BIG_ROLE)
+    assert _stored_config(fake_ctx).role_id == BIG_ROLE
+
+
+def test_provision_role_rejects_unknown_role(authed_client, fake_ctx):
+    _wire_guild(fake_ctx)
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": 999}
+    )
+    assert resp.status_code == 404
+    assert _stored_config(fake_ctx) is None
+
+
+def test_provision_role_rejects_managed_role(authed_client, fake_ctx):
+    _wire_guild(fake_ctx, roles=[_mk_role(555, "SomeBot", managed=True)])
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": 555}
+    )
+    assert resp.status_code == 400
+    assert _stored_config(fake_ctx) is None
+
+
+def test_provision_role_rejects_everyone(authed_client, fake_ctx):
+    guild = _wire_guild(fake_ctx)
+    guild.roles = [_mk_role(guild.id, "@everyone")]
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": guild.id}
+    )
+    assert resp.status_code == 400
+
+
+def test_provision_role_requires_bot(authed_client, fake_ctx):
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"role_id": 1}
+    )
+    assert resp.status_code == 503
+
+
+def test_provision_role_auto_create_creates_and_stores(authed_client, fake_ctx):
+    guild = _wire_guild(fake_ctx)
+    guild.create_role.return_value = _mk_role(BIG_ROLE, "Wellness Guardian")
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"auto_create": True}
+    )
+    assert resp.json()["ok"] is True
+    assert resp.json()["role_id"] == str(BIG_ROLE)
+    assert _stored_config(fake_ctx).role_id == BIG_ROLE
+    guild.create_role.assert_awaited_once()
+
+
+def test_provision_role_auto_create_adopts_existing_name(authed_client, fake_ctx):
+    # A guild that already has a "Wellness Guardian" role keeps it — the
+    # adopt-by-name step must win over creating a twin.
+    guild = _wire_guild(fake_ctx, roles=[_mk_role(BIG_ROLE, "Wellness Guardian")])
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/role", json={"auto_create": True}
+    )
+    assert resp.json()["ok"] is True
+    assert resp.json()["role_id"] == str(BIG_ROLE)
+    assert _stored_config(fake_ctx).role_id == BIG_ROLE
+    guild.create_role.assert_not_awaited()
+
+
+def test_provision_channel_stores_id(authed_client, fake_ctx):
+    _wire_guild(fake_ctx, channels=[_mk_channel(BIG_CHANNEL, "wellness")])
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/channel",
+        json={"channel_id": str(BIG_CHANNEL)},
+    )
+    assert resp.json()["ok"] is True
+    assert resp.json()["channel_id"] == str(BIG_CHANNEL)
+    assert _stored_config(fake_ctx).channel_id == BIG_CHANNEL
+
+
+def test_provision_channel_rejects_unknown_channel(authed_client, fake_ctx):
+    _wire_guild(fake_ctx)
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/channel", json={"channel_id": 999}
+    )
+    assert resp.status_code == 404
+    assert _stored_config(fake_ctx) is None
+
+
+def test_provision_channel_requires_bot(authed_client, fake_ctx):
+    resp = authed_client.post(
+        "/api/wellness/admin/provision/channel", json={"channel_id": 1}
+    )
+    assert resp.status_code == 503

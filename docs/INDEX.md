@@ -87,7 +87,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 
 | Doc | What it covers | Caveat |
 |---|---|---|
-| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body matches code (only `/wellness setup`/`away set` are slash commands; caps/blackouts/streaks are dashboard- and engine-driven (partners retired 2026-08-28, migration 189); opt-out and consent defaults reworked 2026-07-30). **Activation gap closed 2026-08-29:** the Wellness Admin panel's Server Defaults form now sets the guild's opt-in `role_id` and announcement `channel_id`, so a new guild is switched on from the dashboard instead of a hand-seeded row. Still unbuilt: auto-*creating* the role/category (an admin picks ones that already exist). |
+| [wellness_guardian_spec.md](wellness_guardian_spec.md) | Wellness | Current-behavior body matches code (only `/wellness setup`/`away set` are slash commands; caps/blackouts/streaks are dashboard- and engine-driven (partners retired 2026-08-28, migration 189); opt-out and consent defaults reworked 2026-07-30). **Activation gap closed 2026-08-29:** the admin panel's Activate Wellness card (role picker/auto-create + channel picker) now provisions `role_id`/`channel_id` — a new guild activates from the dashboard; see the spec's Activation section. |
 
 ## Design specs (written to implement; may lag the code)
 
@@ -219,4 +219,4 @@ These describe features or shapes of the system that don't match reality. They'r
 
 ---
 
-*One last reminder: `games_system_spec.md` and `dk_pvp_games_suite_spec.md` were corrected on 2026-07-15 and now describe current state (their remaining unbuilt ideas live in each doc's own Roadmap section). `wellness_guardian_spec.md` is still the one to read carefully — everything it describes is real and live on the main guild, and since 2026-08-29 a new guild is switched on from the dashboard rather than a hand-seeded config row; see its caveat above.*
+*One last reminder: `games_system_spec.md` and `dk_pvp_games_suite_spec.md` were corrected on 2026-07-15 and now describe current state (their remaining unbuilt ideas live in each doc's own Roadmap section). `wellness_guardian_spec.md` is still the one to read carefully — everything it describes is real and live on the main guild, and since 2026-08-29 a new guild activates from the dashboard's Activate Wellness card rather than needing a hand-seeded config row; see its caveat above.*

@@ -223,7 +223,8 @@ class _SetupWizardView(discord.ui.View):
             await interaction.response.edit_message(
                 content=(
                     "⚠️ Wellness Guardian isn't set up on this server yet. "
-                    "An admin can configure it from the web dashboard."
+                    "An admin can activate it on the web dashboard under "
+                    "**Config → Members → Wellness**."
                 ),
                 embed=None,
                 view=None,
@@ -244,7 +245,8 @@ class _SetupWizardView(discord.ui.View):
             await interaction.response.edit_message(
                 content=(
                     "⚠️ The wellness role no longer exists. "
-                    "Ask an admin to reconfigure it from the web dashboard."
+                    "An admin can pick or recreate it on the web dashboard "
+                    "under **Config → Members → Wellness**."
                 ),
                 embed=None,
                 view=None,
@@ -364,7 +366,8 @@ class WellnessCog(commands.Cog):
         if cfg is None or not cfg.role_id:
             await interaction.response.send_message(
                 "⚠️ Wellness Guardian isn't set up on this server yet. "
-                "An admin can configure it from the web dashboard.",
+                "An admin can activate it on the web dashboard under "
+                "**Config → Members → Wellness**.",
                 ephemeral=True,
             )
             return
