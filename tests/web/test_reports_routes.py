@@ -153,6 +153,7 @@ def test_quality_score_shape(open_client):
 
 _SMOKE_ENDPOINTS = [
     "/api/reports/interaction-graph",
+    "/api/reports/interaction-graph-series",
     "/api/reports/one-sided-attention",
 ]
 

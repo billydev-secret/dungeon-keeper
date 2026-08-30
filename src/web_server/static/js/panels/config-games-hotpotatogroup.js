@@ -88,9 +88,9 @@ export function mount(container) {
               <label>Allowed Channels</label>
               <div data-picker="channel_allowlist"></div>
               <div class="field-hint">Restrict this game to these channels. Leave the
-                list empty to allow it anywhere. This list is the only channel rule
-                for this game &mdash; the allowed-channel list on Games &rsaquo; Global
-                Config governs the question-bank games, not this one.</div>
+                list empty to allow it in <strong>every channel on the server</strong> —
+                unlike the party games, duels do not consult the Games &rsaquo; Global
+                Config channel list.</div>
             </div>
           </div>
 

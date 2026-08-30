@@ -315,10 +315,11 @@ const SECTIONS = [
       ]},
       // One page per game: the dials for a game that runs live in a channel.
       { heading: "Live Games", items: [
-        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
         // AMA sat under Question Banks until its bank came off: every AMA
-        // question is typed by a member mid-game, so there was never one to fill.
-        { id: "games-ama",          label: "AMA",               module: "./panels/games-ama.js" },
+        // question is typed by a member mid-game, so there was never one to
+        // fill. Its route id stays `games-ama`; only the grouping moved.
+        { id: "games-ama",          label: "Anonymous AMA",     module: "./panels/games-ama.js" },
+        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
         { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
         { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
         { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },

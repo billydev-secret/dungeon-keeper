@@ -25,8 +25,8 @@ export function mount(container) {
           <h2>Risky Roller</h2>
           <div class="subtitle">A dice game members start with <code>/risky start</code></div>
         </header>
-        <div data-region="status"></div>
         ${renderMetaWarning()}
+        <div class="card" data-region="status"></div>
         <form class="form form-cards" data-form>
           <div class="card">
             <div class="section-label">Announcements</div>
@@ -67,10 +67,13 @@ export function mount(container) {
       </div>
     `;
 
+    // The on/off switch lives in games_game_config, not the risky config row,
+    // so it rides the shared game-panel status section like every other game.
+    // The label matches the Global Config list this game appears in, and the
+    // hint names both readers — /risky start and the scheduler.
     mountGamePanel(container.querySelector('[data-region="status"]'), {
-      gameType: "risky_roll",
-      gameName: "Risky Rolls",
-      bare: true,
+      gameType: "risky_roll", gameName: "Risky Rolls", gameIcon: "🎰",
+      hasBank: false, bare: true,
       statusLabel: "Available on This Server",
       statusHint: "When off, /risky start refuses to open a round and a scheduled"
         + " Risky Rolls round is skipped when its time comes round. Rounds already"
@@ -78,7 +81,7 @@ export function mount(container) {
     });
 
     const form = container.querySelector("[data-form]");
-    const status = container.querySelector("[data-status]");
+    const status = container.querySelector('[data-form] [data-status]');
 
     const rolePicker = mountRolePicker(
       form.querySelector('[data-picker="ping_role_id"]'),

@@ -38,7 +38,8 @@ TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 # the way the bot itself reads it (GAME_NAMES / check_game_enabled / the
 # scheduler's enable gate): a row written under any other spelling is read by
 # nothing. "risky_roller" used to sit here while the scheduler asked about
-# "risky_roll", so the switch could never be answered.
+# "risky_roll", so the switch could never be answered. Two tripwires in
+# tests/web/test_games_routes.py hold the line.
 ALL_GAME_TYPES = [
     # "photo" is deliberately absent: the standalone Photo Challenge panel
     # (PUT /api/photo-challenge/config) owns that games_game_config row, and
@@ -145,11 +146,27 @@ def _norm_tags(raw) -> list[str]:
     return out
 
 
+#: Recognised for reading, export and import, but closed to new bank rows: no
+#: code path ever draws them. ``ama`` questions come from members during the
+#: round, so a curated AMA bank row can never be served. Kept out of
+#: ``_check_bank_type`` rather than out of ``VALID_GAME_TYPES`` so an existing
+#: full-bank export containing such a row still round-trips through import.
+BANK_READ_ONLY_GAME_TYPES = frozenset({"ama"})
+
+
 def _check_bank_type(game_type: str) -> None:
     """Reject unknown bank game_types. The global pool is a valid bank slot
     (so full-bank exports containing pool rows round-trip through import)."""
     if game_type not in VALID_GAME_TYPES and game_type != GLOBAL_POOL_TYPE:
         raise HTTPException(status_code=400, detail=f"Invalid game_type: {game_type}")
+    if game_type in BANK_READ_ONLY_GAME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{game_type} has no question bank — its questions come from "
+                "members during the round, so a stored one is never served."
+            ),
+        )
 
 
 def _pool_tags(game_type: str, tags: list[str]) -> list[str]:

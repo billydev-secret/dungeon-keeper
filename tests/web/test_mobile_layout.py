@@ -718,6 +718,24 @@ _GRAPH_STUB = {
 }
 
 
+_SERIES_STUB = {
+    "bin_seconds": 604800,
+    "start": 1_755_000_000,
+    "weeks": 30,
+    "nodes": [
+        {"user_id": str(1469491362444480666 + i),
+         "user_name": _GRAPH_NAMES[i % len(_GRAPH_NAMES)],
+         "cluster_id": i % 8, "joins": [], "leaves": []}
+        for i in range(12)
+    ],
+    "pairs": [
+        {"a": str(1469491362444480666 + i), "b": str(1469491362444480666 + (i + 1) % 12),
+         "w": [1] * 30}
+        for i in range(12)
+    ],
+}
+
+
 def test_connection_graph_populated_fits_on_phone(dashboard, browser):
     """The Connection Graph, *with data*, on a phone.
 
@@ -743,6 +761,16 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
                 body=json.dumps(_GRAPH_STUB),
             ),
         )
+        # Registered after the graph stub so its narrower URL wins the
+        # "interaction-graph*" prefix (Playwright checks routes newest-first).
+        page.route(
+            "**/api/reports/interaction-graph-series*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_SERIES_STUB),
+            ),
+        )
         _goto_panel(page, f"{dashboard.base}/#/connection-graph")
         page.wait_for_selector("[data-cluster-chips] .graph-cluster-chip")
         page.click(".graph-tuning > summary")
@@ -752,6 +780,18 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
             "[data-cluster-chips] .graph-cluster-chip", "els => els.length"
         )
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+        # The replay transport only exists behind the Replay chip.
+        page.click(".graph-tuning > summary")  # fold the popover back away
+        page.click("[data-replay]")
+        page.wait_for_selector("[data-replaybar]:not([hidden])")
+        # Pause first: a playing replay re-renders every 700ms, and the date
+        # label's width changes with it ("Sep 2 – Sep 30" vs "Sep 12 – Oct 10"),
+        # so an audit taken mid-playback samples a bar whose wrap point is
+        # still moving. _settle only watches document scrollWidth, which an
+        # absolutely-positioned bar never moves, so it would not catch this.
+        page.click("[data-rp-toggle]")
+        _settle(page)
+        res_replay = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
     assert chips == 8, (
@@ -759,6 +799,7 @@ def test_connection_graph_populated_fits_on_phone(dashboard, browser):
         "/api/reports/interaction-graph stub shape drift?"
     )
     _assert_fits(res, "Connection Graph with data")
+    _assert_fits(res_replay, "Connection Graph replay")
 
 
 def test_activity_overlay_fits_on_phone(dashboard, browser):

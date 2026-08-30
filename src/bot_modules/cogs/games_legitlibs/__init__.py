@@ -69,6 +69,12 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
             )
             return
 
+        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
+            await interaction.response.send_message(
+                "LegitLibs is currently disabled on this server.", ephemeral=True
+            )
+            return
+
         existing = await get_active_game(self.db, interaction.channel_id)
         if existing and existing["game_type"] == "legitlibs":
             await interaction.response.send_message(

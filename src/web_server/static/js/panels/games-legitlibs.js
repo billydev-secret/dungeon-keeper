@@ -567,6 +567,14 @@ export function mount(container) {
     guardForm(editDiv);
   }
 
+  // The on/off switch lives in games_game_config alongside every other game's,
+  // so it rides the shared game-panel status section rather than growing a
+  // second storage shape here.
+  mountGamePanel(region("status"), {
+    gameType: "legitlibs", gameName: "LegitLibs", gameIcon: "📝",
+    hasBank: false, bare: true,
+  });
+
   // -- New form setup ---------------------------------------------------------
 
   const newFormEl = region("new-form");
