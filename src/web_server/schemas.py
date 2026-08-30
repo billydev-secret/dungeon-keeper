@@ -202,6 +202,9 @@ class ActivityResponse(BaseModel):
     band_mid: list[float] = []
     band_high: list[float] = []
     periods_sampled: int = 0
+    # What the band summarises, named for the legend and the table: "Typical
+    # week", or "Typical Tuesday" when the sample is one weekday's history.
+    band_label: str = ""
 
 
 # ── Invite effectiveness ───────────────────────────────────────────────

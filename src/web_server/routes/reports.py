@@ -407,6 +407,7 @@ async def activity(
     exclude_channel_ids: str | None = None,
     include_bots: bool = False,
     compare_periods: int = 12,
+    same_weekday: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -419,9 +420,19 @@ async def activity(
     # gets a shortened window rather than a silently truncated band.
     if resolution in ("day_overlay", "week_overlay"):
         period = "day" if resolution == "day_overlay" else "week"
+        # A week is already every seventh day; only the day overlay has two
+        # bases to choose between, so the flag is dropped rather than obeyed
+        # anywhere else and the cache key below cannot fork on a no-op.
+        same_weekday = same_weekday and resolution == "day_overlay"
         compare_periods = max(
-            1, min(compare_periods, activity_graphs.overlay_period_cap(period, mode))
+            1,
+            min(
+                compare_periods,
+                activity_graphs.overlay_period_cap(period, mode, same_weekday),
+            ),
         )
+    else:
+        same_weekday = False
 
     excluded_channels: set[int] = set()
     if exclude_channel_ids:
@@ -458,6 +469,7 @@ async def activity(
                 exclude_user_ids=excluded_users or None,
                 exclude_channel_ids=excluded_channels or None,
                 compare_periods=compare_periods,
+                same_weekday=same_weekday,
             )
 
     return await cached_run_query(
@@ -471,6 +483,7 @@ async def activity(
             "exclude_channel_ids": ",".join(str(c) for c in sorted(excluded_channels)),
             "include_bots": include_bots,
             "compare_periods": compare_periods,
+            "same_weekday": same_weekday,
         },
         _q,
     )
