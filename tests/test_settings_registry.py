@@ -259,6 +259,24 @@ def test_rules_watch_requires_its_own_keys_only():
     assert "server_guide_channel_id" not in keys
 
 
+def test_server_guide_channel_is_listed_under_welcome():
+    """It moved off rules-watch, and had to land somewhere.
+
+    The key is live — both the welcome and the leave embed expand
+    ``{server_guide}`` from it, and the Welcome panel writes it — so leaving it
+    unlisted would hide it from the advisor entirely: it couldn't be read back,
+    proposed, or gap-reported, while the panel went on saving it.
+    """
+    setting = sr.get_setting("server_guide_channel_id")
+    assert setting is not None
+    assert setting.kind == "channel"
+    welcome = sr.FEATURES_BY_SLUG["welcome"]
+    assert "server_guide_channel_id" in {s.key for s in welcome.settings}
+    assert "server_guide_channel_id" in sr.writable_keys(is_admin=False)
+    # Optional: a server with no guide channel is still fully set up.
+    assert not setting.required
+
+
 def test_check_registry_rejects_a_dead_key(monkeypatch):
     monkeypatch.setattr(sr, "FEATURES", (
         sr.Feature(slug="a", label="A", panel="p", blurb="b",
