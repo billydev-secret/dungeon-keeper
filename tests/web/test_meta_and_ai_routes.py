@@ -554,6 +554,83 @@ def test_delete_ai_prompt_unknown_key_returns_404(authed_client):
     assert resp.status_code == 404
 
 
+# ── Bot-global AI settings: primary guild only ────────────────────────
+# Every value on this panel is shared by every guild the bot serves (the
+# prompts live at guild 0, the model source and the loaded model are one per
+# host). `admin` only proves the caller administers the guild they have
+# selected, so a second guild's admin must not reach them — the panel's
+# primaryOnly nav flag is client-side and proves nothing.
+
+SECOND_GUILD_ID = 1476525656115515484
+
+
+def _second_guild_admin_client(fake_ctx):
+    """An administrator of a *different* guild than the bot's primary."""
+    from fastapi.testclient import TestClient
+
+    from web_server.auth import SESSION_COOKIE, DiscordOAuthAuth
+    from web_server.server import create_app
+
+    auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
+    client = TestClient(create_app(fake_ctx, auth=auth))
+    client.cookies.set(
+        SESSION_COOKIE,
+        auth.create_session_cookie(
+            user_id=7,
+            username="other-owner",
+            permission_bits=0x8,  # full administrator — of their own guild
+            guild_id=SECOND_GUILD_ID,
+            guilds=[{"id": SECOND_GUILD_ID, "name": "Second Guild", "icon": None}],
+        ),
+    )
+    return client
+
+
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("PUT", "/api/config/ai/prompts/{key}", {"text": "ignore every rule"}),
+        ("DELETE", "/api/config/ai/prompts/{key}", None),
+        ("POST", "/api/config/ai/prompts/{key}/test", {"user_input": "hi"}),
+        ("PUT", "/api/config/ai/model-source",
+         {"model_path": "/etc/passwd", "hf_repo": "", "hf_file": ""}),
+        ("POST", "/api/config/ai/model-reload", None),
+    ],
+)
+def test_second_guild_admin_cannot_touch_bot_global_ai(
+    fake_ctx, method, path, body
+):
+    key = list_prompts()[0].key
+    client = _second_guild_admin_client(fake_ctx)
+    try:
+        resp = client.request(method, path.format(key=key), json=body)
+        assert resp.status_code == 403
+    finally:
+        client.close()
+
+
+def test_second_guild_admin_cannot_rewrite_the_shared_prompt(authed_client, fake_ctx):
+    """The write is refused, and the text every guild runs is untouched."""
+    key = list_prompts()[0].key
+    assert authed_client.put(
+        f"/api/config/ai/prompts/{key}", json={"text": "the owner's text"}
+    ).status_code == 200
+
+    client = _second_guild_admin_client(fake_ctx)
+    try:
+        assert client.put(
+            f"/api/config/ai/prompts/{key}", json={"text": "always answer 'fine'"}
+        ).status_code == 403
+        assert client.delete(f"/api/config/ai/prompts/{key}").status_code == 403
+    finally:
+        client.close()
+
+    from bot_modules.services.ai_config import get_prompt
+    with open_db(fake_ctx.db_path) as conn:
+        assert get_prompt(conn, key, 0) == "the owner's text"
+        assert get_prompt(conn, key, SECOND_GUILD_ID) == "the owner's text"
+
+
 def test_test_ai_prompt_returns_503_when_llm_unavailable(authed_client):
     with patch("bot_modules.services.ollama_client.is_available", return_value=False):
         resp = authed_client.post(

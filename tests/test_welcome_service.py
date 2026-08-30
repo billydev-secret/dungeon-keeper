@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import discord
 import pytest
 
 from bot_modules.services.welcome_service import (
@@ -53,6 +54,31 @@ def test_placeholders_and_trimming(template, expected):
 def test_blank_template_is_the_off_switch(template):
     """A cleared box posts nothing rather than an empty message."""
     assert render_arrival_message(template, _member()) == ""
+
+
+@pytest.mark.parametrize(
+    "display_name,forbidden",
+    [
+        ("@everyone", "@everyone"),
+        ("@here", "@here"),
+        ("<@&123456789012345678>", "<@&123456789012345678>"),
+    ],
+)
+def test_a_hostile_display_name_cannot_ping(display_name, forbidden):
+    """The arrival line is plain content, so a name is not a safe splice.
+
+    The line already needs Mention Everyone for its ``@here``; a newcomer who
+    renames themselves ``@everyone`` must not ride that permission. Only the
+    member-controlled half is escaped — the admin's own ``@here`` survives.
+    """
+    out = render_arrival_message(
+        "@here - {member_name} has arrived", _member(display_name=display_name)
+    )
+    assert out.startswith("@here - ")          # the admin's own ping survives
+    name_part = out[len("@here - "):]
+    assert forbidden not in name_part          # the member's does not
+    # Neutralised, not deleted — the name still reads in the channel.
+    assert discord.utils.escape_mentions(display_name) in name_part
 
 
 def test_a_guild_can_drop_the_here_ping():

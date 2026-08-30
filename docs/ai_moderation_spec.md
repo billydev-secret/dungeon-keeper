@@ -210,7 +210,7 @@ The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or
 
 Keys an admin sets via the dashboard:
 
-- **Per-command system prompt** — review, scan, user query, channel query, watch check, wellness encouragement, and the Rules Watch guard. Empty falls through to the hard-coded default. These are **bot-wide**: the AI panel is primary-guild-only, so it writes them at `guild_id=0` and every guild's reader resolves them through `get_config_value`'s legacy fallback. Saving or restoring also clears any per-guild row an older build wrote, so nothing can shadow the value the panel shows.
+- **Per-command system prompt** — review, scan, user query, channel query, watch check, wellness encouragement, and the Rules Watch guard. Empty falls through to the hard-coded default. These are **bot-wide**: the AI panel is primary-guild-only, so it writes them at `guild_id=0` and every guild's reader resolves them through `get_config_value`'s legacy fallback. Saving or restoring also clears any per-guild row an older build wrote, so nothing can shadow the value the panel shows. "Primary-guild-only" is enforced on the server, not just hidden in the nav: every write on this panel (prompt save, Restore Original, Try It Out, model source, model reload) returns **403** when the caller's active guild is not `ctx.guild_id`, so an admin of a secondary guild cannot rewrite the prompts every other guild runs.
 - **`rules_watch_enabled`** — whether the passive monitor is running (set via the web dashboard's Rules Watch config panel), per guild.
 - **`rules_watch_channel_id`** — Discord channel ID where `immediate`-tier alerts are posted (set via the same panel).
 

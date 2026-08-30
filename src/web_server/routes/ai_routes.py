@@ -24,6 +24,23 @@ router = APIRouter()
 GLOBAL_GUILD_ID = 0
 
 
+def _require_primary_guild(ctx, guild_id: int) -> None:
+    """Refuse a bot-global AI write from anywhere but the primary guild.
+
+    ``require_perms({"admin"})`` only proves the caller administers the guild
+    they currently have selected, and every value this panel touches (the
+    prompts at guild 0, the model source, the loaded model) is shared by every
+    guild the bot serves. Without this, a second guild's admin could rewrite
+    the moderation prompts every other guild runs — a prompt that never emits
+    the verdict block makes every message read as fine. The panel is already
+    primary-guild-only in the nav, but that flag is client-side.
+    """
+    if int(guild_id) != int(ctx.guild_id):
+        raise HTTPException(
+            403, "AI settings are bot-global — edit them from the primary guild"
+        )
+
+
 # ── GET /config/ai ─────────────────────────────────────────────────────────────
 
 
@@ -84,6 +101,7 @@ async def put_ai_prompt(
     from bot_modules.services.ai_config import reset_prompt, set_prompt
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -108,6 +126,7 @@ async def reset_ai_prompt(
     from bot_modules.services.ai_config import reset_prompt
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -134,15 +153,17 @@ async def test_ai_prompt(
     request: Request,
     key: str,
     body: PromptTestBody,
+    guild_id: int = Depends(get_active_guild_id),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     from bot_modules.services import ollama_client
     from bot_modules.services.ai_config import get_prompt
 
+    ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
+
     if not ollama_client.is_available():
         raise HTTPException(503, "LLM is not configured.")
-
-    ctx = get_ctx(request)
 
     def _q():
         with ctx.open_db() as conn:
@@ -290,6 +311,7 @@ async def put_model_source(
     from bot_modules.core.db_utils import set_config_value
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
 
     def _q():
         with ctx.open_db() as conn:
@@ -307,11 +329,13 @@ async def put_model_source(
 @router.post("/config/ai/model-reload")
 async def post_model_reload(
     request: Request,
+    guild_id: int = Depends(get_active_guild_id),
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     from bot_modules.services import ollama_client
 
     ctx = get_ctx(request)
+    _require_primary_guild(ctx, guild_id)
     if not ollama_client.is_available(ctx.db_path):
         raise HTTPException(400, "No model source configured — set model path and HuggingFace details first.")
 

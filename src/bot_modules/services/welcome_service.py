@@ -122,6 +122,14 @@ def render_arrival_message(template: str, member: discord.Member) -> str:
     nothing rather than posting an empty message. ``{mention}`` is accepted as
     an alias for ``{member}`` so an admin who copies the wording from the
     birthday panel still gets a ping.
+
+    Unlike the welcome/leave templates this one is sent as **plain message
+    content**, not an embed description, so every mention in it is live. The
+    template itself is admin-authored and keeps its ``@here``; the display name
+    spliced in by ``{member_name}`` is not — a newcomer calling themselves
+    ``@everyone`` would otherwise ping the whole server through the very
+    permission the ``@here`` needs. Only the member-controlled substitution is
+    escaped.
     """
     text = (template or "").strip()
     if not text:
@@ -129,7 +137,7 @@ def render_arrival_message(template: str, member: discord.Member) -> str:
     rendered = (
         text.replace("{member}", member.mention)
         .replace("{mention}", member.mention)
-        .replace("{member_name}", member.display_name)
+        .replace("{member_name}", discord.utils.escape_mentions(member.display_name))
         .replace("{server}", member.guild.name)
     ).strip()
     return rendered
