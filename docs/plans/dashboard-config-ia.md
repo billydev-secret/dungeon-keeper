@@ -1,6 +1,10 @@
 # Dashboard configuration IA — audit and staged plan
 
-**Status: PROPOSAL — awaiting Billy's sign-off on the open decisions below.**
+**Status: stages 1–4 LANDED on this branch (2026-08-29); the appendix queue
+below is the remaining work, tracked as todo-board items.** Billy's decisions:
+D1 keep Policy Tickets and Pen Pals merged; D2 all four grouping bundles;
+D3 stage 4 only on this branch, the other 85 findings queued (11 high-severity
+as individual todo rows, the rest grouped per area).
 Written 2026-08-29 on branch `dashboard-config-ia-review`. Produced by a
 110-agent audit workflow plus a 14-agent gap-close pass; every defect claim was
 independently re-derived by an adversarial verifier before landing here.

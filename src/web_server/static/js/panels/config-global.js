@@ -15,6 +15,15 @@ import {
 // A Discord user id is a snowflake: 17–20 digits, no other characters.
 const SNOWFLAKE_RE = /^\d{17,20}$/;
 
+// booster_swatch_dir is bot-global (stored at guild 0), so its card renders
+// only on the primary guild — a secondary guild's admin was otherwise shown
+// the host filesystem path and could overwrite the shared value. The PUT
+// refuses it off-primary server-side regardless.
+function isPrimaryGuild() {
+  const u = window.__dk_user || {};
+  return !u.primary_guild_id || u.guild_id === u.primary_guild_id;
+}
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
@@ -82,6 +91,7 @@ export function mount(container) {
             </div>
           </div>
 
+          ${isPrimaryGuild() ? `
           <div class="card">
             <div class="section-label">Server File Paths</div>
             <div class="field">
@@ -95,7 +105,7 @@ export function mount(container) {
                 under <a href="#/economy-sinks">Shop &amp; Perks → Color Palette</a>, which is the
                 normal way to manage them.</div>
             </div>
-          </div>
+          </div>` : ""}
 
           <div style="display:flex; gap:8px; align-items:center;">
             <button type="submit" class="btn btn-primary">Save</button>
@@ -175,6 +185,8 @@ export function mount(container) {
           mod_channel_id: modChannelPicker.getValue() || "0",
           bypass_role_ids: bypassRolesPicker.getValues(),
           recorded_bot_user_ids: botIds,
+          // Absent off-primary (the card isn't rendered): fd.get returns
+          // null and the route treats null as "leave unchanged".
           booster_swatch_dir: fd.get("booster_swatch_dir"),
         });
         showStatus(status, true);

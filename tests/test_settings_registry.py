@@ -139,12 +139,13 @@ def test_writable_keys_narrows_for_a_non_admin():
 
 
 def test_access_granting_roles_are_writable_but_admin_only():
+    # qa_role_id left the registry entirely and inactive_role_id became
+    # non-writable (panel-only setup flow) in the 2026-08-29 registry-contract
+    # fix — both are stronger restrictions than writable-but-admin-only.
     for key in (
         "jailed_role_id",
-        "qa_role_id",
         "whisper_role_id",
         "greeter_role_id",
-        "inactive_role_id",
     ):
         s = sr.get_setting(key)
         assert s is not None, key
@@ -204,7 +205,7 @@ def test_is_set_channel_and_role_treat_zero_as_unset():
 
 
 def test_is_set_bool_reads_falsey_words_as_unset():
-    flag = sr.get_setting("qa_enabled")
+    flag = sr.get_setting("greeting_watch_enabled")
     assert flag is not None
     assert flag.is_set("1") is True
     assert flag.is_set("on") is True
@@ -240,7 +241,7 @@ def test_coerce_bool_accepts_synonyms_both_ways():
 
 
 def test_coerce_int_strips_commas_and_enforces_bounds():
-    s = sr.get_setting("qa_reward")
+    s = sr.get_setting("greeting_watch_window_minutes")  # bounds 1-1440
     assert s is not None
     assert sr.coerce_value(s, "1,000") == "1000"
     with pytest.raises(ValueError, match="whole number"):

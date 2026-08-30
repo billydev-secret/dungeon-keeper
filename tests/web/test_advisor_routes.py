@@ -60,11 +60,13 @@ def test_configured_feature_drops_out_of_suggestions(open_client, fake_ctx):
 
 
 def test_ready_but_off_sorts_first(open_client, fake_ctx):
-    """The cheapest win leads — everything wired, just switched off."""
-    _set(fake_ctx, "qa_channel_id", CH)
-    _set(fake_ctx, "qa_enabled", "0")
+    """The cheapest win leads — everything wired, just switched off.
+    (greeting_watch, not qa: the QA Tracker left the registry in the
+    2026-08-29 registry-contract fix.)"""
+    _set(fake_ctx, "greeting_watch_channel_ids", CH)
+    _set(fake_ctx, "greeting_watch_enabled", "0")
     body = open_client.get("/api/help/suggestions").json()
-    assert body["suggestions"][0]["slug"] == "qa_rewards"
+    assert body["suggestions"][0]["slug"] == "greeting_watch"
     assert body["suggestions"][0]["status"] == "ready_but_off"
     assert body["suggestions"][0]["effort"] == 0
 

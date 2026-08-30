@@ -30,8 +30,11 @@ GLOBAL_POOL_TYPE = "global"
 TRADITIONAL_CATEGORIES = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
 
 ALL_GAME_TYPES = [
+    # "photo" is deliberately absent: the standalone Photo Challenge panel
+    # (PUT /api/photo-challenge/config) owns that games_game_config row, and
+    # leaving it here kept a second live write path to the same row.
     "wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama",
-    "traditional", "mfk", "compliment", "ffa", "photo", "ttl", "hottakes",
+    "traditional", "mfk", "compliment", "ffa", "ttl", "hottakes",
     "story", "fantasies", "risky_roller",
 ]
 

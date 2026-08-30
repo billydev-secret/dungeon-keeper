@@ -1374,6 +1374,15 @@ async def update_global(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    # booster_swatch_dir is bot-global (stored and read at guild 0), so only
+    # the primary guild's panel may write it — accepting it from any guild let
+    # a secondary guild's admin overwrite the shared value, and showed them
+    # the host filesystem path.
+    if body.booster_swatch_dir is not None and guild_id != ctx.guild_id:
+        raise HTTPException(
+            403, "booster_swatch_dir is bot-global — edit it from the primary guild"
+        )
+
     def _q():
         with ctx.open_db() as conn:
             _apply_config_fields(conn, guild_id, body, _GLOBAL_FIELDS)

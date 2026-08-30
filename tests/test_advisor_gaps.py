@@ -139,11 +139,14 @@ def test_scan_covers_every_registered_feature():
 
 
 def test_scan_orders_cheapest_win_first():
+    # greeting_watch is the ready-but-off fixture: qa used to be, but the QA
+    # Tracker deliberately lost its enable_key so gap detection stops nudging
+    # dev tooling (2026-08-29 registry-contract fix).
     conn = _conn([
         # welcome fully wired → configured
         ("welcome_channel_id", CH),
-        # qa wired but switched off → ready_but_off, should sort above partials
-        ("qa_channel_id", CH), ("qa_enabled", "0"),
+        # greeting watch wired but switched off → ready_but_off, sorts first
+        ("greeting_watch_channel_ids", CH), ("greeting_watch_enabled", "0"),
         # logging half done → partial
         ("log_channel_id", CH),
     ])
@@ -152,7 +155,7 @@ def test_scan_orders_cheapest_win_first():
     # ready_but_off must precede every partial, which precedes every unconfigured.
     assert statuses == sorted(statuses, key=ag.STATUS_ORDER.index)
     assert gaps[0].status == "ready_but_off"
-    assert gaps[0].feature.slug == "qa_rewards"
+    assert gaps[0].feature.slug == "greeting_watch"
 
 
 def test_scan_reads_legacy_guild_zero_values():
@@ -203,7 +206,8 @@ def test_report_names_keys_blurb_and_panel():
 
 
 def test_report_distinguishes_off_from_unbuilt():
-    conn = _conn([("qa_channel_id", CH), ("qa_enabled", "0")])
+    # See test_scan_orders_cheapest_win_first for why greeting_watch, not qa.
+    conn = _conn([("greeting_watch_channel_ids", CH), ("greeting_watch_enabled", "0")])
     text = ag.format_gap_report(ag.scan_guild(conn, 1))
     assert "switched OFF" in text
     assert "not set up at all" in text  # other features
