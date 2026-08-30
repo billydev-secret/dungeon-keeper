@@ -138,7 +138,6 @@ def test_pricing_hints_default_ratios_at_median_100():
     assert "price_text_room" not in hints
     assert "price_voice_room" not in hints
 
-
 def test_pricing_hints_scales_with_median():
     hints = metrics.pricing_hints(200.0, SETTINGS)
     assert hints["price_role_color"] == 100  # round(200 * 0.5)

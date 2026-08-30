@@ -94,13 +94,32 @@ async def admin_defaults_data(
 
     cfg = await run_query(_q)
     return {
+        # Snowflakes as strings: a bare JSON number over 2**53 loses its low
+        # digits in the browser and would be written back pointing at nothing.
         "config": {
             "default_enforcement": cfg.default_enforcement if cfg else "gradual",
+            "role_id": str(cfg.role_id) if cfg else "0",
+            "channel_id": str(cfg.channel_id) if cfg else "0",
         }
         if cfg
         else None,
         "enforcement_levels": ENFORCEMENT_LEVELS,
     }
+
+
+def _optional_snowflake(payload: dict, key: str) -> int | None | str:
+    """Read an optional id from the body. Returns the int, None when absent,
+    or the error message when it isn't a number."""
+    raw = payload.get(key)
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return f"{key} must be a number"
+    if value < 0:
+        return f"{key} must be a number"
+    return value
 
 
 @router.post("/defaults")
@@ -117,11 +136,24 @@ async def admin_defaults_save(
     ):
         return _err("invalid enforcement level")
 
+    # The two fields that switch the programme on at all: `/wellness setup`
+    # refuses without the opt-in role, and the scheduler posts neither the
+    # active list nor a milestone without the channel. 0 is a real value here
+    # — it is what "not set" looks like to both gates.
+    role_id = _optional_snowflake(payload, "role_id")
+    if isinstance(role_id, str):
+        return _err(role_id)
+    channel_id = _optional_snowflake(payload, "channel_id")
+    if isinstance(channel_id, str):
+        return _err(channel_id)
+
     def _write():
         with ctx.open_db() as conn:
             upsert_wellness_config(
                 conn,
                 guild_id,
+                role_id=role_id,
+                channel_id=channel_id,
                 default_enforcement=default_enforcement,
             )
 

@@ -91,3 +91,71 @@ def test_admin_pause_and_resume_known_user_ok(authed_client, fake_ctx):
     assert paused.json()["ok"] is True
     resumed = authed_client.post(f"/api/wellness/admin/users/{BIG_USER}/resume")
     assert resumed.json()["ok"] is True
+
+
+# ── the activation pair: opt-in role + announcement channel ──────────
+#
+# `/wellness setup` refuses with "An admin can configure it from the web
+# dashboard" until role_id is set, and the scheduler skips the active list and
+# the milestone posts until channel_id is. Nothing in the code ever wrote
+# either, so that message pointed at a control that did not exist and a fresh
+# guild could never switch the programme on.
+
+BIG_ROLE = 7123456789012345678
+
+
+def test_admin_defaults_saves_the_role_and_channel(authed_client, fake_ctx):
+    from bot_modules.services.wellness_service import get_wellness_config
+
+    resp = authed_client.post(
+        "/api/wellness/admin/defaults",
+        json={
+            "default_enforcement": "gentle",
+            "role_id": str(BIG_ROLE),
+            "channel_id": str(BIG_CHANNEL),
+        },
+    )
+    assert resp.status_code == 200 and resp.json()["ok"] is True
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = get_wellness_config(conn, fake_ctx.guild_id)
+    assert cfg is not None
+    assert cfg.role_id == BIG_ROLE
+    assert cfg.channel_id == BIG_CHANNEL
+    assert cfg.default_enforcement == "gentle"
+
+
+def test_admin_defaults_reports_the_role_and_channel_as_strings(
+    authed_client, fake_ctx
+):
+    authed_client.post(
+        "/api/wellness/admin/defaults",
+        json={"role_id": str(BIG_ROLE), "channel_id": str(BIG_CHANNEL)},
+    )
+    cfg = authed_client.get("/api/wellness/admin/defaults").json()["config"]
+    assert cfg["role_id"] == str(BIG_ROLE)
+    assert cfg["channel_id"] == str(BIG_CHANNEL)
+
+
+def test_admin_defaults_clears_the_pair_with_zero(authed_client, fake_ctx):
+    """0 is "not set" everywhere the gates read these, so it must be storable —
+    an admin has to be able to take the programme back off the air."""
+    from bot_modules.services.wellness_service import get_wellness_config
+
+    authed_client.post(
+        "/api/wellness/admin/defaults",
+        json={"role_id": str(BIG_ROLE), "channel_id": str(BIG_CHANNEL)},
+    )
+    authed_client.post(
+        "/api/wellness/admin/defaults", json={"role_id": "0", "channel_id": "0"}
+    )
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = get_wellness_config(conn, fake_ctx.guild_id)
+    assert cfg is not None and cfg.role_id == 0 and cfg.channel_id == 0
+
+
+def test_admin_defaults_rejects_a_non_numeric_id(authed_client):
+    resp = authed_client.post(
+        "/api/wellness/admin/defaults", json={"role_id": "not-a-snowflake"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["ok"] is False

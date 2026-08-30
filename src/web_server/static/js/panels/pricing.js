@@ -163,8 +163,7 @@ const EMOJI_FIELDS = [
 // QOTD, pin and theme queues have here.
 const ITEM_FIELDS = [
   ["shop_item_expire_days", "Order Review Window (days)", {
-    hint: "An order for a custom item that staff have neither delivered nor turned down within this many days refunds the buyer on its own and comes off the todo board. 0 leaves orders waiting forever. Only items that go on the mod todo list can wait — an item that gives a role is handed over instantly.",
-    max: 365,
+    hint: "An order for a custom item that staff have neither delivered nor turned down within this many days refunds the buyer on its own and comes off the todo board. 0 leaves orders waiting forever. Only items that go on the mod todo list can wait — an item that gives a role is handed over instantly.",    max: 365,
   }],
 ];
 
@@ -186,14 +185,12 @@ const AUCTION_FIELDS = [
   ["auction_max_duration_hours", "Longest Auction (hours)", {
     hint: "The most hours a moderator may run one auction for. 168 is a week. This is a ceiling on what they can type, not the length itself — they pick that when they start one.",
     min: 1,
-    max: 720,
-  }],
+    max: 720,  }],
 ];
 
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
-  ...QOTD_FIELDS, ...ITEM_FIELDS, ...AUCTION_FIELDS, ...DEMURRAGE_FIELDS,
-];
+  ...QOTD_FIELDS, ...ITEM_FIELDS, ...AUCTION_FIELDS, ...DEMURRAGE_FIELDS,];
 
 // Every numeric field is capped somewhere so a typo can't create a price no
 // member could ever pay; DEFAULT_MAX applies where the field has no natural
@@ -216,8 +213,8 @@ function fieldMin(opts) {
  *
  * Only the eight switchable shop lines have one, and their keys line up by
  * construction (`price_role_icon` -> `shop_role_icon_enabled`). Anything else
- * — rakes, sponsor prices, room prices — is priced but not switchable, and
- * returns null so it renders exactly as before.
+ * — rakes, sponsor prices, auction guard-rails — is priced but not switchable,
+ * and returns null so it renders exactly as before.
  */
 function saleKeyFor(key) {
   const SWITCHABLE = new Set([
@@ -372,8 +369,7 @@ function render(container, cfg, pricing) {
             The items themselves — what they cost, what buying one does, how many
             there are — are set up on <a href="#/economy-sinks">Shop &amp; Perks</a>,
             and the orders waiting on a person are worked from
-            <a href="#/shop-approvals">Approvals</a>.
-          </div>
+            <a href="#/shop-approvals">Approvals</a>.          </div>
         </div>
 
         <div class="card">
@@ -386,8 +382,7 @@ function render(container, cfg, pricing) {
             hands the prize over themselves. Members bid in the open, an outbid
             bidder is refunded straight away, and the winning bid is spent — so the
             auction is a sink. These four bound every auction; there is no on/off
-            switch because nothing happens until a moderator starts one.
-          </div>
+            switch because nothing happens until a moderator starts one.          </div>
         </div>
 
         <div style="display:flex; gap:8px; align-items:center;">

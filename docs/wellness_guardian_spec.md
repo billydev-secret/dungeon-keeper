@@ -6,16 +6,17 @@ A self-managed boundary tool. Members opt in, pick their own enforcement level, 
 
 ---
 
-## ⚠️ Activation gap (read first)
+## Activation (read first)
 
-At the code level, **there is no supported way to turn Wellness Guardian on for a guild.** The machinery is real and running, but it is gated on a config row that nothing writes:
+**Closed 2026-08-29.** Wellness is switched on for a guild from the dashboard, on the **Wellness Admin** panel's *Server Defaults* form:
 
-- `/wellness setup` refuses to run unless `wellness_config.role_id` is set, and points the user at the web dashboard.
-- **`/wellness-admin setup` does not exist** — there is no `/wellness-admin` slash command group anywhere. The member-facing "not set up" error strings (`wellness_cog.py:228,249,496`) now all point at the web dashboard rather than naming a phantom command.
-- The dashboard admin router (`/api/wellness/admin`) has **no create-role / create-category / provisioning endpoint**. Its only writer of config sets `default_enforcement` — never `role_id` or `channel_id`.
-- The only other writer of the config row is the background scheduler, which sets `active_list_message_id` only.
+- **Opt-In Role** → `wellness_config.role_id`. `/wellness setup` refuses to run until it is set, and its refusal ("An admin can configure it from the web dashboard") now names a control that exists.
+- **Wellness Channel** → `wellness_config.channel_id`. The scheduler posts neither the active-participants list nor a milestone celebration while it is 0.
+- Both go through `POST /api/wellness/admin/defaults` alongside `default_enforcement`, and are read back (as strings, for snowflake precision) from the matching GET. `0` remains a legal value in both boxes — it is what "not set" looks like to every gate, and clearing them is how an admin takes the programme back off the air.
 
-Net effect: unless a `wellness_config` row is seeded out-of-band (e.g. a manual DB edit), no member can opt in, so no enforcement, dashboard data, or loops have any subject to act on. **Provisioning is the single genuinely-missing piece** — see [Roadmap](#provisioning-admin-setup).
+What is still **not** built is *provisioning* in the original sense: nothing creates the role or the wellness category for you. An admin picks a role and a channel that already exist. `upsert_wellness_config`'s third writer remains the background scheduler, which sets `active_list_message_id` only. See [Roadmap](#provisioning-admin-setup) for the auto-create design that was never built.
+
+Before this, no code path wrote either field: a guild whose row had not been hand-seeded could never opt anybody in, and prod's second guild sat at `0/0` for exactly that reason.
 
 ---
 
@@ -96,7 +97,7 @@ Full CRUD, authenticated as the logged-in member. The Wellness nav section is ga
 | `GET /users`, `POST /users/{id}/pause`, `POST /users/{id}/resume` | List opted-in members; admin pause/resume a member |
 | `GET/POST /exempt`, `DELETE /exempt/{id}` | Manage the exempt-channel list |
 
-The admin panel does **not** provision the wellness role/category (see activation gap) and does not let admins create caps/blackouts on a member's behalf.
+The admin panel sets the opt-in role and wellness channel (see Activation) but does **not** create them, and does not let admins create caps/blackouts on a member's behalf.
 
 ### Data model (confirmed)
 
@@ -110,7 +111,7 @@ Everything below was in the original design spec. Some of the *behavior* here al
 
 ### Provisioning (`/wellness-admin setup`)
 
-The most important missing piece. Nothing creates the Wellness Guardian role or the wellness category/channels, and nothing writes `wellness_config.role_id` / `channel_id`. The original design assumed an admin provisioning step (a `/wellness-admin setup` command, since "retired" in favor of the dashboard) — but the dashboard replacement covers defaults/exempt/user-management and **never replaced provisioning**. Until a provisioning path exists (slash command or a dashboard "Set up wellness" button that creates the role + category and stores their ids), the whole feature is dormant.
+Partly closed. `wellness_config.role_id` / `channel_id` are now set from the dashboard (see Activation), but nothing *creates* the Wellness Guardian role or the wellness category/channels — an admin points the two settings at things that already exist. The original design assumed an admin provisioning step (a `/wellness-admin setup` command, since "retired" in favor of the dashboard) that would create the role + category and store their ids in one click. That auto-create step is still unbuilt; the dashboard controls that replaced it store ids an admin supplies.
 
 The original design also envisioned the wellness category being provisioned from the dashboard:
 
@@ -157,7 +158,7 @@ The original design placed all admin functionality in the **web Wellness panel**
 
 > *A short historical mapping from the retired `/wellness-admin X` commands to their dashboard equivalents lived here while admins migrated. It's now retained only in git history.*
 
-*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
+*Built today:* defaults (enforcement, opt-in role, wellness channel), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
 
 ### Onboarding (`/wellness setup`) — original 3-step design
 
