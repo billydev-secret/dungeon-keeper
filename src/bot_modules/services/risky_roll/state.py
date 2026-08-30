@@ -10,8 +10,6 @@ from .models import PendingQuestionState, PostedQuestionState, RiskyRollState
 if TYPE_CHECKING:
     from .store import StateStore
 
-DEFAULT_MIN_GAME_SECONDS = 1800
-
 store: StateStore | None = None  # set by RiskyRollCog.cog_load()
 
 # Set alongside ``store``. The no-contact gate reads the list directly on every

@@ -68,6 +68,9 @@ async def test_config_defaults_and_upsert(db):
     assert cfg["climb_duration"] == pytest.approx(25.0)
     assert cfg["min_players"] == 2
     assert cfg["max_players"] == 8
+    # lobby_timeout is a column with no reader — the stale-lobby sweep uses its
+    # own window — so get_config must not hand it out as a setting.
+    assert "lobby_timeout" not in cfg
     await chdb.upsert_config(db, GUILD, climb_duration=40.0, max_players=6)
     cfg2 = await chdb.get_config(db, GUILD)
     assert cfg2["climb_duration"] == pytest.approx(40.0)

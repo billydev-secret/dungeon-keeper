@@ -33,6 +33,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     load_econ_settings,
 )
+from bot_modules.games.utils.game_manager import check_game_enabled
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -442,6 +443,27 @@ class BaseGame(commands.Cog):
                 )
         return None
 
+    # ── Availability ──────────────────────────────────────────────────────────
+
+    async def _refuse_if_disabled(
+        self, interaction: discord.Interaction, guild_id: int
+    ) -> bool:
+        """True — with a refusal already sent — when this game is switched off.
+
+        The duel games had no off switch at all: the only gate on starting one
+        was the per-game channel allowlist, and an empty allowlist means "every
+        channel". Their panels now carry the same "Available on This Server"
+        toggle every other game has, stored in games_game_config under
+        ``GAME_KEY``. No row means enabled, so an untouched guild is unaffected.
+        """
+        if await check_game_enabled(self.db, self.GAME_KEY, guild_id):
+            return False
+        await interaction.response.send_message(
+            f"{self.GAME_DISPLAY_NAME} is switched off on this server.",
+            ephemeral=True,
+        )
+        return True
+
     # ── Rate limit ────────────────────────────────────────────────────────────
 
     def _challenge_limit(self, cfg: dict) -> int:
@@ -786,6 +808,9 @@ class BaseGame(commands.Cog):
         host = interaction.user  # type: ignore[assignment]
         guild: discord.Guild = interaction.guild
 
+        if await self._refuse_if_disabled(interaction, guild.id):
+            return
+
         cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
         allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
         if allowlist and interaction.channel_id not in allowlist:
@@ -870,7 +895,7 @@ class BaseGame(commands.Cog):
             stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line
         )
 
-        min_players, max_players, _timeout = await self.get_lobby_params(guild.id)
+        min_players, max_players = await self.get_lobby_params(guild.id)
         game_id = await self._db_create_lobby(
             guild_id=guild.id,
             channel_id=interaction.channel_id,  # type: ignore[arg-type]
@@ -914,7 +939,7 @@ class BaseGame(commands.Cog):
                 await interaction.response.send_message("You're already in.", ephemeral=True)
                 return
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-            min_players, max_players, _ = await self.get_lobby_params(game.guild_id)
+            min_players, max_players = await self.get_lobby_params(game.guild_id)
             if len(game.roster) >= max_players:
                 await interaction.response.send_message(
                     f"The lobby is full ({max_players}).", ephemeral=True
@@ -983,7 +1008,7 @@ class BaseGame(commands.Cog):
                 await interaction.response.send_message("You're not in this lobby.", ephemeral=True)
                 return
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-            min_players, max_players, _ = await self.get_lobby_params(game.guild_id)
+            min_players, max_players = await self.get_lobby_params(game.guild_id)
             refunded = await self._return_stake(game_id, uid)
             new_roster = [u for u in game.roster if u != uid]
             await self._db_set_state(
@@ -1038,7 +1063,7 @@ class BaseGame(commands.Cog):
                     "Only the host can start the game.", ephemeral=True
                 )
                 return
-            min_players, _max_players, _ = await self.get_lobby_params(game.guild_id)
+            min_players, _max_players = await self.get_lobby_params(game.guild_id)
             if len(game.roster) < min_players:
                 await interaction.response.send_message(
                     f"You need at least **{min_players}** players to start "
@@ -1535,8 +1560,8 @@ class BaseGame(commands.Cog):
         """Return open LOBBY games to re-attach views on cog_load. Duels: none."""
         return []
 
-    async def get_lobby_params(self, guild_id: int) -> tuple[int, int, float]:
-        """Return (min_players, max_players, lobby_timeout) for this guild."""
+    async def get_lobby_params(self, guild_id: int) -> tuple[int, int]:
+        """Return (min_players, max_players) for this guild."""
         raise NotImplementedError
 
     # ── Abstract game hooks (subclass must implement) ─────────────────────────

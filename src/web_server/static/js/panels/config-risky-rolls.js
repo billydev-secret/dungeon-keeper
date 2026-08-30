@@ -1,3 +1,4 @@
+import { mountGamePanel } from "./games-panel-shared.js";
 import {
   loadConfig,
   loadRoles,
@@ -24,6 +25,7 @@ export function mount(container) {
           <h2>Risky Roller</h2>
           <div class="subtitle">A dice game members start with <code>/risky start</code></div>
         </header>
+        <div data-region="status"></div>
         ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
@@ -64,6 +66,15 @@ export function mount(container) {
         </form>
       </div>
     `;
+
+    mountGamePanel(container.querySelector('[data-region="status"]'), {
+      gameType: "risky_roll",
+      gameName: "Risky Rolls",
+      bare: true,
+      statusLabel: "Include in Scheduled Games",
+      statusHint: "When off, a scheduled Risky Rolls round is skipped when its time"
+        + " comes round. Members can still open a round themselves with /risky start.",
+    });
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");

@@ -20,7 +20,7 @@ export const TIER_EMOJI  = { 1: "\u{1F338}", 2: "\u{1F336}\uFE0F", 3: "\u{1F525}
  * shell can mount this into one of its sections (see panels/pen-pals.js).
  * Everything else behaves identically.
  */
-export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null, bare = false }) {
+export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBank = false, hasStatus = true, optSchema = [], bankHint = "", bankCategories = null, bare = false, statusHint = "", statusLabel = "" }) {
   function ctrl(name) { return container.querySelector('[data-ctrl="' + name + '"]'); }
   function region(name) { return container.querySelector('[data-region="' + name + '"]'); }
 
@@ -66,9 +66,10 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
       '<div style="margin-bottom:' + (optSchema.length ? "16px" : "12px") + ';">' +
       '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">' +
       '<input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />' +
-      "<span>Available on This Server</span></label>" +
-      '<div class="field-hint">When off, ' + esc(gameName) + " won't start and its commands stay hidden. " +
-      "Existing rounds finish normally.</div></div>" +
+      "<span>" + esc(statusLabel || "Available on This Server") + "</span></label>" +
+      '<div class="field-hint">' + (statusHint ? esc(statusHint) : "When off, " + esc(gameName) +
+        " won't start and its commands stay hidden. Existing rounds finish normally.") +
+      "</div></div>" +
       optFieldsHtml +
       '<div style="display:flex;align-items:center;gap:8px;margin-top:4px;">' +
       '<button class="btn btn-primary" data-action="save-config">Save</button>' +

@@ -29,15 +29,28 @@ def _clean(text: str) -> str:
     return unicodedata.normalize("NFKC", text).strip()
 
 
+def _denylist_hit(cleaned: str, denylist: list[str] | None) -> bool:
+    """True when *cleaned* trips the built-in denylist or a configured word.
+
+    The built-in entries above are regexes. The configured extras are not:
+    they come from the "Extra Banned Words" box on each duel game's dashboard
+    panel, so they are matched as plain case-insensitive substrings. Treating
+    admin-typed text as a regex would make a word like ``c++`` either explode
+    (``re.error``) or silently never match — a banned word that isn't banned.
+    """
+    if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in DEFAULT_NICK_DENYLIST):
+        return True
+    lowered = cleaned.lower()
+    return any(word.strip().lower() in lowered for word in (denylist or []) if word.strip())
+
+
 def contains_disallowed_content(text: str, denylist: list[str] | None = None) -> bool:
     """True if the cleaned text matches the slur/abuse denylist.
 
     Reusable for free-text fields beyond nicknames/stakes (e.g. game question
     prompts, confessions) so they share one guard.
     """
-    cleaned = _clean(text)
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    return any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in effective_denylist)
+    return _denylist_hit(_clean(text), denylist)
 
 
 def validate_nickname(
@@ -56,10 +69,8 @@ def validate_nickname(
         return FilterResult(
             ok=False, value=raw, reason=f"Nickname must be {max_length} characters or fewer."
         )
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    for pattern in effective_denylist:
-        if re.search(pattern, cleaned, re.IGNORECASE):
-            return FilterResult(ok=False, value=raw, reason="Nickname contains disallowed content.")
+    if _denylist_hit(cleaned, denylist):
+        return FilterResult(ok=False, value=raw, reason="Nickname contains disallowed content.")
     if _DANGEROUS_PREFIX.search(cleaned):
         return FilterResult(
             ok=False, value=raw, reason="Nickname cannot start with @, #, or /."
@@ -95,12 +106,10 @@ def validate_stakes(
         return FilterResult(
             ok=False, value=raw, reason=f"Stakes must be {max_length} characters or fewer."
         )
-    effective_denylist = list(DEFAULT_NICK_DENYLIST) + (denylist or [])
-    for pattern in effective_denylist:
-        if re.search(pattern, cleaned, re.IGNORECASE):
-            return FilterResult(
-                ok=False, value=raw, reason="Stakes text contains disallowed content."
-            )
+    if _denylist_hit(cleaned, denylist):
+        return FilterResult(
+            ok=False, value=raw, reason="Stakes text contains disallowed content."
+        )
     return FilterResult(ok=True, value=cleaned, reason=None)
 
 

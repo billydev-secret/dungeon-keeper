@@ -694,6 +694,10 @@ _DUEL_SHARED_DEFAULTS: dict = {
     "cooldown_hours": 48,
     "sentence_hours": 24,
     "channel_allowlist": "[]",
+    # Extra banned words on top of the bot's built-in nickname denylist. The
+    # bot has always enforced these on nicknames and stakes text; until now
+    # nothing could set them, so every guild ran on the built-in list alone.
+    "nick_denylist": "[]",
     "max_nick_length": 32,
     "max_stakes_length": 200,
     # 0 = no limit. Was a hardcoded 3 in the bot, which is a spam brake set at
@@ -787,6 +791,7 @@ def _duel_game_section(conn, guild_id: int, game_key: str) -> dict:
     out["channel_allowlist"] = [
         str(i) for i in json.loads(out["channel_allowlist"] or "[]")
     ]
+    out["nick_denylist"] = [str(w) for w in json.loads(out["nick_denylist"] or "[]")]
     out.update(_duel_game_table_row(conn, guild_id, spec["table"], spec["defaults"]))
     return out
 
@@ -805,6 +810,9 @@ def _duel_shared_updates(body) -> dict:
     allowlist = _clamp_channel_allowlist(body.channel_allowlist)
     if allowlist is not None:
         out["channel_allowlist"] = allowlist
+    denylist = _clamp_nick_denylist(body.nick_denylist)
+    if denylist is not None:
+        out["nick_denylist"] = denylist
     if body.max_nick_length is not None:
         out["max_nick_length"] = max(1, min(32, body.max_nick_length))
     if body.max_stakes_length is not None:
@@ -2495,6 +2503,24 @@ def _clamp_channel_allowlist(values: list[str] | None) -> str | None:
     return json.dumps(sorted({int(v) for v in values if str(v).strip()}))
 
 
+# Matched case-insensitively as substrings by duels/filters.py, so they are
+# stored lowercased and de-duplicated. The 40-entry / 64-character bounds are
+# sanity limits: this is a small list of words, not a content filter.
+_MAX_DENYLIST_WORDS = 40
+_MAX_DENYLIST_WORD_LEN = 64
+
+
+def _clamp_nick_denylist(values: list[str] | None) -> str | None:
+    if values is None:
+        return None
+    words = []
+    for raw in values:
+        word = str(raw).strip().lower()[:_MAX_DENYLIST_WORD_LEN]
+        if word and word not in words:
+            words.append(word)
+    return json.dumps(words[:_MAX_DENYLIST_WORDS])
+
+
 class DuelSharedConfigUpdate(BaseModel):
     """The knobs every duel game shares. Enforced for all six in
     bot_modules/duels/base_duel.py and base_game.py."""
@@ -2502,6 +2528,7 @@ class DuelSharedConfigUpdate(BaseModel):
     cooldown_hours: int | None = None
     sentence_hours: int | None = None
     channel_allowlist: list[str] | None = None
+    nick_denylist: list[str] | None = None
     max_nick_length: int | None = None
     max_stakes_length: int | None = None
     challenge_limit_per_hour: int | None = None

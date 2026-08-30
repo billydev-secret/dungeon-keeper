@@ -1,23 +1,10 @@
-import { api } from "../api.js";
+import { esc } from "../api.js";
+import { mountGamePanel } from "./games-panel-shared.js";
 import {
   loadConfig, loadChannels, mountChannelMultiPicker, apiPut, showStatus,
   guardForm, renderMetaWarning,
   mountAsync,
 } from "../config-helpers.js";
-
-// Party games only run in the channels allow-listed on Games › Global Config.
-async function gameChannelsBanner() {
-  try {
-    const data = await api("/api/games/config/channels");
-    if ((data.channels || []).length) return "";
-  } catch (_) {
-    return "";
-  }
-  return `<div class="empty" role="status" style="margin-bottom:12px;">
-    No channels are allowed to host party games yet, so this game cannot be played
-    anywhere. Add one under <a href="#/games-config">Games › Global Config</a> —
-    the settings below start applying as soon as you do.</div>`;
-}
 
 const numField = (name, label, value, hint, { min, max, step = "1" }) => `
   <div class="field">
@@ -31,9 +18,7 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
 
   return mountAsync(container, async () => {
-    const [config, channels, banner] = await Promise.all([
-      loadConfig(), loadChannels(), gameChannelsBanner(),
-    ]);
+    const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
     // `|| {}`: a config payload missing this section (a fresh guild, a partial
     // response) used to throw on the first cfg.<field> read, and the panel hung
     // on "Loading configuration…" forever. Undefined fields render blank instead.
@@ -45,7 +30,7 @@ export function mount(container) {
           <h2>Hot Potato (Group)</h2>
           <div class="subtitle">A whole lobby passes the ticking bomb around — whoever is holding it when it goes off is out</div>
         </header>
-        ${banner}
+        <div data-region="status"></div>
         ${renderMetaWarning()}
         <form class="form form-cards" data-form>
           <div class="card">
@@ -78,6 +63,15 @@ export function mount(container) {
               { min: 1, max: 32 })}
             ${numField("max_stakes_length", "Longest Stakes Text (characters)", cfg.max_stakes_length,
               "How much a host may write when describing what is at stake.", { min: 1, max: 2000 })}
+            <div class="field">
+              <label for="gc-nick_denylist">Extra Banned Words</label>
+              <input type="text" name="nick_denylist" id="gc-nick_denylist"
+                value="${esc((cfg.nick_denylist || []).join(", "))}"
+                style="width:100%;max-width:420px;box-sizing:border-box;" />
+              <div class="field-hint">Comma-separated. A nickname or stakes text
+                containing one of these is refused, on top of the slurs the bot always
+                blocks. Capitals are ignored.</div>
+            </div>
           </div>
 
           <div class="card">
@@ -92,7 +86,9 @@ export function mount(container) {
               <label>Allowed Channels</label>
               <div data-picker="channel_allowlist"></div>
               <div class="field-hint">Restrict this game to these channels. Leave the
-                list empty to allow it in every channel that may host party games.</div>
+                list empty to allow it anywhere. This list is the only channel rule
+                for this game &mdash; the allowed-channel list on Games &rsaquo; Global
+                Config governs the question-bank games, not this one.</div>
             </div>
           </div>
 
@@ -103,6 +99,13 @@ export function mount(container) {
         </form>
       </div>
     `;
+
+    mountGamePanel(container.querySelector('[data-region="status"]'), {
+      gameType: "hot_potato_group",
+      gameName: "Hot Potato (Group)",
+      bare: true,
+      statusHint: "When off, nobody can start a new Hot Potato (Group) game. Games already running finish normally.",
+    });
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");
@@ -130,6 +133,8 @@ export function mount(container) {
       e.preventDefault();
       const fd = new FormData(form);
       const payload = { channel_allowlist: allowlist.getValues() };
+      payload.nick_denylist = String(fd.get("nick_denylist") || "")
+        .split(",").map(s => s.trim()).filter(Boolean);
       for (const [name, label, min, max, isFloat] of NUMS) {
         const n = isFloat ? parseFloat(fd.get(name)) : parseInt(fd.get(name), 10);
         if (!Number.isFinite(n) || n < min || n > max) {

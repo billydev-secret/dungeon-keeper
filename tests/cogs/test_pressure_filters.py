@@ -65,9 +65,22 @@ def test_nickname_denylist_default_hit():
 
 
 def test_nickname_denylist_custom_hit():
-    r = validate_nickname("badword", max_length=32, denylist=[r"\bbadword\b"])
+    r = validate_nickname("badword", max_length=32, denylist=["badword"])
     assert not r.ok
     assert "disallowed" in r.reason.lower()
+
+
+def test_nickname_denylist_custom_words_are_literal_not_regex():
+    """The extra words come from an admin typing in a dashboard box.
+
+    They are matched as case-insensitive substrings: a word carrying regex
+    punctuation ("c++") has to ban that literal text, not blow up or quietly
+    never match.
+    """
+    assert not validate_nickname("totally c++ fine", max_length=32, denylist=["c++"]).ok
+    assert validate_nickname("plain", max_length=32, denylist=["c++"]).ok
+    # ...and a regex a previous version would have honoured is now just text.
+    assert validate_nickname("badword", max_length=32, denylist=[r"\bnope\b"]).ok
 
 
 def test_nickname_at_prefix_rejected():
