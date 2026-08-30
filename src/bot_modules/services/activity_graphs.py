@@ -832,6 +832,7 @@ def query_activity_overlay(
     compare_periods: int = 12,
     same_weekday: bool = False,
     user_id: int | None = None,
+    include_user_ids: set[int] | None = None,
     channel_id: int | None = None,
     exclude_user_ids: set[int] | None = None,
     exclude_channel_ids: set[int] | None = None,
@@ -856,6 +857,12 @@ def query_activity_overlay(
     today rather than every day, so a Tuesday is read against Tuesdays. Weekday
     seasonality dominates a server's rhythm, and a band mixing weekends into a
     weekday's history mostly measures the weekend.
+
+    ``include_user_ids`` narrows to a *group* of members, where ``user_id``
+    narrows to one. A falsy value (None or an empty set) applies no filter at
+    all, so a caller holding an empty group must not call rather than expect
+    zeros: an empty ``IN ()`` is a SQL error, and silently widening to the
+    whole guild would draw the server's own line and label it the group's.
     """
     period_secs = _OVERLAY_PERIOD_SECS[period]
     n_buckets = period_secs // 3600
@@ -899,6 +906,14 @@ def query_activity_overlay(
     if user_id is not None:
         where += " AND user_id = ?"
         params.append(user_id)
+    if include_user_ids:
+        # The set-valued counterpart of ``user_id``: restrict to a *group*
+        # rather than one member. Sorted so the SQL text and its params are
+        # stable across calls with the same group, which keeps the statement
+        # cache warm and makes a failing test's diff readable.
+        ph = ",".join("?" * len(include_user_ids))
+        where += f" AND user_id IN ({ph})"
+        params.extend(sorted(include_user_ids))
     if channel_id is not None:
         where += " AND channel_id = ?"
         params.append(channel_id)

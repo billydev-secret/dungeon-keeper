@@ -28,6 +28,7 @@ from bot_modules.services.health_metrics import (
     compute_social_graph,
 )
 from bot_modules.services.health_service import cache_key, get_cached, set_cached
+from bot_modules.services.mod_coverage_service import compute_mod_coverage
 from bot_modules.services.message_store import get_known_channels_bulk, get_known_users_bulk
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
@@ -44,7 +45,7 @@ def _guild_extras(ctx, guild):
     """Extract live guild data needed by compute functions.
 
     ``degraded`` reports that the live member list ``mod_ids`` /
-    ``recent_joins`` are derived from wasn't there to read: the bot is
+    ``msg_mod_ids`` / ``recent_joins`` are derived from wasn't there to read: the bot is
     mid-startup, the gateway's member cache hasn't been chunked yet, or the bot
     isn't in this guild at all. Any guild that exists has at least its owner, so
     "no non-bot member visible" is the cache being cold, not a real answer.
@@ -59,6 +60,7 @@ def _guild_extras(ctx, guild):
     voice_active = 0
     nsfw_ids: list[int] = []
     mod_ids: list[int] = []
+    msg_mod_ids: list[int] = []
     recent_joins: dict[int, float] = {}
     humans_seen = 0
 
@@ -78,6 +80,15 @@ def _guild_extras(ctx, guild):
                 or perms.ban_members
             ):
                 mod_ids.append(m.id)
+            # A second, wider circle: everyone who can delete someone else's
+            # message. That is the practical floor of "is a moderator watching
+            # this channel right now" — the coverage report's population — and
+            # it is deliberately not `mod_ids`, which is the narrower set of
+            # people who can kick, ban or reconfigure the server. Discord
+            # grants Administrator every permission implicitly, so admins fall
+            # in here without being named.
+            if perms.manage_messages:
+                msg_mod_ids.append(m.id)
             if m.joined_at:
                 age = time.time() - m.joined_at.timestamp()
                 if age < 90 * 86400:
@@ -88,6 +99,7 @@ def _guild_extras(ctx, guild):
         "voice_active": voice_active,
         "nsfw_ids": nsfw_ids,
         "mod_ids": mod_ids,
+        "msg_mod_ids": msg_mod_ids,
         "recent_joins": recent_joins,
         "degraded": guild is None or humans_seen == 0,
     }
@@ -947,6 +959,47 @@ async def health_mod_workload(
             names = _resolve_user_names(conn, guild, guild_id, user_ids)
             for m in data["mod_actions"]:
                 m["user_name"] = names.get(int(m["user_id"]), "")
+            return data
+
+    return await run_query(_q)
+
+
+@router.get("/health/mod-coverage")
+async def health_mod_coverage(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Is a moderator around when the server is busy?
+
+    Uses ``msg_mod_ids`` — everyone who can delete a message — rather than the
+    narrower ``mod_ids`` the workload report counts. Presence is the question,
+    and someone who can only delete a message is still present.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    extras = _guild_extras(ctx, guild)
+
+    key = _deep_key("mod_coverage")
+
+    def _q():
+        with ctx.open_db() as conn:
+            data = get_cached(conn, guild_id, key)
+            if data is None:
+                data = compute_mod_coverage(
+                    conn,
+                    guild_id,
+                    mod_ids=extras["msg_mod_ids"],
+                    utc_offset_hours=get_tz_offset_hours(conn, guild_id),
+                )
+                # A cold gateway cache reports zero moderators, which computes
+                # as "nobody covers anything". Caching that would serve a
+                # startup artefact as fact for the next quarter of an hour.
+                _cache_unless_degraded(
+                    conn, guild_id, key, data, degraded=extras["degraded"]
+                )
+            data["degraded"] = extras["degraded"]
             return data
 
     return await run_query(_q)

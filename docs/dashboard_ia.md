@@ -82,6 +82,21 @@ decided in `docs/plans/dashboard-config-ia.md`:
   "Moderation" → "Moderation & Privacy" (it holds `message_storage_level`,
   the biggest privacy dial). Every old label survives as a search keyword.
 
+**Mod Coverage (2026-08-30)** — `mod-coverage`, added under Reports →
+Moderation as a *third* moderator report rather than absorbing the two that
+were already there. That was a deliberate call, taken against the usual
+instinct after IA3: Mod Workload counts moderation *actions*, and this server
+records roughly 66 of them a month, so a report built on those counts is
+nearly signal-free. Coverage asks a question the message archive can actually
+answer — when is the server busy, and is a moderator talking then — and it
+uses a **wider** moderator population (anyone with Manage Messages) than the
+kick/ban/manage-guild set the other two count. The two populations are
+`_guild_extras`' `msg_mod_ids` and `mod_ids` respectively; they are not
+expected to agree, and neither is a bug in the other.
+
+Consolidating the three remains open. If it happens, Mod Workload is the one
+to fold in; Mod Engagement measures something genuinely separate.
+
 ## Naming: label-vs-id drift
 
 Ids are frozen (deep links, `help:` mappings and usage telemetry key off

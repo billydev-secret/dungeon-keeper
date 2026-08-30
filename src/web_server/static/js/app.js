@@ -55,6 +55,7 @@ const SECTIONS = [
       { heading: "Moderation", items: [
         { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js" },
+        { id: "mod-coverage",           label: "Mod Coverage",       module: "./panels/mod-coverage.js", keywords: "moderator presence coverage gaps overnight rota busy hours", related: ["activity"] },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
         { id: "health-mod-engagement",  label: "Mod Engagement",     module: "./panels/health-mod-engagement.js" },
       ]},

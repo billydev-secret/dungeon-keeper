@@ -1,7 +1,7 @@
 import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import {
-  makeBarChart, renderChartLegend, renderChartTable,
+  makeBarChart, makeOverlayChart, renderChartLegend, renderChartTable,
   CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, CHART_SURFACE, ROLE_COLORS,
 } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
@@ -63,17 +63,6 @@ function parseCompare(value) {
   const [basis, n] = String(value || "").split(":");
   return { basis: basis === BASIS_WEEKDAY ? BASIS_WEEKDAY : BASIS_ALL, n: Number(n) || 0 };
 }
-
-// Two identities, not N: collapsing history into one envelope means this chart
-// never needs a twelve-step ramp. Amber is the subject, teal the comparison —
-// validated as a categorical pair against CHART_SURFACE (all six checks pass,
-// worst adjacent dE 13.9 protan / 19.2 normal, both >= 3:1 on the surface).
-// A neutral-grey band was rejected: it fails the chroma floor and would have
-// read as a gridline rather than as data.
-const OVERLAY_NOW  = CHART_BAR;      // ROLE_COLORS[0], amber
-const OVERLAY_PAST = ROLE_COLORS[2]; // teal
-// Dashed median + solid current, so identity never rests on colour alone.
-const OVERLAY_BAND_FILL = OVERLAY_PAST + "26";
 
 const MODES = [
   { value: "messages", label: "Messages" },
@@ -448,7 +437,7 @@ export function mount(container, initialParams) {
 
     captionEl.textContent = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
 
-    chart = _makeOverlayChart(canvas, data, {
+    chart = makeOverlayChart(canvas, data, {
       subject, typical, isWeek, currentTotal, typicalToDate,
     });
 
@@ -614,132 +603,6 @@ function _makeMembersChart(canvas, labels, counts) {
       scales: {
         x: { ticks: { color: CHART_TEXT, maxRotation: 45 }, grid: { color: CHART_GRID } },
         y: { ticks: { color: CHART_TEXT, precision: 0 }, grid: { color: CHART_GRID }, beginAtZero: true },
-      },
-    },
-  });
-}
-
-
-/**
- * The band chart: this period against a p25–p75 envelope over the last N.
- *
- * The envelope is a *pair* of line datasets with a fill between them, which is
- * how Chart.js draws a band. Only the upper one carries the legend entry — the
- * lower is scaffolding and opts out via `skipLegend`, so nobody can toggle off
- * half a band and be left with a stray line.
- *
- * Draw order matters: the band goes in first so the two lines sit on top of it
- * rather than under a translucent wash.
- */
-function _makeOverlayChart(
-  canvas, data, { subject, typical, isWeek, currentTotal, typicalToDate }
-) {
-  const hasBand = (data.band_mid || []).length > 0;
-
-  const datasets = [];
-  if (hasBand) {
-    datasets.push({
-      label: `${typical} (p25–p75)`,
-      data: data.band_high,
-      borderColor: "transparent",
-      backgroundColor: OVERLAY_BAND_FILL,
-      borderWidth: 0,
-      pointRadius: 0,
-      pointHitRadius: 0,
-      fill: "+1",
-      tension: 0.2,
-      // A spread is not a quantity you can add up.
-      legendValue: null,
-      order: 3,
-    });
-    datasets.push({
-      label: `${typical} p25`,
-      data: data.band_low,
-      borderColor: "transparent",
-      backgroundColor: "transparent",
-      borderWidth: 0,
-      pointRadius: 0,
-      pointHitRadius: 0,
-      fill: false,
-      tension: 0.2,
-      skipLegend: true,
-      order: 3,
-    });
-    datasets.push({
-      label: `${typical} (median)`,
-      data: data.band_mid,
-      borderColor: OVERLAY_PAST,
-      backgroundColor: "transparent",
-      // Dashed, so the two lines stay distinguishable without colour.
-      borderDash: [6, 4],
-      borderWidth: 2,
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      tension: 0.2,
-      legendValue: typicalToDate,
-      order: 2,
-    });
-  }
-  datasets.push({
-    label: `${subject} so far`,
-    data: data.counts,
-    borderColor: OVERLAY_NOW,
-    backgroundColor: "transparent",
-    borderWidth: 2,
-    pointRadius: 0,
-    pointHoverRadius: 4,
-    tension: 0.2,
-    // The current period stops at the hour we are in. Never bridge the gap —
-    // a line drawn across unlived hours is a claim about the future.
-    spanGaps: false,
-    legendValue: currentTotal,
-    order: 1,
-  });
-
-  return new Chart(canvas.getContext("2d"), {
-    type: "line",
-    data: { labels: data.labels, datasets },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        // Both drawn in HTML by the caller — see the caption and legend hosts.
-        title: { display: false },
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            // 168 ticks cannot all be shown, so the tooltip is where the exact
-            // hour lives.
-            title: (items) => data.labels[items[0].dataIndex] || "",
-          },
-        },
-      },
-      scales: {
-        x: {
-          ticks: {
-            color: CHART_TEXT,
-            maxRotation: 0,
-            autoSkip: false,
-            // A tick per day across a week, every third hour across a day —
-            // 168 labels would be a grey smear.
-            callback(value, index) {
-              if (isWeek) {
-                return index % 24 === 0
-                  ? (data.labels[index] || "").split(" ")[0]
-                  : "";
-              }
-              return index % 3 === 0 ? data.labels[index] : "";
-            },
-          },
-          grid: { color: CHART_GRID },
-        },
-        y: {
-          ticks: { color: CHART_TEXT },
-          grid: { color: CHART_GRID },
-          beginAtZero: true,
-          title: { display: true, text: data.y_label, color: CHART_TEXT },
-        },
       },
     },
   });
