@@ -1,6 +1,8 @@
 """Unit tests for pressure_cooker/filters.py — pure logic, no Discord."""
 from __future__ import annotations
 
+import pytest
+
 from bot_modules.duels.filters import (
     WAGER_STAKES_TEXT,
     contains_disallowed_content,
@@ -73,7 +75,7 @@ def test_nickname_denylist_custom_hit():
 def test_nickname_denylist_custom_words_are_literal_not_regex():
     """The extra words come from an admin typing in a dashboard box.
 
-    They are matched as case-insensitive substrings: a word carrying regex
+    They are matched literally and case-insensitively: a word carrying regex
     punctuation ("c++") has to ban that literal text, not blow up or quietly
     never match.
     """
@@ -81,6 +83,46 @@ def test_nickname_denylist_custom_words_are_literal_not_regex():
     assert validate_nickname("plain", max_length=32, denylist=["c++"]).ok
     # ...and a regex a previous version would have honoured is now just text.
     assert validate_nickname("badword", max_length=32, denylist=[r"\bnope\b"]).ok
+
+
+@pytest.mark.parametrize(
+    ("text", "banned"),
+    [
+        ("class of 2026", "ass"),          # the classic false positive
+        ("Cassandra", "ass"),
+        ("hello there", "hell"),
+        ("Michelle", "hell"),
+        ("grasshopper", "ass"),
+    ],
+)
+def test_nickname_denylist_custom_words_match_whole_words_only(text, banned):
+    """A short banned word must not swallow the longer words it sits inside."""
+    assert validate_nickname(text, max_length=32, denylist=[banned]).ok
+
+
+@pytest.mark.parametrize(
+    ("text", "banned"),
+    [
+        ("ass", "ass"),
+        ("total ass hat", "ass"),
+        ("ASS-hat", "ass"),           # a non-letter neighbour is still a boundary
+        ("go to hell", "hell"),
+        ("banned phrase here", "banned phrase"),
+    ],
+)
+def test_nickname_denylist_custom_words_still_catch_the_real_use(text, banned):
+    assert not validate_nickname(text, max_length=32, denylist=[banned]).ok
+
+
+def test_free_text_guard_shares_the_whole_word_rule():
+    """Guess Who prompts and Risky Roll questions run through the same helper."""
+    assert contains_disallowed_content("what a classy dessert", denylist=["ass"]) is False
+    assert contains_disallowed_content("don't be an ass", denylist=["ass"]) is True
+
+
+def test_stakes_denylist_custom_words_match_whole_words_only():
+    assert validate_stakes("loser buys the class a coffee", denylist=["ass"]).ok
+    assert not validate_stakes("loser is an ass", denylist=["ass"]).ok
 
 
 def test_nickname_at_prefix_rejected():

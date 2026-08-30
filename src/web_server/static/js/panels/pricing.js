@@ -185,12 +185,14 @@ const AUCTION_FIELDS = [
   ["auction_max_duration_hours", "Longest Auction (hours)", {
     hint: "The most hours a moderator may run one auction for. 168 is a week. This is a ceiling on what they can type, not the length itself — they pick that when they start one.",
     min: 1,
-    max: 720,  }],
+    max: 720,
+  }],
 ];
 
 const ALL_NUM_FIELDS = [
   ...PRICE_FIELDS, ...CONSUMABLE_FIELDS, ...EMOJI_FIELDS, ...RAFFLE_FIELDS,
-  ...QOTD_FIELDS, ...ITEM_FIELDS, ...AUCTION_FIELDS, ...DEMURRAGE_FIELDS,];
+  ...QOTD_FIELDS, ...ITEM_FIELDS, ...AUCTION_FIELDS, ...DEMURRAGE_FIELDS,
+];
 
 // Every numeric field is capped somewhere so a typo can't create a price no
 // member could ever pay; DEFAULT_MAX applies where the field has no natural
@@ -369,7 +371,8 @@ function render(container, cfg, pricing) {
             The items themselves — what they cost, what buying one does, how many
             there are — are set up on <a href="#/economy-sinks">Shop &amp; Perks</a>,
             and the orders waiting on a person are worked from
-            <a href="#/shop-approvals">Approvals</a>.          </div>
+            <a href="#/shop-approvals">Approvals</a>.
+          </div>
         </div>
 
         <div class="card">
@@ -382,7 +385,8 @@ function render(container, cfg, pricing) {
             hands the prize over themselves. Members bid in the open, an outbid
             bidder is refunded straight away, and the winning bid is spent — so the
             auction is a sink. These four bound every auction; there is no on/off
-            switch because nothing happens until a moderator starts one.          </div>
+            switch because nothing happens until a moderator starts one.
+          </div>
         </div>
 
         <div style="display:flex; gap:8px; align-items:center;">

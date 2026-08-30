@@ -202,7 +202,8 @@ class EconSettings:
     # goal (docs/plans/monthly-community-quests.md), so there is no monthly
     # personal board to size: the draw stopped reading it and the leaderboard's
     # summary row can never render one. Stored `econ_quest_board_monthly` rows
-    # are ignored by the loader.    # Community-weekly beat sheets (kickoff / tier crossed / final-24h /
+    # are ignored by the loader.
+    # Community-weekly beat sheets (kickoff / tier crossed / final-24h /
     # resolution) DM this member so they can host the event in their own
     # voice — the bot posts nothing publicly (2026-07-18 decision). 0 =
     # fall back to the guild owner.
@@ -364,7 +365,8 @@ class EconSettings:
     # private-rooms stage that was never built. Nothing could ever be bought
     # with them, so they were dropped rather than left advertising rentals
     # nobody can rent. Stored `econ_price_*_room` rows are simply ignored by
-    # the loader — no migration, no product decision reversed.    # Custom shop items (docs/plans/economy-shop-items.md): admin-defined
+    # the loader — no migration, no product decision reversed.
+    # Custom shop items (docs/plans/economy-shop-items.md): admin-defined
     # items sold beside the built-in perks. A manual item escrows the price
     # and files a todo; this is how long that order waits for staff before the
     # member gets their coins back (the emoji/QOTD sponsor sweep pattern).

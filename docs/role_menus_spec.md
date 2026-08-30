@@ -99,6 +99,14 @@ publish time, so it also covers menus published before the grant existed. The
 grant's *Who Can Hand This Out* keeper list is not consulted — that governs
 handing the role to someone else, not self-service.
 
+On a **dropdown** menu the gate is applied per choice, not to the submission:
+the gated picks are dropped and everything else in the selection — the other
+roles added, and the roles the member deselected — still applies, with the
+"you need @X first" note leading the confirmation. A gate that cancelled four
+unrelated picks and named one prerequisite read as a broken menu. The
+fail-closed case is the exception: a *deleted* required role refuses the whole
+click and alerts the mods, because that menu is genuinely misconfigured.
+
 Limit: **25 choices per menu** (platform ceiling). The editor counts down and blocks past the cap. Need more? Make a second menu.
 
 ### 3.3 Modes

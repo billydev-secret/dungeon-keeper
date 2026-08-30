@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -357,16 +358,15 @@ def _error_text(code: str, menu: dict) -> str:
     return MSG_BROKEN
 
 
-async def _clears_grant_prerequisites(
+async def _prerequisite_block(
     interaction: discord.Interaction,
     ctx: "AppContext",
     guild: discord.Guild,
     member: discord.Member,
     menu: dict,
     outcome: Outcome,
-) -> bool:
-    """False (having replied) when a role being added is a grant role whose
-    *Role Required First* the member doesn't hold.
+) -> tuple[set[int], str] | None:
+    """Which of ``outcome.adds`` are gated, and the note explaining why.
 
     A menu button is a second door to a role that ``/grant`` gates — and the
     gate is the point (the production case is Member behind verification).
@@ -374,11 +374,22 @@ async def _clears_grant_prerequisites(
     live here, on the click, where it also survives a grant configured *after*
     the menu was published. Same rules as ``/grant``: fails closed when the
     required role has been deleted, and admins override.
+
+    Only the gated ids come back, so the caller drops those and applies the
+    rest: on a multi-select, one gated pick used to cancel every *other* add
+    and every implied remove with it, while the reply named a single
+    prerequisite — which reads as a broken menu rather than as a gate.
+
+    ``None`` means the click is refused outright (having replied): a required
+    role has been deleted, so the gate is unsatisfiable and that is a broken
+    menu the mods need to hear about, not something to route around.
     """
     grant_roles = ctx.guild_config(guild.id).grant_roles
     if not grant_roles:
-        return True
+        return set(), ""
     actor_is_admin = ctx.is_admin(interaction)
+    blocked: set[int] = set()
+    needed: list[str] = []
     for rid in outcome.adds:
         for req_id in prerequisites_for_role(grant_roles, rid):
             req_role = guild.get_role(req_id)
@@ -391,11 +402,10 @@ async def _clears_grant_prerequisites(
             if verdict == GATE_OK:
                 continue
             if verdict == GATE_MISSING_PREREQUISITE and req_role is not None:
-                await _reply(
-                    interaction,
-                    f"You need the **@{req_role.name}** role before you can pick that.",
-                )
-                return False
+                blocked.add(rid)
+                if req_role.name not in needed:
+                    needed.append(req_role.name)
+                continue
             # Prerequisite role deleted: refuse rather than wave everyone
             # through, and tell the mods their gate is unsatisfiable.
             await _reply(interaction, MSG_BROKEN)
@@ -405,8 +415,12 @@ async def _clears_grant_prerequisites(
                 menu,
                 f"a choice needs role id {req_id} first, and that role is gone",
             )
-            return False
-    return True
+            return None
+    if not blocked:
+        return set(), ""
+    names = ", ".join(f"**@{name}**" for name in needed)
+    what = "that" if len(blocked) == 1 else "some of those"
+    return blocked, f"You need {names} before you can pick {what}."
 
 
 async def _apply_outcome(
@@ -424,10 +438,20 @@ async def _apply_outcome(
         await _alert_mods_once(ctx, guild, menu, "I'm missing the Manage Roles permission")
         return
 
-    if outcome.adds and not await _clears_grant_prerequisites(
-        interaction, ctx, guild, member, menu, outcome
-    ):
-        return
+    notice = ""
+    if outcome.adds:
+        gated = await _prerequisite_block(interaction, ctx, guild, member, menu, outcome)
+        if gated is None:
+            return
+        blocked, notice = gated
+        if blocked:
+            outcome = replace(
+                outcome, adds=tuple(r for r in outcome.adds if r not in blocked)
+            )
+            if not outcome.adds and not outcome.removes:
+                # Nothing survived the gate — the note is the whole reply.
+                await _reply(interaction, notice)
+                return
 
     add_roles: list[discord.Role] = []
     remove_roles: list[discord.Role] = []
@@ -510,7 +534,9 @@ async def _apply_outcome(
             "role_pick", occurrence="set",
         )
     await _mod_log(ctx, guild, member, menu, add_roles, remove_roles)
-    await _reply(interaction, _confirmation_text(menu, add_roles, remove_roles))
+    confirmation = _confirmation_text(menu, add_roles, remove_roles)
+    # One reply, not two: the gate's note leads, the roles that did land follow.
+    await _reply(interaction, f"{notice}\n{confirmation}" if notice else confirmation)
 
 
 def _confirmation_text(
