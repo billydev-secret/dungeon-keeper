@@ -546,7 +546,7 @@
         <tr><td><strong><a href="#greeting-watch">Greeting Watch</a></strong></td><td>DMs a greeter when a member's "good morning" in a watched channel goes unanswered. Dashboard-configured, no commands.</td></tr>
         <tr><td><strong><a href="#intake">Intake Cards</a></strong></td><td>Per-newcomer welcome checklist card in greeter chat that ticks itself as the procedure happens, plus a bot-synced procedure-reference channel. Dashboard-configured, no commands.</td></tr>
         <tr><td><strong><a href="#chat-revive">Chat Revive</a></strong></td><td>Rhythm-aware lull detector that revives a quiet channel with a question card and an opt-in ping role. Dashboard-managed, no commands.</td></tr>
-        <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graphs, interaction heatmaps, invite trees — dashboard panels.</td></tr>
+        <tr><td><strong><a href="#network-analytics">Network Analytics</a></strong></td><td>Connection graph, interaction tables, invite trees — dashboard panels.</td></tr>
         <tr><td><strong><a href="#config">Configuration Reference</a></strong></td><td>Web dashboard panels covering every persistent setting.</td></tr>
         <tr><td><strong><a href="#qa-tracker">QA Tracker</a></strong></td><td>Volunteer testing crew: Pass / Fail / Blocked verdict cards on new bot changes, paid in economy currency, with admin void and oversight.</td></tr>
         <tr><td><strong><a href="#owner-tools">Developer / Owner</a></strong></td><td>Module hot-reload, Spotify authorization. Bot-owner only.</td></tr>
@@ -2789,12 +2789,12 @@
          24. NETWORK ANALYTICS
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="network-analytics" class="section-break"><span class="section-num">28</span> Network Analytics</h2>
-    <p>Interactive graph and matrix views of who interacts with whom. Useful for spotting cliques, isolated members, and invite trees.</p>
+    <p>Interactive graph and list views of who interacts with whom. Useful for spotting cliques, friend groups, and invite trees.</p>
 
     <p>Two panels read the same data in different ways, both under <strong>Reports &rarr; Social Graph</strong>:</p>
     <ul>
       <li><strong><a href="/#/interaction-graph">Interactions</a></strong> — the list view. Top pairs and most-connected members as sortable tables, with a bar chart and a focus-member filter. Best when you want a name and a number.</li>
-      <li><strong><a href="/#/connection-graph">Connection Graph</a></strong> — the picture. A drag-and-zoom network map where each dot is a member, dot size is how much they interact, line thickness is how strongly a pair does, and colour is the friend group the maths found. Above it sit the health numbers for the network as a whole — how tight the friend groups are, how many of all possible connections exist, how often interaction goes both ways, and how many hops separate any two people. Below it: who bridges otherwise separate groups, how big each group is, which members have <em>no</em> recorded interactions at all, and a grid of how much each group talks to every other group. Controls let you change the period, focus on one member, hide groups, thin out weak connections, switch layouts, and go fullscreen.</li>
+      <li><strong><a href="/#/connection-graph">Connection Graph</a></strong> — the picture. A drag-and-zoom network map that fills the whole page: each dot is a member, dot size is how much they interact, line strength is how strongly a pair does, and colour is the friend group the maths found. The most active members are labelled; hover anyone to light up who they talk to. A row of chips above the map switches the layout, the period, and a focus member, with the finer knobs (connection strength cut-offs, node limits, group granularity) behind one Tuning chip. The coloured chips on the map are the friend groups themselves — click one to hide or show that group — and the ⛶ button goes fullscreen.</li>
     </ul>
 
     <div class="callout callout-info">

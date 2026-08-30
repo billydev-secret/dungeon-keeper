@@ -244,3 +244,73 @@ def test_the_palette_is_not_cycled():
         "the palette is being cycled — past six slots fold the tail into "
         "'Other', facet, or switch to a table; never reuse a hue"
     )
+
+
+# ── the network-graph extension ─────────────────────────────────────────────
+#
+# GRAPH_CLUSTERS documents itself as "the six brand hues plus the
+# least-saturated pair that passes every check" and GRAPH_EDGE as "amber
+# lightened until the mark clears the surface". Comments drift; these pin the
+# claims to the same arithmetic as the rest of the file. The applicable
+# standard is ADJACENT pairs only — a force graph separates communities
+# spatially, which is the documented reason the extension may exist at all —
+# and the CVD result lands in the 6–8 conditional band, which is legal only
+# because the panel draws a surface ring on every node and labels by
+# prominence (secondary encoding).
+
+
+def _graph_palette() -> list[str]:
+    src = _CHARTS.read_text(encoding="utf-8")
+    block = re.search(r"export const GRAPH_CLUSTERS = \[(.*?)\];", src, re.S)
+    assert block, "GRAPH_CLUSTERS is gone from charts.js"
+    extras = re.findall(r'"(#[0-9A-Fa-f]{6})"', block.group(1))
+    assert "...ROLE_COLORS" in block.group(1), (
+        "GRAPH_CLUSTERS no longer extends ROLE_COLORS — it must stay a spread "
+        "of the categorical palette plus extension slots, never a parallel copy"
+    )
+    return _palette() + extras
+
+
+@pytest.mark.parametrize("colour", _graph_palette())
+def test_graph_slot_is_inside_the_lightness_band(colour):
+    L, _ = _oklch(colour)
+    assert BAND[0] <= L <= BAND[1], f"{colour} L={L:.3f} outside {BAND}"
+
+
+@pytest.mark.parametrize("colour", _graph_palette())
+def test_graph_slot_carries_enough_chroma(colour):
+    _, C = _oklch(colour)
+    assert C >= CHROMA_FLOOR, f"{colour} C={C:.3f} reads as grey"
+
+
+def test_graph_adjacent_slots_separate_under_colourblindness():
+    pal = _graph_palette()
+    worst = min(
+        (
+            (min(_delta_e(a, b, "protan"), _delta_e(a, b, "deutan")), a, b)
+            for a, b in zip(pal, pal[1:])
+        ),
+        key=lambda t: t[0],
+    )
+    d, a, b = worst
+    assert d >= CVD_FLOOR, (
+        f"{a} and {b} are ΔE {d:.1f} apart under simulated colourblindness "
+        f"(floor {CVD_FLOOR}; the ring + prominence labels justify the 6–8 "
+        f"band, not anything below it)"
+    )
+
+
+def test_graph_adjacent_slots_separate_for_normal_vision():
+    pal = _graph_palette()
+    worst = min(((_delta_e(a, b), a, b) for a, b in zip(pal, pal[1:])), key=lambda t: t[0])
+    d, a, b = worst
+    assert d >= NORMAL_FLOOR, f"{a} and {b}: ΔE {d:.1f} (adjacent, floor {NORMAL_FLOOR})"
+
+
+def test_graph_edge_tint_clears_the_surface():
+    """Edges composite at weight-scaled alpha; the base mark must start well
+    above the 3:1 fill floor or the low-alpha end vanishes into the ground —
+    the measured "greyed over" failure this constant exists to prevent."""
+    edge = _token("GRAPH_EDGE")
+    ratio = _contrast(edge, SURFACE)
+    assert ratio >= CONTRAST_MIN, f"GRAPH_EDGE {edge} is {ratio:.2f}:1 vs {SURFACE}"
