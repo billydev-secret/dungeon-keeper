@@ -191,7 +191,8 @@ class EconSettings:
     # per period — their "personal board", drawn from that cadence's active
     # pool. Tuning these down is how a guild makes the board feel smaller
     # without deactivating library quests; 0 turns the cadence off entirely
-    # (nothing shows, nothing pays). Capped at POOL_CAP by the dashboard.
+    # (nothing shows, nothing pays). The dashboard bounds these at POOL_CAP
+    # to protect the quest embed's field limit, not because the pool is.
     # (No monthly size: a monthly quest is a guild-wide goal, never a personal
     # board row, so quest_board_monthly sized nothing. It was dropped rather
     # than left as a dial the panel no longer offers and no draw ever reads;

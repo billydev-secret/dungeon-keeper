@@ -126,13 +126,15 @@ def test_occurrence_period_is_keyed_to_the_occurrence():
 @pytest.mark.parametrize(
     "existing,qtype,expected",
     [
-        # daily/weekly each form a pool capped at POOL_CAP; the per-user board
-        # draws N of them, so many can be active at once.
+        # daily is UNCAPPED (2026-08-30): the per-user board size, not the pool
+        # size, bounds what a member sees and is paid, so the old ceiling only
+        # ever gated adding content.
         ([], "daily", True),
         (["weekly", "weekly"], "daily", True),
         (["daily"] * 2, "daily", True),
-        (["daily"] * POOL_CAP, "daily", False),
-        # weekly: own pool, capped at POOL_CAP
+        (["daily"] * POOL_CAP, "daily", True),
+        (["daily"] * (POOL_CAP * 4), "daily", True),
+        # weekly: own pool, still capped at POOL_CAP
         ([], "weekly", True),
         (["weekly"] * (POOL_CAP - 1), "weekly", True),
         (["weekly"] * POOL_CAP, "weekly", False),

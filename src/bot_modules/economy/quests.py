@@ -14,16 +14,27 @@ import re
 import statistics
 from datetime import date, timedelta
 
-# Library slot limits per guild. Daily/weekly active quests form a per-cadence
-# *pool*: each member is shown/paid a personal subset of N drawn from that pool
-# per period (see assigned_quest_ids), so the caps are a sanity ceiling on pool
-# size, not a hard "one active" rule. Community goals and monthly goals are
-# guild-wide and uncapped (their rotation owns how many run at once — monthly is
-# a single lane per calendar month). Event quests are capped at 1 active PER
-# TRIGGER KIND — the listener pays every active quest matching its trigger, so
-# two same-kind actives would double-pay one occurrence.
+# ``POOL_CAP`` does one job now, and it is NOT a library slot limit: it bounds
+# the configurable *board size* (``quest_board_*``), which is load-bearing —
+# ``quest_views`` warns that a large board can blow Discord's 1024-char embed
+# field cap. Do not read it as a ceiling on how many quests may be active.
 POOL_CAP = 25
-MAX_ACTIVE_DAILY = POOL_CAP
+
+# The daily pool is UNCAPPED (2026-08-30). The old ceiling of 25 was
+# self-described as "a sanity ceiling", and it protected nothing: payout is
+# bounded by the board size a member draws, not by how many quests are in the
+# pool, the draw walk in ``assigned_quest_ids`` handles any pool size, and the
+# frozen per-period snapshot is a few hundred bytes. What it *did* do was
+# refuse new dailies in a guild that had drifted past it (TGM sat at 27 for
+# months with no ill effect), so the only thing it actually gated was adding
+# content. A bigger pool simply spaces a member's repeats further apart.
+#
+# Weekly keeps its ceiling: nobody has asked for more than 25 weeklies, and an
+# unbounded second pool is headroom without a use case. Community and monthly
+# are guild-wide and uncapped (their rotation owns how many run at once —
+# monthly is a single lane per calendar month). Event quests are capped at 1
+# active PER TRIGGER KIND — the listener pays every active quest matching its
+# trigger, so two same-kind actives would double-pay one occurrence.
 MAX_ACTIVE_WEEKLY = POOL_CAP
 MAX_ACTIVE_EVENT_PER_KIND = 1
 
@@ -589,11 +600,14 @@ def can_activate(existing_active: list[str], qtype: str) -> bool:
     """True if activating one more ``qtype`` quest respects the slot rule.
 
     ``existing_active`` is the list of qtypes of the guild's currently-active
-    quests (excluding the one under consideration). Community and monthly are
-    guild-wide goals whose rotation owns concurrency, so they're uncapped here.
+    quests (excluding the one under consideration). Daily, community and
+    monthly are uncapped; only weekly still has a ceiling, and event quests are
+    gated per trigger kind by ``can_activate_event`` instead.
     """
     if qtype == "daily":
-        return existing_active.count("daily") < MAX_ACTIVE_DAILY
+        # Uncapped — see the note on POOL_CAP. The board size, not the pool
+        # size, is what bounds what a member sees and is paid.
+        return True
     if qtype == "weekly":
         return existing_active.count("weekly") < MAX_ACTIVE_WEEKLY
     if qtype in ("community", "monthly"):

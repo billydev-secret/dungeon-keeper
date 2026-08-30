@@ -392,8 +392,9 @@ function questVerification(q) {
 }
 
 // "pool → what one member actually sees" per cadence. The old version quoted
-// slot caps of 1/5/5 that no longer exist (the cap is POOL_CAP for every
-// cadence); pool-vs-board is the number that actually shapes the experience.
+// slot caps of 1/5/5 that no longer exist (daily is uncapped outright, weekly
+// stops at POOL_CAP); pool-vs-board is the number that actually shapes the
+// experience.
 function renderSlotSummary(container, quests) {
   const host = container.querySelector("[data-quest-slots]");
   if (!host) return;

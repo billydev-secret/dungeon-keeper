@@ -252,6 +252,16 @@ def test_pool_cap_still_bounds_a_cadence(db):
             set_quest_active(conn, GUILD, over, True)
 
 
+def test_the_daily_pool_is_uncapped(db):
+    """The old ceiling refused new dailies in a guild already past it."""
+    with open_db(db) as conn:
+        for _ in range(POOL_CAP + 5):
+            _make(conn, qtype="daily")
+        over = _make(conn, qtype="daily", active=False)
+        set_quest_active(conn, GUILD, over, True)  # no raise
+        assert _get(conn, GUILD, over)["active"] == 1
+
+
 def test_slot_limit_is_per_guild(db):
     with open_db(db) as conn:
         _make(conn, qtype="daily", guild_id=GUILD)
