@@ -108,14 +108,16 @@ export function mount(container) {
               </label>
               <div class="field-hint">When checked, the bot pings the role below in the
                 channel below as soon as a site's cooldown expires, and keeps a live
-                status message updated there. Unchecked, bumps are still recorded but
-                nobody is pinged.</div>
+                status message updated there. Unchecked, bumps are still recorded —
+                both from <code>/bump log</code> and from detection — but nobody is
+                pinged and the status message stops updating.</div>
             </div>
             <div class="field">
               <label>Reminder Channel</label>
               <span data-picker="channel"></span>
               <div class="field-hint">Where reminders and the live status message are
-                posted. Members also run <code>/bump log</code> here after bumping.</div>
+                posted. Members also run <code>/bump log</code> here after bumping, and
+                auto-detection only watches this channel.</div>
             </div>
             <div class="field">
               <label>Ping Role</label>
@@ -148,8 +150,10 @@ export function mount(container) {
           <div class="field-hint" style="margin-top:8px;">
             <strong>Detection</strong> is optional. Set <strong>Bot ID</strong> to the
             listing bot's user ID and a bump is recorded automatically when that bot
-            posts, so nobody has to run <code>/bump log</code>. Leave it blank to rely on
-            the command alone.
+            posts <em>in the Reminder Channel above</em> — that is the only channel
+            watched, so a listing bot that answers somewhere else is never detected,
+            and detection is off entirely until a Reminder Channel is picked. Leave the
+            Bot ID blank to rely on <code>/bump log</code> alone.
             <br /><strong>Text when bumped</strong> narrows that to messages containing
             a phrase (e.g. <code>Bump done!</code>); blank means any message from the bot
             counts.

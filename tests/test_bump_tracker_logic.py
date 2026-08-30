@@ -15,6 +15,8 @@ from bot_modules.bump_tracker.detector_logic import (
     component_texts,
     match_site,
     message_text,
+    should_detect,
+    should_post_widget,
 )
 
 # ── Real message fixtures ─────────────────────────────────────────────────────
@@ -309,3 +311,45 @@ def test_null_patterns_from_the_database_are_treated_as_empty():
         "failure_pattern": None,
     }]
     assert match_site(sites, 7, "anything") == ("legacy", "success")
+
+
+# ── What the "Send Bump Reminders" switch actually governs ────────────────────
+
+
+def tracker_cfg(*, enabled=1, channel_id=555):
+    return {"enabled": enabled, "channel_id": channel_id}
+
+
+@pytest.mark.parametrize(
+    ("config", "channel_id", "expected"),
+    [
+        # The panel promises "bumps are still recorded but nobody is pinged"
+        # when the switch is off, so detection must survive enabled = 0.
+        (tracker_cfg(enabled=1), 555, True),
+        (tracker_cfg(enabled=0), 555, True),
+        # Detection is locked to the reminder channel, and there is nothing to
+        # watch until one is set.
+        (tracker_cfg(enabled=1), 999, False),
+        (tracker_cfg(enabled=0), 999, False),
+        (tracker_cfg(enabled=1, channel_id=0), 555, False),
+        (tracker_cfg(enabled=0, channel_id=0), 0, False),
+        (None, 555, False),
+    ],
+)
+def test_should_detect_survives_reminders_being_off(config, channel_id, expected):
+    assert should_detect(config, channel_id) is expected
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        (tracker_cfg(enabled=1), True),
+        # Reminders off means the live status message stops updating too — the
+        # background loop already skipped it, the manual log path used not to.
+        (tracker_cfg(enabled=0), False),
+        (tracker_cfg(enabled=1, channel_id=0), False),
+        (None, False),
+    ],
+)
+def test_should_post_widget_follows_the_reminders_switch(config, expected):
+    assert should_post_widget(config) is expected
