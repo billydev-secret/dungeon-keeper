@@ -317,6 +317,9 @@ class GuildConfig:
     unverified_role_id: int
     greeter_role_id: int
     greeter_chat_channel_id: int
+    #: The arrival line dropped in greeter chat when a newcomer arrives without
+    #: an intake card. Blank means "post nothing".
+    greeter_arrival_message: str
     leave_channel_id: int
     leave_message: str
     join_leave_log_channel_id: int
@@ -364,6 +367,7 @@ class GuildConfig:
     ) -> "GuildConfig":
         from bot_modules.services.greeting_watch_service import parse_extra_words
         from bot_modules.services.welcome_service import (
+            DEFAULT_ARRIVAL_MESSAGE,
             DEFAULT_LEAVE_MESSAGE,
             DEFAULT_WELCOME_MESSAGE,
         )
@@ -401,6 +405,9 @@ class GuildConfig:
             unverified_role_id=_int("unverified_role_id"),
             greeter_role_id=_int("greeter_role_id"),
             greeter_chat_channel_id=_int("greeter_chat_channel_id"),
+            greeter_arrival_message=_val(
+                "greeter_arrival_message", DEFAULT_ARRIVAL_MESSAGE
+            ),
             leave_channel_id=leave_channel_id,
             leave_message=_val("leave_message", DEFAULT_LEAVE_MESSAGE),
             join_leave_log_channel_id=_parse_int_config(

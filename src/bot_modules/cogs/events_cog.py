@@ -79,7 +79,11 @@ from bot_modules.services.login_card_service import (
     record_card,
 )
 from bot_modules.services.sentiment_service import score_text
-from bot_modules.services.welcome_service import build_leave_embed, build_welcome_embed
+from bot_modules.services.welcome_service import (
+    build_leave_embed,
+    build_welcome_embed,
+    render_arrival_message,
+)
 from bot_modules.services.wellness_enforcement import wellness_on_message
 from bot_modules.services.wellness_service import (
     login_digest_value as wellness_login_digest_value,
@@ -1806,9 +1810,12 @@ class EventsCog(commands.Cog):
                 _guild_id, _member_id
             ):
                 greeter_channel = after.guild.get_channel(cfg.greeter_chat_channel_id)
-                if isinstance(greeter_channel, discord.TextChannel):
+                arrival_line = render_arrival_message(
+                    cfg.greeter_arrival_message, after
+                )
+                if isinstance(greeter_channel, discord.TextChannel) and arrival_line:
                     try:
-                        await greeter_channel.send(f"@here - {after.mention} has arrived")
+                        await greeter_channel.send(arrival_line)
                     except discord.Forbidden:
                         log.warning(
                             "Missing permission to send greeter ping in #%s.",
@@ -1913,9 +1920,10 @@ class EventsCog(commands.Cog):
 
         if not intake_posted and cfg.greeter_chat_channel_id > 0:
             greeter_channel = member.guild.get_channel(cfg.greeter_chat_channel_id)
-            if isinstance(greeter_channel, discord.TextChannel):
+            arrival_line = render_arrival_message(cfg.greeter_arrival_message, member)
+            if isinstance(greeter_channel, discord.TextChannel) and arrival_line:
                 try:
-                    await greeter_channel.send(f"@here - {member.mention} has arrived")
+                    await greeter_channel.send(arrival_line)
                 except discord.Forbidden:
                     log.warning(
                         "Missing permission to send greeter ping in #%s.",

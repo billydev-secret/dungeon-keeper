@@ -6,8 +6,32 @@ import re
 import sqlite3
 import time
 
+from bot_modules.core.db_utils import get_config_value
+
 # Max valid day per month; Feb capped at 28 (Feb 29 skips 3/4 years)
 MAX_DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+# Guild-local hour the announcement pass waits for. Configurable per guild on
+# the Birthdays panel; 09:00 stays the default so guilds that never touch the
+# dial keep the behavior they've always had.
+ANNOUNCE_HOUR_KEY = "birthday_announce_hour"
+DEFAULT_ANNOUNCE_HOUR = 9
+
+
+def announce_hour(conn: sqlite3.Connection, guild_id: int) -> int:
+    """Guild-local hour (0–23) at which today's birthdays go out.
+
+    A missing, non-numeric or out-of-range stored value falls back to
+    :data:`DEFAULT_ANNOUNCE_HOUR` — the loop must never stall on a bad row.
+    """
+    raw = get_config_value(conn, ANNOUNCE_HOUR_KEY, str(DEFAULT_ANNOUNCE_HOUR), guild_id)
+    try:
+        hour = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_ANNOUNCE_HOUR
+    if not 0 <= hour <= 23:
+        return DEFAULT_ANNOUNCE_HOUR
+    return hour
 
 # Matched anywhere in a message for the `birthday_wish` quest detector — the
 # is_greeting pattern: a heuristic vocabulary, not a classifier; widen as real

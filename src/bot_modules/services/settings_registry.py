@@ -231,6 +231,9 @@ FEATURES: tuple[Feature, ...] = (
             _ch("birthday_channel_id", "Birthday announcement channel", required=True),
             _text("birthday_message", "Birthday message"),
             _flag("birthday_pin", "Pin the birthday post"),
+            _num("birthday_announce_hour", "Hour announcements go out (guild-local)",
+                 minimum=0, maximum=23, default="9",
+                 help="0–23 in the server's own time zone; 9 means 09:00."),
         ),
     ),
     # The qa_* keys (QA Tracker, Dev → QA Tracker) are deliberately NOT here.
@@ -304,9 +307,14 @@ FEATURES: tuple[Feature, ...] = (
     ),
     Feature(
         slug="inactivity",
-        label="Inactivity prune",
-        panel="Config → Inactivity",
-        blurb="Flags members who've gone quiet so you can nudge or prune them.",
+        # Label/panel name the *sweep*, not the prune. "Auto-Remove Role
+        # (Inactive)" is a separate panel backed by its own table
+        # (inactivity_prune_rules), which this KV-only registry cannot describe;
+        # calling this entry "Inactivity prune" made the two read as one feature
+        # and hid the real prune rule behind a name already spent.
+        label="Inactive sweep",
+        panel="Config → Inactive Sweep",
+        blurb="Flags members who've gone quiet so you can nudge them.",
         enable_key="inactive_auto_sweep",
         settings=(
             _flag("inactive_auto_sweep", "Automatic sweep"),
@@ -422,6 +430,13 @@ FEATURES: tuple[Feature, ...] = (
         blurb="Members write a profile the server can browse.",
         settings=(
             _ch("bios_channel_id", "Bios channel", required=True),
+            # BiosConfig.configured needs BOTH the channel and the wizard
+            # category, so the category has to be `required` here too — with it
+            # missing, gap detection called a bios setup "configured" that the
+            # wizard would refuse to start.
+            _num("bios_wizard_category_id", "Bios wizard category", required=True,
+                 writable=False, default="0",
+                 help="A category, not a text channel — set it from the panel."),
             # Bounds mirror routes/bios.py BiosConfigBody — pinned by
             # tests/test_settings_registry_contract.py. archive_grace is
             # SECONDS the wizard room stays open, not days: the old "days"
