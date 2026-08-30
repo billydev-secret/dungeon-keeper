@@ -66,6 +66,34 @@ export const CHART_GRID   = "#3f4147";
 // read as a 2px gap rather than a border.
 export const CHART_SURFACE = "#2b2d31";
 
+// ── Network-graph extension ────────────────────────────────────────────
+// The Connection Graph is the one chart where series identity is NOT
+// legend-matched across the page: communities are separated spatially, so
+// the standard that applies is adjacent-pair separation plus secondary
+// encoding (surface rings, prominence labels), not the all-pairs bar-chart
+// rule that caps ROLE_COLORS at six. Folding cluster 7+ into
+// SERIES_OVERFLOW is a real failure there, not a safe default — the
+// palette validator scores that neutral at chroma 0.011 ("reads gray") and
+// ΔE 4.6 from wine under deuteranopia, and both live servers detect eight
+// communities.
+//
+// The two extra slots are the least-saturated pair that passes every
+// validator check appended to the six (lightness band, chroma ≥ 0.1,
+// adjacent CVD ΔE 8.4 worst, normal-vision ΔE 17.8 worst, against
+// CHART_SURFACE). Eight mutually-distinguishable earthy hues are not
+// achievable — the best all-pairs result is ΔE 14.7 against a floor of 15
+// — which is why these are for spatially-separated graphs ONLY: never use
+// GRAPH_CLUSTERS for legend-matched series, and past eight the tail still
+// folds to the overflow neutral.
+export const GRAPH_CLUSTERS = [...ROLE_COLORS, "#5C8547", "#685CA3"];
+
+// Edge tint for the network canvas: edges composite at weight-scaled alpha
+// over CHART_SURFACE, and CHART_BAR (4.0:1) muddies into the ground below
+// ~0.3 alpha — the "greyed over" regression. This is amber lightened until
+// the mark clears 5.7:1, the same hue family so a single-series chart and
+// the graph still read as one brand.
+export const GRAPH_EDGE = "#C9A24E";
+
 const BAR     = CHART_BAR;
 const ACCENT  = CHART_ACCENT;
 const TEXT    = CHART_TEXT;

@@ -1233,13 +1233,200 @@ textarea.field-input { resize: vertical; }
   min-width: 160px;
 }
 
-/* Connection Graph's control strip carries nine controls. The shared
-   .controls floor of 160px would put every one of them on its own row at
-   phone width; these are all two- or three-digit numbers, so they get a
-   narrower floor and the strip stays a few rows instead of nine. */
-.graph-controls input[type="number"] { min-width: 0; width: 90px; }
-.graph-controls select { min-width: 0; }
-.graph-controls .ctrl-field { display: flex; flex-direction: column; gap: var(--s-1); font-size: var(--t-2); color: var(--ink-dim); }
+/* Connection Graph stage: the canvas owns the page. #panel-root is already a
+   height-constrained flex column (flex:1 + min-height:0 all the way up), so
+   the panel just flex-fills it — header, one chip bar, then the canvas takes
+   every remaining pixel. No viewport math: the shell's padding and meta-bar
+   are whatever they are. (The old layout pinned the canvas to 60vh beneath a
+   scorecard and nine labelled controls, with three more reports below it.) */
+.graph-stage {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 480px;
+}
+.graph-stage header { margin-bottom: var(--s-3); }
+
+/* Control chips: one wrapping row of compact, self-describing controls. The
+   numeric tuning knobs live behind the Tuning popover so the bar stays one
+   row on desktop and about two on a phone. */
+.graph-chipbar {
+  /* Above every canvas overlay (msg z4, chips z5, fullscreen z5): the bar is
+     a stacking context, so the Tuning popover can never out-z them from
+     inside — the bar itself has to sit higher. */
+  position: relative;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+}
+/* rangePicker wraps its select in a label; lay it out as an inline chip
+   rather than the stacked .controls column. */
+.graph-chipbar > label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--t-2);
+  color: var(--ink-dim);
+}
+.graph-chipbar select,
+.graph-chipbar input[type="text"] {
+  background: var(--bg-card);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--t-2);
+  min-width: 0;
+}
+
+.graph-tuning { position: relative; }
+.graph-tuning > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg-card);
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: var(--s-1) var(--s-2);
+  font-size: var(--t-2);
+}
+.graph-tuning > summary::-webkit-details-marker { display: none; }
+.graph-tuning > summary::after { content: " ▾"; }
+.graph-tuning[open] > summary { color: var(--ink); background: var(--bg-card-hover); }
+/* Explicit, not left to the UA: Chromium hides closed-details content with
+   content-visibility, which keeps layout boxes — the closed popover's rows
+   then measure as off-screen geometry in the responsive audit. display:none
+   is what "closed" means here. */
+.graph-tuning:not([open]) .graph-tuning-pop { display: none; }
+.graph-tuning-pop {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 4px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  background: var(--bg-card);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: var(--s-3);
+  min-width: 230px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+}
+.graph-tuning-pop label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  font-size: var(--t-2);
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.graph-tuning-pop input[type="number"] {
+  width: 64px;
+  background: var(--bg-rail);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: var(--s-1);
+  font-size: var(--t-2);
+}
+.graph-tuning-pop input[type="range"] { width: 110px; }
+.graph-tuning-range { display: flex; align-items: center; gap: 6px; }
+.graph-tuning-range span {
+  font-size: var(--t-1);
+  color: var(--ink-mute);
+  min-width: 24px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Loading / empty / error overlay for the canvas. The old inline style put
+   display:flex ON the element, which beats the [hidden] attribute's UA rule
+   — so the empty overlay (an 88% card veil) sat over the canvas permanently
+   and ate its mouse events. That veil was the "greyed over" everyone saw
+   since the panel's restore. A class rule loses to [hidden] correctly. */
+.graph-msg {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+}
+.graph-msg[hidden] { display: none; }
+
+/* Community chips — overlaid on the canvas, legend and cluster filter in
+   one: each chip wears its community's fill; clicking hides/shows the group,
+   and a hidden group's chip goes hollow so the way back stays visible. */
+.graph-clusterbar {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  /* Above the message overlay (z4): hiding the last community renders the
+     empty state, and the chips ARE the way back — they stay clickable. */
+  z-index: 5;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-1);
+  max-width: 60%;
+}
+.graph-cluster-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--t-1);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-dim);
+  background: color-mix(in srgb, var(--bg-floor) 72%, transparent);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.graph-cluster-chip:hover { color: var(--ink); border-color: var(--ink-mute); }
+.graph-cluster-chip .dot {
+  box-sizing: border-box;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+}
+.graph-cluster-chip.is-hidden { color: var(--ink-mute); }
+
+.graph-hint {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  max-width: 38%;
+  text-align: right;
+  font-size: var(--t-1);
+  color: var(--ink-mute);
+  background: color-mix(in srgb, var(--bg-floor) 60%, transparent);
+  border-radius: 6px;
+  padding: 3px 8px;
+  pointer-events: none;
+}
+@media (max-width: 560px) {
+  /* No hover on touch, and the corner belongs to the community chips. */
+  .graph-hint { display: none; }
+
+  /* Anchor the Tuning popover to the chip BAR, not the chip: a 230px pop
+     hung off a chip in the row's right half runs off a phone screen. Static
+     positioning on the details hands the absolute pop to .graph-chipbar
+     (position:relative), so left/right 0 spans exactly the bar's width. */
+  .graph-tuning { position: static; }
+  .graph-tuning-pop { left: 0; right: 0; min-width: 0; }
+}
 
 .chart-wrap {
   background: var(--bg-alt);
