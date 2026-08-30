@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import discord
+import pytest
 
 from bot_modules.core.branding import SECTION_SPACER
 from bot_modules.services.dm_perms_service import (
@@ -157,3 +158,83 @@ def test_build_panel_embed_spaces_sections_but_not_the_last():
     ends = [(f.value or "").endswith(SECTION_SPACER) for f in embed.fields]
     assert ends[:-1] == [True] * (len(ends) - 1)
     assert ends[-1] is False
+
+
+# ── request lifecycle limits (per-guild dashboard dials) ─────────────
+
+
+def test_request_limits_default_when_nothing_is_stored(sync_db_path):
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    assert get_request_limits(sync_db_path, 5) == {
+        "expiry_hours": 24,
+        "max_pending": 5,
+    }
+
+
+@pytest.mark.parametrize(
+    ("stored_hours", "expected_hours"),
+    [(48, 48), (1, 1), (0, 1), (5000, 720), ("nonsense", 24)],
+)
+def test_request_expiry_hours_is_clamped(sync_db_path, stored_hours, expected_hours):
+    from bot_modules.core.db_utils import open_db, set_config_value
+    from bot_modules.services.dm_perms_service import get_request_limits
+
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, "dm_request_expiry_hours", str(stored_hours), 5)
+    assert get_request_limits(sync_db_path, 5)["expiry_hours"] == expected_hours
+
+
+def test_request_limits_are_per_guild(sync_db_path):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.dm_perms_service import (
+        get_request_limits,
+        set_request_limits,
+    )
+
+    with open_db(sync_db_path) as conn:
+        set_request_limits(conn, 5, expiry_hours=2, max_pending=1)
+
+    assert get_request_limits(sync_db_path, 5) == {"expiry_hours": 2, "max_pending": 1}
+    assert get_request_limits(sync_db_path, 6) == {"expiry_hours": 24, "max_pending": 5}
+
+
+@pytest.mark.parametrize(
+    ("hours", "label"),
+    [(1, "1 hour"), (24, "24 hours"), (48, "48 hours")],
+)
+def test_request_expiry_label(hours, label):
+    from bot_modules.services.dm_perms_service import request_expiry_label
+
+    assert request_expiry_label(hours) == label
+
+
+def test_expiry_sweep_uses_each_guilds_own_window(sync_db_path):
+    """A guild that shortened its window expires sooner; its neighbour, which
+    kept the default, keeps waiting."""
+    import time
+
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.dm_perms_service import (
+        expire_stale_pending_requests,
+        set_request_limits,
+        upsert_request,
+    )
+
+    init_db(sync_db_path)
+    upsert_request(sync_db_path, 5, 100, 200, "dm", "", 1, None)
+    upsert_request(sync_db_path, 6, 101, 201, "dm", "", 2, None)
+    six_hours_ago = time.time() - 6 * 3600
+    with open_db(sync_db_path) as conn:
+        conn.execute("UPDATE dm_requests SET created_at = ?", (six_hours_ago,))
+        set_request_limits(conn, 5, expiry_hours=2)
+
+    expired = expire_stale_pending_requests(sync_db_path)
+
+    assert [(r["guild_id"], r["requester_id"]) for r in expired] == [(5, 100)]
+    with open_db(sync_db_path) as conn:
+        statuses = {
+            int(r["guild_id"]): r["status"]
+            for r in conn.execute("SELECT guild_id, status FROM dm_requests")
+        }
+    assert statuses == {5: "expired", 6: "pending"}

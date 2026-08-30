@@ -204,8 +204,9 @@ Setup wizard sets most keys; the rest live on the web dashboard.
 | `log_channel_id` | Channel for audit log embeds | unset (set by wizard) |
 | `transcript_channel_id` | Channel where transcript files are posted | unset (set by wizard) |
 | `jailed_role_id` | The `@Jailed` role | auto-created |
-| `ticket_panel_channel_id` / `ticket_panel_message_id` | Where the persistent ticket button lives | set when the panel is posted from Moderation → Tickets |
-| `ticket_notify_on_create` | DM all mods on every new ticket | on |
+| `ticket_panels` table | Where the persistent ticket button lives | written when the panel is posted from Moderation → Tickets. The old `ticket_panel_channel_id` / `ticket_panel_message_id` config rows survive on live servers but nothing reads them — they are listed in `settings_registry.DEAD_KEYS` so no advisor pass proposes a write that would do nothing |
+| `ticket_notify_on_create` | DM all mods on every new ticket. Read against the guild the ticket was opened in, matching how the dashboard writes it | on |
+| `policy_vote_timeout_hours` | How long a policy vote runs before it resolves itself; `0` turns auto-resolution off. Per guild, and the sweep covers every guild the bot is in | 72 |
 | `warning_threshold` | Active-warning count that triggers an admin alert | 3 |
 | `api_port` / `api_secret` | Dashboard API port and shared secret | platform defaults |
 

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from bot_modules.core.db_utils import (
     add_grant_permission,
+    clear_config_id_bucket,
     delete_config_value,
     delete_grant_role,
     get_config_id_set,
@@ -97,7 +98,7 @@ from bot_modules.services.dm_perms_service import (
     set_audit_channel,
     set_dm_mode_role_ids,
     set_panel_settings,
-    set_request_channel,
+    set_request_limits,
 )
 from web_server.routes.panel_posting import (
     ChannelIdBody,
@@ -361,7 +362,10 @@ def _lookup_member_name(uid: int, guild, conn, guild_id: int) -> str:
 
 def _dms_section_with_conn(conn, guild_id: int) -> dict:
     cfg = get_dms_config_with_conn(conn, guild_id)
-    return {k: str(v) for k, v in cfg.items()}
+    # Ids go out as strings (snowflake precision); the two lifecycle dials are
+    # small counts and stay numbers so the panel's number inputs get numbers.
+    numeric = {"request_expiry_hours", "max_pending_requests"}
+    return {k: (v if k in numeric else str(v)) for k, v in cfg.items()}
 
 
 # ── Starboard config helper ──────────────────────────────────────────
@@ -2638,6 +2642,16 @@ async def update_greeting_watch(
                     normalized,
                     guild_id,
                 )
+                # Blank the pre-multi single-subscriber key at the same time.
+                # Both the DM loop and this panel fall back to it whenever the
+                # CSV holds no ids, so leaving it behind would resurrect the
+                # old subscriber the moment an admin clears the list.
+                set_config_value(
+                    conn,
+                    "greeting_watch_notify_user_id",
+                    "",
+                    guild_id,
+                )
             if body.window_minutes is not None:
                 set_config_value(
                     conn,
@@ -2786,6 +2800,12 @@ async def update_spoiler(
                     body.spoiler_required_channels,
                     guild_id,
                 )
+                # The home guild also inherits a pre-per-guild bucket stored
+                # under guild 0 whenever its own bucket is empty, and no panel
+                # can reach those rows. Retire them on save, or "leave empty to
+                # switch this off" would silently re-enforce a stale list.
+                if guild_id == ctx.guild_id:
+                    clear_config_id_bucket(conn, "spoiler_required_channels", 0)
         return {"ok": True}
 
     result = await run_query(_q)
@@ -3778,11 +3798,12 @@ async def post_confessions_button(
 
 
 class DmsConfigUpdate(BaseModel):
-    request_channel_id: str | None = None
     audit_channel_id: str | None = None
     open_role_id: str | None = None
     ask_role_id: str | None = None
     closed_role_id: str | None = None
+    request_expiry_hours: int | None = None
+    max_pending_requests: int | None = None
 
 
 @router.put("/config/dms")
@@ -3797,8 +3818,14 @@ async def update_dms(
     role_fields = (body.open_role_id, body.ask_role_id, body.closed_role_id)
 
     def _q():
-        if body.request_channel_id is not None:
-            set_request_channel(ctx.db_path, guild_id, int(body.request_channel_id))
+        if body.request_expiry_hours is not None or body.max_pending_requests is not None:
+            with ctx.open_db() as conn:
+                set_request_limits(
+                    conn,
+                    guild_id,
+                    expiry_hours=body.request_expiry_hours,
+                    max_pending=body.max_pending_requests,
+                )
         if body.audit_channel_id is not None:
             set_audit_channel(ctx.db_path, guild_id, int(body.audit_channel_id))
         if any(f is not None for f in role_fields):

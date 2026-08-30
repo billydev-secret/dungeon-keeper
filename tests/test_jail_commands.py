@@ -193,3 +193,91 @@ def test_read_warning_threshold_defaults_to_three(tmp_path):
 
     ctx = _make_ctx(tmp_path / "jc15.db", guild_id=10)
     assert _read_warning_threshold(ctx, 10) == 3
+
+
+# ── policy vote timeout sweeps every guild ───────────────────────────
+#
+# ``/policy open`` works on any server and each server sets its own voting
+# deadline on its own dashboard, so a sweep that only ever looked at the home
+# guild left proposals elsewhere stuck in 'voting' forever.
+
+
+async def test_policy_vote_sweep_resolves_on_every_guild(tmp_path, monkeypatch):
+    import time
+
+    from bot_modules.commands import jail_commands as jc
+    from bot_modules.services.moderation import (
+        create_policy_ticket,
+        start_policy_vote,
+    )
+
+    ctx = _make_ctx(tmp_path / "jc16.db", guild_id=10)
+    pids: dict[int, int] = {}
+    with open_db(ctx.db_path) as conn:
+        for gid in (10, 20):
+            pid = create_policy_ticket(
+                conn, guild_id=gid, creator_id=1, channel_id=5,
+                title="t", description="d",
+            )
+            start_policy_vote(conn, pid, vote_text="v")
+            conn.execute(
+                "UPDATE policy_tickets SET vote_started_at = ? WHERE id = ?",
+                (time.time() - 10 * 24 * 3600, pid),
+            )
+            pids[gid] = pid
+
+    resolved: list[tuple[int, int]] = []
+
+    async def _fake_resolve(bot, ctx_, guild, policy):
+        resolved.append((guild.id, policy["id"]))
+
+    monkeypatch.setattr(jc, "_resolve_expired_policy", _fake_resolve)
+
+    bot = MagicMock()
+    bot.guilds = [MagicMock(id=10), MagicMock(id=20)]
+
+    await jc.sweep_expired_policy_votes(bot, ctx)
+
+    assert sorted(resolved) == [(10, pids[10]), (20, pids[20])]
+
+
+async def test_policy_vote_sweep_honors_a_per_guild_deadline_of_zero(
+    tmp_path, monkeypatch
+):
+    """A guild that sets the deadline to 0 turns auto-resolution off — for
+    itself only."""
+    import time
+
+    from bot_modules.commands import jail_commands as jc
+    from bot_modules.services.moderation import (
+        create_policy_ticket,
+        start_policy_vote,
+    )
+
+    ctx = _make_ctx(tmp_path / "jc17.db", guild_id=10)
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "policy_vote_timeout_hours", "0", guild_id=20)
+        for gid in (10, 20):
+            pid = create_policy_ticket(
+                conn, guild_id=gid, creator_id=1, channel_id=5,
+                title="t", description="d",
+            )
+            start_policy_vote(conn, pid, vote_text="v")
+            conn.execute(
+                "UPDATE policy_tickets SET vote_started_at = ? WHERE id = ?",
+                (time.time() - 10 * 24 * 3600, pid),
+            )
+
+    resolved: list[int] = []
+
+    async def _fake_resolve(bot, ctx_, guild, policy):
+        resolved.append(guild.id)
+
+    monkeypatch.setattr(jc, "_resolve_expired_policy", _fake_resolve)
+
+    bot = MagicMock()
+    bot.guilds = [MagicMock(id=10), MagicMock(id=20)]
+
+    await jc.sweep_expired_policy_votes(bot, ctx)
+
+    assert resolved == [10]

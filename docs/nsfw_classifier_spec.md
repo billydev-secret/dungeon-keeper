@@ -195,6 +195,13 @@ The `nsfw_detections` row in `docs/data_register.md` carries the matching scope 
 
 Dashboard only; no in-Discord configuration. The **Image Guard** panel (Config → Moderation & Safety) holds all of it — spoiler-required channels, the SFW-prevention mode/log-channel/exemptions, and both thresholds.
 
+The spoiler-required channel list lives in the `config_ids` bucket of the same
+name, per guild. Home-guild reads fall back to a pre-per-guild bucket stored
+under `guild_id = 0` whenever the guild's own bucket is empty, and no panel can
+reach those legacy rows — so saving the list from the panel also retires them.
+Without that, "leave empty to switch this off" would clear the panel and then
+quietly re-enforce a stale list nobody could see.
+
 Stored in the shared `config` table, per guild:
 
 | key | default | what it does |

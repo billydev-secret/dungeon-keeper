@@ -171,6 +171,30 @@ def test_no_dead_key_is_in_the_registry():
     assert not (set(sr.SETTINGS_BY_KEY) & sr.DEAD_KEYS)
 
 
+@pytest.mark.parametrize("key", [
+    # The live panel record moved to the ticket_panels table (migration 023).
+    "ticket_panel_channel_id",
+    "ticket_panel_message_id",
+    # Superseded by the grant_roles table; only the completed one-time startup
+    # migration still reads them, exactly like their nsfw_role_id sibling.
+    "nsfw_grant_message",
+    "nsfw_announce_channel_id",
+    "nsfw_log_channel_id",
+])
+def test_superseded_key_is_guarded_as_dead(key):
+    assert key in sr.DEAD_KEYS
+    assert sr.get_setting(key) is None
+
+
+def test_rules_watch_requires_its_own_keys_only():
+    """Its alert channel is the control the model can propose; the Welcome
+    panel's server-guide channel has nothing to do with it."""
+    feature = sr.FEATURES_BY_SLUG["rules_watch"]
+    keys = {s.key for s in feature.settings}
+    assert "rules_watch_channel_id" in keys
+    assert "server_guide_channel_id" not in keys
+
+
 def test_check_registry_rejects_a_dead_key(monkeypatch):
     monkeypatch.setattr(sr, "FEATURES", (
         sr.Feature(slug="a", label="A", panel="p", blurb="b",
