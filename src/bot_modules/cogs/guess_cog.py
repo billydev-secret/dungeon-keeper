@@ -25,7 +25,14 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.duels.filters import contains_disallowed_content
+from bot_modules.services.guess_embeds import (
+    leaderboard_embed,
+    reveal_names,
+    round_inspector_embed,
+    solved_embed,
+)
 from bot_modules.services.guess_models import BoundingBox, GuessConfig, GuessGuess, GuessRound
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import (
     KIND_ATTEMPT,
@@ -367,27 +374,6 @@ def _game_embed(
     )
 
 
-def _solved_embed(
-    round_id: int,
-    answer_mention: str,
-    submitter_mention: str,
-    solver_mention: str,
-    guess_count: int,
-    unique_count: int,
-) -> discord.Embed:
-    guesses_txt = f"{guess_count} guess{'es' if guess_count != 1 else ''}"
-    guessers_txt = f"{unique_count} guesser{'s' if unique_count != 1 else ''}"
-    return discord.Embed(
-        title=f"✅ Round #{round_id} — Solved!",
-        color=discord.Color.green(),
-        description=(
-            f"**Answer:** {answer_mention}\n"
-            f"**Submitted by:** {submitter_mention}\n"
-            f"**Solved by:** {solver_mention} in {guesses_txt} (across {guessers_txt})"
-        ),
-    )
-
-
 # ── Views ─────────────────────────────────────────────────────────────────────
 
 SELECT_TIMEOUT_SECONDS = 60
@@ -700,20 +686,36 @@ class GuessSelectView(discord.ui.View):
             # reveal still names them together in the bot's own voice, which is
             # the bot manufacturing the association the pair exists to prevent.
             # Degrade to plain ids so the reveal still reads correctly.
-            answer_mention = f"<@{round_row.answer_id}>"
-            submitter_mention = f"<@{round_row.submitter_id}>"
-            if round_row.submitter_id != round_row.answer_id and await asyncio.to_thread(
-                no_contact_service.is_no_contact,
-                db_path,
-                round_row.guild_id,
+            reveal_no_contact = (
+                round_row.submitter_id != round_row.answer_id
+                and await asyncio.to_thread(
+                    no_contact_service.is_no_contact,
+                    db_path,
+                    round_row.guild_id,
+                    round_row.answer_id,
+                    round_row.submitter_id,
+                )
+            )
+            name_fn = await build_name_fn(
+                guild=interaction.guild,
+                db_path=db_path,
+                guild_id=round_row.guild_id,
+                user_ids=[
+                    round_row.answer_id,
+                    round_row.submitter_id,
+                    interaction.user.id,
+                ],
+            )
+            answer_name, submitter_name = reveal_names(
                 round_row.answer_id,
                 round_row.submitter_id,
-            ):
-                answer_mention = f"User {round_row.answer_id}"
-                submitter_mention = f"User {round_row.submitter_id}"
-            solved_emb = _solved_embed(
-                self.round_id, answer_mention, submitter_mention,
-                interaction.user.mention, guess_count, unique_count,
+                no_contact=reveal_no_contact,
+                name_fn=name_fn,
+            )
+            solved_emb = solved_embed(
+                self.round_id, answer_name, submitter_name,
+                interaction.user.id, guess_count, unique_count,
+                name_fn=name_fn,
             )
             full_attachments: list[discord.File] = []
             orig_path: Path | None = None
@@ -2080,29 +2082,20 @@ class GuessCog(commands.Cog):
             _do_count_unique_guessers_for_round, db_path, round_id
         )
 
-        if round_row.deleted_at is not None:
-            status = "🗑 Deleted"
-        elif round_row.solved_at is not None:
-            status = f"✅ Solved by <@{round_row.solver_id}>"
-        else:
-            status = "⏳ Open"
-
         accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
-        embed = discord.Embed(
-            title=f"🔍 Round #{round_row.id} — inspector",
-            color=accent,
-            description=(
-                f"**Status:** {status}\n"
-                f"**Submitter:** <@{round_row.submitter_id}>\n"
-                f"**Answer:** <@{round_row.answer_id}>\n"
-                f"**Difficulty:** {round_row.difficulty}\n"
-                f"**Guesses:** {guess_count} ({unique_count} unique guessers)\n"
-                f"**Re-rolls:** {round_row.reroll_count}\n"
-                f"**Created:** <t:{int(round_row.created_at)}:R>"
-            ),
+        name_fn = await build_name_fn(
+            guild=interaction.guild,
+            db_path=db_path,
+            guild_id=interaction.guild.id,
+            user_ids=[
+                round_row.submitter_id,
+                round_row.answer_id,
+                round_row.solver_id or 0,
+            ],
         )
-        if round_row.crop_url:
-            embed.set_image(url=round_row.crop_url)
+        embed = round_inspector_embed(
+            round_row, guess_count, unique_count, color=accent, name_fn=name_fn
+        )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
@@ -2342,30 +2335,16 @@ class GuessCog(commands.Cog):
             asyncio.to_thread(_do_get_top_guessers, db_path, interaction.guild.id),
         )
 
-        medals = ["🥇", "🥈", "🥉", "4.", "5."]
-
-        def _poster_line(i: int, row: tuple[int, int, int]) -> str:
-            user_id, posted, solved = row
-            pct = f"{solved / posted * 100:.0f}%" if posted else "—"
-            return f"{medals[i]} <@{user_id}> — **{posted}** posted, {solved} solved ({pct})"
-
-        def _guesser_line(i: int, row: tuple[int, int]) -> str:
-            user_id, solved = row
-            return f"{medals[i]} <@{user_id}> — **{solved}** solved"
-
-        poster_text = (
-            "\n".join(_poster_line(i, r) for i, r in enumerate(posters))
-            if posters else "_No rounds posted yet._"
-        )
-        guesser_text = (
-            "\n".join(_guesser_line(i, r) for i, r in enumerate(guessers))
-            if guessers else "_No rounds solved yet._"
-        )
-
         accent = await safe_resolve_accent(db_path, interaction.guild, log_label="guess")
-        embed = discord.Embed(title="🏆 Guess Leaderboard", color=accent)
-        embed.add_field(name="Top Posters", value=poster_text, inline=False)
-        embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
+        name_fn = await build_name_fn(
+            guild=interaction.guild,
+            db_path=db_path,
+            guild_id=interaction.guild.id,
+            user_ids=[r[0] for r in posters] + [r[0] for r in guessers],
+        )
+        embed = leaderboard_embed(
+            posters, guessers, color=accent, name_fn=name_fn
+        )
 
         await interaction.followup.send(embed=embed)
 

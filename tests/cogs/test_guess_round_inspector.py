@@ -25,6 +25,24 @@ def _stub_accent_color(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_name_resolver(monkeypatch):
+    """The embeds resolve member ids to display names; build_name_fn reads
+    ``known_users``, which a bare ``:memory:`` db_path has no schema for. The
+    resolver's own fallback chain is covered in
+    tests/test_name_resolver_logic.py, and the builders in
+    tests/test_guess_embeds.py — here it only has to answer.
+
+    monkeypatch, not mock.patch: a cog fixture whose mock outlives it stubs the
+    real helper for a whole xdist worker (see the no-contact stub leak).
+    """
+    async def _fake_build_name_fn(**_kwargs):
+        return lambda uid: f"Member{uid}"
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.build_name_fn", _fake_build_name_fn
+    )
+
 def _make_round() -> GuessRound:
     return GuessRound(
         id=ROUND_ID, guild_id=GUILD_ID, submitter_id=1001,

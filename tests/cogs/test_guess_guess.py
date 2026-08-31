@@ -29,6 +29,24 @@ def _stub_accent_color(monkeypatch):
         AsyncMock(return_value=discord.Color.default()),
     )
 
+@pytest.fixture(autouse=True)
+def _stub_name_resolver(monkeypatch):
+    """The embeds resolve member ids to display names; build_name_fn reads
+    ``known_users``, which a bare ``:memory:`` db_path has no schema for. The
+    resolver's own fallback chain is covered in
+    tests/test_name_resolver_logic.py, and the builders in
+    tests/test_guess_embeds.py — here it only has to answer.
+
+    monkeypatch, not mock.patch: a cog fixture whose mock outlives it stubs the
+    real helper for a whole xdist worker (see the no-contact stub leak).
+    """
+    async def _fake_build_name_fn(**_kwargs):
+        return lambda uid: f"Member{uid}"
+
+    monkeypatch.setattr(
+        "bot_modules.cogs.guess_cog.build_name_fn", _fake_build_name_fn
+    )
+
 GUESS_ROLE_ID = 7001
 ROUND_ID = 99
 
@@ -114,6 +132,13 @@ async def test_correct_first_guess_marks_solved_and_edits_message():
     game_msg.edit.assert_called_once()
     call_content = interaction.edit_original_response.call_args.kwargs.get("content", "")
     assert "correct" in call_content.lower()
+
+    # The one wiring assertion: the reveal edit carries resolved names, not the
+    # raw <@id>s the card used to print (tests/test_guess_embeds.py owns the
+    # rendering contract itself).
+    desc = game_msg.edit.call_args.kwargs["embed"].description
+    assert "Member2001" in desc and "Member1001" in desc and "Member9999" in desc
+    assert "<@" not in desc
 
 
 @pytest.mark.asyncio
