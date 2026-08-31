@@ -11,8 +11,8 @@ import {
   renderMetaWarning,
   mountChannelPicker,
   mountCategoryPicker,
-  mountAsync,
 } from "../config-helpers.js";
+import { mountTabs } from "../tabs.js";
 
 // A bios channel can be correctly configured here and still reach nobody —
 // deleting a role silently takes its channel permission overwrite with it.
@@ -40,77 +40,22 @@ export function mount(container) {
         <h2>Bios</h2>
         <div class="subtitle">A guided walk-through that helps members introduce themselves, and the questions it asks</div>
       </header>
-      <div class="tabs" style="margin-bottom:12px; display:flex; flex-wrap:wrap; gap:6px;" role="group" aria-label="Bios settings sections">
-        <button type="button" data-tab="config"    class="tab-btn active" aria-pressed="true">Settings</button>
-        <button type="button" data-tab="fields"    class="tab-btn" aria-pressed="false">Profile Questions</button>
-        <button type="button" data-tab="questions" class="tab-btn" aria-pressed="false">Icebreakers</button>
-      </div>
-      <div data-pane="config"></div>
-      <div data-pane="fields"    style="display:none;"></div>
-      <div data-pane="questions" style="display:none;"></div>
+      <div data-tabs></div>
     </div>
   `;
 
-  const panes = {
-    config: container.querySelector('[data-pane="config"]'),
-    fields: container.querySelector('[data-pane="fields"]'),
-    questions: container.querySelector('[data-pane="questions"]'),
-  };
-  const loaded = { config: false, fields: false, questions: false };
-
-  const loaders = {
-    config: () => renderConfigTab(panes.config),
-    fields: () => renderFieldsTab(panes.fields),
-    questions: () => renderQuestionsTab(panes.questions),
-  };
-  const loadErrors = {
-    config: "Couldn’t load the bios settings.",
-    fields: "Couldn’t load the profile questions.",
-    questions: "Couldn’t load the icebreaker questions.",
-  };
-
-  // Each tab loader is an un-awaited async call. A rejection used to be an
-  // unhandled promise rejection and left that pane on "Loading…" forever (F1);
-  // mountAsync turns it into an error state in the pane it belongs to. Retry
-  // re-runs just that loader — each one rebuilds its own pane from scratch, so
-  // the default whole-page remount isn't needed here.
-  const handles = {};
-  function openTab(name) {
-    handles[name]?.unmount?.();
-    handles[name] = mountAsync(panes[name], loaders[name], {
-      errorMsg: loadErrors[name],
-      retry: () => openTab(name),
-    });
-  }
-
-  container.querySelectorAll(".tab-btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      container.querySelectorAll(".tab-btn").forEach((b) => {
-        b.classList.remove("active");
-        b.setAttribute("aria-pressed", "false");
-      });
-      btn.classList.add("active");
-      btn.setAttribute("aria-pressed", "true");
-      for (const [name, pane] of Object.entries(panes)) {
-        pane.style.display = btn.dataset.tab === name ? "" : "none";
-      }
-      const name = btn.dataset.tab;
-      if (!loaded[name]) {
-        loaded[name] = true;
-        openTab(name);
-      }
-    });
-  });
-
-  // Initial tab
-  loaded.config = true;
-  openTab("config");
-
-  return {
-    unmount() {
-      for (const h of Object.values(handles)) h?.unmount?.();
-    },
-  };
+  // The tab strip + its lazy per-tab loading (each pane fetched only the
+  // first time its tab is opened, a failed fetch turned into a Retry button
+  // instead of a stuck "Loading…") lives in tabs.js — see its header comment
+  // for the rejection-reaches-the-guard contract `render` below relies on.
+  return mountTabs(container.querySelector("[data-tabs]"), [
+    { key: "config", label: "Settings", render: renderConfigTab,
+      errorMsg: "Couldn’t load the bios settings." },
+    { key: "fields", label: "Profile Questions", render: renderFieldsTab,
+      errorMsg: "Couldn’t load the profile questions." },
+    { key: "questions", label: "Icebreakers", render: renderQuestionsTab,
+      errorMsg: "Couldn’t load the icebreaker questions." },
+  ], { ariaLabel: "Bios settings sections" });
 }
 
 // ── Config tab ──────────────────────────────────────────────────────
