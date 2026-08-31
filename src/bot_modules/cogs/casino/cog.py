@@ -1077,6 +1077,29 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             log.exception("casino win-percentile read failed for %s", guild_id)
             return None
 
+    async def _ping_enabled(self, guild_id: int) -> bool:
+        """Whether this guild lets a Legendary win carry an @here.
+
+        Read only once a broadcast has already qualified for the ping, so an
+        ordinary win never pays for the query. Same fail-safe as the
+        percentile read above: a read failure returns False, which costs the
+        ping and keeps the announcement. Going the other way — pinging the
+        room because a config lookup hiccuped — is the one outcome an admin
+        who unchecked this dial asked us never to produce.
+        """
+
+        def _read() -> bool:
+            with self.bot.ctx.open_db() as conn:
+                return svc.load_casino_settings(
+                    conn, guild_id
+                ).broadcast_ping_enabled
+
+        try:
+            return await asyncio.to_thread(_read)
+        except Exception:
+            log.exception("casino ping-dial read failed for %s", guild_id)
+            return False
+
     async def _bank_announced_win(self, guild_id: int, payout: int) -> None:
         """Add this announcement to the population future ones are ranked
         against. Best-effort: a statistics row is not worth failing a post
@@ -1112,15 +1135,21 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         Also the one place the win-history population is written, once per
         card and strictly after the percentile read — see ``record_win``.
         """
+        top_pct = await self._top_pct_payout(guild_id, payout, threshold)
+        # The dial only decides anything where a ping is possible at all, and
+        # a None percentile can never reach the rung that pings — so the
+        # ordinary broadcast skips the read instead of asking.
+        ping_enabled = (
+            True if top_pct is None else await self._ping_enabled(guild_id)
+        )
         built = casino_embeds.build_big_win_broadcast(
             result_embed,
             payout=payout,
             threshold=threshold,
             stake=stake,
             game_label=game_label,
-            top_pct_payout=await self._top_pct_payout(
-                guild_id, payout, threshold
-            ),
+            top_pct_payout=top_pct,
+            ping_enabled=ping_enabled,
             winner_name=winner.display_name if winner else None,
             winner_icon=str(winner.display_avatar.url) if winner else None,
         )

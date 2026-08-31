@@ -521,6 +521,7 @@ def build_big_win_broadcast(
     stake: int,
     game_label: str,
     top_pct_payout: int | None = None,
+    ping_enabled: bool = True,
     winner_name: str | None = None,
     winner_icon: str | None = None,
 ) -> BigWinBroadcast | None:
@@ -540,7 +541,8 @@ def build_big_win_broadcast(
     on, so the stake gate is load-bearing for more than the copy.
     """
     tier = logic.big_win_tier(
-        payout, threshold, stake=stake, top_pct_payout=top_pct_payout
+        payout, threshold, stake=stake, top_pct_payout=top_pct_payout,
+        ping_enabled=ping_enabled,
     )
     if tier is None:
         return None

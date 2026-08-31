@@ -272,6 +272,7 @@ def big_win_tier(
     *,
     stake: int,
     top_pct_payout: int | None = None,
+    ping_enabled: bool = True,
 ) -> BigWinTier | None:
     """The broadcast tier for ``payout``, or None when it stays private.
 
@@ -293,6 +294,11 @@ def big_win_tier(
     *withhold* the ping: an unknown percentile is never treated as a passing
     one, and it can never create a broadcast the dial switched off.
 
+    ``ping_enabled`` False mutes the @here without touching the ladder — the
+    top rung still reads 💎 Legendary Win and still broadcasts, it just does
+    not shout. It is the guild's dial, so it withholds the ping and nothing
+    else; the copy a Legendary win carries is the same either way.
+
     **Legendary supersedes the rung it lands on** rather than sitting above
     it as a fourth step, and that is a deliberate accepted cost. The ping is
     the larger of the percentile and ``LEGENDARY_MIN_MULT``× the bar, so when
@@ -308,7 +314,7 @@ def big_win_tier(
     if top_pct_payout is not None and payout >= max(
         top_pct_payout, threshold * LEGENDARY_MIN_MULT
     ):
-        return BigWinTier(LEGENDARY_HEADER, LEGENDARY_LEAD, True)
+        return BigWinTier(LEGENDARY_HEADER, LEGENDARY_LEAD, ping_enabled)
     for mult, header in BIG_WIN_TIERS:
         if payout >= threshold * mult:
             return BigWinTier(header, None, False)

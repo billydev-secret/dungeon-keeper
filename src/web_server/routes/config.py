@@ -613,6 +613,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "jackpot_cut_pct": s.jackpot_cut_pct,
         "jackpot_seed": s.jackpot_seed,
         "broadcast_min_payout": s.broadcast_min_payout,
+        "broadcast_ping_enabled": s.broadcast_ping_enabled,
     }
 
 
@@ -4278,6 +4279,9 @@ class CasinoConfigUpdate(BaseModel):
     jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)
     jackpot_seed: int | None = Field(default=None, ge=0, le=1_000_000)
     broadcast_min_payout: int | None = Field(default=None, ge=0, le=10_000_000)
+    # Mutes the @here on the loudest broadcast tier. Nothing else pings,
+    # so this is the whole ping surface.
+    broadcast_ping_enabled: bool | None = None
 
 
 @router.put("/config/casino")

@@ -48,6 +48,7 @@ def cog(tmp_path: Path):
     ns = SimpleNamespace(bot=SimpleNamespace(ctx=SimpleNamespace(open_db=lambda: open_db(db_path))))
     ns._top_pct_payout = MethodType(CasinoCog._top_pct_payout, ns)
     ns._bank_announced_win = MethodType(CasinoCog._bank_announced_win, ns)
+    ns._ping_enabled = MethodType(CasinoCog._ping_enabled, ns)
     ns.db_path = db_path
     return ns
 
@@ -175,6 +176,35 @@ async def test_a_top_three_percent_win_pings_here(cog):
     assert sent["content"] == "@here"
     assert sent["allowed_mentions"].everyone is True
     assert "view" not in sent or sent["view"] is None
+
+
+@pytest.mark.asyncio
+async def test_the_ping_dial_mutes_the_here_but_keeps_the_broadcast(cog):
+    """Billy's ask: the loudest wins should stop shouting in this guild. The
+    card still posts — only the ping and its mention allowance go away."""
+    with open_db(cog.db_path) as conn:
+        svc.save_casino_settings(
+            conn, GUILD_ID, {"broadcast_ping_enabled": False}
+        )
+    _bank_wins(cog, [600] * 100 + [3_000] * 4)  # the same history that pings
+    channel = _Channel()
+    await _broadcast(cog, channel, 3_000)
+    assert len(channel.sends) == 1
+    sent = channel.sends[0]
+    assert sent["content"] is None
+    assert sent["allowed_mentions"].everyone is False
+    assert sent["embed"].title == "💎 Legendary Win — Slots"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_ping_dial_read_withholds_the_ping(cog):
+    """Fail-safe direction: a config read that hiccups must not ping a room
+    whose admin unchecked the dial. Silence is the safe way to be wrong."""
+    def _boom():
+        raise RuntimeError("db gone")
+
+    cog.bot = SimpleNamespace(ctx=SimpleNamespace(open_db=_boom))
+    assert await cog._ping_enabled(GUILD_ID) is False
 
 
 @pytest.mark.asyncio

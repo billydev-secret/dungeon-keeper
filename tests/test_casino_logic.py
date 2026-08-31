@@ -788,6 +788,33 @@ def test_a_payout_that_is_not_a_win_never_broadcasts(payout, stake, announced):
     assert (tier is not None) is announced
 
 
+@pytest.mark.parametrize(
+    ("payout", "top_pct", "header"),
+    [
+        pytest.param(3000, 2500, logic.LEGENDARY_HEADER, id="over-the-percentile"),
+        pytest.param(1500, 1000, logic.LEGENDARY_HEADER, id="on-the-3x-floor"),
+        pytest.param(1499, 1000, "💰 Big Win", id="a-rung-that-never-pinged"),
+    ],
+)
+def test_ping_enabled_false_mutes_the_here_without_changing_the_copy(
+    payout, top_pct, header
+):
+    """The guild's dial withholds the @here and nothing else. A muted
+    Legendary win is still 💎 Legendary Win, still carries its lead line and
+    still broadcasts — the only difference anyone sees is the missing ping.
+    """
+    tier = logic.big_win_tier(
+        payout, 500, stake=1, top_pct_payout=top_pct, ping_enabled=False
+    )
+    assert tier is not None
+    assert tier.ping is False
+    assert tier.header == header
+    # Identical to the pinging call in every respect but ``ping``.
+    loud = logic.big_win_tier(payout, 500, stake=1, top_pct_payout=top_pct)
+    assert loud is not None
+    assert (loud.header, loud.lead) == (tier.header, tier.lead)
+
+
 def test_big_win_tier_ping_still_obeys_the_broadcast_bar():
     """A percentile can only ever escalate a broadcast, never create one. A
     guild with the feature switched off stays silent however rare the win."""

@@ -219,6 +219,26 @@ def test_update_casino_broadcast_threshold_roundtrip_and_bounds(
     ).status_code == 422
 
 
+def test_update_casino_broadcast_ping_roundtrip(authed_client, fake_ctx):
+    """The @here dial defaults on, so unchecking it is the only edit that
+    changes anything — and it has to survive the round trip to be worth
+    offering."""
+    assert authed_client.get("/api/config").json()["casino"][
+        "broadcast_ping_enabled"
+    ] is True
+    resp = authed_client.put(
+        "/api/config/casino", json={"broadcast_ping_enabled": False}
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(
+            conn, fake_ctx.guild_id
+        ).broadcast_ping_enabled is False
+    assert authed_client.get("/api/config").json()["casino"][
+        "broadcast_ping_enabled"
+    ] is False
+
+
 def test_update_casino_blackjack_idle_capped_at_webhook_ttl(authed_client):
     """Ephemeral hand messages are editable for 15 minutes only — the
     dashboard must refuse an idle window the auto-stand can't repaint."""
