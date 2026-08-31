@@ -220,12 +220,16 @@ def test_activity_every_day_basis_keeps_the_generic_label(open_client, fake_ctx)
 # ── quality-score ─────────────────────────────────────────────────────
 
 
-def test_quality_score_shape(open_client):
+def test_contributors_shape(open_client):
+    """The frozen quality-score id now serves the five contributor views."""
     resp = open_client.get("/api/reports/quality-score")
     assert resp.status_code == 200
     data = resp.json()
-    assert "entries" in data
-    assert "total_scored" in data
+    assert data["window_days"] == 90
+    assert "members_considered" in data
+    for view in ("popular", "catalyst", "connectors", "welcomers", "under_attended"):
+        assert isinstance(data[view], list), view
+    assert "entries" not in data, "the composite score's shape is gone"
 
 
 # ── heavy endpoints: smoke only ───────────────────────────────────────

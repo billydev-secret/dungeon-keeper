@@ -1,9 +1,15 @@
 # Quality Score → Contributors
 
-**Status (2026-08-31):** Investigation complete, build not started. The member
-quality score is being **replaced**, not repaired: a nine-week backtest showed
-the composite performs worse at its own stated job than a single line of SQL,
-and the question it answers is not the question the server needs answered.
+**Status (2026-08-31): COMPLETE.** All five stages shipped. The member quality
+score was **replaced**, not repaired: a nine-week backtest showed the composite
+performs worse at its own stated job than a single line of SQL, and the question
+it answered is not the question the server needs answered.
+
+Two things were learned during the build that the investigation had not
+anticipated, both recorded in full below: channel baselines must be
+**leave-one-out**, and the sample-floor question is really a **reliability**
+question, answered by measuring split-half reliability rather than by picking a
+threshold.
 
 Source research: `docs/member_quality_score_research.pdf` — the report the
 original algorithm was speced from (April 2026). It was never committed at the
@@ -159,25 +165,25 @@ these roles, because they are held by different people.
 
 ---
 
-## Stages
+## Stages — all complete 2026-08-31
 
-1. **`contributors_service.py`** — the five metrics over the existing ingest
+1. ✅ **`contributors_service.py`** — the five metrics over the existing ingest
    tables, one bulk fetch per window, mirroring the current single-pass shape.
    Ships with `tests/test_contributors_service.py` covering each metric's happy
    path, the channel-adjustment denominator, the empty-channel and
    zero-opportunity guards, and the bot/self-interaction exclusions.
-2. **Route** — `GET /api/reports/quality-score` returns the five views,
+2. ✅ **Route** — `GET /api/reports/quality-score` returns the five views,
    `require_perms({"moderator"})` unchanged, `cached_run_query` TTL unchanged.
    Schema in `schemas.py` replaces the four component floats.
-3. **Panel** — `panels/quality-score.js` rebuilt as five sortable tables (or one
+3. ✅ **Panel** — `panels/quality-score.js` rebuilt as five sortable tables (or one
    table with a view switcher), counts shown beside every lift, `mountAsync` with
    the rejection reaching the loader. Names resolved via `_resolve_names`.
-4. **Delete** `member_quality_score.py`, its cache warmer in
+4. ✅ **Delete** `member_quality_score.py`, its cache warmer in
    `dungeonkeeper/__main__.py:691`, `MemberStandIn`, `tests/test_member_quality_score.py`,
    and the four weight constants. Delete `core/scoring.py` too — a second, older
    scorer carrying the same 40/25/20/15 weights, confirmed to have **zero
    importers** anywhere in `src/` or `tests/`.
-5. **Docs, same commit** — `reporting_spec.md` §Member quality score rewritten;
+5. ✅ **Docs** — `reporting_spec.md` §Member quality score rewritten;
    `docs/INDEX.md` plans row; `manual.html` (the Reports paragraph at ~line 2146
    names "Quality Score" and must name Contributors instead); this plan's status
    header. Commit `docs/member_quality_score_research.pdf` alongside.
@@ -197,12 +203,25 @@ every metric is derived at read time from `messages`, `message_attachments` and
   visible leaderboard does.
 - **Route id `quality-score` is reused**, per the frozen-id rule.
 
-## Open
+## Settled during the build
 
-- **Minimum thresholds per view.** The measured lists used ≥15 posts, ≥8 revival
-  attempts, ≥150 replies, ≥50 acts given. Lower floors admit noisy small-sample
-  entries; higher floors hide quieter contributors. Needs a call once the panel
-  is visible.
+- **Leave-one-out baselines.** A member who dominates a small channel was being
+  measured largely against themselves, pulling their lift toward 1.0 and hiding
+  the outperformance the view exists to surface. Caught by a test fixture that
+  scored two members identically who should have differed 2.5×.
+- **Thresholds were the wrong instrument** — the question is reliability, and
+  reliability is measurable. Split-half reliability (a member's lift across two
+  independent 45-day windows, confirmed on a separate 30/30 split) drove both
+  corrections: shrinkage (k = 25 / 0 / 5 / 50) and floors on *expected* events
+  (≥1 restart, ≥5 newcomer replies). Each value sits where the two splits agree;
+  one tuned on a single split and contradicted by the other is fitted noise.
+  Full numbers in `contributors_service.py`'s constants block.
+- **Under-attended k = 50 is deliberately not the reliability argmax.** k = 1600
+  scores 0.916 by flattening everyone under ~1000 acts to 1.0 and letting raw
+  volume carry the correlation; it demotes the member who is the actual finding
+  in that view (2.17× over 369 acts → 1.22×).
+
+## Open
 - **Window default.** Currently 90 days, matching the old panel and the
   reaction-data floor. 30 days would make the lists more current but thins the
   catalyst counts considerably.

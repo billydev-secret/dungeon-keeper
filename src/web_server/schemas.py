@@ -530,26 +530,30 @@ class ChannelComparisonResponse(BaseModel):
     channels: list[ChannelRowSchema]
 
 
-# ── Quality score ─────────────────────────────────────────────────────
+# ── Contributors ──────────────────────────────────────────────────────
 
 
-class QualityScoreEntrySchema(BaseModel):
+class ContributorEntrySchema(BaseModel):
     user_id: str
     user_name: str = ""
-    final_score: float
-    engagement_given: float
-    consistency_recency: float
-    content_resonance: float
-    posting_activity: float
-    status: str
-    active_days: int
-    active_weeks: int
-    gender: str = "unknown"
+    score: float
+    volume: int
+    own_rate: float = 0.0
+    baseline: float = 0.0
+    partners: int = 0
+    given: int = 0
+    received: int = 0
+    concentration: float = 0.0
 
 
-class QualityScoreResponse(BaseModel):
-    total_scored: int
-    entries: list[QualityScoreEntrySchema]
+class ContributorsResponse(BaseModel):
+    window_days: int
+    members_considered: int
+    popular: list[ContributorEntrySchema]
+    catalyst: list[ContributorEntrySchema]
+    connectors: list[ContributorEntrySchema]
+    welcomers: list[ContributorEntrySchema]
+    under_attended: list[ContributorEntrySchema]
 
 
 # ── Moderation: Jails ────────────────────────────────────────────────────

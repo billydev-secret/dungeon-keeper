@@ -12,9 +12,9 @@ from bot_modules.core.db_utils import get_tz_offset_hours
 from bot_modules.services import activity_graphs, ping_tracker_service, reports_data
 from bot_modules.services.channel_rollup import build_resolver, guild_channel_ids
 from bot_modules.services import usage_telemetry_service as usage_telemetry
-from bot_modules.services.member_quality_score import (
-    MemberStandIn,
-    build_quality_report,
+from bot_modules.services.contributors_service import (
+    VIEW_NAMES,
+    build_contributors_payload,
 )
 from bot_modules.services.message_store import get_known_channels_bulk
 from bot_modules.services.reports_data import MemberSnapshot
@@ -29,6 +29,7 @@ from web_server.deps import (
 )
 from web_server.helpers import resolve_names as _resolve_names
 from web_server.schemas import (
+    ContributorsResponse,
     ActivityResponse,
     ChannelComparisonResponse,
     GrantAuditResponse,
@@ -43,7 +44,6 @@ from web_server.schemas import (
     NsfwTagMixResponse,
     OneSidedAttentionResponse,
     PingResponseResponse,
-    QualityScoreResponse,
     RetentionResponse,
     TimeToLevel5Response,
     UsageReportResponse,
@@ -963,72 +963,53 @@ async def channel_comparison(
     return result
 
 
-# ── Quality score ─────────────────────────────────────────────────────
+# ── Contributors ──────────────────────────────────────────────────────
 
 
-@router.get("/quality-score", response_model=QualityScoreResponse)
-async def quality_score(
+@router.get("/quality-score", response_model=ContributorsResponse)
+async def contributors(
     request: Request,
     days: int | None = None,
-    min_active_days: int | None = None,
     include_bots: bool = False,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
+    """Five ranked views of who carries the community.
+
+    Keeps the ``quality-score`` route id it inherited from the composite score
+    it replaced: deep links, the nav help mapping and usage telemetry all key
+    off that id, and CLAUDE.md freezes it.
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
 
     def _q():
-        from datetime import datetime as _dt
-        from datetime import timezone as _tz
-
         with ctx.open_db() as conn:
-            if guild is not None:
-                members = guild.members
-            else:
-                # Offline: build stand-in members from DB message authors
-                q_bot_clause, q_bot_params = bot_filter_clause(
-                    guild_id, include_bots=include_bots
-                )
-                rows = conn.execute(
-                    f"""
-                    SELECT DISTINCT author_id, MIN(ts) AS first_seen
-                    FROM messages WHERE guild_id = ?{q_bot_clause}
-                    GROUP BY author_id
-                    """,
-                    (guild_id, *q_bot_params),
-                ).fetchall()
-                members = [
-                    MemberStandIn(
-                        int(r[0]), False, _dt.fromtimestamp(float(r[1]), tz=_tz.utc)
-                    )
-                    for r in rows
-                ]
-
-            return build_quality_report(
+            # Live membership where we have it; the service falls back to
+            # known_users.current_member when the bot is offline.
+            member_ids = {m.id for m in guild.members} if guild is not None else None
+            return build_contributors_payload(
                 conn,
                 guild_id,
-                members,  # type: ignore[arg-type]
                 window_days=days,
-                min_active_days=min_active_days,
+                member_ids=member_ids,
                 include_bots=include_bots,
             )
 
     result = await cached_run_query(
         "quality-score",
         guild_id,
-        {
-            "days": days,
-            "min_active_days": min_active_days,
-            "include_bots": include_bots,
-        },
+        {"days": days, "include_bots": include_bots},
         _q,
         ttl=300,
     )
-    await _resolve_names(ctx, guild, result.get("entries", []), ("user_id", "user_name"))
+    for view in VIEW_NAMES:
+        await _resolve_names(ctx, guild, result.get(view, []), ("user_id", "user_name"))
     return result
 
+
+# ── Voice activity ─────────────────────────────────────────────────────
 
 # ── Time to level 5 ────────────────────────────────────────────────────
 

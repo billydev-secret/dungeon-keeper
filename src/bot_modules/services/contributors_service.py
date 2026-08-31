@@ -539,3 +539,60 @@ def build_contributors_report(
     report.welcomers = _rank(report.welcomers)
     report.under_attended = _rank(report.under_attended)
     return report
+
+
+VIEW_NAMES = ("popular", "catalyst", "connectors", "welcomers", "under_attended")
+
+
+def build_contributors_payload(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    now: datetime | None = None,
+    window_days: int | None = None,
+    member_ids: set[int] | None = None,
+    include_bots: bool = False,
+) -> dict:
+    """Shape the report for the dashboard.
+
+    Shared by the web route and the hourly cache warmer so both store an
+    identical payload under the same cache key.  ``user_name`` is left blank —
+    the route resolves display names per request.  Ids are strings: a snowflake
+    exceeds 2^53 and would lose precision as a JSON number.
+
+    Unlike the quality score this replaces, no gender tag is attached.  Nothing
+    in these five views is per-gender, and ``member_gender`` is mod-assigned
+    without the subject's involvement, so not reading it here is one less place
+    that data travels.
+    """
+    report = build_contributors_report(
+        conn,
+        guild_id,
+        now=now,
+        window_days=window_days,
+        member_ids=member_ids,
+        include_bots=include_bots,
+    )
+
+    def rows(entries: list[ContributorEntry]) -> list[dict]:
+        return [
+            {
+                "user_id": str(e.user_id),
+                "user_name": "",
+                "score": round(e.score, 4),
+                "volume": e.volume,
+                "own_rate": round(e.own_rate, 4),
+                "baseline": round(e.baseline, 4),
+                "partners": e.partners,
+                "given": e.given,
+                "received": e.received,
+                "concentration": round(e.concentration, 4),
+            }
+            for e in entries
+        ]
+
+    return {
+        "window_days": report.window_days,
+        "members_considered": report.members_considered,
+        **{name: rows(getattr(report, name)) for name in VIEW_NAMES},
+    }
