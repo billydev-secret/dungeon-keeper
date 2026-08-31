@@ -780,8 +780,22 @@ def main() -> None:
         try:
             async with bot:
                 await bot.start(boot_cfg.token)
-        except (KeyboardInterrupt, asyncio.CancelledError):
-            pass
+        except (KeyboardInterrupt, asyncio.CancelledError) as exc:
+            # The ordinary Ctrl-C / SIGTERM unwind lands here, so this is not an
+            # error -- but it is also where a cancellation raised *during*
+            # bot.close() would land after destroying the real exception, which
+            # is worth a line in the journal rather than a silent exit 0.
+            log.info("Bot loop stopped by %s", type(exc).__name__)
+        except Exception:
+            # Everything else: the bot died rather than stopped. Most of these
+            # come from setup_hook, where one bad cog takes the whole process
+            # down before on_ready -- so name the cause in the journal (this is
+            # the line to grep for after an unexplained death) and let it
+            # propagate, because a clean exit 0 is what once left the bot dead
+            # for 25 minutes with Restart=on-failure watching and nothing to
+            # act on.
+            log.critical("Bot exited abnormally — see traceback", exc_info=True)
+            raise
         finally:
             await _shutdown()
 

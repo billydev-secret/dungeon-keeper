@@ -199,101 +199,6 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
                 await channel.send(f"🗳️ Vote now! {' '.join(role_mentions)}")
 
 
-class _WarnFromMessageModal(discord.ui.Modal, title="Warn User — Message Context"):
-    notes: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
-        label="Moderator notes (optional)",
-        style=discord.TextStyle.paragraph,
-        required=False,
-        max_length=500,
-    )
-
-    def __init__(self, source_message: discord.Message, ctx: "AppContext") -> None:
-        super().__init__()
-        self.source_message = source_message
-        self._ctx = ctx
-
-    async def on_submit(self, interaction: discord.Interaction) -> None:
-        ctx = self._ctx
-        guild = interaction.guild
-        member = interaction.user
-        if guild is None or not isinstance(member, discord.Member):
-            await interaction.response.send_message("❌ Server only.", ephemeral=True)
-            return
-
-        target = guild.get_member(self.source_message.author.id)
-        if target is None:
-            await interaction.response.send_message(
-                "❌ That user is no longer in this server.", ephemeral=True
-            )
-            return
-
-        reason_text = self.source_message.content.strip()
-        notes_text = self.notes.value.strip()
-        full_reason = reason_text
-        if notes_text:
-            full_reason = f"{reason_text}\n\n**Mod notes:** {notes_text}"
-
-        wfm_guild_id = guild.id
-        wfm_target_id = target.id
-        wfm_member_id = member.id
-        wfm_source_msg_id = self.source_message.id
-        wfm_source_ch_id = self.source_message.channel.id
-
-        def _issue_warning():
-            with ctx.open_db() as conn:
-                wid = create_warning(
-                    conn,
-                    guild_id=wfm_guild_id,
-                    user_id=wfm_target_id,
-                    moderator_id=wfm_member_id,
-                    reason=full_reason,
-                )
-                cnt = get_active_warning_count(conn, wfm_guild_id, wfm_target_id)
-                write_audit(
-                    conn,
-                    guild_id=wfm_guild_id,
-                    action="warning_issue",
-                    actor_id=wfm_member_id,
-                    target_id=wfm_target_id,
-                    extra={
-                        "warning_id": wid,
-                        "reason": full_reason,
-                        "count": cnt,
-                        "source_message_id": wfm_source_msg_id,
-                        "source_channel_id": wfm_source_ch_id,
-                    },
-                )
-            return wid, cnt
-
-        warning_id, count = await asyncio.to_thread(_issue_warning)
-
-        await interaction.response.send_message(
-            f"⚠️ Warning issued to {target.mention}. They now have **{count}** active warning(s).",
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
-
-        audit_embed = build_warning_audit_embed(
-            target_mention=target.mention,
-            moderator_mention=member.mention,
-            active_count=count,
-            reason=reason_text,
-            notes=notes_text,
-            source_jump_url=self.source_message.jump_url,
-        )
-        await _post_audit(ctx, guild, audit_embed)
-
-        threshold = await asyncio.to_thread(
-            _read_warning_threshold, ctx, guild.id
-        )
-        if count >= threshold and (count - 1) < threshold:
-            alert = build_warning_threshold_embed(
-                target_mention=target.mention,
-                active_count=count,
-                admin_role_ids=sorted(_get_admin_role_ids(ctx, guild.id)),
-            )
-            await _post_audit(ctx, guild, alert)
-
-
 class JailCog(commands.Cog):
     ticket = app_commands.Group(name="ticket", description="Ticket management commands.")
     policy = app_commands.Group(
@@ -343,33 +248,6 @@ class JailCog(commands.Cog):
         bot.tree.add_command(ticket_ctx_menu)
         self._ticket_context_menu = ticket_ctx_menu
 
-        async def warn_message_ctx(
-            interaction: discord.Interaction, message: discord.Message
-        ) -> None:
-            invoker = interaction.user
-            if not isinstance(invoker, discord.Member) or not _is_mod(invoker, ctx):
-                await interaction.response.send_message("❌ Mod only.", ephemeral=True)
-                return
-            if message.author.bot:
-                await interaction.response.send_message(
-                    "❌ Can't warn a bot.", ephemeral=True
-                )
-                return
-            if not message.content or not message.content.strip():
-                await interaction.response.send_message(
-                    "❌ That message has no text content to use as a warning reason.",
-                    ephemeral=True,
-                )
-                return
-            await interaction.response.send_modal(_WarnFromMessageModal(message, ctx))
-
-        warn_msg_ctx_menu = app_commands.ContextMenu(
-            name="Warn User (Message)", callback=warn_message_ctx
-        )
-        warn_msg_ctx_menu.default_permissions = discord.Permissions(moderate_members=True)
-        bot.tree.add_command(warn_msg_ctx_menu)
-        self._warn_msg_context_menu = warn_msg_ctx_menu
-
         # Start jail expiry background task
         bot.startup_task_factories.append(lambda: jail_expiry_loop(bot, ctx))
         # Resolve policy votes whose 72h (or configured) window has passed.
@@ -400,10 +278,6 @@ class JailCog(commands.Cog):
         if hasattr(self, "_ticket_context_menu"):
             self.bot.tree.remove_command(
                 "Open Ticket About This Message", type=discord.AppCommandType.message
-            )
-        if hasattr(self, "_warn_msg_context_menu"):
-            self.bot.tree.remove_command(
-                "Warn User (Message)", type=discord.AppCommandType.message
             )
 
     # ── Record a jailed member walking out ───────────────────────────────
