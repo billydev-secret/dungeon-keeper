@@ -77,6 +77,10 @@ class VoiceTranscriptionConfig:
     enabled: bool
     model_name: str
     channel_ids: tuple[int, ...]  # allowlist; empty = all channels
+    #: Remove the voice message once its transcript has been posted. Off by
+    #: default: the delete is irreversible and the transcript cannot be checked
+    #: against the audio afterwards.
+    delete_after_transcribe: bool = False
 
 
 def is_available() -> bool:
@@ -116,7 +120,7 @@ def _parse_channel_ids(raw: str | None) -> tuple[int, ...]:
 
 def get_config(conn: Any, guild_id: int) -> VoiceTranscriptionConfig | None:
     row = conn.execute(
-        "SELECT enabled, model_name, channel_ids "
+        "SELECT enabled, model_name, channel_ids, delete_after_transcribe "
         "FROM voice_transcription_config WHERE guild_id = ?",
         (guild_id,),
     ).fetchone()
@@ -127,6 +131,7 @@ def get_config(conn: Any, guild_id: int) -> VoiceTranscriptionConfig | None:
         enabled=bool(row["enabled"]),
         model_name=row["model_name"],
         channel_ids=_parse_channel_ids(row["channel_ids"]),
+        delete_after_transcribe=bool(row["delete_after_transcribe"]),
     )
 
 
@@ -137,18 +142,21 @@ def set_config(
     enabled: bool,
     model_name: str,
     channel_ids: tuple[int, ...] = (),
+    delete_after_transcribe: bool = False,
 ) -> None:
     if model_name not in VALID_MODELS:
         model_name = DEFAULT_MODEL
     csv = ",".join(str(int(c)) for c in channel_ids)
     conn.execute(
         """
-        INSERT INTO voice_transcription_config (guild_id, enabled, model_name, channel_ids)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO voice_transcription_config
+            (guild_id, enabled, model_name, channel_ids, delete_after_transcribe)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (guild_id) DO UPDATE SET
             enabled = excluded.enabled,
             model_name = excluded.model_name,
-            channel_ids = excluded.channel_ids
+            channel_ids = excluded.channel_ids,
+            delete_after_transcribe = excluded.delete_after_transcribe
         """,
-        (guild_id, int(enabled), model_name, csv),
+        (guild_id, int(enabled), model_name, csv, int(delete_after_transcribe)),
     )
