@@ -2048,6 +2048,17 @@ def test_broadcast_min_payout_defaults_off_and_roundtrips(db):
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 500
 
 
+def test_broadcast_ping_defaults_on_and_roundtrips(db):
+    """Default on: the @here is the behaviour every guild already had, so a
+    guild that never touches the dial keeps it."""
+    with open_db(db) as conn:
+        assert svc.load_casino_settings(conn, GUILD).broadcast_ping_enabled is True
+        svc.save_casino_settings(conn, GUILD, {"broadcast_ping_enabled": False})
+        assert svc.load_casino_settings(conn, GUILD).broadcast_ping_enabled is False
+        svc.save_casino_settings(conn, GUILD, {"broadcast_ping_enabled": True})
+        assert svc.load_casino_settings(conn, GUILD).broadcast_ping_enabled is True
+
+
 # ── win history (the broadcast's top-3% percentile, migration 162) ─────
 
 

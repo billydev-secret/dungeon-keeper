@@ -88,13 +88,25 @@ channel edit bucket). The channel itself carries only shared surfaces:
   |---|---|---|
   | 💰 Big Win | ≥ 1× `broadcast_min_payout` | — |
   | 🔥 Huge Win | ≥ 3× | — |
-  | 💎 Legendary Win | top 3% of the guild's recent **announced** wins, floored at 3× | `@here` |
+  | 💎 Legendary Win | top 3% of the guild's recent **announced** wins, floored at 3× | `@here`, unless `broadcast_ping_enabled` is off |
 
   Steps are **multiples of the dial**, never coin amounts: the two live
   guilds run economies ~8× apart, and a hardcoded ladder would be wrong in
   at least one of them. The top rung adds a lead line above the result copy
   and is the only one that pings; `AllowedMentions(everyone=True)` is set
   only for it, every other broadcast staying on `.none()`.
+
+  **The ping is a per-guild dial** (`broadcast_ping_enabled`, default on —
+  the behaviour every guild already had). Unchecked, a Legendary win keeps
+  its header, its lead line and its public card and simply drops the `@here`;
+  the ladder itself does not move. `big_win_tier` takes it as a `ping_enabled`
+  kwarg rather than reading config, so the decision stays pure, and the cog's
+  `_send_big_win` — the single chokepoint every broadcast path funnels through
+  — is the only place that reads it. That read happens **only** when the
+  percentile lookup already returned a rankable mark, so an ordinary
+  broadcast never pays for it, and a failed read returns False: a hiccup can
+  cost the ping but must never manufacture one in a guild that switched it
+  off.
 
   **Rungs are sized against what the economy actually pays.** This shipped on
   2026-08-15 with a three-rung ladder topping out at 🌟 Monster Win (10×) and
@@ -168,7 +180,9 @@ channel edit bucket). The channel itself carries only shared surfaces:
   prod broadcasts a few dozen times a year, so the 100-row floor this
   originally shipped with would have taken years to arm. The read is skipped
   for any payout under 3× the bar, and a failed read degrades to None, so a
-  hiccup costs the ping and never the announcement.
+  hiccup costs the ping and never the announcement. A guild that has armed
+  the percentile and then turns `broadcast_ping_enabled` off reaches the same
+  silence from the other direction — the card posts, the `@here` does not.
 
   The table **deliberately stores no `user_id`**: it answers only "how big is
   an announced win around here lately", which never needs to know who won, so
@@ -264,6 +278,7 @@ All movement goes through `services/casino_service.py`:
 | `pools_takeout_pct` | 5 | % of the whole pool taken at settle and **burned** (bounds 0–50). Distinct from `jackpot_cut_pct`, which is skimmed per lost stake and fed to a pot that re-mints it |
 | `pools_metrics` | `""` | comma-separated `pools_metrics` keys the daily draw may pick from. Empty = the whole roster, which is also what an untouched guild runs |
 | `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
+| `broadcast_ping_enabled` | on | whether a 💎 Legendary Win carries an `@here`. Off, that rung still broadcasts, just silently — no other rung ever pinged |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
 Dashboard: **Economy → Casino** (`config-casino.js`, admin-only;
@@ -672,13 +687,15 @@ one row), and an AST guard walks `cog.py`/`pools_panel.py` requiring every
 render site to pass a `name_fn` — needed because the parameter defaults to
 `mention`, so a missed call site would silently reintroduce the bug.
 `tests/web/test_casino_routes.py` — section shape (string ids), PUT
-persistence + guards, `broadcast_min_payout` roundtrip/bounds, the 840s
-idle cap; authz/snowflake/browser sweeps cover the panel automatically.
+persistence + guards, `broadcast_min_payout` roundtrip/bounds,
+`broadcast_ping_enabled` roundtrip (default on), the 840s idle cap;
+authz/snowflake/browser sweeps cover the panel automatically.
 The big-win broadcast is a three-layer contract: the tier ladder and the
 percentile/floor interaction in `tests/test_casino_logic.py` (including that
 an unknown percentile withholds the ping rather than passing it, that a
-percentile can never create a broadcast the dial switched off, the documented
-supersession, and `test_every_ladder_rung_is_reachable` guarding the dead-rung
+percentile can never create a broadcast the dial switched off, that
+`ping_enabled=False` mutes the `@here` while leaving the header and lead line
+untouched, the documented supersession, and `test_every_ladder_rung_is_reachable` guarding the dead-rung
 defect), the rolling window in `tests/test_casino_service.py` (sample floor,
 per-guild scoping, trim keeping the newest, a schema assertion that the table
 holds no `user_id`, the band never rounding loose at the sample floor, and
@@ -687,5 +704,6 @@ embed in `tests/test_casino_embeds.py` (header replaces the game title, copy
 and fields survive, and the player's own card is never mutated), and the cog
 seam in `tests/cogs/test_casino_big_win_broadcast.py` (no view, `@here` with
 `everyone=True` only on the top rung, a thin history or a failed percentile
-read still broadcasting, a push posting and banking nothing, one banked row
+read still broadcasting, the ping dial muting the `@here` while the Legendary
+card still posts, a failed dial read withholding the ping, a push posting and banking nothing, one banked row
 per announcement, and the current win not being ranked against itself).

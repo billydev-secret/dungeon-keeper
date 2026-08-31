@@ -112,6 +112,11 @@ class CasinoSettings:
     # in the casino channel (results themselves render ephemerally).
     # 0 = never broadcast.
     broadcast_min_payout: int = 0
+    # Whether the loudest broadcast tier carries an @here. Only that top rung
+    # ever pings, so this is the whole ping surface: unchecked, a Legendary
+    # win still posts its card, just quietly. Defaults on — the ping is the
+    # behaviour every guild already had.
+    broadcast_ping_enabled: bool = True
     # Bot bookkeeping (the hub panel message + where it lives, so a channel
     # move can clean up the old panel) — not dashboard-editable.
     panel_message_id: int = 0
@@ -133,6 +138,7 @@ _BOOL_KEYS = [
     "mines_enabled",
     "pools_enabled",
     "jackpot_enabled",
+    "broadcast_ping_enabled",
 ]
 # Free-text settings — stored and returned verbatim rather than coerced.
 _STR_KEYS = ["pools_metrics"]

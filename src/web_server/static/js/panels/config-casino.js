@@ -168,6 +168,21 @@ export function mount(container) {
         "the casino channel, with a Play Again button anyone can press. " +
         "Enter 0 to never broadcast wins (jackpot hits are always announced).",
     ));
+    const pingRow = document.createElement("div");
+    pingRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
+    pingRow.append(
+      checkbox(
+        "broadcast_ping_enabled", c.broadcast_ping_enabled !== false,
+        "Ping the room (@here) on Legendary wins",
+      ),
+    );
+    cardFloor.appendChild(field(
+      "Legendary Win Ping", pingRow,
+      "The rarest broadcasts \u2014 the biggest payouts this casino has ever " +
+        "handed over \u2014 are announced with an @here so nobody misses one. " +
+        "Uncheck this and those wins still get their own public message, " +
+        "just without pinging everyone in the channel. No other win pings.",
+    ));
 
     const row = document.createElement("div");
     row.style.cssText = "display:flex; gap:8px; align-items:center;";
@@ -225,6 +240,7 @@ export function mount(container) {
           keno_enabled: fd.has("keno_enabled"),
           mines_enabled: fd.has("mines_enabled"),
           jackpot_enabled: fd.has("jackpot_enabled"),
+          broadcast_ping_enabled: fd.has("broadcast_ping_enabled"),
         });
         showStatus(statusEl, true);
       } catch (err) {
