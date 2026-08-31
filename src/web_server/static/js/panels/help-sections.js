@@ -93,7 +93,7 @@ export const HELP_GROUPS = [
   { heading: "Server Admin", items: [
     { page: "help-setup",          anchor: "setup",             label: "Setup & Permissions" },
     { page: "help-announcements",  anchor: "announcements",     label: "Announcements" },
-    { page: "help-role-menus",     anchor: "role-menus",        label: "Role Menus" },
+    { page: "help-role-menus",     anchor: "role-menus",        label: "Reaction Roles" },
     { page: "help-docs",           anchor: "docs",              label: "Docs" },
     { page: "help-config",         anchor: "config",            label: "Configuration Reference" },
     { page: "help-cleanup",        anchor: "server-ops",        label: "Server Upkeep" },

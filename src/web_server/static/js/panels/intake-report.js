@@ -8,6 +8,12 @@ import { renderError } from "../states.js";
  * Moderator-level information — no gating applies here. The procedure and
  * card behaviour live on Config → Members → Intake Cards (config-intake),
  * cross-linked via `related:`.
+ *
+ * Three separate boxes — Queue, Welcomers, Skipped steps — rather than one
+ * long tile, so each reads as its own thing at a glance (Billy: "it seems
+ * like these should also be separate boxes, like skip steps, welcomers,
+ * that kind of stuff"). The content and controls are unchanged, just
+ * regrouped.
  */
 export function mount(container, initialParams = {}) {
   container.innerHTML = `
@@ -16,25 +22,26 @@ export function mount(container, initialParams = {}) {
         <h2>Intake Queue</h2>
         <div class="subtitle">Open welcome cards, and how intakes are going</div>
       </header>
-      <section data-region="queue"></section>
-    </div>
-  `;
-  return mountQueue(container.querySelector('[data-region="queue"]'), initialParams);
-}
 
-export function mountQueue(container, initialParams) {
-  container.innerHTML = `
-    <div>
-      <div class="section-label">Queue</div>
-      <div class="field-hint" style="margin-bottom:10px;">Open intake cards and how the welcome procedure is actually going</div>
       <div class="controls"></div>
       <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
-      <div data-open></div>
-      <h3 style="margin-top:16px;">Welcomers</h3>
-      <div data-welcomers></div>
-      <h3 style="margin-top:16px;">Skipped steps</h3>
-      <div class="subtitle">Steps marked skipped when the completion code closed a card early — the procedure’s own feedback about what the team doesn’t run.</div>
-      <div data-skipped></div>
+
+      <section class="card">
+        <div class="section-label">Queue</div>
+        <div class="field-hint" style="margin-bottom:10px;">Open intake cards and how the welcome procedure is actually going</div>
+        <div data-open></div>
+      </section>
+
+      <section class="card">
+        <div class="section-label">Welcomers</div>
+        <div data-welcomers></div>
+      </section>
+
+      <section class="card">
+        <div class="section-label">Skipped steps</div>
+        <div class="subtitle">Steps marked skipped when the completion code closed a card early — the procedure’s own feedback about what the team doesn’t run.</div>
+        <div data-skipped></div>
+      </section>
     </div>
   `;
 
@@ -133,7 +140,9 @@ export function mountQueue(container, initialParams) {
       }
     } catch (err) {
       // A failed fetch is an error, not an empty queue — .empty reads as
-      // "nothing to do here", which is the opposite of what happened.
+      // "nothing to do here", which is the opposite of what happened. Every
+      // refresh pass (the initial load and every range change) is guarded by
+      // this same try/catch, so a later failure surfaces the same way.
       openWrap.innerHTML = renderError(`Couldn't load the intake queue — try again. (${err.message})`);
     }
   }

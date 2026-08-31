@@ -62,7 +62,7 @@ export function mountSettings(container) {
     container.innerHTML = `
       <div>
         <div class="section-label">Settings</div>
-        <div class="field-hint" style="margin-bottom:14px;">
+        <div class="field-hint">
           How members earn XP, who can grant it, and where level-ups are logged.
         </div>
         ${renderMetaWarning()}
@@ -77,7 +77,8 @@ export function mountSettings(container) {
             <div class="field">
               <label>Promotion Review Grant Role</label>
               <div data-picker="promotion_review_grant_role_id"></div>
-              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. This is also the role the Level 5 card's <strong>Spicy access</strong> line reports on. Choose "(none)" and the Grant button has nothing to give (the Spicy access line then falls back to a grant named <code>nsfw</code>, and is left off the card if there isn't one). Who may press Grant is separate: admins, mods, and anyone with Manage Roles.</div>
+              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. Also what the Level 5 card's <strong>Spicy access</strong> line reports on.</div>
+              <div class="field-hint">Choose "(none)" and Grant has nothing to give — the Spicy access line then falls back to a role named <code>nsfw</code>, or drops off the card if there isn't one. Pressing Grant itself is open to admins, mods, and anyone with Manage Roles.</div>
             </div>
             <div class="field">
               <label>Promotion Review Ping Role</label>
@@ -112,13 +113,10 @@ export function mountSettings(container) {
 
           <div class="card">
             <div class="section-label">How XP Is Calculated</div>
-            <div class="note" style="margin: 0 0 14px;">
-              Every message earns its word count times the XP per word, plus a bonus when it
-              replies to another person. Multipliers cut XP down for rapid-fire posting, repeated
-              text, and two members trading messages back and forth to farm. Voice XP is paid on a
-              timer while a member sits in a voice channel with enough other people. The XP needed
-              for a level follows <code>factor × (level − 1)²</code>, so each level costs more than the last.
-              Defaults are listed in each hint — the defaults suit most servers.
+            <div class="note">
+              <code>words × XP per word + reply bonus</code>, trimmed by whichever multipliers
+              below apply, plus XP paid on a timer for time in voice. A level needs
+              <code>factor × (level − 1)²</code> XP, so each one costs more than the last.
             </div>
           </div>
 
@@ -147,7 +145,7 @@ export function mountSettings(container) {
           </div>
 
           <div class="card">
-            <div class="section-label">Rapid-Fire Slowdown</div>
+            <div class="section-label">Anti-Farming</div>
             <div class="field">
               <label for="xp-cooldown_thresholds_seconds">Rapid-Fire Time Tiers (seconds)</label>
               <input type="text" name="cooldown_thresholds_seconds" id="xp-cooldown_thresholds_seconds" required value="${esc(xp.cooldown_thresholds_seconds)}" style="max-width:220px;" />
@@ -158,10 +156,6 @@ export function mountSettings(container) {
               <input type="text" name="cooldown_multipliers" id="xp-cooldown_multipliers" required value="${esc(xp.cooldown_multipliers)}" style="max-width:220px;" />
               <div class="field-hint">Three numbers, separated by commas, matching the tiers above. 0.35 means a message in that tier earns 35% of its normal XP. Default 0.35,0.6,0.85.</div>
             </div>
-          </div>
-
-          <div class="card">
-            <div class="section-label">Anti-Farming</div>
             <div class="field">
               <label for="xp-duplicate_multiplier">Repeat-Message Multiplier</label>
               <input type="number" name="duplicate_multiplier" id="xp-duplicate_multiplier" required step="0.01" min="0" max="1" value="${xp.duplicate_multiplier}" style="max-width:140px;" />

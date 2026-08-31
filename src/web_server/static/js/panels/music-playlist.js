@@ -23,6 +23,7 @@ import {
 } from "../config-helpers.js";
 import { renderSortableTable } from "../table.js";
 import { confirmDialog, toast } from "../ui.js";
+import { mountTabs } from "../tabs.js";
 
 // The three shapes connection_status() reports. Wording matches the spec —
 // "Read-only, needs re-consent" is the whole diagnosis, not a code.
@@ -101,10 +102,15 @@ export function mount(container) {
       api("/api/music-playlist/status"),
       loadChannels(),
     ]);
-    render(container, status, channels);
+    return render(container, status, channels);
   }, { errorMsg: "Couldn’t load the Music Playlist settings." });
 }
 
+// Tabbed like Bios (config-bios.js is the reference implementation — see
+// tabs.js for the lazy-load / retry contract): Settings bundles the
+// admin-only config plus the two occasional maintenance actions, and each of
+// the three data tables gets its own lazily-loaded tab so an admin who only
+// ever checks Settings never pays for the other three fetches.
 function render(container, status, channels) {
   const s = status.settings || {};
   // Tracks the last-saved playlist id across saves in this panel session,
@@ -134,185 +140,38 @@ function render(container, status, channels) {
     panel.appendChild(w.firstElementChild);
   }
 
-  // ── Connection ───────────────────────────────────────────────────────
-  const conn = CONNECTION[status.connection] || CONNECTION.not_connected;
-  const cardConn = sectionCard(panel, "Connection");
-  const connRow = document.createElement("div");
-  connRow.style.cssText = "display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:6px 0;";
-  connRow.innerHTML =
-    `<span class="${esc(conn.cls)}">${esc(conn.label)}</span>` +
-    // A real navigation, not a fetch: /spotify/authorize redirects to
-    // Spotify's consent page. New tab so the panel survives the round trip.
-    `<a class="btn btn-primary" href="/spotify/authorize" target="_blank" rel="noopener">${esc(conn.btn)}</a>`;
-  cardConn.appendChild(connRow);
-  const connHint = document.createElement("div");
-  connHint.className = "field-hint";
-  connHint.textContent =
-    "The playlist is written with the bot owner's Spotify account. " +
-    "Read-only means the stored grant predates the write scopes — click " +
-    "through the consent page once more, then reload this page. Nothing " +
-    "below can write to Spotify until the chip says Connected.";
-  cardConn.appendChild(connHint);
+  const tabsHost = document.createElement("div");
+  panel.appendChild(tabsHost);
+  container.appendChild(panel);
 
-  // ── Watch + Behavior (one form, one Save) ────────────────────────────
-  const form = document.createElement("form");
-  form.className = "form form-cards";
-  panel.appendChild(form);
-
-  const cardWatch = sectionCard(form, "Watch");
-  const chanSlot = document.createElement("span");
-  cardWatch.appendChild(field(
-    "Watched Channel",
-    chanSlot,
-    "The one channel whose music links feed the playlist. \"(disabled)\" " +
-      "stops watching entirely.",
-  ));
-  const chanPicker = mountChannelPicker(
-    chanSlot, channels, String(s.channel_id || "0"),
-    { emptyValue: "0", emptyLabel: "(disabled)", label: "Watched Channel" },
-  );
-  const playlistInput = document.createElement("input");
-  playlistInput.type = "text";
-  playlistInput.name = "playlist_id";
-  playlistInput.value = s.playlist_id || "";
-  playlistInput.placeholder = "Playlist link, spotify:playlist: URI, or bare id";
-  playlistInput.style.maxWidth = "420px";
-  cardWatch.appendChild(field(
-    "Target Playlist",
-    playlistInput,
-    "The Spotify playlist the window is written to. Paste an " +
-      "open.spotify.com/playlist link — it's stored as the bare id. Leave " +
-      "empty to clear. Changing it does not move anything: songs already " +
-      "added stay in the old playlist, and already-processed messages " +
-      "never follow the new one.",
-  ));
-  const watchToggles = document.createElement("div");
-  watchToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
-  watchToggles.append(checkbox("enabled", s.enabled === true, "Watch the channel"));
-  cardWatch.appendChild(field(
-    "Enable",
-    watchToggles,
-    "Unchecked pauses the watcher without losing any settings. Links " +
-      "posted while paused are only picked up by a later Re-scan.",
-  ));
-
-  const cardBehavior = sectionCard(form, "Behavior");
-  cardBehavior.appendChild(field(
-    "Window Size",
-    numInput("window_size", s.window_size ?? 30, 1, "1", 200),
-    "How many songs the rolling playlist holds. Song N+1 pushes the " +
-      "oldest one out. Between 1 and 200; 30 is the default.",
-  ));
-  const behaviorToggles = document.createElement("div");
-  behaviorToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
-  behaviorToggles.append(
-    checkbox("remove_on_delete", s.remove_on_delete !== false, "Remove when the message is deleted"),
-  );
-  cardBehavior.appendChild(field(
-    "Re-scan Depth",
-    numInput("rescan_depth", s.rescan_depth ?? 200, 1, "1", 2000),
-    "How far back Re-scan reads the channel. This is the only way to " +
-      "recover songs the bot could not add at the time (a read-only " +
-      "connection, or a Spotify outage), so raise it if writes were blocked " +
-      "for longer than this many messages. Between 1 and 2000; 200 is the " +
-      "default.",
-  ));
-  cardBehavior.appendChild(field(
-    "Options",
-    behaviorToggles,
-    "Remove-on-delete drops a track when its source message is deleted, " +
-      "unless another live message still references it. Album and playlist " +
-      "links always contribute their single most popular track.",
-  ));
-
-  const saveRow = document.createElement("div");
-  saveRow.style.cssText = "display:flex; gap:8px; align-items:center;";
-  const saveBtn = document.createElement("button");
-  saveBtn.type = "submit";
-  saveBtn.className = "btn btn-primary";
-  saveBtn.textContent = "Save";
-  const saveStatus = document.createElement("span");
-  saveRow.append(saveBtn, saveStatus);
-  form.appendChild(saveRow);
-
-  guardForm(form);
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(form);
-    const windowSize = parseInt(String(fd.get("window_size") ?? "").trim(), 10);
-    if (!Number.isFinite(windowSize) || windowSize < 1 || windowSize > 200) {
-      showStatus(saveStatus, false, "Window Size must be a whole number between 1 and 200.");
-      form.querySelector('[name="window_size"]').focus();
-      return;
-    }
-    const rescanDepth = parseInt(String(fd.get("rescan_depth") ?? "").trim(), 10);
-    if (!Number.isFinite(rescanDepth) || rescanDepth < 1 || rescanDepth > 2000) {
-      showStatus(saveStatus, false, "Re-scan Depth must be a whole number between 1 and 2000.");
-      form.querySelector('[name="rescan_depth"]').focus();
-      return;
-    }
-    // Repointing the dial strands the back catalogue: the processed-message
-    // ledger is playlist-agnostic, so already-processed messages never
-    // follow, and nothing already added moves. Deliberate (2026-08-18) —
-    // warned about here rather than re-keying the ledger.
-    if (
-      savedPlaylistId &&
-      extractPlaylistId(playlistInput.value) !== savedPlaylistId
-    ) {
-      const ok = await confirmDialog(
-        "Songs already in the current playlist stay there, and messages " +
-          "the bot has already processed will never be re-added to the new " +
-          "one — a Re-scan only picks up messages that never landed. " +
-          "Change the target playlist?",
-        { title: "Change target playlist", confirmLabel: "Change playlist" },
-      );
-      if (!ok) return;
-    }
-    try {
-      const saved = await apiPut("/api/music-playlist/settings", {
-        enabled: fd.has("enabled"),
-        channel_id: chanPicker.getValue() || "0", // string — snowflake rule
-        playlist_id: playlistInput.value.trim(),
-        window_size: windowSize,
-        remove_on_delete: fd.has("remove_on_delete"),
-        rescan_depth: rescanDepth,
-      });
-      savedPlaylistId = (saved && saved.settings
-        ? saved.settings.playlist_id
-        : extractPlaylistId(playlistInput.value)) || "";
-      showStatus(saveStatus, true);
-      refreshWindow(); // a changed playlist or window size redraws the table
-    } catch (err) {
-      showStatus(saveStatus, false, err.message);
-    }
-  });
-
-  // ── Window ───────────────────────────────────────────────────────────
-  const cardWindow = sectionCard(panel, "Live Window");
-  const windowLabel = cardWindow.querySelector(".section-label");
+  // ── Live Window (host built once; reused across tab opens/retries so the
+  // Settings tab's Save and the Maintenance actions below can always refresh
+  // it, even before its own tab has ever been opened) ────────────────────
   const windowHint = document.createElement("div");
   windowHint.className = "field-hint";
   windowHint.style.marginBottom = "8px";
-  windowHint.textContent =
-    "The songs currently on the playlist, newest first. Removing a row " +
-    "also removes the track from Spotify.";
-  cardWindow.appendChild(windowHint);
   const windowHost = document.createElement("div");
   windowHost.style.overflowX = "auto";
-  cardWindow.appendChild(windowHost);
 
   let windowRows = [];
-  async function refreshWindow() {
+  async function refreshWindow({ throwOnError = false } = {}) {
     let payload;
     try {
       payload = await api("/api/music-playlist/window");
     } catch (err) {
+      // throwOnError is set only by the Live Window tab's own first open —
+      // that lets the rejection reach mountTabs' per-pane mountAsync so a
+      // failed load gets a real Retry button (F1) instead of this inline
+      // box, which every other caller (row actions, Save, Maintenance) still
+      // wants: it must not blow away a tab the admin is actively looking at.
+      if (throwOnError) throw err;
       errorBox(windowHost, err);
       return;
     }
     windowRows = payload.tracks || [];
-    windowLabel.textContent = `Live Window (${windowRows.length} of ${payload.window_size})`;
+    windowHint.textContent =
+      `${windowRows.length} of ${payload.window_size} songs, newest first. ` +
+      "Removing a row also removes the track from Spotify.";
     const nameOf = await nameLookup(windowRows);
     for (const r of windowRows) r.added_by_name = nameOf(r.added_by);
     renderSortableTable(windowHost, {
@@ -362,32 +221,31 @@ function render(container, status, channels) {
   });
 
   // ── Review queue ─────────────────────────────────────────────────────
-  const cardQueue = sectionCard(panel, "Review Queue");
-  const queueLabel = cardQueue.querySelector(".section-label");
   const queueHint = document.createElement("div");
   queueHint.className = "field-hint";
   queueHint.style.marginBottom = "8px";
-  queueHint.textContent =
-    "Links the pipeline had nothing to add for — no metadata, no Spotify " +
-    "candidates, or an unreadable album/playlist. A decision here is " +
-    "remembered: the same link never comes back for review. While the " +
-    "connection is read-only, approvals fail until re-consent and can " +
-    "simply be retried after.";
-  cardQueue.appendChild(queueHint);
   const queueHost = document.createElement("div");
   queueHost.style.overflowX = "auto";
-  cardQueue.appendChild(queueHost);
 
-  async function refreshQueue() {
+  async function refreshQueue({ throwOnError = false } = {}) {
     let payload;
     try {
       payload = await api("/api/music-playlist/unmatched");
     } catch (err) {
+      if (throwOnError) throw err;
       errorBox(queueHost, err);
       return;
     }
     const rows = payload.items || [];
-    queueLabel.textContent = rows.length ? `Review Queue (${rows.length})` : "Review Queue";
+    queueHint.textContent =
+      (rows.length
+        ? `${rows.length} link${rows.length === 1 ? "" : "s"} waiting for review. `
+        : "Nothing waiting for review right now. ") +
+      "Links the pipeline had nothing to add for — no metadata, no Spotify " +
+      "candidates, or an unreadable album/playlist. A decision here is " +
+      "remembered: the same link never comes back for review. While the " +
+      "connection is read-only, approvals fail until re-consent and can " +
+      "simply be retried after.";
     const nameOf = await nameLookup(rows);
     for (const r of rows) {
       r.added_by_name = nameOf(r.added_by);
@@ -448,23 +306,21 @@ function render(container, status, channels) {
   });
 
   // ── History ──────────────────────────────────────────────────────────
-  const cardHistory = sectionCard(panel, "History");
   const historyHint = document.createElement("div");
   historyHint.className = "field-hint";
   historyHint.style.marginBottom = "8px";
   historyHint.textContent =
     "Tracks that left the window and why — rolled off the end, source " +
     "message deleted, or removed by an admin. Newest removals first.";
-  cardHistory.appendChild(historyHint);
   const historyHost = document.createElement("div");
   historyHost.style.overflowX = "auto";
-  cardHistory.appendChild(historyHost);
 
-  async function refreshHistory() {
+  async function refreshHistory({ throwOnError = false } = {}) {
     let payload;
     try {
       payload = await api("/api/music-playlist/history");
     } catch (err) {
+      if (throwOnError) throw err;
       errorBox(historyHost, err);
       return;
     }
@@ -487,13 +343,7 @@ function render(container, status, channels) {
     });
   }
 
-  // ── Maintenance ──────────────────────────────────────────────────────
-  const cardMaint = sectionCard(panel, "Maintenance");
-  // Guarded so its own showStatus attributes the save to this card. Without
-  // it, [data-maint-status] sits outside every guarded container and a
-  // successful Re-scan falls back to the page-wide clear, disarming the
-  // unsaved-edits warning on the settings form above.
-  guardForm(cardMaint);
+  // ── Maintenance (rendered on the Settings tab, below) ───────────────
   const maintRow = document.createElement("div");
   maintRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; margin:6px 0;";
   const rescanBtn = document.createElement("button");
@@ -506,7 +356,6 @@ function render(container, status, channels) {
   reconcileBtn.textContent = "Reconcile with Spotify";
   const maintStatus = document.createElement("span");
   maintRow.append(rescanBtn, reconcileBtn, maintStatus);
-  cardMaint.appendChild(maintRow);
   const maintHint = document.createElement("div");
   maintHint.className = "field-hint";
   maintHint.textContent =
@@ -516,7 +365,6 @@ function render(container, status, channels) {
     "Reconcile squares the actual Spotify playlist with the window shown " +
     "here, and will ask before deleting anything it doesn't recognise. " +
     "Both need the bot online.";
-  cardMaint.appendChild(maintHint);
 
   async function runMaintenance(path, body) {
     rescanBtn.disabled = reconcileBtn.disabled = true;
@@ -565,9 +413,219 @@ function render(container, status, channels) {
   rescanBtn.addEventListener("click", () => runMaintenance("/api/music-playlist/rescan"));
   reconcileBtn.addEventListener("click", () => runMaintenance("/api/music-playlist/reconcile"));
 
-  container.appendChild(panel);
+  // ── Settings tab: Connection, Watch, Behavior, Maintenance ───────────
+  function renderSettingsTab(pane) {
+    pane.innerHTML = "";
+    // A local flex column recreates app.css's shared "adjacent top-level
+    // boxes" spacing (`.panel > :is(...) + :is(...)`), which only reaches a
+    // panel's *direct* children — once these cards live inside a tab pane
+    // that rule can't see them, so the Connection/Watch collision Billy
+    // reported would come right back without this.
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "display:flex; flex-direction:column; gap:var(--s-5);";
+    pane.appendChild(wrap);
 
-  refreshWindow();
-  refreshQueue();
-  refreshHistory();
+    const conn = CONNECTION[status.connection] || CONNECTION.not_connected;
+    const cardConn = sectionCard(wrap, "Connection");
+    const connRow = document.createElement("div");
+    connRow.style.cssText = "display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:6px 0;";
+    connRow.innerHTML =
+      `<span class="${esc(conn.cls)}">${esc(conn.label)}</span>` +
+      // A real navigation, not a fetch: /spotify/authorize redirects to
+      // Spotify's consent page. New tab so the panel survives the round trip.
+      `<a class="btn btn-primary" href="/spotify/authorize" target="_blank" rel="noopener">${esc(conn.btn)}</a>`;
+    cardConn.appendChild(connRow);
+    const connHint = document.createElement("div");
+    connHint.className = "field-hint";
+    connHint.textContent =
+      "The playlist is written with the bot owner's Spotify account. " +
+      "Read-only means the stored grant predates the write scopes — click " +
+      "through the consent page once more, then reload this page. Nothing " +
+      "below can write to Spotify until the chip says Connected.";
+    cardConn.appendChild(connHint);
+
+    // ── Watch + Behavior (one form, one Save) ──────────────────────────
+    const form = document.createElement("form");
+    form.className = "form form-cards";
+    // app.css only widens a form-cards form to the full panel with
+    // `.panel > .form.form-cards` — a direct-child selector that can't reach
+    // it once it's nested inside a tab pane, so its Watch/Behavior cards
+    // would otherwise sit narrower (capped at .form's 640px) than the
+    // full-width Connection/Maintenance cards around them.
+    form.style.maxWidth = "none";
+    wrap.appendChild(form);
+
+    const cardWatch = sectionCard(form, "Watch");
+    const chanSlot = document.createElement("span");
+    cardWatch.appendChild(field(
+      "Watched Channel",
+      chanSlot,
+      "The one channel whose music links feed the playlist. \"(disabled)\" " +
+        "stops watching entirely.",
+    ));
+    const chanPicker = mountChannelPicker(
+      chanSlot, channels, String(s.channel_id || "0"),
+      { emptyValue: "0", emptyLabel: "(disabled)", label: "Watched Channel" },
+    );
+    const playlistInput = document.createElement("input");
+    playlistInput.type = "text";
+    playlistInput.name = "playlist_id";
+    playlistInput.value = s.playlist_id || "";
+    playlistInput.placeholder = "Playlist link, spotify:playlist: URI, or bare id";
+    playlistInput.style.maxWidth = "420px";
+    cardWatch.appendChild(field(
+      "Target Playlist",
+      playlistInput,
+      "The Spotify playlist the window is written to. Paste an " +
+        "open.spotify.com/playlist link — it's stored as the bare id. Leave " +
+        "empty to clear. Changing it does not move anything: songs already " +
+        "added stay in the old playlist, and already-processed messages " +
+        "never follow the new one.",
+    ));
+    const watchToggles = document.createElement("div");
+    watchToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
+    watchToggles.append(checkbox("enabled", s.enabled === true, "Watch the channel"));
+    cardWatch.appendChild(field(
+      "Enable",
+      watchToggles,
+      "Unchecked pauses the watcher without losing any settings. Links " +
+        "posted while paused are only picked up by a later Re-scan.",
+    ));
+
+    const cardBehavior = sectionCard(form, "Behavior");
+    cardBehavior.appendChild(field(
+      "Window Size",
+      numInput("window_size", s.window_size ?? 30, 1, "1", 200),
+      "How many songs the rolling playlist holds. Song N+1 pushes the " +
+        "oldest one out. Between 1 and 200; 30 is the default.",
+    ));
+    const behaviorToggles = document.createElement("div");
+    behaviorToggles.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
+    behaviorToggles.append(
+      checkbox("remove_on_delete", s.remove_on_delete !== false, "Remove when the message is deleted"),
+    );
+    cardBehavior.appendChild(field(
+      "Re-scan Depth",
+      numInput("rescan_depth", s.rescan_depth ?? 200, 1, "1", 2000),
+      "How far back Re-scan reads the channel. This is the only way to " +
+        "recover songs the bot could not add at the time (a read-only " +
+        "connection, or a Spotify outage), so raise it if writes were blocked " +
+        "for longer than this many messages. Between 1 and 2000; 200 is the " +
+        "default.",
+    ));
+    cardBehavior.appendChild(field(
+      "Options",
+      behaviorToggles,
+      "Remove-on-delete drops a track when its source message is deleted, " +
+        "unless another live message still references it. Album and playlist " +
+        "links always contribute their single most popular track.",
+    ));
+
+    const saveRow = document.createElement("div");
+    saveRow.style.cssText = "display:flex; gap:8px; align-items:center;";
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "submit";
+    saveBtn.className = "btn btn-primary";
+    saveBtn.textContent = "Save";
+    const saveStatus = document.createElement("span");
+    saveRow.append(saveBtn, saveStatus);
+    form.appendChild(saveRow);
+
+    guardForm(form);
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      const windowSize = parseInt(String(fd.get("window_size") ?? "").trim(), 10);
+      if (!Number.isFinite(windowSize) || windowSize < 1 || windowSize > 200) {
+        showStatus(saveStatus, false, "Window Size must be a whole number between 1 and 200.");
+        form.querySelector('[name="window_size"]').focus();
+        return;
+      }
+      const rescanDepth = parseInt(String(fd.get("rescan_depth") ?? "").trim(), 10);
+      if (!Number.isFinite(rescanDepth) || rescanDepth < 1 || rescanDepth > 2000) {
+        showStatus(saveStatus, false, "Re-scan Depth must be a whole number between 1 and 2000.");
+        form.querySelector('[name="rescan_depth"]').focus();
+        return;
+      }
+      // Repointing the dial strands the back catalogue: the processed-message
+      // ledger is playlist-agnostic, so already-processed messages never
+      // follow, and nothing already added moves. Deliberate (2026-08-18) —
+      // warned about here rather than re-keying the ledger.
+      if (
+        savedPlaylistId &&
+        extractPlaylistId(playlistInput.value) !== savedPlaylistId
+      ) {
+        const ok = await confirmDialog(
+          "Songs already in the current playlist stay there, and messages " +
+            "the bot has already processed will never be re-added to the new " +
+            "one — a Re-scan only picks up messages that never landed. " +
+            "Change the target playlist?",
+          { title: "Change target playlist", confirmLabel: "Change playlist" },
+        );
+        if (!ok) return;
+      }
+      try {
+        const saved = await apiPut("/api/music-playlist/settings", {
+          enabled: fd.has("enabled"),
+          channel_id: chanPicker.getValue() || "0", // string — snowflake rule
+          playlist_id: playlistInput.value.trim(),
+          window_size: windowSize,
+          remove_on_delete: fd.has("remove_on_delete"),
+          rescan_depth: rescanDepth,
+        });
+        savedPlaylistId = (saved && saved.settings
+          ? saved.settings.playlist_id
+          : extractPlaylistId(playlistInput.value)) || "";
+        showStatus(saveStatus, true);
+        refreshWindow(); // a changed playlist or window size redraws the table
+      } catch (err) {
+        showStatus(saveStatus, false, err.message);
+      }
+    });
+
+    const cardMaint = sectionCard(wrap, "Maintenance");
+    // Guarded so its own showStatus attributes the save to this card. Without
+    // it, [data-maint-status] sits outside every guarded container and a
+    // successful Re-scan falls back to the page-wide clear, disarming the
+    // unsaved-edits warning on the settings form above.
+    guardForm(cardMaint);
+    cardMaint.appendChild(maintRow);
+    cardMaint.appendChild(maintHint);
+  }
+
+  // Each of these runs again on Retry (tabs.js re-invokes `render` on the
+  // same pane), so `pane` must be cleared first — appending onto whatever a
+  // failed attempt left behind (its Retry UI) would leave both on screen.
+  function renderWindowTab(pane) {
+    pane.innerHTML = "";
+    pane.append(windowHint, windowHost);
+    windowHost.innerHTML = '<div class="empty">Loading…</div>';
+    return refreshWindow({ throwOnError: true });
+  }
+
+  function renderQueueTab(pane) {
+    pane.innerHTML = "";
+    pane.append(queueHint, queueHost);
+    queueHost.innerHTML = '<div class="empty">Loading…</div>';
+    return refreshQueue({ throwOnError: true });
+  }
+
+  function renderHistoryTab(pane) {
+    pane.innerHTML = "";
+    pane.append(historyHint, historyHost);
+    historyHost.innerHTML = '<div class="empty">Loading…</div>';
+    return refreshHistory({ throwOnError: true });
+  }
+
+  return mountTabs(tabsHost, [
+    { key: "settings", label: "Settings", render: renderSettingsTab,
+      errorMsg: "Couldn’t load the Music Playlist settings." },
+    { key: "window", label: "Live Window", render: renderWindowTab,
+      errorMsg: "Couldn’t load the live window." },
+    { key: "queue", label: "Review Queue", render: renderQueueTab,
+      errorMsg: "Couldn’t load the review queue." },
+    { key: "history", label: "History", render: renderHistoryTab,
+      errorMsg: "Couldn’t load the history." },
+  ], { ariaLabel: "Music Playlist sections" });
 }

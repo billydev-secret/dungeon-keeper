@@ -15,6 +15,25 @@ Two things here can only break in a browser:
   * **The manage card must render a dismissed row and offer Restore**, off the
     ``include_dismissed`` payload.
 
+Also covers the Home panel's Suggested Setup *widget* (``panels/home.js``),
+one layer up from the tile above — Billy asked for the card to disappear
+entirely once nothing is left to suggest, instead of showing an "all done"
+message:
+
+  * with nothing outstanding, the widget renders no card at all;
+  * with something outstanding, it still renders (the tile above owns its
+    dismiss control — this only proves the card actually shows up through the
+    real fetch → filter → widget-grid pipeline);
+  * a *failed* fetch is advisory and must not collapse into the same "nothing
+    outstanding" empty state — the card stays up rather than reading as "all
+    set" when the truth is "couldn't check".
+
+And the drag-reorder path in the same file: a widget hidden from view (perm
+gate, or setup-suggestions with nothing left to suggest) must be re-inserted
+at its original spot in the *saved* layout, not dropped, when the visible
+widgets around it are reordered. All of this is DOM/layout-only behavior with
+no logic-layer counterpart, hence the browser tier rather than a unit test.
+
 Marked ``browser``. Auto-skips without Playwright / Chromium.
 """
 
@@ -160,6 +179,61 @@ async () => {
 }
 """
 
+# No suggestions left — the widget must render nothing at all.
+_NO_SUGGESTIONS = {"guild_id": "1", "suggestions": []}
+
+# Mounts the real Home panel (not the tile in isolation): sets up the admin
+# user + a fixed widget layout in localStorage the way a real login would,
+# then imports panels/home.js and calls its mount() — exercising the actual
+# fetch → filter → widget-grid pipeline the "disappears when done" fix lives
+# in. `perms` defaults to admin (setup-suggestions is admin-only); `layout`
+# is a plain array of widget ids, written under the same
+# `dk_layout_<user_id>` / version-3 key home.js itself reads.
+_MOUNT_HOME = """
+async ({ perms, layout }) => {
+  document.body.innerHTML = '<div id="host"></div>';
+  try { localStorage.clear(); } catch (_) {}
+  window.__dk_user = { user_id: '0', perms: new Set(perms || ['admin']) };
+  // home.js one-time-injects "unseen" admin widgets (setup-suggestions,
+  // config-problems) into whatever layout it finds — mark both seen so the
+  // explicit `layout` below is what actually renders, not that plus a
+  // surprise extra card.
+  localStorage.setItem('dk_seen_setup_suggestions_0', '1');
+  localStorage.setItem('dk_seen_config_problems_0', '1');
+  localStorage.setItem('dk_layout_0', JSON.stringify({ version: 3, widgets: layout }));
+  const mod = await import('/static/js/panels/home.js');
+  window.__homeHandle = mod.mount(document.getElementById('host'));
+  return true;
+}
+"""
+
+# Drags the card for `srcId` and drops it on the card for `tgtId`, firing the
+# same dragstart/dragover/drop/dragend sequence widget-grid.js's
+# `_setupDragDrop` listens for. Real OS-level drag simulation is exactly the
+# kind of thing that flakes headless; dispatching the DragEvents directly at
+# the cards is what the listeners actually key off (they never inspect how
+# the drag was produced), so this reaches the same code deterministically.
+_DRAG_REORDER = """
+([srcId, tgtId]) => {
+  const cards = [...document.querySelectorAll("#host .home-grid .home-card[data-widget-id]")];
+  const src = cards.find((c) => c.dataset.widgetId === srcId);
+  const tgt = cards.find((c) => c.dataset.widgetId === tgtId);
+  if (!src || !tgt) throw new Error(`drag card not found: ${srcId} -> ${tgtId}`);
+  const dt = new DataTransfer();
+  const fire = (type, el) => {
+    const r = el.getBoundingClientRect();
+    el.dispatchEvent(new DragEvent(type, {
+      bubbles: true, cancelable: true, dataTransfer: dt,
+      clientX: r.x + r.width / 2, clientY: r.y + r.height / 2,
+    }));
+  };
+  fire("dragstart", src);
+  fire("dragover", tgt);
+  fire("drop", tgt);
+  fire("dragend", src);
+}
+"""
+
 
 def test_dismissing_a_row_posts_without_navigating_away(page):
     page.evaluate(_STUB_FETCH, _SUGGESTIONS)
@@ -193,3 +267,119 @@ def test_the_assistant_page_lists_dismissed_rows_with_restore(page):
     write = page.evaluate("() => window.__writes[0]")
     assert write["method"] == "DELETE"
     assert write["href"].endswith("/api/help/suggestions/birthdays/dismiss")
+
+
+# ── Home panel: the widget itself, not the tile in isolation ──────────────
+
+
+def test_home_panel_shows_nothing_when_setup_is_all_done(page):
+    page.evaluate(_STUB_FETCH, _NO_SUGGESTIONS)
+    page.evaluate(_MOUNT_HOME, {"perms": ["admin"], "layout": ["setup-suggestions"]})
+    # An empty grid has no size, so it counts as "hidden" under Playwright's
+    # default visibility check — wait for it to exist in the DOM, not for it
+    # to have a non-zero box (that's exactly what the empty-grid test wants
+    # to prove is absent).
+    page.wait_for_selector("#host .home-grid", state="attached")
+    # The layout has nothing else in it, so an "all done" card would be the
+    # grid's only child — a truly empty grid proves the widget rendered
+    # nothing, not just that it rendered small.
+    assert page.locator("#host .home-grid .home-card").count() == 0
+
+
+def test_home_panel_still_shows_the_widget_when_suggestions_remain(page):
+    page.evaluate(_STUB_FETCH, _SUGGESTIONS)
+    page.evaluate(_MOUNT_HOME, {"perms": ["admin"], "layout": ["setup-suggestions"]})
+    card = page.locator("#host .home-grid .home-card[data-widget-id='setup-suggestions']")
+    card.wait_for(state="attached", timeout=5000)
+    assert card.count() == 1
+    # Its per-row dismiss control (the tile's own behavior, proven above)
+    # made it through the real panel pipeline intact.
+    assert card.locator("[data-dismiss='welcome']").count() == 1
+
+
+def test_a_failed_suggestions_fetch_does_not_read_as_all_done(page):
+    page.evaluate("""
+      () => {
+        window.fetch = async (url) => {
+          const href = String(url);
+          if (href.includes('/api/help/suggestions')) {
+            return new Response(
+              JSON.stringify({ detail: 'boom' }),
+              { status: 500, headers: { 'Content-Type': 'application/json' } },
+            );
+          }
+          return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
+        };
+      }
+    """)
+    page.evaluate(_MOUNT_HOME, {"perms": ["admin"], "layout": ["setup-suggestions"]})
+    # An empty grid has no size, so it counts as "hidden" under Playwright's
+    # default visibility check — wait for it to exist in the DOM, not for it
+    # to have a non-zero box (that's exactly what the empty-grid test wants
+    # to prove is absent).
+    page.wait_for_selector("#host .home-grid", state="attached")
+    # Same empty suggestions list a genuine "nothing outstanding" response
+    # produces, but arrived at via a fetch failure — the card must still be
+    # there, distinguishing "couldn't check" from "all set".
+    assert page.locator("#host .home-grid .home-card[data-widget-id='setup-suggestions']").count() == 1
+
+
+def test_reorder_does_not_drop_a_hidden_widget_from_the_saved_layout(page):
+    page.evaluate(_STUB_FETCH, _NO_SUGGESTIONS)  # keeps setup-suggestions hidden
+    page.evaluate(_MOUNT_HOME, {
+        "perms": ["admin"],
+        "layout": ["home-messages", "setup-suggestions", "home-presence"],
+    })
+    # An empty grid has no size, so it counts as "hidden" under Playwright's
+    # default visibility check — wait for it to exist in the DOM, not for it
+    # to have a non-zero box (that's exactly what the empty-grid test wants
+    # to prove is absent).
+    page.wait_for_selector("#host .home-grid", state="attached")
+
+    # Confirm the setup is what it claims before reordering around it: two
+    # visible cards, setup-suggestions hidden.
+    assert page.locator(
+        "#host .home-grid .home-card[data-widget-id='setup-suggestions']"
+    ).count() == 0
+    visible_before = page.evaluate(
+        "() => [...document.querySelectorAll("
+        "  '#host .home-grid .home-card[data-widget-id]'"
+        ")].map((c) => c.dataset.widgetId)"
+    )
+    assert visible_before == ["home-messages", "home-presence"]
+
+    page.click("#host .home-edit-toggle")
+    page.wait_for_selector("#host .home-grid .home-card[draggable]")
+
+    page.evaluate(_DRAG_REORDER, ["home-messages", "home-presence"])
+
+    # onReorder → saveLayout → render() is synchronous JS, but give it a
+    # tick and assert on what got *persisted*, not just what's on screen —
+    # the bug this guards drops the hidden widget from the saved layout,
+    # which a screen-only check wouldn't catch.
+    page.wait_for_function(
+        "() => {"
+        "  try {"
+        "    const raw = localStorage.getItem('dk_layout_0');"
+        "    if (!raw) return false;"
+        "    const w = JSON.parse(raw).widgets;"
+        "    return w.length && w[0] !== 'home-messages';"
+        "  } catch (_) { return false; }"
+        "}",
+        timeout=5000,
+    )
+    saved = page.evaluate(
+        "() => JSON.parse(localStorage.getItem('dk_layout_0')).widgets"
+        ".map((e) => typeof e === 'string' ? e : e.id)"
+    )
+    assert "setup-suggestions" in saved, (
+        "reordering while setup-suggestions was hidden (nothing left to "
+        "suggest) dropped it from the saved layout entirely"
+    )
+    assert saved.index("setup-suggestions") == 1, (
+        "the hidden widget must be re-inserted at its original position, "
+        f"not just appended or left wherever — got {saved!r}"
+    )
+    assert saved[0] == "home-presence" and saved[2] == "home-messages", (
+        f"the visible widgets around it should still have been reordered — got {saved!r}"
+    )

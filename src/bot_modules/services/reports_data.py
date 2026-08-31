@@ -1551,7 +1551,16 @@ class XpLeaderboardData(TypedDict):
     total_users: int
     leaderboard: list[XpUserRow]
     level_distribution: list[XpLevelBucket]
+    level_distribution_active_days: int
     source_totals: dict[str, float]
+
+
+# Level distribution is scoped to members who earned XP in this many trailing
+# days, not the full membership: an all-time roster bakes in everyone who
+# went quiet or left long ago, which flattens the shape into noise (Billy,
+# 2026-08-31). Fixed regardless of the report's own `days` window/filter, so
+# the distribution reads as "who's active now" background context.
+XP_LEVEL_DISTRIBUTION_ACTIVE_DAYS = 30
 
 
 def get_xp_leaderboard_data(
@@ -1626,15 +1635,24 @@ def get_xp_leaderboard_data(
             }
         )
 
-    # Level distribution (always all-time)
+    # Level distribution — scoped to members with at least one XP event in the
+    # trailing active window (see XP_LEVEL_DISTRIBUTION_ACTIVE_DAYS above),
+    # not every row member_xp has ever accumulated.
+    active_cutoff = _time.time() - XP_LEVEL_DISTRIBUTION_ACTIVE_DAYS * 86400
     level_rows = conn.execute(
         """
-        SELECT level, COUNT(*) FROM member_xp
-        WHERE guild_id = ?
-        GROUP BY level
-        ORDER BY level
+        SELECT m.level, COUNT(*)
+        FROM member_xp m
+        WHERE m.guild_id = ?
+          AND EXISTS (
+              SELECT 1 FROM xp_events e
+              WHERE e.guild_id = m.guild_id AND e.user_id = m.user_id
+                AND e.created_at >= ?
+          )
+        GROUP BY m.level
+        ORDER BY m.level
         """,
-        (guild_id,),
+        (guild_id, active_cutoff),
     ).fetchall()
     level_distribution: list[XpLevelBucket] = [
         {"level": int(r[0]), "count": int(r[1])} for r in level_rows
@@ -1670,6 +1688,7 @@ def get_xp_leaderboard_data(
         "total_users": int(total_row[0]) if total_row else 0,
         "leaderboard": leaderboard,
         "level_distribution": level_distribution,
+        "level_distribution_active_days": XP_LEVEL_DISTRIBUTION_ACTIVE_DAYS,
         "source_totals": source_totals,
     }
 

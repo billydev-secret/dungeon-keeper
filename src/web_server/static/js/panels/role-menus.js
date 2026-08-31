@@ -55,7 +55,7 @@ export function mount(container) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Role Menus</h2>
+        <h2>Reaction Roles</h2>
         <div class="subtitle">Self-service roles: members click buttons or pick from a dropdown on a DK-posted embed. Build here, publish to a channel — no commands, no reactions.</div>
       </header>
       <section class="mod-split">

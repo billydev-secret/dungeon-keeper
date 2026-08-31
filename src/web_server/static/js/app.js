@@ -145,7 +145,9 @@ const SECTIONS = [
       ]},
       { heading: "Roles", items: [
         { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup", related: ["grant-audit"] },
-        { id: "role-menus",        label: "Role Menus",        module: "./panels/role-menus.js", help: "help-role-menus" },
+        // Renamed 2026-08-31: "Reaction Roles" is what people actually call
+        // this feature. "Role Menus" stays as a search keyword.
+        { id: "role-menus",        label: "Reaction Roles",        module: "./panels/role-menus.js", help: "help-role-menus", keywords: "role menus" },
       ]},
       // IA3 (2026-08-29): the set-up-the-newcomer-experience job spanned three
       // headings (Welcome under Members, Auto-Role/Onboarding under Roles,
@@ -306,7 +308,9 @@ const SECTIONS = [
     id: "games", label: "Games", perms: ["admin"], gameHostRole: true, icon: "⚄",
     groups: [
       { heading: "Operations", items: [
-        { id: "games-logs",         label: "Overview & Logs",   module: "./panels/games-logs.js", help: "help-games" },
+        // Renamed 2026-08-31: "Play Statistics" says what's actually on the
+        // page. "Overview & Logs" stays as a search keyword.
+        { id: "games-logs",         label: "Play Statistics",   module: "./panels/games-logs.js", help: "help-games", keywords: "overview logs" },
         { id: "games-scheduling",   label: "Scheduling",        module: "./panels/games-scheduling.js", help: "help-games" },
         { id: "games-config",       label: "Global Config",     module: "./panels/games-config.js", adminOnly: true, help: "help-games" },
         { id: "games-external",     label: "External Tracking", module: "./panels/games-external.js", perms: ["moderator"], keywords: "track external bot results bank payout watch channel" },

@@ -79,6 +79,10 @@ export function mount(container) {
   let data = {
     home: null, health: null, economy: null, suggestions: null, channelHealth: null,
   };
+  // Tracked separately from data.suggestions so a failed fetch can be told
+  // apart from a genuinely empty ("nothing left to set up") response — both
+  // leave the suggestions list empty, but only one should hide the card.
+  let suggestionsFailed = false;
 
   async function fetchData() {
     // Determine which sources are needed
@@ -96,11 +100,14 @@ export function mount(container) {
     if (needsEconomy) promises.push(api("/api/economy/metrics").then(d => { data.economy = d; }));
     else promises.push(Promise.resolve());
     // Suggestions are advisory — a failure here must not blank the dashboard.
+    // A failed fetch is kept out of data.suggestions (left null) rather than
+    // faked as an empty list, so it can't be mistaken for "nothing left to
+    // suggest" — see the visibleLayout filter in render().
     if (needsSuggestions) {
       promises.push(
         api("/api/help/suggestions?limit=3")
-          .then(d => { data.suggestions = d; })
-          .catch(() => { data.suggestions = { suggestions: [] }; }),
+          .then(d => { data.suggestions = d; suggestionsFailed = false; })
+          .catch(() => { data.suggestions = null; suggestionsFailed = true; }),
       );
     } else promises.push(Promise.resolve());
     // Advisory like suggestions — a failure must not blank the dashboard, and
@@ -167,15 +174,40 @@ export function mount(container) {
 
     // Filter layout to only widgets user has perms for
     const visibleLayout = layout.filter(e => {
-      const w = WIDGET_MAP[entryId(e)];
-      return w && (!w.perms.length || w.perms.every(p => perms.has(p)));
+      const id = entryId(e);
+      const w = WIDGET_MAP[id];
+      if (!w || (w.perms.length && !w.perms.every(p => perms.has(p)))) return false;
+      // Setup suggestions: when the fetch succeeded and came back with
+      // nothing outstanding, the card shouldn't render at all — not even an
+      // "all done" message. A failed fetch is a different state (surfaced by
+      // fetchData leaving data.suggestions null) and must not be hidden the
+      // same way, or "couldn't check" would read as "nothing to do".
+      if (id === "setup-suggestions" && !suggestionsFailed &&
+          data.suggestions && (data.suggestions.suggestions || []).length === 0) {
+        return false;
+      }
+      return true;
     });
 
     await renderGrid(gridEl, visibleLayout, data, {
       editMode,
       onReorder(newLayout) {
-        // Re-insert any perm-filtered widgets at their original positions
-        layout = newLayout;
+        // newLayout is a reorder of visibleLayout only. Entries left out of
+        // visibleLayout (perm-gated, or setup-suggestions hidden because it's
+        // all done) must be re-inserted at their original spots rather than
+        // dropped from the saved layout — otherwise finishing setup and later
+        // dragging any other card would permanently lose the suggestions
+        // widget, and it would never come back even if something later
+        // becomes unconfigured again.
+        const visibleIds = new Set(visibleLayout.map(entryId));
+        const hidden = layout.filter(e => !visibleIds.has(entryId(e)));
+        if (hidden.length) {
+          const hiddenIds = new Set(hidden.map(entryId));
+          const nextVisible = [...newLayout];
+          layout = layout.map(e => hiddenIds.has(entryId(e)) ? e : nextVisible.shift());
+        } else {
+          layout = newLayout;
+        }
         saveLayout(userId, layout);
         render();
       },

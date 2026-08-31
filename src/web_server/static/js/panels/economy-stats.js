@@ -2,8 +2,22 @@
 // how fast currency flows. Read-only; gated by the economy manager role (or
 // admin), same as the Operations page. Everything is a single GET; the
 // Refresh button re-fetches.
+//
+// Laid out as tabs (mountTabs, see tabs.js — config-bios.js is the reference
+// caller) so the eight report sections don't all have to be scrolled past to
+// reach the one you want. Unlike a config panel's tabs, every section here
+// comes from the same one-shot /api/economy/stats fetch, so a tab's render
+// is a synchronous re-draw of already-loaded data, not its own request —
+// the lazy-open-on-click behavior just means an unopened tab pays nothing to
+// build DOM it isn't showing. The panel itself is a report panel, so the
+// fetch/redraw cycle is wired through mountReloadable: a failed refresh (the
+// Refresh button, or the browser retrying the initial load) renders a real
+// error with a Reload hint instead of leaving stale figures on screen next
+// to a Refresh button that looks like it worked.
 import { api, esc, fmtAge } from "../api.js";
-import { loadMembers, mountAsync } from "../config-helpers.js";
+import { loadMembers } from "../config-helpers.js";
+import { mountReloadable } from "../report-helpers.js";
+import { mountTabs } from "../tabs.js";
 
 // Server-side cap on the member table (hard cap 500). Named so the "showing
 // top N of M" note and both fetch sites can't drift apart.
@@ -88,126 +102,104 @@ function fmtDur(secs) {
 
 export function mount(container) {
   container.innerHTML = `<div class="panel">${renderLoading("Loading statistics…")}</div>`;
-  let liveTimer = null;
-  const loading = mountAsync(container, async () => {
-    // The member list, the stats blob, and the live pulse don't depend on each
-    // other — fetch them together rather than in a waterfall (W-D11).
+
+  // Which tab is open survives a Refresh — decorate() rebuilds the tab strip
+  // from scratch every pass (see mountReloadable), so without this a Refresh
+  // click would silently bounce the admin back to Overview.
+  let activeTab = "overview";
+  // The current tab strip's handle, so a rebuild can tear down its live
+  // pulse interval (owned by the Overview tab's render, see below) before
+  // replacing the DOM it lives in.
+  let tabsHandle = null;
+
+  async function load() {
+    // The member list and the stats blob don't depend on each other — fetch
+    // them together rather than in a waterfall (W-D11). A failed member
+    // lookup degrades to raw ids rather than failing the whole page; a
+    // failed stats fetch is the real failure and reaches mountReloadable.
     const [members, stats] = await Promise.all([
       loadMembers().catch(() => []),
-      api("/api/economy/stats", { limit: MEMBER_LIMIT }).then(
-        (d) => ({ ok: true, data: d }),
-        (err) => ({ ok: false, err }),
-      ),
+      api("/api/economy/stats", { limit: MEMBER_LIMIT }),
     ]);
-    render(container, members);
-    applyStats(container, members, stats);
-    refreshLive(container);
-    liveTimer = setInterval(() => refreshLive(container), LIVE_REFRESH_MS);
-  }, { errorMsg: "Couldn’t load the economy statistics." });
+    return { members, stats };
+  }
+
+  function decorate({ members, stats }) {
+    tabsHandle?.unmount?.();
+
+    container.innerHTML = `
+      <div class="panel">
+        <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+          <div>
+            <h2>Statistics</h2>
+            <div class="subtitle">Who holds what, and how fast currency flows &middot; members active in the last 30 days</div>
+          </div>
+          <button class="btn" data-refresh>Refresh</button>
+        </header>
+        <div data-tabs></div>
+      </div>`;
+
+    container.querySelector("[data-refresh]").addEventListener("click", () => reload());
+
+    tabsHandle = mountTabs(container.querySelector("[data-tabs]"), [
+      { key: "overview", label: "Overview",
+        render: (pane) => renderOverviewTab(pane, stats) },
+      { key: "income", label: "Income",
+        render: (pane) => renderIncomeTab(pane, stats) },
+      { key: "spending", label: "Spending",
+        render: (pane) => renderSpendingTab(pane, stats, members) },
+      { key: "members", label: "Members",
+        render: (pane) => renderMembersTab(pane, stats, members) },
+    ], {
+      ariaLabel: "Statistics sections",
+      initial: activeTab,
+      onShow: (key) => { activeTab = key; },
+    });
+  }
+
+  // Every refresh pass — the initial load and every later Refresh click —
+  // goes through this guard, not just the first (see mountReloadable).
+  const reload = mountReloadable(container, {
+    load, decorate,
+    describe: "the economy statistics",
+    renderError,
+  });
+
   return {
-    unmount() {
-      loading.unmount();
-      if (liveTimer) clearInterval(liveTimer);
-    },
+    unmount() { tabsHandle?.unmount?.(); },
   };
 }
 
-// Every section that the stats fetch fills. Kept in one place so a failure can
-// clear all of them instead of leaving six panels stuck on "Loading…" (W-D7).
-const STATS_SECTIONS = [
-  "[data-distribution]", "[data-income-sources]", "[data-engagement]",
-  "[data-affordability]", "[data-burn]", "[data-transfers]", "[data-members]",
-];
+// ── overview tab: headline numbers, holdings, the live pulse ────────────
 
-function applyStats(container, members, stats) {
-  if (!stats.ok) {
-    container.querySelector("[data-summary]").innerHTML = renderError(
-      `Couldn't load economy statistics — ${stats.err.message}. Press Refresh to try again.`
-    );
-    for (const sel of STATS_SECTIONS) {
-      const el = container.querySelector(sel);
-      if (el) el.innerHTML = renderEmpty("Not loaded — the statistics request failed.");
-    }
-    return;
-  }
-  const data = stats.data;
-  renderSummary(container, data);
-  renderDistribution(container, data.distribution);
-  renderIncomeSources(container, data.income_sources);
-  renderEngagement(container, data.engagement);
-  renderAffordability(container, data.affordability);
-  renderBurn(container, data.burn_top, members);
-  renderTransfers(container, data.transfers_top, members);
-  // supply.holders is the population the member table is capped out of — pass
-  // it through so the table can admit that it is a top-N slice.
-  renderMembers(container, data.members, members, data.supply?.holders);
+function renderOverviewTab(pane, stats) {
+  pane.innerHTML = `
+    <div class="card-grid" data-summary style="margin-bottom:4px;"></div>
+
+    <section class="card">
+      <div class="section-label">Balance Distribution</div>
+      <div data-distribution></div>
+    </section>
+
+    <section class="card" data-live-card>
+      <div class="section-label">Happening Now</div>
+      <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
+      <div data-live>${renderLoading("Loading…")}</div>
+    </section>
+  `;
+  renderSummary(pane, stats);
+  renderDistribution(pane, stats.distribution);
+
+  // The live pulse has its own independent fetch/retry cycle (its errors
+  // render inline and retry on the next tick), distinct from this tab's own
+  // one-shot data — see refreshLive.
+  refreshLive(pane);
+  const liveTimer = setInterval(() => refreshLive(pane), LIVE_REFRESH_MS);
+  return { unmount() { clearInterval(liveTimer); } };
 }
 
-function render(container, members) {
-  container.innerHTML = `
-    <div class="panel">
-      <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
-        <div>
-          <h2>Statistics</h2>
-          <div class="subtitle">Who holds what, and how fast currency flows &middot; members active in the last 30 days</div>
-        </div>
-        <button class="btn" data-refresh>Refresh</button>
-      </header>
-
-      <div class="card-grid" data-summary style="margin-bottom:4px;"></div>
-
-      <section class="card">
-        <div class="section-label">Balance Distribution</div>
-        <div data-distribution>${renderLoading("Loading…")}</div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Income Sources</div>
-        <div class="field-hint">Coins minted per week by source (grants, quests,
-          logins, activity, games) over the last 8 weeks. Transfers move currency
-          sideways, so they aren't income and don't appear here.</div>
-        <div data-income-sources>${renderLoading("Loading…")}</div>
-      </section>
-
-      <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
-        <section class="card"><div class="section-label">Engagement</div>
-          <div data-engagement>${renderLoading("Loading…")}</div></section>
-        <section class="card"><div class="section-label">Affordability</div>
-          <div class="field-hint">Solid color ≈ how many days of median daily income each perk costs.</div>
-          <div data-affordability>${renderLoading("Loading…")}</div></section>
-      </div>
-
-      <section class="card">
-        <div class="section-label">Biggest Spenders (all time)</div>
-        <div class="field-hint">Lifetime currency burned — rentals, consumables and other sinks. Transfers and staff clawbacks don't count: a transfer moves currency sideways rather than removing it.</div>
-        <div data-burn>${renderLoading("Loading…")}</div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Top Transfers (30d)</div>
-        <div class="field-hint">One-way volume over 500 is flagged — a possible farming/laundering signal worth an audit.</div>
-        <div data-transfers>${renderLoading("Loading…")}</div>
-      </section>
-
-      <section class="card" data-live-card>
-        <div class="section-label">Happening Now</div>
-        <div class="field-hint">The quest pulse — anonymous counts only, auto-refreshes every 45s.</div>
-        <div data-live>${renderLoading("Loading…")}</div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Members</div>
-        <div data-members>${renderLoading("Loading…")}</div>
-      </section>
-    </div>`;
-
-  container.querySelector("[data-refresh]").addEventListener("click", () => {
-    refresh(container, members);
-  });
-}
-
-async function refreshLive(container) {
-  const host = container.querySelector("[data-live]");
+async function refreshLive(pane) {
+  const host = pane.querySelector("[data-live]");
   if (!host) return;
   let live;
   try {
@@ -283,15 +275,6 @@ async function refreshLive(container) {
   host.innerHTML = bits.join("");
 }
 
-async function refresh(container, members) {
-  container.querySelector("[data-summary]").innerHTML = renderLoading("Refreshing…");
-  const stats = await api("/api/economy/stats", { limit: MEMBER_LIMIT }).then(
-    (d) => ({ ok: true, data: d }),
-    (err) => ({ ok: false, err }),
-  );
-  applyStats(container, members, stats);
-}
-
 // ── summary ──────────────────────────────────────────────────────────
 
 function renderSummary(container, data) {
@@ -339,6 +322,31 @@ function renderDistribution(container, dist) {
         <div style="width:44px; text-align:right; font-variant-numeric:tabular-nums;">${fmtNum(b.count)}</div>
       </div>`;
   }).join("");
+}
+
+// ── income tab: income sources, engagement, affordability ───────────────
+
+function renderIncomeTab(pane, stats) {
+  pane.innerHTML = `
+    <section class="card">
+      <div class="section-label">Income Sources</div>
+      <div class="field-hint">Coins minted per week by source (grants, quests,
+        logins, activity, games) over the last 8 weeks. Transfers move currency
+        sideways, so they aren't income and don't appear here.</div>
+      <div data-income-sources></div>
+    </section>
+
+    <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));">
+      <section class="card"><div class="section-label">Engagement</div>
+        <div data-engagement></div></section>
+      <section class="card"><div class="section-label">Affordability</div>
+        <div class="field-hint">Solid color ≈ how many days of median daily income each perk costs.</div>
+        <div data-affordability></div></section>
+    </div>
+  `;
+  renderIncomeSources(pane, stats.income_sources);
+  renderEngagement(pane, stats.engagement);
+  renderAffordability(pane, stats.affordability);
 }
 
 // ── income sources (stacked bars, pure DOM/CSS) ──────────────────────
@@ -451,7 +459,25 @@ function renderAffordability(container, aff) {
   }).join("");
 }
 
-// ── top transfers ────────────────────────────────────────────────────
+// ── spending tab: biggest spenders, top transfers ────────────────────
+
+function renderSpendingTab(pane, stats, members) {
+  pane.innerHTML = `
+    <section class="card">
+      <div class="section-label">Biggest Spenders (all time)</div>
+      <div class="field-hint">Lifetime currency burned — rentals, consumables and other sinks. Transfers and staff clawbacks don't count: a transfer moves currency sideways rather than removing it.</div>
+      <div data-burn></div>
+    </section>
+
+    <section class="card">
+      <div class="section-label">Top Transfers (30d)</div>
+      <div class="field-hint">One-way volume over 500 is flagged — a possible farming/laundering signal worth an audit.</div>
+      <div data-transfers></div>
+    </section>
+  `;
+  renderBurn(pane, stats.burn_top, members);
+  renderTransfers(pane, stats.transfers_top, members);
+}
 
 // Ledger kinds that can show up as a member's top sink. Unknown kinds fall
 // back to the raw kind rather than being hidden — a new sink should look
@@ -520,7 +546,14 @@ function renderTransfers(container, transfers, members) {
     </div>`;
 }
 
-// ── member table (client-side sortable) ──────────────────────────────
+// ── members tab (client-side sortable) ───────────────────────────────
+
+function renderMembersTab(pane, stats, members) {
+  pane.innerHTML = `<div data-members></div>`;
+  // stats.supply.holders is the population the member table is capped out
+  // of — pass it through so the table can admit that it is a top-N slice.
+  renderMembers(pane, stats.members, members, stats.supply?.holders);
+}
 
 function sortMembers(members, rows) {
   const { key, dir } = sortState;

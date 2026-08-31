@@ -12,8 +12,10 @@ from bot_modules.services.message_store import init_member_events_table, init_me
 from bot_modules.services.channel_rollup import build_resolver
 from bot_modules.services.activity_graphs import TAG_ORDER
 from bot_modules.services.nsfw_classifier_service import DEFAULT_LABEL_SET
-from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_interaction_series, get_nsfw_tag_mix_data, get_one_sided_attention_data
+from bot_modules.services.invite_tracker import record_invite
+from bot_modules.services.reports_data import get_channel_comparison_data, get_greeter_log_sessions, get_greeter_response_data, get_interaction_graph_data, get_interaction_series, get_invite_effectiveness_data, get_nsfw_tag_mix_data, get_one_sided_attention_data, get_xp_leaderboard_data
 from tests.db_template import migrated_db
+from web_server.schemas import InviteEffectivenessResponse
 
 
 @pytest.fixture
@@ -673,6 +675,69 @@ def test_tag_vocabulary_matches_the_detector_exactly():
     assert len(TAG_ORDER) == len(set(TAG_ORDER)), "a label is listed twice"
 
 
+@pytest.fixture
+def xp_conn(tmp_path):
+    """Migrated DB with XP tables — for the xp-leaderboard report."""
+    path = tmp_path / "xp.db"
+    migrated_db(path)
+    with open_db(path) as c:
+        yield c
+
+
+def _award_xp(conn, guild_id, user_id, *, level, amount, ts, source="text"):
+    conn.execute(
+        "INSERT INTO member_xp (guild_id, user_id, total_xp, level) VALUES (?, ?, ?, ?)",
+        (guild_id, user_id, amount, level),
+    )
+    conn.execute(
+        "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (guild_id, user_id, source, amount, ts),
+    )
+
+
+def test_xp_level_distribution_excludes_members_inactive_past_the_window(xp_conn):
+    """Billy: 'We have this level distribution here, and it includes everyone.
+    Maybe it's better for people active over the last thirty days, not
+    everyone.' A member whose only XP event is 90 days old drops out of the
+    distribution even though their member_xp row (and level) still exists."""
+    now = time.time()
+    _award_xp(xp_conn, 1, 100, level=5, amount=500, ts=now - 1 * 86400)
+    _award_xp(xp_conn, 1, 200, level=9, amount=900, ts=now - 90 * 86400)
+    xp_conn.commit()
+
+    data = get_xp_leaderboard_data(xp_conn, guild_id=1)
+
+    levels = {b["level"]: b["count"] for b in data["level_distribution"]}
+    assert levels == {5: 1}
+    assert data["level_distribution_active_days"] == 30
+
+
+def test_xp_level_distribution_window_is_independent_of_the_days_filter(xp_conn):
+    """The report's own time-period selector (`days`) scopes the leaderboard
+    table and source totals; the level distribution's 30-day active window is
+    fixed and does not shrink or grow with it."""
+    now = time.time()
+    _award_xp(xp_conn, 1, 300, level=3, amount=300, ts=now - 20 * 86400)
+    xp_conn.commit()
+
+    data = get_xp_leaderboard_data(xp_conn, guild_id=1, days=7)
+
+    levels = {b["level"]: b["count"] for b in data["level_distribution"]}
+    assert levels == {3: 1}
+
+
+def test_xp_level_distribution_empty_when_nobody_is_active(xp_conn):
+    now = time.time()
+    _award_xp(xp_conn, 1, 400, level=2, amount=200, ts=now - 60 * 86400)
+    xp_conn.commit()
+
+    data = get_xp_leaderboard_data(xp_conn, guild_id=1)
+
+    assert data["level_distribution"] == []
+    assert data["level_distribution_active_days"] == 30
+
+
 def test_the_palette_overflow_slot_holds_the_label_production_never_sees():
     """Seven labels, six palette colours: whatever sits last is drawn in the
     grey overflow neutral.
@@ -698,3 +763,75 @@ def test_the_palette_overflow_slot_holds_the_label_production_never_sees():
         f"{overflowing} would be drawn in the overflow neutral; only the label "
         f"production never sees belongs there"
     )
+
+
+@pytest.fixture
+def ie_conn(tmp_path):
+    """Migrated DB with invite_edges + member_activity — for the
+    invite-effectiveness report."""
+    path = tmp_path / "ie.db"
+    migrated_db(path)
+    with open_db(path) as c:
+        yield c
+
+
+def _mark_active(conn, guild_id, user_id, ts):
+    conn.execute(
+        "INSERT INTO member_activity (guild_id, user_id, last_channel_id, last_message_id, last_message_at)"
+        " VALUES (?, ?, 0, 0, ?)",
+        (guild_id, user_id, ts),
+    )
+
+
+def test_invite_effectiveness_service_returns_invitees_per_inviter(ie_conn):
+    """The service layer already carries the per-invitee detail the
+    dashboard's expand row needs — this is the fixture the response schema
+    test below re-uses to prove the layer *above* it drops that detail."""
+    now = time.time()
+    record_invite(ie_conn, guild_id=1, inviter_id=900, invitee_id=1, joined_at=now)
+    record_invite(ie_conn, guild_id=1, inviter_id=900, invitee_id=2, joined_at=now)
+    _mark_active(ie_conn, 1, 1, now)
+    ie_conn.commit()
+
+    data = get_invite_effectiveness_data(ie_conn, guild_id=1)
+
+    assert data["total_invites"] == 2
+    assert data["total_active"] == 1
+    row = data["inviters"][0]
+    assert row["invite_count"] == 2
+    invitee_ids = {i["invitee_id"] for i in row["invitees"]}
+    assert invitee_ids == {"1", "2"}
+
+
+def test_invite_effectiveness_response_schema_preserves_invitees(ie_conn):
+    """Billy: 'it says this board has twenty eight invites, seven still
+    active, and I hit the drop down. It says no joins recorded.'
+
+    The route returns ``get_invite_effectiveness_data``'s dict straight
+    through FastAPI's ``response_model=InviteEffectivenessResponse``, which
+    silently drops any dict key its schema doesn't declare. ``InviterRowSchema``
+    never declared ``invitees``, so every expand row rendered the empty state
+    no matter how many joins the inviter actually had — this reproduces that
+    at the schema layer the route depends on, without touching HTTP or the
+    panel.
+    """
+    now = time.time()
+    record_invite(ie_conn, guild_id=1, inviter_id=900, invitee_id=1, joined_at=now)
+    record_invite(ie_conn, guild_id=1, inviter_id=900, invitee_id=2, joined_at=now)
+    _mark_active(ie_conn, 1, 1, now)
+    ie_conn.commit()
+
+    data = get_invite_effectiveness_data(ie_conn, guild_id=1)
+    assert data["inviters"][0]["invitees"], "fixture setup: service must produce invitees"
+
+    served = InviteEffectivenessResponse.model_validate(data).model_dump()
+
+    # The summary totals (what Billy read as "28 invites, 7 still active")
+    # survive because they're top-level fields on the response schema.
+    assert served["total_invites"] == data["total_invites"]
+    assert served["total_active"] == data["total_active"]
+
+    # The per-inviter invitee list (what the expand arrow renders) must
+    # survive the same round trip — before the fix this comes back empty.
+    served_invitees = served["inviters"][0]["invitees"]
+    assert {i["invitee_id"] for i in served_invitees} == {"1", "2"}

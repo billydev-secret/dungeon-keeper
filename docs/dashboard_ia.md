@@ -126,7 +126,7 @@ splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
 
 **Games** was a 23-item flat list until 2026-08; it now has three subgroups:
 
-* **Operations** — Overview & Logs, Scheduling, Global Config, External Tracking.
+* **Operations** — Play Statistics, Scheduling, Global Config, External Tracking.
 * **Live Games** — one page of dials per game that runs live in a channel
   (LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
   (Group), Chicken, Musical Chairs, Photo Challenge — which had been a

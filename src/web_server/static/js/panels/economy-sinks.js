@@ -28,6 +28,7 @@ import {
   showStatus, guardForm, mountAsync, loadRoles,
 } from "../config-helpers.js";
 import { confirmDialog, toast } from "../ui.js";
+import { mountTabs } from "../tabs.js";
 import { DEFAULT_MAX, economyOffBanner } from "./economy-shop-shared.js";
 
 /**
@@ -131,8 +132,8 @@ function render(container, cfg) {
         </div>
         <div data-onsale-list>
           ${SHOP_LINES.map(([key, label, blurb]) => `
-            <label class="field" style="display:flex;gap:8px;align-items:baseline;margin-bottom:6px;">
-              <input type="checkbox" name="${key}" data-onsale />
+            <label style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;cursor:pointer;">
+              <input type="checkbox" name="${key}" data-onsale style="flex:none;margin-top:3px;" />
               <span><strong>${esc(label)}</strong>
                 <span class="field-hint" style="display:inline;">— ${esc(blurb)}</span>
               </span>
@@ -166,62 +167,7 @@ function render(container, cfg) {
           gradients to show up at all.
         </div>
 
-        <div data-palette></div>
-        <div data-palette-empty class="field-hint" style="display:none;">
-          No colors yet. Upload swatch images below and press Sync Palette.
-        </div>
-
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
-          <div class="section-label">Swatch Images</div>
-          <div class="field-hint" style="margin-bottom:10px;">
-            One image per color, named <code>ColorName_HEX1_HEX2.png</code> — for example
-            <code>Ruby_ff0000_8b0000.png</code>. The two hex codes become the gradient.
-            Images are stored for this server only.
-          </div>
-          <div data-swatch-active class="field-hint" style="margin-bottom:10px;"></div>
-          <div data-swatch-list style="margin-bottom:12px;"><div class="empty">Loading swatch images…</div></div>
-          <form class="field-row" style="flex-wrap:wrap;align-items:flex-end;" data-upload-form>
-            <div class="field">
-              <label for="sink-swatch-input">Image Files</label>
-              <input type="file" id="sink-swatch-input" name="files"
-                accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
-              <div class="field-hint">Several at once is fine. Uploading alone changes nothing — press Sync Palette after.</div>
-            </div>
-            <button type="submit" class="btn btn-primary" data-upload-btn>Upload Images</button>
-            <span data-upload-status></span>
-          </form>
-        </div>
-
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
-          <div class="section-label">Sync Palette From Swatches</div>
-          <div class="field-hint" style="margin-bottom:10px;">
-            Makes the palette match the images above: new files become new colors, and
-            existing colors pick up any renamed file, changed gradient or new ordering.
-            A color whose image is gone stops being offered — if someone is renting it they
-            keep it, and it is deleted outright only when nobody holds it. No Discord roles
-            are created or deleted, so members wearing an old booster color keep it either way.
-          </div>
-          <form class="field-row" style="align-items:center;" data-sync-form>
-            <button type="submit" class="btn btn-primary" data-sync-btn>Sync Palette</button>
-            <span data-sync-status></span>
-          </form>
-        </div>
-
-        <div style="margin-top:1.25rem;padding-top:1rem;border-top:1px solid var(--rule);">
-          <div class="section-label">Old Showroom Channel</div>
-          <div class="field-hint" style="margin-bottom:10px;">
-            Members now browse the swatches inside <code>/bank shop</code> — the picker shows
-            every gradient as a picture, so no channel has to hold them. If this server still
-            has the old showroom sitting in a channel, this deletes those messages. Nothing
-            else changes: the colors, their prices and anyone renting one are untouched.
-          </div>
-          <form class="form" data-takedown-form>
-            <div style="display:flex;gap:8px;align-items:center;">
-              <button type="submit" class="btn btn-danger" data-takedown-btn>Delete Old Showroom</button>
-              <span data-takedown-status></span>
-            </div>
-          </form>
-        </div>
+        <div data-palette-tabs></div>
       </section>
 
       <section class="form card" style="margin-top:1.5rem;">
@@ -424,224 +370,301 @@ function colorRow(color) {
 
 
 function wirePalette(container, colors) {
-  const listEl = container.querySelector("[data-palette]");
-  const emptyEl = container.querySelector("[data-palette-empty]");
+  // Colors are already loaded (fetched alongside cfg/icons in mount()), so
+  // the Colors tab paints instantly with no fetch of its own — it only needs
+  // this to stay current when Sync (a different tab) changes the catalog.
+  // Panes stay in the DOM once opened — tabs.js only toggles their
+  // visibility — so a color-catalog refresh keeps the Colors tab correct
+  // even when it isn't the one currently on screen; if it was never opened
+  // there's no pane yet, and `latestColors` just carries the fresh data
+  // through to whenever it first renders.
+  let latestColors = colors;
 
-  function renderList(rows) {
-    listEl.innerHTML = rows.map(colorRow).join("");
-    emptyEl.style.display = rows.length ? "none" : "block";
+  function paintColorList(pane, rows) {
+    latestColors = rows;
+    pane.querySelector("[data-palette]").innerHTML = rows.map(colorRow).join("");
+    pane.querySelector("[data-palette-empty]").style.display = rows.length ? "none" : "block";
   }
-  renderList(colors);
 
-  // Row actions via delegation so re-rendered rows stay wired.
-  listEl.addEventListener("click", async (e) => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
-    const row = btn.closest("[data-color-id]");
-    const id = row.getAttribute("data-color-id");
-    const rowStatus = row.querySelector("[data-row-status]");
+  function refreshColorsTabIfOpen(rows) {
+    latestColors = rows;
+    const pane = container.querySelector('[data-pane="colors"]');
+    if (pane && pane.querySelector("[data-palette]")) paintColorList(pane, rows);
+  }
 
-    if (btn.hasAttribute("data-save")) {
-      const nameInput = row.querySelector("[data-name]");
-      const priceInput = row.querySelector("[data-price]");
-      if (!nameInput.value.trim()) {
-        showStatus(rowStatus, false, "Name cannot be empty");
-        nameInput.focus();
-        return;
-      }
-      const price = parseInt(priceInput.value, 10);
-      if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
-        showStatus(rowStatus, false, `Price Per Week must be a whole number from 0 to ${DEFAULT_MAX}`);
-        priceInput.focus();
-        return;
-      }
-      btn.disabled = true;
-      try {
-        await request("PATCH", `/api/economy/color-catalog/${id}`, {
-          body: {
-            name: nameInput.value.trim(),
-            price,
-            enabled: row.querySelector("[data-enabled]").checked,
-          },
-        });
-        showStatus(rowStatus, true);
-      } catch (err) {
-        showStatus(rowStatus, false, err.message);
-      } finally {
-        btn.disabled = false;
-      }
-    } else if (btn.hasAttribute("data-delete")) {
-      const colorName = row.querySelector("[data-name]").value.trim() || "this color";
-      const ok = await confirmDialog(
-        `"${colorName}" disappears from the shop and the showroom. Its swatch image stays, `
-        + "so the next sync brings it back — delete the image too if you want it gone. "
-        + "To retire a color while keeping it for current renters, clear \"Offer in the "
-        + "shop\" and save instead.",
-        { title: "Delete this color?", danger: true, confirmLabel: "Delete" },
-      );
-      if (!ok) return;
-      btn.disabled = true;
-      try {
-        await apiDelete(`/api/economy/color-catalog/${id}`);
-        renderList(await api("/api/economy/color-catalog"));
-      } catch (err) {
-        // 409 = in use: surface the reason, keep the row.
-        showStatus(rowStatus, false, err.message);
-        btn.disabled = false;
-      }
-    }
-  });
+  function renderColorsTab(pane) {
+    pane.innerHTML = `
+      <div data-palette></div>
+      <div data-palette-empty class="field-hint" style="display:none;">
+        No colors yet. Upload swatch images on the Swatch Images tab, then Sync.
+      </div>
+    `;
+    paintColorList(pane, latestColors);
 
-  // ── swatch images ──
-  const swatchList = container.querySelector("[data-swatch-list]");
-  const swatchActive = container.querySelector("[data-swatch-active]");
+    // Row actions via delegation so re-rendered rows stay wired.
+    pane.querySelector("[data-palette]").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) return;
+      const row = btn.closest("[data-color-id]");
+      const id = row.getAttribute("data-color-id");
+      const rowStatus = row.querySelector("[data-row-status]");
 
-  function renderSwatchList(data) {
-    const files = data.files || [];
-    if (!files.length) {
-      swatchList.innerHTML = `<div class="empty">No swatch images uploaded yet.</div>`;
-    } else {
-      swatchList.innerHTML = files.map((f) => {
-        const chip = f.valid
-          ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
-          : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
-        const meta = f.valid
-          ? `<span>${esc(f.label)}</span>`
-          : `<span style="color:var(--red-text)">⚠ Skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
-        return `
-          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--rule);">
-            ${chip}
-            <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
-            ${meta}
-            <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${esc(f.name)}">Delete</button>
-          </div>`;
-      }).join("");
-    }
-    swatchActive.innerHTML = data.using_managed
-      ? ""
-      : `<strong>Syncing currently reads a folder on the server:</strong> <code>${esc(data.active_dir)}</code>. Upload at least one correctly named image here to switch syncing over to this server's own set.`;
-
-    swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
-      btn.addEventListener("click", async () => {
-        const name = btn.dataset.swatchDel;
+      if (btn.hasAttribute("data-save")) {
+        const nameInput = row.querySelector("[data-name]");
+        const priceInput = row.querySelector("[data-price]");
+        if (!nameInput.value.trim()) {
+          showStatus(rowStatus, false, "Name cannot be empty");
+          nameInput.focus();
+          return;
+        }
+        const price = parseInt(priceInput.value, 10);
+        if (!Number.isFinite(price) || price < 0 || price > DEFAULT_MAX) {
+          showStatus(rowStatus, false, `Price Per Week must be a whole number from 0 to ${DEFAULT_MAX}`);
+          priceInput.focus();
+          return;
+        }
+        btn.disabled = true;
+        try {
+          await request("PATCH", `/api/economy/color-catalog/${id}`, {
+            body: {
+              name: nameInput.value.trim(),
+              price,
+              enabled: row.querySelector("[data-enabled]").checked,
+            },
+          });
+          showStatus(rowStatus, true);
+        } catch (err) {
+          showStatus(rowStatus, false, err.message);
+        } finally {
+          btn.disabled = false;
+        }
+      } else if (btn.hasAttribute("data-delete")) {
+        const colorName = row.querySelector("[data-name]").value.trim() || "this color";
         const ok = await confirmDialog(
-          `Delete the image "${name}"? At the next sync its color stops being offered — `
-          + "anyone renting it keeps it, and it is removed outright only if nobody holds it.",
-          { title: "Delete Swatch Image", danger: true, confirmLabel: "Delete Image" },
+          `"${colorName}" disappears from the shop and the showroom. Its swatch image stays, `
+          + "so the next sync brings it back — delete the image too if you want it gone. "
+          + "To retire a color while keeping it for current renters, clear \"Offer in the "
+          + "shop\" and save instead.",
+          { title: "Delete this color?", danger: true, confirmLabel: "Delete" },
         );
         if (!ok) return;
+        btn.disabled = true;
         try {
-          renderSwatchList(
-            await apiDelete(`/api/economy/color-catalog/swatches/${encodeURIComponent(name)}`),
-          );
+          await apiDelete(`/api/economy/color-catalog/${id}`);
+          paintColorList(pane, await api("/api/economy/color-catalog"));
         } catch (err) {
-          toast(err.message, "error");
+          // 409 = in use: surface the reason, keep the row.
+          showStatus(rowStatus, false, err.message);
+          btn.disabled = false;
         }
-      });
+      }
     });
   }
 
-  // The trailing .catch is not redundant with the try/inside: a throw from
-  // renderSwatchList itself would escape as an unhandled rejection and leave
-  // the list on "Loading swatch images…" forever.
-  (async () => {
-    try {
-      renderSwatchList(await api("/api/economy/color-catalog/swatches"));
-    } catch (err) {
-      swatchList.innerHTML = `<div class="error">Couldn't load the swatch images: ${esc(err.message)}</div>`;
-    }
-  })().catch(() => {
-    swatchList.innerHTML = `<div class="error">Couldn't load the swatch images.</div>`;
-  });
+  // Fetched only the first time this tab opens; a rejection here propagates
+  // to mountTabs' guard, which turns it into a Retry button for this pane
+  // alone (see tabs.js) — so this must not swallow the error itself.
+  async function renderSwatchesTab(pane) {
+    pane.innerHTML = `<div class="empty">Loading swatch images…</div>`;
+    const data = await api("/api/economy/color-catalog/swatches");
 
-  const uploadForm = container.querySelector("[data-upload-form]");
-  const uploadBtn = container.querySelector("[data-upload-btn]");
-  const uploadStatus = container.querySelector("[data-upload-status]");
-  const swatchInput = container.querySelector("[data-swatch-input]");
-  guardForm(uploadForm);
-  uploadForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (!swatchInput.files.length) {
-      showStatus(uploadStatus, false, "Choose at least one image file first.");
-      swatchInput.focus();
-      return;
-    }
-    const fd = new FormData();
-    for (const file of swatchInput.files) fd.append("files", file);
-    uploadBtn.disabled = true;
-    uploadStatus.textContent = "Uploading…";
-    try {
-      const data = await apiPost("/api/economy/color-catalog/swatches", fd);
-      renderSwatchList(data);
-      swatchInput.value = "";
-      const n = data.saved?.length || 0;
-      showStatus(uploadStatus, true, `Uploaded ${n} image${n === 1 ? "" : "s"}`);
-    } catch (err) {
-      showStatus(uploadStatus, false, err.message);
-    } finally {
-      uploadBtn.disabled = false;
-    }
-  });
+    pane.innerHTML = `
+      <div class="field-hint" style="margin-bottom:10px;">
+        One image per color, named <code>ColorName_HEX1_HEX2.png</code> — for example
+        <code>Ruby_ff0000_8b0000.png</code>. The two hex codes become the gradient.
+        Images are stored for this server only.
+      </div>
+      <div data-swatch-active class="field-hint" style="margin-bottom:10px;"></div>
+      <div data-swatch-list style="margin-bottom:12px;"></div>
+      <form class="field-row" style="flex-wrap:wrap;align-items:flex-end;" data-upload-form>
+        <div class="field">
+          <label for="sink-swatch-input">Image Files</label>
+          <input type="file" id="sink-swatch-input" name="files"
+            accept="image/png,image/jpeg,image/gif,image/webp" multiple data-swatch-input />
+          <div class="field-hint">Several at once is fine. Uploading alone changes nothing — press Sync after.</div>
+        </div>
+        <button type="submit" class="btn btn-primary" data-upload-btn>Upload Images</button>
+        <span data-upload-status></span>
+      </form>
+    `;
 
-  // ── sync ──
-  const syncForm = container.querySelector("[data-sync-form]");
-  const syncBtn = container.querySelector("[data-sync-btn]");
-  const syncStatus = container.querySelector("[data-sync-status]");
-  syncForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    syncBtn.disabled = true;
-    syncStatus.textContent = "Syncing…";
-    try {
-      const data = await apiPost("/api/economy/color-catalog/sync");
-      const parts = [];
-      if (data.added?.length) parts.push(`added ${data.added.length}`);
-      if (data.disabled?.length) parts.push(`stopped offering ${data.disabled.length}`);
-      if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
-      showStatus(syncStatus, true, parts.length ? parts.join(", ") : "Already up to date");
-      if (data.still_disabled?.length) {
-        // Sync never re-enables — it can't tell a deliberate retirement from a
-        // swatch that was deleted by mistake and put back.
-        toast(
-          `Not offered in the shop: ${data.still_disabled.join(", ")}. `
-          + "Tick \"Offer in the shop\" to bring one back.",
-          "info",
-        );
+    const swatchList = pane.querySelector("[data-swatch-list]");
+    const swatchActive = pane.querySelector("[data-swatch-active]");
+
+    function renderSwatchList(d) {
+      const files = d.files || [];
+      if (!files.length) {
+        swatchList.innerHTML = `<div class="empty">No swatch images uploaded yet.</div>`;
+      } else {
+        swatchList.innerHTML = files.map((f) => {
+          const chip = f.valid
+            ? `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:linear-gradient(135deg,#${esc(f.hex1)},#${esc(f.hex2)});flex:none;"></span>`
+            : `<span style="display:inline-block;width:28px;height:18px;border-radius:4px;border:1px solid var(--rule);background:repeating-linear-gradient(45deg,#555,#555 4px,#333 4px,#333 8px);flex:none;"></span>`;
+          const meta = f.valid
+            ? `<span>${esc(f.label)}</span>`
+            : `<span style="color:var(--red-text)">⚠ Skipped when syncing — rename it to ColorName_HEX1_HEX2 plus its extension.</span>`;
+          return `
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid var(--rule);">
+              ${chip}
+              <span style="flex:none;font-family:monospace;opacity:.85;">${esc(f.name)}</span>
+              ${meta}
+              <button type="button" class="btn btn-danger" style="margin-left:auto;padding:2px 8px;" data-swatch-del="${esc(f.name)}">Delete</button>
+            </div>`;
+        }).join("");
       }
-      renderList(await api("/api/economy/color-catalog"));
-    } catch (err) {
-      showStatus(syncStatus, false, err.message);
-    } finally {
-      syncBtn.disabled = false;
-    }
-  });
+      swatchActive.innerHTML = d.using_managed
+        ? ""
+        : `<strong>Syncing currently reads a folder on the server:</strong> <code>${esc(d.active_dir)}</code>. Upload at least one correctly named image here to switch syncing over to this server's own set.`;
 
-  // ── the old showroom channel, on its way out ──
-  const takedownForm = container.querySelector("[data-takedown-form]");
-  const takedownBtn = container.querySelector("[data-takedown-btn]");
-  const takedownStatus = container.querySelector("[data-takedown-status]");
-  guardForm(takedownForm);
-  takedownForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const ok = await confirmDialog(
-      "Delete the showroom messages this server posted in a channel? "
-      + "Members browse the colors in /bank shop instead — nothing else changes.",
-      { title: "Delete Old Showroom", danger: true, confirmLabel: "Delete Messages" },
-    );
-    if (!ok) return;
-    takedownBtn.disabled = true;
-    try {
-      const data = await apiPost("/api/economy/color-catalog/remove-panel");
-      const n = data.deleted || 0;
-      showStatus(
-        takedownStatus, true,
-        n ? `Deleted ${n} message${n === 1 ? "" : "s"}` : "Nothing left to delete",
-      );
-    } catch (err) {
-      showStatus(takedownStatus, false, err.message);
-    } finally {
-      takedownBtn.disabled = false;
+      swatchList.querySelectorAll("[data-swatch-del]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const name = btn.dataset.swatchDel;
+          const ok = await confirmDialog(
+            `Delete the image "${name}"? At the next sync its color stops being offered — `
+            + "anyone renting it keeps it, and it is removed outright only if nobody holds it.",
+            { title: "Delete Swatch Image", danger: true, confirmLabel: "Delete Image" },
+          );
+          if (!ok) return;
+          try {
+            renderSwatchList(
+              await apiDelete(`/api/economy/color-catalog/swatches/${encodeURIComponent(name)}`),
+            );
+          } catch (err) {
+            toast(err.message, "error");
+          }
+        });
+      });
     }
-  });
+    renderSwatchList(data);
+
+    const uploadForm = pane.querySelector("[data-upload-form]");
+    const uploadBtn = pane.querySelector("[data-upload-btn]");
+    const uploadStatus = pane.querySelector("[data-upload-status]");
+    const swatchInput = pane.querySelector("[data-swatch-input]");
+    guardForm(uploadForm);
+    uploadForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      if (!swatchInput.files.length) {
+        showStatus(uploadStatus, false, "Choose at least one image file first.");
+        swatchInput.focus();
+        return;
+      }
+      const fd = new FormData();
+      for (const file of swatchInput.files) fd.append("files", file);
+      uploadBtn.disabled = true;
+      uploadStatus.textContent = "Uploading…";
+      try {
+        const uploaded = await apiPost("/api/economy/color-catalog/swatches", fd);
+        renderSwatchList(uploaded);
+        swatchInput.value = "";
+        const n = uploaded.saved?.length || 0;
+        showStatus(uploadStatus, true, `Uploaded ${n} image${n === 1 ? "" : "s"}`);
+      } catch (err) {
+        showStatus(uploadStatus, false, err.message);
+      } finally {
+        uploadBtn.disabled = false;
+      }
+    });
+  }
+
+  function renderSyncTab(pane) {
+    pane.innerHTML = `
+      <div class="field-hint" style="margin-bottom:10px;">
+        Makes the palette match the images on the Swatch Images tab: new files become
+        new colors, and existing colors pick up any renamed file, changed gradient or
+        new ordering. A color whose image is gone stops being offered — if someone is
+        renting it they keep it, and it is deleted outright only when nobody holds it.
+        No Discord roles are created or deleted, so members wearing an old booster
+        color keep it either way.
+      </div>
+      <form class="field-row" style="align-items:center;" data-sync-form>
+        <button type="submit" class="btn btn-primary" data-sync-btn>Sync Palette</button>
+        <span data-sync-status></span>
+      </form>
+    `;
+    const syncForm = pane.querySelector("[data-sync-form]");
+    const syncBtn = pane.querySelector("[data-sync-btn]");
+    const syncStatus = pane.querySelector("[data-sync-status]");
+    syncForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      syncBtn.disabled = true;
+      syncStatus.textContent = "Syncing…";
+      try {
+        const data = await apiPost("/api/economy/color-catalog/sync");
+        const parts = [];
+        if (data.added?.length) parts.push(`added ${data.added.length}`);
+        if (data.disabled?.length) parts.push(`stopped offering ${data.disabled.length}`);
+        if (data.removed?.length) parts.push(`removed ${data.removed.length}`);
+        showStatus(syncStatus, true, parts.length ? parts.join(", ") : "Already up to date");
+        if (data.still_disabled?.length) {
+          // Sync never re-enables — it can't tell a deliberate retirement from a
+          // swatch that was deleted by mistake and put back.
+          toast(
+            `Not offered in the shop: ${data.still_disabled.join(", ")}. `
+            + "Tick \"Offer in the shop\" to bring one back.",
+            "info",
+          );
+        }
+        refreshColorsTabIfOpen(await api("/api/economy/color-catalog"));
+      } catch (err) {
+        showStatus(syncStatus, false, err.message);
+      } finally {
+        syncBtn.disabled = false;
+      }
+    });
+  }
+
+  function renderShowroomTab(pane) {
+    pane.innerHTML = `
+      <div class="field-hint" style="margin-bottom:10px;">
+        Members now browse the swatches inside <code>/bank shop</code> — the picker shows
+        every gradient as a picture, so no channel has to hold them. If this server still
+        has the old showroom sitting in a channel, this deletes those messages. Nothing
+        else changes: the colors, their prices and anyone renting one are untouched.
+      </div>
+      <form class="form" data-takedown-form>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button type="submit" class="btn btn-danger" data-takedown-btn>Delete Old Showroom</button>
+          <span data-takedown-status></span>
+        </div>
+      </form>
+    `;
+    const takedownForm = pane.querySelector("[data-takedown-form]");
+    const takedownBtn = pane.querySelector("[data-takedown-btn]");
+    const takedownStatus = pane.querySelector("[data-takedown-status]");
+    guardForm(takedownForm);
+    takedownForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const ok = await confirmDialog(
+        "Delete the showroom messages this server posted in a channel? "
+        + "Members browse the colors in /bank shop instead — nothing else changes.",
+        { title: "Delete Old Showroom", danger: true, confirmLabel: "Delete Messages" },
+      );
+      if (!ok) return;
+      takedownBtn.disabled = true;
+      try {
+        const data = await apiPost("/api/economy/color-catalog/remove-panel");
+        const n = data.deleted || 0;
+        showStatus(
+          takedownStatus, true,
+          n ? `Deleted ${n} message${n === 1 ? "" : "s"}` : "Nothing left to delete",
+        );
+      } catch (err) {
+        showStatus(takedownStatus, false, err.message);
+      } finally {
+        takedownBtn.disabled = false;
+      }
+    });
+  }
+
+  mountTabs(container.querySelector("[data-palette-tabs]"), [
+    { key: "colors", label: "Colors", render: renderColorsTab,
+      errorMsg: "Couldn’t load the color palette." },
+    { key: "swatches", label: "Swatch Images", render: renderSwatchesTab,
+      errorMsg: "Couldn’t load the swatch images." },
+    { key: "sync", label: "Sync", render: renderSyncTab },
+    { key: "showroom", label: "Old Showroom", render: renderShowroomTab },
+  ], { ariaLabel: "Color palette sections" });
 }
 
 // ── Custom shop items ───────────────────────────────────────────────────────
