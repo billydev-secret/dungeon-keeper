@@ -6,7 +6,9 @@ Automatically transcribes Discord voice messages (voice notes) posted in text ch
 
 ## Commands
 
-None. The feature is a pure `on_message` listener — all configuration lives in the web dashboard (Config → Voice Transcription).
+One message **context menu**: **Transcribe Voice Note** (long-press a message on mobile, or right-click → Apps on desktop). Everything else is a pure `on_message` listener, and all configuration lives in the web dashboard (Config → Voice Transcription).
+
+The menu is registered with `allowed_installs(guilds=True, users=True)` and `allowed_contexts(guilds=True, dms=True, private_channels=True)` — i.e. it is a **user-installable** command. That is what lets it run in a personal DM: a bot cannot read or post in a DM it is not part of, but a user-installed command travels with the person who installed it and answers through the interaction. It requires **User Install** to be enabled for the app in the Discord Developer Portal; without that, the command simply never appears outside guilds.
 
 ## Behavior
 
@@ -22,7 +24,14 @@ A message qualifies for transcription when **all** of the following hold:
 The first attachment is downloaded to a temporary file (suffix from its filename, defaulting to `.ogg`) and transcribed off the event loop via `faster_whisper` with `device="cpu"`, `compute_type="int8"`, `beam_size=1`. A typing indicator shows in the channel while transcription runs. Loaded models are cached in-process, one instance per model name.
 
 ### Output
-On success with non-empty text, the bot **replies** to the voice message with `📝 {transcript}` (no author mention). Empty transcripts and any failure are silent — errors are logged at warning level, nothing is posted.
+On success with non-empty text, the bot posts a **standalone message** — not a reply — reading `📝 **{speaker}:** {transcript}`, with the speaker's display name markdown-escaped. It is standalone because `delete_after_transcribe` may remove the voice message, and a reply to a deleted message renders as a dangling stub. Empty transcripts and any failure are silent on the listener path — errors are logged at warning level, nothing is posted.
+
+### On-demand transcription (context menu)
+The menu path is **not** gated on the per-guild config: that dial governs which channels transcribe *automatically*, and a DM has no guild row to read. The only gates are that faster-whisper is available and that the picked message carries audio. Attachment selection is deliberately wider than the listener's: any attachment whose `content_type` starts with `audio/` qualifies, falling back to the `IS_VOICE_MESSAGE` flag when Discord reports no content type. Someone who reached for the menu picked that message and meant it, so an uploaded `.mp3` is accepted where the automatic listener would ignore it.
+
+The interaction is deferred (transcription exceeds Discord's 3s window) and the transcript is posted **publicly**, since the point is to leave the text in the conversation. Every failure mode replies **ephemerally** instead: unavailable, no audio found, transcription failed, or no speech detected. Model choice is the guild's configured model in a guild and `base.en` in a DM.
+
+Transcripts are fitted to a single message by `fit_transcript` (1900 chars, cut on a word boundary where one falls in the last fifth of the budget) with an explicit truncation note — a transcript that simply stopped mid-sentence would read as a failure.
 
 ### Availability
 If `faster-whisper` isn't installed, the cog is skipped entirely at setup (logged warning). The dashboard reports availability and per-model cache status.
@@ -48,11 +57,14 @@ Routes (`src/web_server/routes/config.py`):
 
 ## Stored data
 
-One table, `voice_transcription_config`, one row per guild: `guild_id`, `enabled`, `model_name`, `channel_ids` (comma-separated string). Transcripts themselves are not stored anywhere — the reply message is the only output. Downloaded model weights live on disk under `.cache/huggingface/hub`.
+One table, `voice_transcription_config`, one row per guild: `guild_id`, `enabled`, `model_name`, `channel_ids` (comma-separated string), `delete_after_transcribe` (migration 199, default off).
+
+**Nothing about a transcription is retained.** The audio is written to a temp file only because faster-whisper reads from a path, and it is unlinked in a `finally` whether or not the transcribe succeeded. The transcript's only home is the Discord message that carries it. This holds for DMs by construction as well as by intent: `events_cog.on_message` returns early on `not message.guild`, so DM messages are never ingested into `messages`, and `dm_audit_log` records actions rather than content. Downloaded model weights live on disk under `.cache/huggingface/hub`.
 
 ## Non-goals
 
-- No live voice-channel transcription — text-channel voice notes only.
-- Only the first attachment of a voice message is transcribed (Discord voice notes carry exactly one).
+- No live voice-channel transcription — posted audio only.
+- Only one attachment per message is transcribed (Discord voice notes carry exactly one; the menu takes the first audio attachment it finds).
 - English-only models (`*.en`); no language detection or multilingual support.
-- No user-facing error messages — failures are log-only.
+- The **listener** has no user-facing error messages — failures are log-only. The **context menu** does report failures, ephemerally, because someone is waiting on a press.
+- `delete_after_transcribe` does not apply to the context menu: it transcribes what it was pointed at and leaves it alone. Deleting someone's message on their behalf is not something a long-press should do, and in a DM the bot could not do it anyway.

@@ -101,6 +101,28 @@ def _get_model(model_name: str) -> Any:
         return _cache[model_name]
 
 
+#: Discord message content caps at 2000 characters. A long note has to be cut
+#: somewhere, and the cut is announced rather than silent — a transcript that
+#: simply stops mid-sentence reads like a transcription failure.
+MAX_TRANSCRIPT_CHARS = 1900
+_TRUNCATED_NOTE = "\n\n*(transcript truncated — the recording was longer than one message)*"
+
+
+def fit_transcript(text: str, limit: int = MAX_TRANSCRIPT_CHARS) -> str:
+    """Trim a transcript to one Discord message, saying so when it trims.
+
+    Cuts on a word boundary where there is one in the last fifth of the budget,
+    so the visible text ends on a whole word rather than mid-syllable.
+    """
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    space = head.rfind(" ")
+    if space > limit * 0.8:
+        head = head[:space]
+    return head.rstrip() + _TRUNCATED_NOTE
+
+
 def transcribe_file(path: Path, model_name: str = DEFAULT_MODEL) -> str:
     """Transcribe an audio file; returns the full transcript as a single string."""
     model = _get_model(model_name)
