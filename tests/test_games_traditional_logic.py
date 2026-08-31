@@ -646,3 +646,26 @@ def test_host_view_exposes_an_end_game_button_bound_to_do_close():
     assert "_do_close" in source
     assert "is_host_or_mod" in source  # host/mod gate, not open to the room
     assert "ConfirmCloseView" in source  # same confirm popup every other game uses
+
+
+def test_host_view_lays_its_buttons_out_two_per_row():
+    """The panel is a 2x4 grid, not one packed row of four and a ragged three.
+
+    Discord packs up to five buttons into an action row on its own, so the
+    pairing only holds while every button carries an explicit ``row=``.
+    """
+    from collections import defaultdict
+
+    from bot_modules.cogs.games_traditional_cog import TraditionalHostView
+
+    view = TraditionalHostView("game-1", 1, None, None)
+    rows: dict[int | None, list[str]] = defaultdict(list)
+    for child in view.children:
+        rows[child.row].append(child.label)
+
+    assert rows == {
+        0: ["SFW Truth", "SFW Dare"],
+        1: ["NSFW Truth", "NSFW Dare"],
+        2: ["Ask Question", "Bank Round"],
+        3: ["❓ Help", "End Game"],
+    }

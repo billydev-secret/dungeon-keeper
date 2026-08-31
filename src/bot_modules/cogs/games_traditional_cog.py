@@ -133,7 +133,11 @@ class TraditionalHostView(discord.ui.View):
     async def _update_embed(self, interaction: discord.Interaction, payload: dict):
         await self.refresh_embed(interaction.guild, payload)
 
-    # --- Player preference toggles (row 0) ---
+    # --- Player preference toggles (rows 0-1) ---
+    #
+    # Two buttons per row, deliberately: the four category toggles pair up
+    # SFW over NSFW, so the panel reads as a 2x4 grid rather than one packed
+    # row of four and a ragged row of three underneath.
 
     @discord.ui.button(label="SFW Truth", style=discord.ButtonStyle.primary, custom_id="tod_sfw_truth", row=0)
     async def sfw_truth(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -145,12 +149,12 @@ class TraditionalHostView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "sfw_dare")
 
-    @discord.ui.button(label="NSFW Truth", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_truth", row=0)
+    @discord.ui.button(label="NSFW Truth", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_truth", row=1)
     async def nsfw_truth(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "nsfw_truth")
 
-    @discord.ui.button(label="NSFW Dare", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_dare", row=0)
+    @discord.ui.button(label="NSFW Dare", style=discord.ButtonStyle.danger, custom_id="tod_nsfw_dare", row=1)
     async def nsfw_dare(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await self._toggle_pref(interaction, "nsfw_dare")
@@ -183,9 +187,9 @@ class TraditionalHostView(discord.ui.View):
             msg = f"**{CAT_LABELS[category]}** {action} from your preferences."
         await interaction.response.send_message(msg, ephemeral=True)
 
-    # --- Host controls (row 1) ---
+    # --- Host controls (row 2) ---
 
-    @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.success, custom_id="tod_ask", row=1)
+    @discord.ui.button(label="Ask Question", style=discord.ButtonStyle.success, custom_id="tod_ask", row=2)
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
@@ -215,7 +219,7 @@ class TraditionalHostView(discord.ui.View):
         )
         await interaction.response.send_modal(modal)
 
-    @discord.ui.button(label="Bank Round", emoji="🎲", style=discord.ButtonStyle.primary, custom_id="tod_bank_round", row=1)
+    @discord.ui.button(label="Bank Round", emoji="🎲", style=discord.ButtonStyle.primary, custom_id="tod_bank_round", row=2)
     async def bank_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Serve every opted-in player a fresh question pulled from the bank.
 
@@ -289,12 +293,12 @@ class TraditionalHostView(discord.ui.View):
                 msg += f"\nSkipped {already_asked} player{'s' if already_asked != 1 else ''} already asked in all their categories."
         await interaction.followup.send(msg, ephemeral=True)
 
-    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=1)
+    @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="tod_htp", row=3)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["traditional"], ephemeral=True)
 
-    @discord.ui.button(label="End Game", style=discord.ButtonStyle.secondary, custom_id="tod_end", row=2)
+    @discord.ui.button(label="End Game", style=discord.ButtonStyle.secondary, custom_id="tod_end", row=3)
     async def end_game_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Close the game, post the recap, and pay the room.
 
