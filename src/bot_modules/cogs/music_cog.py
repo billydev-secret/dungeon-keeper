@@ -118,7 +118,14 @@ class MusicCog(commands.Cog):
         log.info("Music cog unloading")
         if self._startup_task and not self._startup_task.done():
             self._startup_task.cancel()
-            with contextlib.suppress(Exception):
+            # CancelledError is a BaseException, so suppress(Exception) does not
+            # catch it -- awaiting the task we just cancelled re-raises it out of
+            # cog_unload, out of Bot.close(), and *replaces* whatever exception
+            # was already unwinding. That is how a startup crash once left no
+            # traceback at all and exited 0: close() runs on the way out of
+            # ``async with bot``, and the Lavalink port poll is always still
+            # pending a second into boot.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._startup_task
         for task in self._idle_tasks.values():
             task.cancel()

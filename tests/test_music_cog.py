@@ -8,6 +8,7 @@ now-playing card. The card's own placement rules are covered by
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -272,3 +273,26 @@ async def test_the_bot_moving_between_voice_channels_is_not_a_session_end(cog):
         member, MagicMock(channel=MagicMock()), MagicMock(channel=MagicMock())
     )
     assert GUILD in cog._queues
+
+
+async def test_unloading_swallows_the_startup_task_it_just_cancelled(cog):
+    """A cancelled Lavalink poll must not escape cog_unload.
+
+    ``Bot.close()`` unloads every extension on the way out of ``async with
+    bot``, so an exception raised here replaces whatever was already unwinding.
+    That is exactly how a ``CommandLimitReached`` at boot reached production as
+    a clean exit 0 with no traceback on 2026-08-31: the port poll is still
+    pending a second in, ``cancel()`` then ``await`` re-raises CancelledError,
+    and ``contextlib.suppress(Exception)`` does not catch a BaseException.
+    """
+    cog.bot.guilds = []
+
+    async def _never_finishes():
+        await asyncio.sleep(3600)
+
+    cog._startup_task = asyncio.create_task(_never_finishes())
+    await asyncio.sleep(0)  # let it reach the sleep, so it is pending, not done
+
+    await cog.cog_unload()  # must not raise
+
+    assert cog._startup_task.cancelled()
