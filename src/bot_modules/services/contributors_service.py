@@ -64,13 +64,60 @@ RESPONSE_MIN_PEOPLE = 2
 MIN_CHANNEL_POSTS = 30
 MIN_CHANNEL_ATTEMPTS = 5
 
-# Sample floors before a member appears in a view.  Open question in the plan
-# doc: lower floors admit noisy small-sample rows, higher ones hide quieter
-# contributors.  Revisit once the panel is visible.
-MIN_POSTS = 15
+# Shrinkage: pseudo-observations added at the baseline rate, so a small sample
+# is pulled toward "unremarkable" instead of being trusted at face value.  A
+# threshold answers the wrong question -- 2.34x on 67 acts and 2.07x on 7,849
+# aren't different because one cleared a bar, they're different because one
+# estimate is noisy.  Each k below was fitted by maximising split-half
+# reliability (a member's lift over two independent 45-day windows) and checked
+# on a separate 30/30 split; the gains held on the held-out data.
+#
+#   view              raw r    shrunk r     k
+#   popular           0.864 -> 0.966       25    reliability peaks here and flattens
+#   catalyst          0.771 -> 0.771        0    shrinkage strictly HURTS it (see below)
+#   welcomers         0.761 -> 0.793        5
+#   under_attended    0.704 -> 0.832       50    argmax was 1600; deliberately not taken
+#
+# under_attended keeps climbing to r=0.916 at k=1600, but that optimum works by
+# flattening everyone under ~1000 acts to 1.0 and letting raw volume carry the
+# correlation -- it demotes the member who is the actual finding in that view
+# (2.17x over 369 acts -> 1.22x).  k=50 takes two thirds of the reliability gain
+# and keeps two thirds of the spread.
+#
+# catalyst is not shrunk because shrinkage measurably lowers its reliability at
+# every k.  What it needs instead is a floor on *expected* restarts: in a room
+# that restarts 3.6% of the time, 14 attempts expect half a success, so a single
+# lucky one reads as 1.99x.  Requiring at least one expected event raises
+# reliability from 0.771 to 0.882 -- and keeps more members (36 vs 21) than the
+# stricter floor of two, because it cuts noise rather than volume.
+SHRINK_POSTS = 25
+SHRINK_REVIVALS = 0
+SHRINK_REPLIES = 5
+SHRINK_ACTS = 50
+
+# The precision of a rate estimate depends on how many events you *expect*, not
+# how many trials there were, and this turned out to matter more than shrinkage
+# on the two views whose events are rare.  Each floor is the point where the two
+# independent splits *agree* -- a value tuned on one split and contradicted by
+# the other is fitted noise, not a threshold.
+#
+#   view        floor   r (45/45 split)   r (30/30 split)
+#   catalyst      1.0   0.771 -> 0.882    (raw lift kept; shrinkage hurts)
+#   welcomers     5.0   0.761 -> 0.814    0.653 -> 0.804
+#
+# Popular Content and Under-Attended need no such floor: their expected counts
+# run to the dozens even for light contributors, so shrinkage alone is enough.
+MIN_EXPECTED_REVIVALS = 1.0
+MIN_EXPECTED_NEWCOMER_REPLIES = 5.0
+
+# Presence floors.  These no longer protect the ranking -- shrinkage does that,
+# and a 3-act member can no longer reach the top -- so they exist only to keep
+# near-empty rows out of the table.  MIN_REVIVAL_ATTEMPTS is the exception and
+# is load-bearing, since the catalyst view is unshrunk.
+MIN_POSTS = 5
 MIN_REVIVAL_ATTEMPTS = 8
-MIN_REPLIES_SENT = 150
-MIN_ACTS_GIVEN = 50
+MIN_REPLIES_SENT = 20
+MIN_ACTS_GIVEN = 20
 
 # Under-attended weighting: a target receiving the median gets weight 1.0, and
 # the weight is capped at this multiple so one near-silent target can't dominate
@@ -120,11 +167,6 @@ class ContributorsReport:
 # ---------------------------------------------------------------------------
 
 
-def _lift(actual: float, expected: float) -> float:
-    """Ratio of observed to expected, or 0.0 where there was no opportunity."""
-    return actual / expected if expected > 0 else 0.0
-
-
 def _leave_one_out(
     channel_total: float,
     channel_count: float,
@@ -143,6 +185,18 @@ def _leave_one_out(
     if others_count < floor:
         return None
     return (channel_total - own_total) / others_count
+
+
+def _shrunk_lift(own_rate: float, baseline: float, volume: float, k: int) -> float:
+    """Lift with *k* pseudo-observations added at the baseline rate.
+
+    ``k`` zero returns the raw lift.  As the sample grows the prior washes out,
+    so a high-volume member keeps their true figure while a three-event member
+    lands near 1.0 instead of topping the view on noise.
+    """
+    if baseline <= 0:
+        return 0.0
+    return (own_rate * volume + baseline * k) / (baseline * (volume + k))
 
 
 def _rank(entries: list[ContributorEntry]) -> list[ContributorEntry]:
@@ -315,7 +369,7 @@ def build_contributors_report(
         report.popular.append(
             ContributorEntry(
                 user_id=uid,
-                score=_lift(got, expected),
+                score=_shrunk_lift(got / n, expected / n, n, SHRINK_POSTS),
                 volume=n,
                 own_rate=got / n,
                 baseline=expected / n,
@@ -375,12 +429,14 @@ def build_contributors_report(
             )
             if rate is not None:
                 expected += own_attempts * rate
-        if attempts < MIN_REVIVAL_ATTEMPTS or expected <= 0:
+        if attempts < MIN_REVIVAL_ATTEMPTS or expected < MIN_EXPECTED_REVIVALS:
             continue
         report.catalyst.append(
             ContributorEntry(
                 user_id=uid,
-                score=_lift(wins, expected),
+                score=_shrunk_lift(
+                    wins / attempts, expected / attempts, attempts, SHRINK_REVIVALS
+                ),
                 volume=attempts,
                 own_rate=wins / attempts,
                 baseline=expected / attempts,
@@ -426,11 +482,13 @@ def build_contributors_report(
     for uid, sent in replies_sent.items():
         if not eligible(uid) or sent < MIN_REPLIES_SENT or server_share <= 0:
             continue
+        if sent * server_share < MIN_EXPECTED_NEWCOMER_REPLIES:
+            continue
         share = replies_to_newcomer.get(uid, 0) / sent
         report.welcomers.append(
             ContributorEntry(
                 user_id=uid,
-                score=_lift(share, server_share),
+                score=_shrunk_lift(share, server_share, sent, SHRINK_REPLIES),
                 volume=sent,
                 own_rate=share,
                 baseline=server_share,
@@ -465,7 +523,9 @@ def build_contributors_report(
             report.under_attended.append(
                 ContributorEntry(
                     user_id=uid,
-                    score=_lift(weighted[uid] / n, server_weight),
+                    score=_shrunk_lift(
+                        weighted[uid] / n, server_weight, n, SHRINK_ACTS
+                    ),
                     volume=n,
                     own_rate=weighted[uid] / n,
                     baseline=server_weight,

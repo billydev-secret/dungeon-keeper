@@ -52,6 +52,8 @@ def low_floors(monkeypatch):
         ("MIN_ACTS_GIVEN", 2),
         ("MIN_CHANNEL_POSTS", 2),
         ("MIN_CHANNEL_ATTEMPTS", 2),
+        ("MIN_EXPECTED_REVIVALS", 0.25),
+        ("MIN_EXPECTED_NEWCOMER_REPLIES", 0.5),
     ):
         monkeypatch.setattr(cs, name, value)
 
@@ -241,13 +243,15 @@ def test_catalyst_is_relative_to_the_channel(conn, low_floors):
     for uid in (22, 23, 26, 27):  # channel 2 almost never does
         for _ in range(3):
             _revival(conn, uid, next(slot), channel=2, responders=[50], count=1)
-    # one success, so the hard room has a low base rate rather than none at all
-    # (a room nobody ever restarts has no computable lift — see the test above)
-    _revival(conn, 28, next(slot), channel=2, responders=[50, 51], count=4)
+    # a couple of successes, so the hard room has a low base rate rather than
+    # none at all — a room nobody ever restarts has no computable lift, and one
+    # too thin to expect a single restart is dropped by MIN_EXPECTED_REVIVALS
+    for uid in (28, 29):
+        _revival(conn, uid, next(slot), channel=2, responders=[50, 51], count=4)
 
-    for _ in range(3):  # A succeeds in the easy room
+    for _ in range(6):  # A succeeds in the easy room
         _revival(conn, 1, next(slot), channel=1, responders=[50, 51], count=4)
-    for _ in range(3):  # B succeeds in the hard room
+    for _ in range(6):  # B succeeds in the hard room
         _revival(conn, 2, next(slot), channel=2, responders=[52, 53], count=4)
 
     catalyst = run(conn).catalyst
@@ -315,6 +319,30 @@ def test_welcomers_expires_after_the_newcomer_window(conn, low_floors):
     assert row(run(conn).welcomers, 2).own_rate == 1.0
 
 
+def test_welcomers_drops_rows_with_too_few_expected_newcomer_replies(
+    conn, low_floors, monkeypatch
+):
+    """Twenty replies can't establish a welcoming rate.
+
+    Same rule as the catalyst floor: what bounds the estimate is how many
+    newcomer-replies you'd *expect* at the server's own rate, not how many
+    replies were sent.
+    """
+    monkeypatch.setattr(cs, "MIN_EXPECTED_NEWCOMER_REPLIES", 5.0)
+    newbie = msg(conn, 60, 10 * 24)
+    veteran = msg(conn, 50, 80 * 24)
+    for _ in range(60):  # sets a server-wide share of roughly a third
+        msg(conn, 3, 9 * 24, reply_to=newbie)
+    for _ in range(120):
+        msg(conn, 3, 9 * 24, reply_to=veteran)
+
+    for _ in range(4):  # a four-reply member: expects ~1.3, far under the floor
+        msg(conn, 1, 9 * 24, reply_to=newbie)
+
+    assert row(run(conn).welcomers, 1) is None
+    assert row(run(conn).welcomers, 3) is not None
+
+
 def test_welcomers_empty_when_nobody_answers_a_newcomer(conn, low_floors):
     """No server-wide share means no baseline, so the view is empty."""
     stale = msg(conn, 60, 80 * 24)
@@ -358,6 +386,84 @@ def test_under_attended_favours_engaging_the_overlooked(conn, low_floors):
 
     under = run(conn).under_attended
     assert row(under, 2).score > row(under, 1).score
+
+
+# ── Shrinkage ──────────────────────────────────────────────────────────
+
+
+def test_small_samples_cannot_top_a_view_on_noise(conn, low_floors):
+    """A huge lift over three acts must not outrank a solid one over hundreds.
+
+    This is what replaced the sample threshold: a cutoff answers the wrong
+    question, since two lifts differ because one estimate is noisy, not because
+    one cleared a bar.
+    """
+    # the room's rate has to be set by other people, since every baseline is
+    # leave-one-out — otherwise these two would mostly be measured against
+    # each other
+    background(conn, 1, uids=(10, 11, 12), posts=70, responders=2)
+
+    for _ in range(3):  # tiny sample, spectacular rate
+        m = msg(conn, 1, 40, channel=1)
+        for r in range(90, 98):
+            react(conn, r, 1, m, 39)
+    for _ in range(200):  # large sample, merely good rate
+        m = msg(conn, 2, 40, channel=1)
+        for r in (90, 91, 92):
+            react(conn, r, 2, m, 39)
+
+    popular = run(conn).popular
+    a, b = row(popular, 1), row(popular, 2)
+    assert a.own_rate > b.own_rate, "the tiny sample has the higher raw rate"
+    assert b.score > a.score, "but the reliable one ranks higher"
+
+
+def test_shrinkage_leaves_large_samples_almost_untouched(conn, low_floors):
+    """The prior washes out as evidence accumulates."""
+    background(conn, 1, uids=(10, 11, 12), posts=40, responders=2)
+    for _ in range(400):
+        m = msg(conn, 1, 40, channel=1)
+        for r in (90, 91, 92):
+            react(conn, r, 1, m, 39)
+    e = row(run(conn).popular, 1)
+    raw = e.own_rate / e.baseline
+    assert abs(e.score - raw) / raw < 0.10
+
+
+def test_catalyst_drops_rows_with_too_few_expected_restarts(
+    conn, low_floors, monkeypatch
+):
+    """One lucky restart in a room that almost never restarts is not a signal.
+
+    A rate estimate's precision comes from the number of events expected, not
+    the number of tries — so the floor is on expected restarts, not attempts.
+    """
+    monkeypatch.setattr(cs, "MIN_EXPECTED_REVIVALS", 1.0)  # the production value
+    slot = iter(range(900, 40, -8))
+    for uid in (20, 21, 24, 25, 28, 29):  # a room that seldom restarts
+        for _ in range(6):
+            _revival(conn, uid, next(slot), channel=1, responders=[50], count=1)
+    for uid in (30, 31):  # a couple of successes set a low, non-zero base rate
+        _revival(conn, uid, next(slot), channel=1, responders=[50, 51], count=4)
+    for _ in range(11):  # our member: one fluke restart out of twelve
+        _revival(conn, 1, next(slot), channel=1, responders=[50], count=1)
+    _revival(conn, 1, next(slot), channel=1, responders=[50, 51], count=4)
+
+    entry = row(run(conn).catalyst, 1)
+    assert entry is None, "expected restarts is well under 1, so there is nothing to measure"
+
+
+def test_catalyst_is_not_shrunk(conn, low_floors):
+    """Shrinkage measurably lowers this view's split-half reliability."""
+    assert cs.SHRINK_REVIVALS == 0
+    slot = iter(range(900, 40, -8))
+    for uid in (20, 21, 24):
+        for _ in range(6):
+            _revival(conn, uid, next(slot), channel=1, responders=[50, 51], count=4)
+    for _ in range(6):
+        _revival(conn, 1, next(slot), channel=1, responders=[50, 51], count=4)
+    e = row(run(conn).catalyst, 1)
+    assert e.score == pytest.approx(e.own_rate / e.baseline)
 
 
 # ── Exclusions ─────────────────────────────────────────────────────────
