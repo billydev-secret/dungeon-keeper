@@ -1009,6 +1009,7 @@ def _voice_transcription_section(conn, guild_id: int) -> dict:
             "enabled": False,
             "model_name": _VT_DEFAULT_MODEL,
             "channel_ids": [],
+            "delete_after_transcribe": False,
             "available": _vt_is_available(),
             "models": _vt_models_status(),
         }
@@ -1016,6 +1017,7 @@ def _voice_transcription_section(conn, guild_id: int) -> dict:
         "enabled": cfg.enabled,
         "model_name": cfg.model_name,
         "channel_ids": [str(c) for c in cfg.channel_ids],
+        "delete_after_transcribe": cfg.delete_after_transcribe,
         "available": _vt_is_available(),
         "models": _vt_models_status(),
     }
@@ -3713,6 +3715,7 @@ class VoiceTranscriptionConfigUpdate(BaseModel):
     enabled: bool = False
     model_name: str = _VT_DEFAULT_MODEL
     channel_ids: list[str] = []
+    delete_after_transcribe: bool = False
 
 
 class VoiceTranscriptionDownloadRequest(BaseModel):
@@ -3750,6 +3753,7 @@ async def update_voice_transcription_config(
                 enabled=body.enabled,
                 model_name=model,
                 channel_ids=channel_ids,
+                delete_after_transcribe=body.delete_after_transcribe,
             )
         return {"ok": True}
 

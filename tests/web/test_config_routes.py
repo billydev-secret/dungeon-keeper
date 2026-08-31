@@ -2694,6 +2694,29 @@ def test_voice_transcription_enables_a_downloaded_model(
     assert saved.model_name == "tiny.en"
 
 
+def test_voice_transcription_round_trips_the_delete_dial(
+    authed_client, fake_ctx, monkeypatch
+):
+    """The GET must return the dial in both branches. When it did not, the
+    panel's checkbox loaded as undefined and the next Save posted it back off —
+    the Income Sources clobber, in miniature."""
+    _vt_env(monkeypatch, cached=True)
+    body = authed_client.get("/api/config").json()["voice_transcription"]
+    assert body["delete_after_transcribe"] is False  # unset guild, not missing
+
+    resp = authed_client.put(
+        "/api/config/voice-transcription",
+        json={
+            "enabled": True, "model_name": "base.en",
+            "channel_ids": ["5000"], "delete_after_transcribe": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert _vt_saved(fake_ctx).delete_after_transcribe is True
+    body = authed_client.get("/api/config").json()["voice_transcription"]
+    assert body["delete_after_transcribe"] is True
+
+
 def test_voice_transcription_can_always_be_turned_off(
     authed_client, fake_ctx, monkeypatch
 ):

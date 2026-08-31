@@ -35,6 +35,18 @@ def _is_voice_message(message: discord.Message) -> bool:
     return bool(message.flags.value & _VOICE_MSG_FLAG) and bool(message.attachments)
 
 
+def format_transcript(speaker: str, text: str) -> str:
+    """The standalone post that replaces the voice message.
+
+    It carries the speaker's name because it is no longer a reply: once the
+    audio can be deleted, a reply would render as a dangling "original message
+    was deleted" stub, and an unattributed line in a busy channel does not say
+    whose note it was. The name is markdown-escaped -- a display name holding
+    ``*`` or ``_`` would otherwise reformat the transcript after it.
+    """
+    return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** {text}"
+
+
 class VoiceTranscriptionCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
@@ -93,7 +105,25 @@ class VoiceTranscriptionCog(commands.Cog):
         if not text:
             return
 
-        await message.reply(f"📝 {text}", mention_author=False)
+        speaker = getattr(message.author, "display_name", None) or str(message.author)
+        await message.channel.send(format_transcript(speaker, text))
+
+        # Only after the transcript is safely posted, and only on success: a
+        # failed transcribe returns above, so the audio is never destroyed
+        # without something to show for it.
+        if cfg.delete_after_transcribe:
+            try:
+                await message.delete()
+            except discord.Forbidden:
+                log.warning(
+                    "Cannot delete voice message in #%s — the bot needs Manage "
+                    "Messages there; transcript posted, audio left in place",
+                    getattr(message.channel, "name", message.channel.id),
+                )
+            except discord.NotFound:
+                pass  # already gone; the transcript still stands
+            except discord.HTTPException:
+                log.warning("Deleting the voice message failed", exc_info=True)
 
 
 async def setup(bot: Bot) -> None:

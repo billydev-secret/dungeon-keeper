@@ -88,6 +88,17 @@ export function mount(container) {
                 messages are left alone.</div>
             </div>
             <div class="field">
+              <label style="display:flex; gap:6px; align-items:center;">
+                <input type="checkbox" name="delete_after_transcribe" ${vt.delete_after_transcribe ? "checked" : ""} />
+                Delete the voice message once transcribed
+              </label>
+              <div class="field-hint">Leaves only the text behind, which suits a notes
+                channel. This cannot be undone — the recording is gone, so a
+                misheard word can never be checked against it afterwards. The bot needs
+                Manage Messages in the channel; without it the transcript is still
+                posted and the audio simply stays.</div>
+            </div>
+            <div class="field">
               <label>Channels to Transcribe</label>
               <span data-picker="channel_ids"></span>
               <div class="field-hint">Only voice messages posted in these channels are
@@ -162,6 +173,7 @@ export function mount(container) {
           model_name: fd.get("model_name"),
           // Still a list of id strings, exactly as the multi-select posted.
           channel_ids: channelsPicker.getValues(),
+          delete_after_transcribe: form.querySelector('input[name="delete_after_transcribe"]').checked,
         });
         showStatus(status, true);
       } catch (err) {
