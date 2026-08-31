@@ -95,9 +95,24 @@ def test_activity_overlay_shape(open_client, resolution, points, x_label):
     assert data["show_members"] is False
 
 
-def _seed_overlay_history(db_path, guild_id, weeks):
-    """One message and one XP event per week, `weeks` weeks back."""
-    start = overlay_period_start(datetime.now(timezone.utc), 0.0, "week")
+def _seed_overlay_history(db_path, guild_id, weeks, period="week"):
+    """One message and one XP event per week, `weeks` weeks back.
+
+    ``period`` picks the anchor the weekly steps count back from, and it must
+    match what the request under test overlays on:
+
+    * ``"week"`` anchors to the start of this week, so the rows land on past
+      **week starts** — what a ``week_overlay`` compares.
+    * ``"day"`` anchors to today's midnight, so the rows land on **today's
+      weekday**, a whole number of weeks back — what a ``same_weekday=true``
+      ``day_overlay`` compares.
+
+    They are not interchangeable, though they look it: weeks start on Sunday
+    (``overlay_period_start``), so a week-anchored seed only lands on today's
+    weekday when today happens to *be* Sunday. Anchoring the same-weekday
+    tests to the week made them pass on Sundays and fail the other six days.
+    """
+    start = overlay_period_start(datetime.now(timezone.utc), 0.0, period)
     with open_db(db_path) as conn:
         for back in range(1, weeks + 1):
             ts = start - back * 7 * 86400 + 1800
@@ -150,9 +165,11 @@ def test_activity_same_weekday_clamps_compare_periods_by_mode(
     open_client, fake_ctx, mode, expected_sampled
 ):
     invalidate_report_cache()
-    # The weekly fixture is seeded a whole number of weeks back from the start
-    # of this week, which is also a whole number of weeks back from today.
-    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    # Day-anchored: a same-weekday overlay looks for past *todays*, so the
+    # fixture has to step back a week at a time from today, not from Sunday.
+    _seed_overlay_history(
+        fake_ctx.db_path, fake_ctx.guild_id, weeks=20, period="day"
+    )
     resp = open_client.get(
         f"/api/reports/activity?resolution=day_overlay&mode={mode}"
         "&compare_periods=26&same_weekday=true&include_bots=true"
@@ -164,7 +181,9 @@ def test_activity_same_weekday_clamps_compare_periods_by_mode(
 def test_activity_same_weekday_names_the_weekday(open_client, fake_ctx):
     """The caption and the band say which weekday, not just "day"."""
     invalidate_report_cache()
-    _seed_overlay_history(fake_ctx.db_path, fake_ctx.guild_id, weeks=20)
+    _seed_overlay_history(
+        fake_ctx.db_path, fake_ctx.guild_id, weeks=20, period="day"
+    )
     resp = open_client.get(
         "/api/reports/activity?resolution=day_overlay&mode=messages"
         "&compare_periods=8&same_weekday=true&include_bots=true"
