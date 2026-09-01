@@ -14,6 +14,7 @@ from bot_modules.services.channel_rollup import build_resolver, guild_channel_id
 from bot_modules.services import usage_telemetry_service as usage_telemetry
 from bot_modules.services.contributors_service import (
     VIEW_NAMES,
+    WINDOW_DAYS,
     build_contributors_payload,
 )
 from bot_modules.services.message_store import get_known_channels_bulk
@@ -983,24 +984,32 @@ async def contributors(
     guild_id = get_active_guild_id(request)
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot is not None else None
+    # Resolve the window before it reaches the cache key: the panel always
+    # sends an explicit 90 while the hourly warmer stores the default, so an
+    # unnormalised key put them in two different slots and the warm entry could
+    # never be hit.
+    window_days = days if days is not None else WINDOW_DAYS
 
     def _q():
         with ctx.open_db() as conn:
             # Live membership where we have it; the service falls back to
-            # known_users.current_member when the bot is offline.
+            # known_users.current_member when the bot is offline.  An empty
+            # gateway cache is not the same claim as "this guild has no
+            # members" -- pass None so that fallback runs, or an unchunked
+            # guild filters every member out and empties all five views.
             member_ids = {m.id for m in guild.members} if guild is not None else None
             return build_contributors_payload(
                 conn,
                 guild_id,
-                window_days=days,
-                member_ids=member_ids,
+                window_days=window_days,
+                member_ids=member_ids or None,
                 include_bots=include_bots,
             )
 
     result = await cached_run_query(
         "quality-score",
         guild_id,
-        {"days": days, "include_bots": include_bots},
+        {"days": window_days, "include_bots": include_bots},
         _q,
         ttl=300,
     )

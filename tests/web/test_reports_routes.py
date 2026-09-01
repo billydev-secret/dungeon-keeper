@@ -581,3 +581,72 @@ def test_time_to_level5_honours_the_level_curve_factor(
     assert body["xp_required"] == pytest.approx(expected_required)
     reached = [m for m in body["members"] if int(m["user_id"]) == user_id]
     assert bool(reached) is expect_crossing
+
+
+def _seed_replies(db_path, guild_id=123, *, target=4101, author=4102, count=20):
+    """One message from *target*, then *count* replies to it from *author*.
+
+    Enough to clear the Connectors floor (MIN_ACTS_GIVEN = 20 acts given), which
+    is the cheapest of the five views to satisfy.
+    """
+    now = int(time.time())
+    with open_db(db_path) as conn:
+        conn.execute(
+            """INSERT OR IGNORE INTO messages
+               (message_id, guild_id, channel_id, author_id, ts, content)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (9000, guild_id, 2001, target, now - 7200, "seed"),
+        )
+        for i in range(count):
+            conn.execute(
+                """INSERT OR IGNORE INTO messages
+                   (message_id, guild_id, channel_id, author_id, ts, content,
+                    reply_to_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (9001 + i, guild_id, 2001, author, now - 3600 + i, "re", 9000),
+            )
+        conn.commit()
+
+
+def test_contributors_survives_a_cold_member_cache(open_client, fake_ctx, live_guild):
+    """An empty gateway cache must not read as "this guild has no members".
+
+    The route passed ``{m.id for m in guild.members}`` straight through, so a
+    guild whose members hadn't been chunked filtered every member out and
+    emptied all five views with no error anywhere.
+    """
+    invalidate_report_cache()
+    _seed_replies(fake_ctx.db_path, fake_ctx.guild_id)
+    live_guild([])  # bot is up, member cache is cold
+
+    resp = open_client.get("/api/reports/quality-score")
+    assert resp.status_code == 200
+    assert resp.json()["connectors"], "cold cache emptied the report"
+
+
+def test_contributors_default_window_shares_one_cache_key(
+    open_client, fake_ctx, monkeypatch
+):
+    """``?days=90`` and no ``days`` at all are the same query, so one entry.
+
+    The hourly warmer stores the default window; the panel always sends an
+    explicit 90.  Keying on the raw parameter meant the two never met and every
+    panel load recomputed from scratch.
+    """
+    invalidate_report_cache()
+    _seed_replies(fake_ctx.db_path, fake_ctx.guild_id)
+
+    from web_server.routes import reports as reports_routes
+
+    calls = []
+    real = reports_routes.build_contributors_payload
+
+    def counting(*args, **kwargs):
+        calls.append(kwargs.get("window_days"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reports_routes, "build_contributors_payload", counting)
+
+    assert open_client.get("/api/reports/quality-score").status_code == 200
+    assert open_client.get("/api/reports/quality-score?days=90").status_code == 200
+    assert len(calls) == 1, f"recomputed instead of reusing the warm entry: {calls}"

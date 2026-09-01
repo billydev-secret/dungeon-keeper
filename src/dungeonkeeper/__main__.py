@@ -688,12 +688,17 @@ def main() -> None:
 
                             try:
                                 from bot_modules.services.contributors_service import (
+                                    WINDOW_DAYS,
                                     build_contributors_payload,
                                 )
 
+                                # Keyed on the resolved window, matching what
+                                # the route normalises to -- warming under
+                                # days=None stored an entry the panel, which
+                                # always sends an explicit 90, never read.
                                 _put(
                                     "quality-score",
-                                    {"days": None, "include_bots": False},
+                                    {"days": WINDOW_DAYS, "include_bots": False},
                                     build_contributors_payload(
                                         conn,
                                         gid,
@@ -701,7 +706,8 @@ def main() -> None:
                                             s.user_id
                                             for s in member_snapshots
                                             if not s.is_bot
-                                        },
+                                        }
+                                        or None,
                                     ),
                                 )
                             except Exception:
