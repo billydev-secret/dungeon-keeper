@@ -1854,6 +1854,164 @@ def render_activity_chart(
 
 
 # ---------------------------------------------------------------------------
+# Period overlay, rendered (the moderator stats panel's image)
+# ---------------------------------------------------------------------------
+#
+# The dashboard draws the overlay with Chart.js; this draws the same shape as a
+# PNG for the sticky panel in a mod channel, which cannot host a live chart.
+# The palette is deliberately the dashboard's, validated in
+# docs/plans/weekly-activity-comparison.md against a dark surface: amber for the
+# period in progress, teal for the band it is read against, and a dashed median
+# so identity is never carried by colour alone.
+
+_OVERLAY_CURRENT = "#B58030"   # amber — the subject
+_OVERLAY_BAND = "#00A29C"      # teal — the comparison
+
+
+@dataclass(frozen=True)
+class OverlayChart:
+    """One overlay's worth of drawable series, plus the words around it."""
+
+    title: str
+    labels: list[str]
+    current: list[float | None]
+    band_low: list[float]
+    band_mid: list[float]
+    band_high: list[float]
+    current_label: str = "Today"
+    band_label: str = "Typical day"
+    #: Said in place of the band when there is not enough history for one.
+    empty_note: str = ""
+
+
+@_serialized_render
+def render_overlay_panel(
+    charts: Sequence[OverlayChart],
+    *,
+    y_label: str = "Messages",
+    x_label: str = "Hour of day",
+) -> bytes:
+    """Render one or more overlays stacked into a single PNG.
+
+    One image rather than one per chart because Discord gives an embed a single
+    image slot: stacking them here is what lets the reader drop their eye
+    straight from one band to the next on a shared x-axis, instead of comparing
+    two separately-scaled pictures Discord laid out on its own terms.
+
+    Each chart keeps its **own** y-axis. Sharing one would let the wider band
+    set the scale for both and flatten the tighter one, which is the comparison
+    the panel exists to make.
+    """
+    if not charts:
+        raise ValueError("render_overlay_panel needs at least one chart")
+
+    rows = len(charts)
+    fig, axes = plt.subplots(
+        rows, 1, figsize=(9, 3.3 * rows), sharex=True, squeeze=False
+    )
+    fig.patch.set_facecolor(_BG)
+
+    n = max(len(chart.labels) for chart in charts)
+    x = list(range(n))
+
+    for index, (ax, chart) in enumerate(zip((row[0] for row in axes), charts)):
+        ax.set_facecolor(_BG)
+
+        if chart.band_mid:
+            ax.fill_between(
+                x[: len(chart.band_low)],
+                chart.band_low,
+                chart.band_high,
+                color=_OVERLAY_BAND,
+                alpha=0.18,
+                linewidth=0,
+                zorder=1,
+                label=f"{chart.band_label} (middle half)",
+            )
+            ax.plot(
+                x[: len(chart.band_mid)],
+                chart.band_mid,
+                color=_OVERLAY_BAND,
+                linewidth=1.6,
+                linestyle="--",
+                zorder=2,
+                label=f"{chart.band_label} (median)",
+            )
+
+        # Matplotlib leaves None unplotted the same way Chart.js does, so the
+        # line simply stops at the hour in progress instead of diving to the
+        # floor across hours nobody has lived yet.
+        ax.plot(
+            x[: len(chart.current)],
+            chart.current,
+            color=_OVERLAY_CURRENT,
+            linewidth=2.2,
+            zorder=3,
+            label=chart.current_label,
+        )
+
+        ax.set_title(chart.title, color=_TEXT, fontsize=11, pad=8, loc="left")
+        ax.set_ylabel(y_label, color=_TEXT, fontsize=9)
+        ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
+        ax.tick_params(length=0)
+        ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=0)
+        ax.set_axisbelow(True)
+        ax.set_ylim(bottom=0)
+        ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+        # Legended once, on the top chart. Every chart here draws the same three
+        # marks with the same meanings, so a second identical box is clutter
+        # sitting on top of the data it is explaining.
+        if chart.band_mid and index == 0:
+            ax.legend(
+                facecolor=_BG,
+                edgecolor=_GRID,
+                labelcolor=_TEXT,
+                fontsize=8,
+                loc="upper left",
+                framealpha=0.85,
+            )
+        elif not chart.band_mid and chart.empty_note:
+            # Nothing to legend, so the space carries the reason instead. A
+            # blank upper-left corner would read as "quiet", not as "no history
+            # to compare against yet".
+            ax.text(
+                0.01,
+                0.95,
+                chart.empty_note,
+                transform=ax.transAxes,
+                color=_TEXT,
+                fontsize=8,
+                va="top",
+                alpha=0.75,
+            )
+
+    # Every third hour: 24 ticks on a 9-inch axis collide, and the reader is
+    # locating a time of day rather than reading a value off a gridline.
+    step = 3 if n > 12 else 1
+    positions = list(range(0, n, step))
+    bottom = axes[-1][0]
+    labels = charts[-1].labels
+    bottom.set_xticks(positions)
+    bottom.set_xticklabels(
+        [labels[i] for i in positions], rotation=45, ha="right",
+        color=_TEXT, fontsize=8,
+    )
+    bottom.set_xlabel(x_label, color=_TEXT, fontsize=9)
+    bottom.set_xlim(0, n - 1)
+
+    plt.tight_layout(pad=1.2)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
 # Role growth over time
 # ---------------------------------------------------------------------------
 

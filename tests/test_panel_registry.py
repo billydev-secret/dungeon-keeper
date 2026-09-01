@@ -34,6 +34,7 @@ _COG_MODULES = {
     "GuessCog": "bot_modules.cogs.guess_cog",
     "JailCog": "bot_modules.cogs.jail_cog",
     "RoleGrantCog": "bot_modules.cogs.role_grant_cog",
+    "ModStatsCog": "bot_modules.cogs.mod_stats_cog",
 }
 
 
@@ -96,6 +97,9 @@ def test_registry_covers_the_commands_it_replaced():
         "guess-prompt",       # /guess prompt
         "ticket-panel",       # /ticket panel
         "grant-audit",        # /grant_audit
+        # Never had a command: the moderator stats panel was born on the
+        # dashboard (2026-09-01), which is where CLAUDE.md says it belongs.
+        "mod-stats",
     }
 
 

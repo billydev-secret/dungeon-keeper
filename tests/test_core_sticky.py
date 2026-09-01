@@ -15,6 +15,7 @@ import pytest
 
 from bot_modules.core.sticky import (
     PanelContent,
+    PanelImage,
     StickyPanel,
     should_restick,
 )
@@ -1248,3 +1249,77 @@ async def test_yielding_does_not_stop_the_next_genuine_trigger():
     await asyncio.sleep(0.02 * 6)
     panel.cancel_all()
     assert live.sends == 1
+
+
+# ── images ────────────────────────────────────────────────────────────
+#
+# Added for the moderator stats panel, the first panel whose content is a
+# rendered chart. An embed image can only come from a URL or an attachment on
+# the same message, so the picture has to travel with the send *and* with every
+# edit that keeps it.
+
+
+def _image_panel(bot, store, *, signature=None):
+    async def _build(guild):
+        return PanelContent(
+            embed=discord.Embed(title="p"),
+            signature=signature,
+            image=PanelImage(filename="chart.png", data=b"\x89PNG-bytes"),
+        )
+
+    return _panel(bot, store, build=_build)
+
+
+def test_panel_image_builds_a_fresh_file_each_time():
+    """A discord.File wraps a single-use stream. ``place`` can post, retry, and
+    even run on after its caller was cancelled — every one of those handing
+    Discord the same exhausted buffer is the bug this shape prevents."""
+    image = PanelImage(filename="chart.png", data=b"\x89PNG-bytes")
+    first, second = image.to_file(), image.to_file()
+
+    assert first is not second
+    assert first.fp.read() == b"\x89PNG-bytes"
+    # The first read consumed the first file; the second must be untouched.
+    assert second.fp.read() == b"\x89PNG-bytes"
+    assert image.attachment_url == "attachment://chart.png"
+
+
+def test_placing_an_image_panel_sends_the_attachment():
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store()
+    panel = _image_panel(_bot(guild), store)
+
+    asyncio.run(panel.place(guild, channel))
+
+    file = channel.send.call_args.kwargs["file"]
+    assert file.filename == "chart.png"
+    assert channel.send.call_args.kwargs["embed"].title == "p"
+
+
+def test_refreshing_an_image_panel_replaces_the_attachment():
+    """``attachments`` has to be passed on the edit: omitting it keeps whatever
+    the message already carries, so the panel would show last hour's chart
+    under this hour's numbers forever."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _image_panel(_bot(guild), store)
+
+    assert asyncio.run(panel.refresh(GUILD)) is True
+
+    attachments = sent.edit.call_args.kwargs["attachments"]
+    assert [f.filename for f in attachments] == ["chart.png"]
+
+
+def test_refreshing_an_imageless_panel_clears_any_attachment():
+    """The other half of the same rule: a panel that stopped having an image
+    must not keep displaying the last one it drew."""
+    channel, sent = _channel()
+    guild = _guild(channel)
+    store = _Store(CHANNEL, MESSAGE)
+    panel = _panel(_bot(guild), store)
+
+    assert asyncio.run(panel.refresh(GUILD)) is True
+
+    assert sent.edit.call_args.kwargs["attachments"] == []

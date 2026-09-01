@@ -115,6 +115,12 @@ def _voice_control_channel(
     )
 
 
+def _mod_stats_channel(conn: sqlite3.Connection, guild_id: int) -> tuple[int, ...]:
+    return _one(
+        int(get_config_value(conn, "mod_stats_panel_channel_id", "0", guild_id) or 0)
+    )
+
+
 def _guess_prompt_channel(
     conn: sqlite3.Connection, guild_id: int
 ) -> tuple[int, ...]:
@@ -212,6 +218,9 @@ _STICKY_PANELS: tuple[
     ("voice-control", "the Voice Control owner panel", False, _voice_control_channel),
     ("guess-prompt", "the Guess Who prompt", False, _guess_prompt_channel),
     ("todo-board", "the todo board", False, _todo_board_channel),
+    # Refreshes hourly by editing itself in place, so it only takes the
+    # bottom slot back under *human* messages — it warns, never blocks.
+    ("mod-stats", "the moderator stats panel", False, _mod_stats_channel),
     # restick_on_bot: the Reckoning and last-call posts are the panel's own
     # main buriers, so it follows them down — and blocks anything else here.
     ("survivor", "the Survivor panel", True, _survivor_posted_channel),
