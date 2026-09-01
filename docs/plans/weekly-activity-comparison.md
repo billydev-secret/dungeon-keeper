@@ -128,6 +128,44 @@ band is dragged toward the floor by weeks that never happened, and the median of
 available the band is suppressed and only the current-week line is drawn, with
 the caption saying so.
 
+## Smoothing the current line (2026-08-31)
+
+Billy, on the week overlay: *"we should smooth out this week a little more."*
+
+168 hourly points on an axis that can only label a tick a day, from a **single**
+week, draw as hash — the shape is in there but the eye cannot find it. So the
+period in progress is plotted as a **centred 3-hour rolling mean**
+(`smooth_series` / `OVERLAY_SMOOTH_WINDOW` in `activity_graphs.py`), computed
+server-side and carried beside the raw series as `counts_smooth`, never in
+place of it.
+
+**Only the current line.** The band is already an average of a kind — a
+per-hour percentile over N weeks — and blurring it too would soften the very
+envelope this week is read against. Asked and answered: smoothing both was the
+like-for-like option, and Billy chose this week alone.
+
+**The cost, taken deliberately.** Averaging one side and not the other pulls
+this week's spikes down toward a band that kept its own, so one roaring hour
+sits lower against the p75 than it truly was. Everything a reader takes a
+*number* from is therefore raw: the totals beside the legend, and every cell of
+the table, come from `counts`. The chart says which it is — the legend entry
+reads "This week so far (3-hour average)" and the table row "This week so far
+(hourly)".
+
+**The window truncates, it does not pad.** Hour 0 has no hour before it and the
+hour being lived through has no hour after it; averaging either against a
+fabricated neighbour would bend the line toward the floor exactly where the
+reader looks hardest — the start of the week and the live edge. Unlived hours
+stay `null` in the smoothed series too, so nothing bridges the gap.
+
+**The day overlay is left raw** (`OVERLAY_SMOOTH_WINDOW["day"] = 1`). 24 points
+an hour apart are the reading, not noise around it. Mod Coverage's own overlay
+is unchanged for the same reason — it is a day.
+
+Smoothing in numbers rather than harder in the renderer, because Chart.js
+`tension` bows a curve *between* points and can dip a line below zero between
+two quiet hours; a mean can never leave the range it averages.
+
 ## What this view drops, and why
 
 - **The XP per-source breakdown** (`series`). The series axis is now weeks-vs-now;

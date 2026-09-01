@@ -724,10 +724,14 @@ export function renderChartTable(host, { labels, datasets, indexLabel = "Period"
  *
  * Draw order matters: the band goes in first so the two lines sit on top of it
  * rather than under a translucent wash.
+ *
+ * `data.counts` is drawn as handed over: a caller smoothing the current line
+ * passes the smoothed series here and names it in `currentNote`, while keeping
+ * the raw one for the table and the totals.
  */
 export function makeOverlayChart(
   canvas, data,
-  { subject, typical, isWeek, currentTotal, typicalToDate, extraSeries = [] }
+  { subject, typical, isWeek, currentTotal, typicalToDate, extraSeries = [], currentNote = "" }
 ) {
   const hasBand = (data.band_mid || []).length > 0;
 
@@ -776,7 +780,10 @@ export function makeOverlayChart(
     });
   }
   datasets.push({
-    label: `${subject} so far`,
+    // `currentNote` names a transform the caller applied to this line — "3-hour
+    // average". The legend is the only place a reader learns the line is not
+    // the raw series, so it is a label, never a tooltip or a footnote.
+    label: currentNote ? `${subject} so far (${currentNote})` : `${subject} so far`,
     data: data.counts,
     borderColor: OVERLAY_NOW,
     backgroundColor: "transparent",

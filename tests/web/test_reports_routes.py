@@ -74,13 +74,18 @@ def test_activity_shape(open_client):
 
 
 @pytest.mark.parametrize(
-    "resolution,points,x_label",
+    "resolution,points,x_label,smooth_window",
     [
-        ("day_overlay", 24, "Hour of day"),
-        ("week_overlay", 168, "Hour of week"),
+        # The day is drawn raw (24 points ARE the reading); the week's 168
+        # hourly points get a 3-hour centred mean, carried as a second series
+        # so the exact counts survive for the table and the totals.
+        ("day_overlay", 24, "Hour of day", 1),
+        ("week_overlay", 168, "Hour of week", 3),
     ],
 )
-def test_activity_overlay_shape(open_client, resolution, points, x_label):
+def test_activity_overlay_shape(
+    open_client, resolution, points, x_label, smooth_window
+):
     invalidate_report_cache()
     resp = open_client.get(
         f"/api/reports/activity?resolution={resolution}&mode=messages"
@@ -93,6 +98,8 @@ def test_activity_overlay_shape(open_client, resolution, points, x_label):
     # The overlay drops both — the series axis is now "now vs history".
     assert data["series"] == []
     assert data["show_members"] is False
+    assert data["smooth_window"] == smooth_window
+    assert len(data["counts_smooth"]) == (points if smooth_window > 1 else 0)
 
 
 def _seed_overlay_history(db_path, guild_id, weeks, period="week"):

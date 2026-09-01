@@ -26,6 +26,7 @@ from bot_modules.services.activity_graphs import (
     _strftime_expr,
     _week_buckets,
     _WINDOW_LABELS,
+    OVERLAY_SMOOTH_WINDOW,
     overlay_labels,
     overlay_period_cap,
     overlay_period_start,
@@ -49,6 +50,7 @@ from bot_modules.services.activity_graphs import (
     render_level_histogram,
     render_nsfw_gender_chart,
     render_nsfw_gender_line_chart,
+    smooth_series,
 )
 from tests.db_template import migrated_db
 
@@ -1289,3 +1291,89 @@ def test_overlay_same_weekday_xp_clamps_in_whole_strides(db_conn, monkeypatch):
     assert res.periods_requested == 26
     assert res.periods_sampled == 10
     assert res.band_mid[0] == 3.0
+
+
+# ── Current-line smoothing ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "values,window,expected",
+    [
+        # A window of 1 (or 0) is smoothing turned off — the series comes back
+        # as it went in, so the day overlay's raw shape is untouched.
+        ([1.0, 5.0, 1.0], 1, [1.0, 5.0, 1.0]),
+        ([1.0, 5.0, 1.0], 0, [1.0, 5.0, 1.0]),
+        # Centred mean of three, truncating at both ends rather than padding:
+        # hour 0 averages itself with hour 1 only.
+        ([0.0, 3.0, 0.0, 3.0, 0.0], 3, [1.5, 1.0, 2.0, 1.0, 1.5]),
+        # An unlived hour stays unlived, and the last lived hour averages only
+        # with what came before it — never across the gap.
+        ([2.0, 4.0, 6.0, None, None], 3, [3.0, 4.0, 5.0, None, None]),
+        # A period nobody has lived an hour of yet is all Nones, not zeros.
+        ([None, None], 3, [None, None]),
+        ([], 3, []),
+    ],
+)
+def test_smooth_series(values, window, expected):
+    assert smooth_series(values, window) == expected
+
+
+def test_smooth_series_never_overshoots_the_raw_range():
+    """A mean cannot leave the range it averages over.
+
+    Worth pinning because the chart's other softener, Chart.js `tension`, *can*
+    bow a curve below zero between two low points — which is the reason the
+    line is smoothed here in numbers rather than harder in the renderer.
+    """
+    raw = [1.0, 9.0, 2.0, 8.0, 3.0, 7.0, 4.0]
+    smoothed = smooth_series(raw, 3)
+    assert min(smoothed) >= min(raw)
+    assert max(smoothed) <= max(raw)
+
+
+def test_overlay_week_smooths_the_current_line_only(db_conn):
+    """The week's line is averaged; the band it is read against is not.
+
+    Smoothing both would blur the envelope; smoothing neither leaves 168 hourly
+    points reading as hash. See docs/plans/weekly-activity-comparison.md.
+    """
+    # Week 0 is the one in progress; 1-4 are the history the band comes from.
+    _seed_weeks(db_conn, 0.0, {0: 6, 1: 4, 2: 3, 3: 2, 4: 1})
+
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=0.0
+    )
+
+    assert res.smooth_window == OVERLAY_SMOOTH_WINDOW["week"] == 3
+    assert len(res.current_smooth) == len(res.current) == 168
+    # The raw series keeps the spike whole - it is what the table and the
+    # period total are read from - while the drawn line is the same series
+    # under the shared helper.
+    assert res.current[0] == 6.0
+    assert res.current_smooth == smooth_series(res.current, 3)
+    # And the band is the untouched percentile of the four sampled weeks.
+    assert res.band_mid[0] == 2.5
+    assert res.band_low[0] == 1.8
+    assert res.band_high[0] == 3.2
+
+
+def test_overlay_week_smoothing_stops_at_the_live_edge(db_conn):
+    """Unlived hours stay None in the smoothed line too — never bridged."""
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3, 3: 2})
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=0.0
+    )
+    lived = sum(1 for c in res.current if c is not None)
+    assert [i for i, v in enumerate(res.current_smooth) if v is None] == list(
+        range(lived, 168)
+    )
+
+
+def test_overlay_day_is_drawn_raw(db_conn):
+    """24 points an hour apart are the reading; averaging them would blur it."""
+    _seed_days(db_conn, 0.0, {1: 4, 2: 3, 3: 2})
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=7, utc_offset_hours=0.0
+    )
+    assert res.smooth_window == 1
+    assert res.current_smooth == []

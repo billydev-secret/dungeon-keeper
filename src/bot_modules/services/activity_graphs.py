@@ -7,7 +7,8 @@ import io
 import os
 import sqlite3
 import statistics
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -705,6 +706,41 @@ OVERLAY_MAX_PERIODS: dict[str, int] = {"day": 90, "week": 26}
 # as the weekly overlay does and is capped like that rather than like a day.
 OVERLAY_SAME_WEEKDAY_MAX = 26
 
+# Width, in hours, of the centred rolling mean the period *in progress* is
+# drawn with. Only that line is smoothed: the band is already an average of its
+# own (a per-hour percentile over N periods), while the current period is a
+# single realisation and reads as hash at hour resolution. A week is 168 points
+# on an axis that can only label a tick a day, so three hours takes the noise
+# out without moving where the peaks sit; a day is 24 points whose hour-by-hour
+# shape *is* the reading, so it is left alone.
+#
+# The raw counts travel alongside it and are what the table and the period
+# total are built from - the smoothing is a line on a chart, never the number
+# anyone reads off.
+OVERLAY_SMOOTH_WINDOW: dict[str, int] = {"day": 1, "week": 3}
+
+
+def smooth_series(values: Sequence[float | None], window: int) -> list[float | None]:
+    """Centred rolling mean of *values*, keeping ``None`` where it found one.
+
+    The window **truncates** at both ends rather than wrapping or zero-padding:
+    hour 0 of a period has no hour before it, and the hour being lived through
+    has no hour after it. Averaging either against a fabricated neighbour would
+    bend the line toward the floor exactly where the reader is looking hardest -
+    the start of the period, and the live edge.
+    """
+    if window <= 1:
+        return list(values)
+    half = window // 2
+    out: list[float | None] = []
+    for i, value in enumerate(values):
+        if value is None:
+            out.append(None)
+            continue
+        near = [v for v in values[max(0, i - half) : i + half + 1] if v is not None]
+        out.append(round(sum(near) / len(near), 1))
+    return out
+
 # Full weekday names, Sunday-first to match _DOW_LABELS. Spelled out rather
 # than taken from strftime("%A"), which follows the process locale.
 _DOW_FULL = [
@@ -817,6 +853,11 @@ class OverlayResult:
     clamped: bool
     #: True when the band sampled only days sharing today's weekday.
     same_weekday: bool = False
+    #: ``current`` under a centred rolling mean, for drawing only. Empty when
+    #: this period is not smoothed at all (see OVERLAY_SMOOTH_WINDOW).
+    current_smooth: list[float | None] = field(default_factory=list)
+    #: Width of that mean in hours; 1 when the line is drawn raw.
+    smooth_window: int = 1
 
     @property
     def has_band(self) -> bool:
@@ -966,9 +1007,18 @@ def query_activity_overlay(
             band_mid.append(round(_percentile(column, 0.50), 1))
             band_high.append(round(_percentile(column, 0.75), 1))
 
+    # A drawn-only companion to `current`. Computed here rather than in the
+    # panel so one definition of the line's shape serves the chart, the API and
+    # the tests, and so the raw series stays untouched beside it.
+    smooth_window = OVERLAY_SMOOTH_WINDOW.get(period, 1)
+
     return OverlayResult(
         labels=overlay_labels(period),
         current=current,
+        current_smooth=(
+            smooth_series(current, smooth_window) if smooth_window > 1 else []
+        ),
+        smooth_window=smooth_window,
         band_low=band_low,
         band_mid=band_mid,
         band_high=band_high,

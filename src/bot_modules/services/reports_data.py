@@ -602,6 +602,12 @@ class ActivityData(TypedDict):
     # lived through yet past the hour we are in. A covariant Sequence so the
     # timeline branches can still hand over a plain list[float].
     counts: Sequence[float | None]
+    # Overlay views only; empty elsewhere and on the day overlay, which is
+    # drawn raw. The same series under a centred rolling mean, for the chart
+    # line alone - `counts` stays the number the table and the total read.
+    counts_smooth: Sequence[float | None]
+    #: Width of that mean in hours; 1 when the line is drawn raw.
+    smooth_window: int
     member_counts: list[int]
     show_members: bool
     y_label: str
@@ -734,6 +740,8 @@ def get_activity_data(
         "mode": mode,
         "labels": labels,
         "counts": counts,
+        "counts_smooth": [],
+        "smooth_window": 1,
         "member_counts": member_counts,
         "show_members": show_members,
         "y_label": y_label,
@@ -816,6 +824,8 @@ def _get_overlay_data(
         "mode": mode,
         "labels": result_ov.labels,
         "counts": result_ov.current,
+        "counts_smooth": result_ov.current_smooth,
+        "smooth_window": result_ov.smooth_window,
         "member_counts": [],
         "show_members": False,
         "y_label": "XP Earned" if mode == "xp" else "Messages",

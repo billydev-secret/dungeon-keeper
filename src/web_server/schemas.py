@@ -268,6 +268,12 @@ class ActivityResponse(BaseModel):
     # Nullable on the overlay views: the current period stops at the hour we
     # are in rather than flooring the rest of the period to zero.
     counts: list[float | None]
+    # Overlay views only: the same series under a centred rolling mean, drawn
+    # in place of the raw line so a single week reads as a shape rather than
+    # hash. Empty where nothing is smoothed; `counts` remains the exact series
+    # behind the table and the period total.
+    counts_smooth: list[float | None] = []
+    smooth_window: int = 1
     member_counts: list[int]
     show_members: bool
     y_label: str

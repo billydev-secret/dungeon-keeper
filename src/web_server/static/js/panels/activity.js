@@ -437,8 +437,24 @@ export function mount(container, initialParams) {
 
     captionEl.textContent = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
 
-    chart = makeOverlayChart(canvas, data, {
+    // A week is 168 hourly points on an axis that can label one tick a day, and
+    // a single week is one realisation of it — drawn raw it reads as hash. The
+    // server hands down a centred rolling mean of the current line and the
+    // panel plots that instead. Only that line: the band is a per-hour
+    // percentile over N weeks and so is smoothed across weeks already, and
+    // blurring it as well would soften the envelope this week is read against.
+    //
+    // The cost, deliberately taken: averaging one side and not the other pulls
+    // this week's spikes down toward a band that kept its own, so a single
+    // roaring hour sits lower against the p75 than it truly was. That is why
+    // the numbers stay raw — the totals beside the legend and every cell of the
+    // table are built from `data.counts`, so the exact hour is one click away.
+    const smoothWindow = (data.counts_smooth || []).length ? data.smooth_window || 1 : 1;
+    const plotted = smoothWindow > 1 ? data.counts_smooth : data.counts;
+
+    chart = makeOverlayChart(canvas, { ...data, counts: plotted }, {
       subject, typical, isWeek, currentTotal, typicalToDate,
+      currentNote: smoothWindow > 1 ? `${smoothWindow}-hour average` : "",
     });
 
     legendEl.replaceChildren();
@@ -447,7 +463,12 @@ export function mount(container, initialParams) {
     renderChartTable(tableEl, {
       labels: data.labels,
       datasets: [
-        { label: `${subject} so far`, data: data.counts },
+        // Raw, and said so when the line above is not: the table is where an
+        // exact hour is read.
+        {
+          label: smoothWindow > 1 ? `${subject} so far (hourly)` : `${subject} so far`,
+          data: data.counts,
+        },
         ...(hasBand ? [
           { label: `${typical} (median)`, data: data.band_mid },
           { label: `${typical} (p25)`, data: data.band_low },
