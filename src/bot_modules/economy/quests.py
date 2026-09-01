@@ -125,7 +125,7 @@ TRIGGER_KINDS: dict[str, str] = {
     "guess_post": "Submit a Guess Who round",
     "quoted": "Have your message turned into a quote card",
     "session_join": "Join a scheduled game session",
-    "voice_message": "Post a voice message",
+    "voice_message": "Post a voice message (optionally scoped to the trigger channel)",
     "music_request": "Request a song",
     "birthday_set": "Set your birthday",
     "level_up": "Reach a new level",
@@ -257,7 +257,7 @@ TRIGGER_KIND_INFO: dict[str, str] = {
     "guess_post": "Submitting a Guess Who round for others to solve (confession rounds count too). The submitter IS the answer, so this is credited privately — no register-feed entry, no sign-off; a card naming the earner would solve the round for everyone reading. Event cadence: once per submitted round.",
     "quoted": "Someone ELSE turning your message into a quote card (the quoted author is credited; self-quotes never fire). Event cadence: once per quoted message.",
     "session_join": "Joining a scheduled game session. Event cadence: once per session.",
-    "voice_message": "Posting a voice message (the transcription listener is the detector). Event cadence: once per message — use daily/weekly with a target count.",
+    "voice_message": "Posting a voice message (the transcription listener is the detector). Set a trigger channel to count only notes posted there — a note in a thread also counts for a quest scoped to the thread's parent channel. Event cadence: once per message — use daily/weekly with a target count.",
     "music_request": "Requesting a song in the music player. Capped at once per guild-local day by construction, so raw queue spam never multi-pays.",
     "birthday_set": "Saving your birthday. Event cadence: once ever — the bio_set pattern.",
     "level_up": "Reaching a new XP level. Event cadence: once per level reached.",
@@ -301,6 +301,15 @@ _REWARD_BANDS: dict[str, tuple[int, int]] = {
 # close enough, and errs low for media-heavy channels, the forgiving
 # direction). Scoped quests on other kinds keep unscaled sizing.
 CHANNEL_SHARE_KINDS = frozenset({"message_sent", "reply_sent", "media_post"})
+
+# Kinds a quest may scope to one channel — the set the dashboard shows the
+# channel picker for (mirrored in economy-sources-shared.js, guarded by a
+# parity test). Membership is a claim about the *firing site*: it has to hand
+# `channel_ids` to fire_trigger_quests, or a scoped quest on that kind silently
+# never fires. Adding a kind here without plumbing its listener is the bug.
+CHANNEL_SCOPED_KINDS = frozenset(
+    {"message_sent", "reply_sent", "reaction_given", "media_post", "voice_message"}
+)
 
 # Kinds whose member is never named on a public surface, because naming them
 # there gives away something the action itself was keeping — either directly,

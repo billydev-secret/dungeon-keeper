@@ -37,7 +37,7 @@ export const KIND_LABELS = {
   guess_post: "📮 Submit a Guess Who round",
   quoted: "💬 Have your message turned into a quote card",
   session_join: "📅 Join a scheduled game session",
-  voice_message: "🎧 Post a voice message",
+  voice_message: "🎧 Post a voice message (channel-scopable)",
   music_request: "🎵 Request a song",
   birthday_set: "🎂 Set your birthday",
   level_up: "📈 Reach a new level",
@@ -65,5 +65,5 @@ export const KIND_LABELS = {
 
 // Kinds whose quests can carry a trigger-channel scope.
 export const CHANNEL_SCOPED_KINDS = new Set([
-  "media_post", "message_sent", "reply_sent", "reaction_given",
+  "media_post", "message_sent", "reply_sent", "reaction_given", "voice_message",
 ]);

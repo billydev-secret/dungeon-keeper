@@ -55,6 +55,17 @@ def _audio_attachment(message: discord.Message) -> discord.Attachment | None:
     return None
 
 
+def _quest_channel_ids(message: discord.Message) -> tuple[int, ...]:
+    """Where the note was posted, for a channel-scoped "post a voice message".
+
+    The thread's parent rides along so a note dropped in a thread still counts
+    for a quest scoped to the channel the thread hangs off — same rule the
+    message/media triggers use in ``events_cog``.
+    """
+    parent_id = getattr(message.channel, "parent_id", None)
+    return tuple(c for c in (message.channel.id, parent_id) if c is not None)
+
+
 async def _transcribe_attachment(
     attachment: discord.Attachment, model_name: str
 ) -> str:
@@ -201,6 +212,7 @@ class VoiceTranscriptionCog(commands.Cog):
         await fire_member_trigger(
             self.bot, message.guild.id, message.author.id, "voice_message",
             occurrence=str(message.id),
+            channel_ids=_quest_channel_ids(message),
         )
 
         cfg = await asyncio.to_thread(self._read_config, message.guild.id)

@@ -974,7 +974,18 @@ pay*:
 All firing funnels through `fire_trigger_quests` (service) — one member, one
 kind, every matching active quest — riding the normal `claim_quest` machine, so
 sign-off, booster multiplier, ledger kind `quest`, and per-period dedup come for
-free. Repeats fall out silently on the claim collision. Kinds:
+free. Repeats fall out silently on the claim collision.
+
+A kind quest may also carry a **trigger channel** (`trigger_channel_id`, NULL =
+anywhere), same column the trigger-word quests use. The dashboard offers the
+channel picker only for `quests.CHANNEL_SCOPED_KINDS` (`message_sent`,
+`reply_sent`, `reaction_given`, `media_post`, `voice_message`), mirrored in
+`economy-sources-shared.js` and held there by a parity test. Membership is a
+claim about the **firing site**: it has to pass `channel_ids` (the message's
+channel plus its thread parent, so a thread counts toward its parent) into
+`fire_trigger_quests`, or a scoped quest on that kind silently never fires —
+the gate refuses a scoped quest from a caller with no channel context at all.
+Adding a kind to the set without plumbing its listener is the bug. Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
@@ -1012,7 +1023,7 @@ free. Repeats fall out silently on the claim collision. Kinds:
 | `guess_win` | member wins a Guess Who round (stretch twin of `guess`; fires only for the solve-race winner) | `guess_cog` solved path | `guess_win:<round_id>` |
 | `guess_post` | member submits a Guess Who round for others to solve (confession rounds included — producer half of the guess-who pair, see §4.6 pairing) | `guess_cog` both `_do_insert_round` call sites | `guess_post:<round_id>` |
 | `session_join` | member appears in a game-night session's roster (end_game now merges the real roster into `games_session_tracker`, which start-time calls only seeded with the host) | `game_manager._fire_session_join` | `session_join:<session_id>` — later games in the same session collide silently |
-| `voice_message` | member posts a voice message (fires before the transcription config gate — the quest is the post, not the transcript) | `voice_transcription_cog._on_message` | `voice_message:<message_id>` — use daily/weekly with a target count |
+| `voice_message` | member posts a voice message (fires before the transcription config gate — the quest is the post, not the transcript); per-quest `trigger_channel_id` scopes it (threads count via parent) | `voice_transcription_cog._on_message` | `voice_message:<message_id>` — use daily/weekly with a target count |
 | `music_request` | member's `/play` adds ≥1 track | `music_cog.play` via `daily_occurrence=True` | `music_request:<local_day>` (once/day by construction — a 30-track playlist and 30 requests look the same) |
 | `birthday_set` | member saves their birthday | `birthday_cog` modal submit | `birthday_set:set` (event = once ever, the `bio_set` pattern) |
 | `level_up` | member's level-up is announced (announce-time, not award-time, so quest-XP payouts can't recurse into another claim; a silently-won level fires when its announcement lands) | `xp_service.handle_level_progress` via `fire_trigger_inline`, one fire per delivered level | `level_up:<level>` |

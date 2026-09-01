@@ -182,6 +182,7 @@ async def fire_member_trigger(
     *,
     occurrence: str | None = None,
     daily_occurrence: bool = False,
+    channel_ids: tuple[int, ...] | None = None,
 ) -> None:
     """Fire a quest trigger for one member outside the game-faucet path.
 
@@ -194,6 +195,11 @@ async def fire_member_trigger(
     (computed where the fire already derives it), making an event quest on
     this kind pay at most once per day by construction — the
     voice_session/photo_post pattern for call sites without tz plumbing.
+
+    ``channel_ids`` is the firing message's channel (plus its thread parent)
+    when the action happened in one, so a quest scoped to a channel pays only
+    there. Leave it None for kinds with no channel to speak of: a
+    channel-scoped quest then never fires, which is the safe direction.
     """
     try:
         guild = bot.get_guild(guild_id)
@@ -215,7 +221,7 @@ async def fire_member_trigger(
         boosters = {member.id: member.premium_since is not None}
         await _fire_triggers(
             bot, guild, settings, trigger_kind, [member.id], boosters, occurrence,
-            daily_occurrence=daily_occurrence,
+            daily_occurrence=daily_occurrence, channel_ids=channel_ids,
         )
     except Exception:
         log.exception(
@@ -613,6 +619,7 @@ async def _fire_triggers(
     occurrence: str | None,
     *,
     daily_occurrence: bool = False,
+    channel_ids: tuple[int, ...] | None = None,
 ) -> None:
     """Auto-claim active trigger-kind quests for members; silent by design.
 
@@ -639,6 +646,7 @@ async def _fire_triggers(
                     local_day=day,
                     occurrence=occ,
                     booster=boosters.get(uid, False),
+                    channel_ids=channel_ids,
                 )
                 results.extend((uid, outcome) for _quest, outcome in fired)
         return results

@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from bot_modules.economy.quests import TRIGGER_KINDS
+from bot_modules.economy.quests import CHANNEL_SCOPED_KINDS, TRIGGER_KINDS
 
 _JS = Path(__file__).resolve().parent.parent / (
     "src/web_server/static/js/panels/economy-sources-shared.js"
@@ -32,4 +32,24 @@ def test_js_kind_labels_mirror_trigger_kinds():
     assert js == py, (
         f"KIND_LABELS drifted from TRIGGER_KINDS — "
         f"missing in JS: {sorted(py - js)}; extra in JS: {sorted(js - py)}"
+    )
+
+
+def _js_channel_scoped_kinds() -> set[str]:
+    text = _JS.read_text(encoding="utf-8")
+    start = text.index("export const CHANNEL_SCOPED_KINDS = new Set([")
+    block = text[start : text.index("]);", start)]
+    return set(re.findall(r'"(\w+)"', block))
+
+
+def test_js_channel_scoped_kinds_mirror_python():
+    """The channel picker is the only way to scope a quest to a channel, so a
+    kind Python believes is scopable but JS does not is an unreachable setting
+    (the Rabbit Hole voice-note quest paid in every channel because of exactly
+    that gap)."""
+    js = _js_channel_scoped_kinds()
+    py = set(CHANNEL_SCOPED_KINDS)
+    assert js == py, (
+        f"CHANNEL_SCOPED_KINDS drifted — missing in JS: {sorted(py - js)}; "
+        f"extra in JS: {sorted(js - py)}"
     )
