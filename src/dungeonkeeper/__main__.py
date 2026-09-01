@@ -686,32 +686,25 @@ def main() -> None:
                                     log.exception("Reports cache warming failed for nsfw-gender")
 
                             try:
-                                from datetime import datetime, timezone
-
-                                from bot_modules.services.member_quality_score import (
-                                    MemberStandIn,
-                                    build_quality_report,
+                                from bot_modules.services.contributors_service import (
+                                    build_contributors_payload,
                                 )
 
-                                qs_members = [
-                                    MemberStandIn(
-                                        s.user_id,
-                                        s.is_bot,
-                                        datetime.fromtimestamp(
-                                            s.joined_at, tz=timezone.utc
-                                        )
-                                        if s.joined_at is not None
-                                        else None,
-                                    )
-                                    for s in member_snapshots
-                                ]
                                 _put(
                                     "quality-score",
-                                    {"days": None, "min_active_days": None},
-                                    build_quality_report(conn, gid, qs_members),  # type: ignore[arg-type]
+                                    {"days": None, "include_bots": False},
+                                    build_contributors_payload(
+                                        conn,
+                                        gid,
+                                        member_ids={
+                                            s.user_id
+                                            for s in member_snapshots
+                                            if not s.is_bot
+                                        },
+                                    ),
                                 )
                             except Exception:
-                                log.exception("Reports cache warming failed for quality-score")
+                                log.exception("Reports cache warming failed for contributors")
 
                     await asyncio.to_thread(_warm)
                     log.info("Reports cache warmed for guild %s", format_guild_for_log(guild))

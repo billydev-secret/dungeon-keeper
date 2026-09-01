@@ -1,6 +1,6 @@
 # Reporting — Feature Spec
 
-Reporting is the analytics backbone of the dashboard. A handful of small services — interaction tracking, voice-follow capture, incident detection, invite attribution, and the member quality score — produce the data; the dashboard renders it as charts and tables. The Discord surface is empty apart from an unrelated `/invite` command that returns the bot's install URL — the `/quality_leave` group, and the leave-of-absence concept it managed, were removed 2026-07-28.
+Reporting is the analytics backbone of the dashboard. A handful of small services — interaction tracking, voice-follow capture, incident detection, invite attribution, and the contributors report — produce the data; the dashboard renders it as charts and tables. The Discord surface is empty apart from an unrelated `/invite` command that returns the bot's install URL — the `/quality_leave` group, and the leave-of-absence concept it managed, were removed 2026-07-28.
 
 ## Commands
 
@@ -17,7 +17,7 @@ The bot needs **Manage Server** to read invite codes for attribution. When missi
 
 ### Dashboard report tiles
 
-Every report is admin-only, GET-only (cache clear is the single POST), and read through a per-route cache keyed by guild + parameters. Most tiles use a 60-second TTL; heavier tiles that scan the message archive (quality score, time-to-level, activity drop-off) use 5 to 10 minutes. An hourly background warmer additionally precomputes the default-parameter view of the heavy tiles (including the quality score) so a cold page load rarely pays the compute; non-default parameter combinations still compute on demand. The cache only invalidates on TTL expiry or explicit clear — there are no realtime pushes.
+Every report is admin-only, GET-only (cache clear is the single POST), and read through a per-route cache keyed by guild + parameters. Most tiles use a 60-second TTL; heavier tiles that scan the message archive (contributors, time-to-level, activity drop-off) use 5 to 10 minutes. An hourly background warmer additionally precomputes the default-parameter view of the heavy tiles (including contributors) so a cold page load rarely pays the compute; non-default parameter combinations still compute on demand. The cache only invalidates on TTL expiry or explicit clear — there are no realtime pushes.
 
 Day-bucketed charts roll over at the guild's local 6 am, not midnight. Names on every row are resolved live from the guild cache when the bot is online and fall back to the historical name archive when offline; some tiles (role listings, guild-wide inactivity) return a service-unavailable error when the bot is offline since they depend on live role membership.
 
@@ -51,7 +51,7 @@ Tiles group into a few areas:
 - **XP** — top-N leaderboard for a window, days-to-level-5 histogram, and a generalised days-to-level-N report (level 2–100). Source data is owned by [[xp-spec]].
 - **Interaction graph** — force-directed network of replies and mentions, read by two panels off the one `/reports/interaction-graph` endpoint: **Interactions** (`interaction-graph`) renders it as sortable tables plus a bar chart, and **Connection Graph** (`connection-graph`, restored 2026-08-26 after the 2026-07 cleanup removed it; redesigned 2026-08-29 into a single full-page canvas with control chips) renders the network map itself. It still requests `include_metrics=1` — community detection (the per-node `cluster_id` and the Granularity dial) runs inside the metrics block server-side — but of that block it now surfaces only `clusters` (the community chips); the scorecard, bridge/cluster tables, isolates list and cross-cluster matrix it once rendered were dropped in the redesign. Of the network-health numbers, the Health panel's **Social Graph** tile still shows clustering coefficient, density, bridge count and isolates (its own computation, shared query exclusions); reciprocity, avg path length, small-world quotient, the per-user bridge table and the cross-cluster matrix now have **no dashboard surface**, though the endpoint keeps computing and returning them. The panel's **Replay** (added 2026-08-29) plays the network back through time off a sibling endpoint, `/reports/interaction-graph-series` (`get_interaction_series`): one weekly-binned aggregation of `user_interactions_log` (undirected pair weight vectors, top-`limit` members by span total, pairs totalling <2 dropped), `member_events` join/leave stamps so a departing member vanishes at their leave week instead of when their rolling window drains, and one full-span clustering pass (weighted label propagation, the same algorithm `graph_metrics` runs for the live graph — not Louvain) for stable replay colours. The roster is who survives the pair floor, so a member whose every pair is a one-off ships as no node at all rather than defaulting to cluster 0, which is the largest real community. The same bot-endpoint exclusion applies. The client composes a rolling 28-day window stepped weekly and updates the force sim in place, so positions carry across frames. Any interaction touching a bot on either endpoint is excluded, so a member replying to a bot never reads as a one-sided relationship — the exclusion is applied in the queries (`get_interaction_graph_data`) so the interaction-graph tables and the Health **Social Graph** metrics share it. Recorded bots (see State) still have their raw interactions logged; they're just filtered out at report time.
 - **Invite effectiveness** — per-inviter table of active invitees joined through them.
-- **Quality score** — the Member Quality Score table (described below).
+- **Contributors** — the five contributor views (described below).
 - **One-Sided Attention** — lopsided, unreciprocated attention between member pairs, for moderator review (described below).
 
 ### Message Review
@@ -91,18 +91,51 @@ A join raid fires when at least 3 accounts younger than 7 days join within a 2-m
 
 The bot caches the current `uses` count for every guild invite at startup and refreshes per join. When a member joins, the bot diffs the live invite list against the cache; the first code whose `uses` ticked up is recorded as the inviter on that join. If two joins land in the same window, only one inviter is detected — the rest record without an attribution. Re-joins after a leave never overwrite the original inviter.
 
-### Member quality score
+### Contributors
 
-A whole-server score in `[0, 1]` computed over a rolling 90-day window from four sub-scores:
+Five separately ranked views over a rolling window (default 90 days), mod-gated,
+served by `contributors_service.py` on the frozen `quality-score` route id.
+There is **no composite and no overall rank**: it replaced the Member Quality
+Score on 2026-08-31 after a nine-week backtest showed that composite scoring
+AUC 0.845 against 30-day forward silence — its own stated purpose — while
+`days since last activity` alone scored 0.910, and that its largest weight
+(Engagement Given, 40%) scored 0.513. Across the measured leaderboards not one
+member appeared on all three original families, so no set of weights describes
+these roles. See `docs/plans/quality-score-revisit.md` and
+`docs/member_quality_score_research.pdf`.
 
-1. **Engagement Given (40%)** — average percentile of reaction-rate and reply-ratio (replies under 5 characters don't count). Multiplied by an initiative multiplier (0.85× to 1.10×) based on what fraction of pair interactions the member started. Anti-gaming: serial reactions to the same author on the same day get half credit after 5 and zero after 10.
-2. **Consistency & Recency (25%)** — 60% recency (exponential decay since last seen) + 40% consistency (active weeks divided by min of weeks-in-window or weeks-since-join, so newcomers aren't penalised for short tenure).
-3. **Content Resonance (20%)** — mean reactions + replies received per "post" (an attachment or a non-reply conversation starter). Non-posters get the neutral percentile 0.5.
-4. **Posting Activity (15%)** — daily-capped attachments + conversation starters per active day. Non-posters get a percentile floor of 0.25.
+1. **Popular Content** — unique reactors plus unique repliers per post (a post
+   is a conversation starter or an attachment), as a lift against the channel's
+   own average.
+2. **Conversation Catalyst** — a message after 3+ hours of channel silence
+   followed within 30 minutes by 3+ messages from 2+ other people, as a lift
+   against how often anyone restarts those channels.
+3. **Connectors** — distinct people engaged, with reciprocity (given ÷ received)
+   and top-partner concentration as evidence. Ranked by breadth, not a lift.
+4. **Welcomers** — the share of a member's replies aimed at someone inside their
+   first 14 days of posting, against the server-wide share. Newcomer status
+   comes from a first message, never `joined_at`, which Discord resets on
+   rejoin.
+5. **Lifts the Under-Attended** — replies and reactions weighted by the inverse
+   of how much attention the target usually receives, capped at 8×.
 
-Status precedence: `Onboarding` (under 7 days tenure) → `Insufficient Data` (under 7 active days) → `Active`. Onboarding and insufficient rows are scored 0 and sort to the bottom. A `Leave of Absence` status existed until 2026-07-28; it was removed along with `/quality_leave`, its only writer, having never been used in production.
+Every baseline is **leave-one-out**: a member who dominates a small channel
+would otherwise be measured against themselves. Two corrections keep thin
+samples from topping a view, both fitted on one split-half of the window and
+confirmed on a second, independent split:
 
-Tenure buffer adds 30 days at 6 months and 60 days at 12 months to the inactivity threshold, surfaced on each row so reviewers can see why a long-tenured quiet member isn't flagged.
+- **Shrinkage** — k pseudo-observations at the baseline rate. k = 25 (popular),
+  5 (welcomers), 50 (under-attended), 0 (catalyst, where shrinkage measurably
+  lowers reliability). The under-attended k is deliberately not the reliability
+  argmax, which flattens everyone below ~1000 acts and ranks by raw volume.
+- **A floor on expected events**, which matters more than shrinkage where events
+  are rare: ≥1 expected restart (catalyst), ≥5 expected newcomer replies
+  (welcomers). In a room restarting 3.6% of the time, 14 attempts expect half a
+  success, so one lucky restart reads as 1.99×.
+
+The remaining `MIN_*` constants are presence floors that keep near-empty rows
+out of the table; they no longer protect the ranking. No gender tag is read —
+nothing here is per-gender.
 
 ### One-sided (unreciprocated) attention
 
@@ -152,7 +185,7 @@ What this replaced, and why. The shipped gate demanded 15 combined weighted even
 ## Non-goals
 
 - **No realtime dashboard updates.** Every tile is poll-driven; cache TTL is the freshness floor.
-- **No per-channel quality scores.** Quality score is server-wide; per-channel rollups belong to other tiles.
+- **No per-channel contributor views.** Contributors is server-wide, though every lift is measured against the member's own channel mix; per-channel rollups belong to other tiles.
 - **No write endpoints on report tiles.** Only the cache-clear endpoint is non-GET, and it never touches data tables.
 - **No precise invite tracking.** Concurrent joins race the cache diff and may mis-attribute or fail to attribute.
 - **No historical baseline retention.** The 30-day rolling baseline overwrites older numbers; there is no audit of how baselines drifted.

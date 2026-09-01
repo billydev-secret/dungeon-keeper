@@ -329,7 +329,7 @@ def test_no_text_column_escapes_its_own_output():
 # never a member-supplied name.
 _HTML_COLUMNS = {
     # colored score/percentage/± figures: the value is a number, the color a literal
-    ("quality-score.js", "final_score"),
+    ("quality-score.js", "score"),
     ("retention.js", "drop_pct"),
     ("retention.js", "normalized_drop_pct"),
     ("xp-leaderboard.js", "_diff"),
