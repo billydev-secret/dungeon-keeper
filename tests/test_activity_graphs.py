@@ -27,6 +27,7 @@ from bot_modules.services.activity_graphs import (
     _week_buckets,
     _WINDOW_LABELS,
     OVERLAY_SMOOTH_WINDOW,
+    OverlayChart,
     overlay_labels,
     overlay_period_cap,
     overlay_period_start,
@@ -50,6 +51,7 @@ from bot_modules.services.activity_graphs import (
     render_level_histogram,
     render_nsfw_gender_chart,
     render_nsfw_gender_line_chart,
+    render_overlay_panel,
     smooth_series,
 )
 from tests.db_template import migrated_db
@@ -1377,3 +1379,45 @@ def test_overlay_day_is_drawn_raw(db_conn):
     )
     assert res.smooth_window == 1
     assert res.current_smooth == []
+
+
+# ── Overlay renderer (the moderator stats panel's image) ──────────────
+
+
+def _overlay_chart(*, band=True, current=None) -> OverlayChart:
+    hours = list(range(24))
+    return OverlayChart(
+        title="Today vs the last 8 days",
+        labels=list(_HOD_LABELS),
+        # Unlived hours are None, exactly as the query returns them.
+        current=current if current is not None else [float(h) for h in hours[:10]]
+        + [None] * 14,
+        band_low=[float(h) for h in hours] if band else [],
+        band_mid=[float(h) + 1 for h in hours] if band else [],
+        band_high=[float(h) + 2 for h in hours] if band else [],
+        empty_note="Not enough history to compare against yet.",
+    )
+
+
+def test_render_overlay_panel_stacks_charts_into_one_png():
+    """Two overlays, one image — Discord gives an embed a single image slot."""
+    png = render_overlay_panel([_overlay_chart(), _overlay_chart()])
+    assert png.startswith(PNG_MAGIC)
+
+
+def test_render_overlay_panel_draws_without_a_band():
+    """A young server has no band; the chart still has to render rather than
+    raise on the empty series, and says why the band is missing."""
+    png = render_overlay_panel([_overlay_chart(band=False)])
+    assert png.startswith(PNG_MAGIC)
+
+
+def test_render_overlay_panel_survives_a_day_with_no_data_at_all():
+    """Every hour unlived — a panel posted seconds after local midnight."""
+    png = render_overlay_panel([_overlay_chart(current=[None] * 24)])
+    assert png.startswith(PNG_MAGIC)
+
+
+def test_render_overlay_panel_needs_a_chart():
+    with pytest.raises(ValueError):
+        render_overlay_panel([])

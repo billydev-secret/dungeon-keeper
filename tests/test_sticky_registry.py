@@ -239,6 +239,10 @@ def _seed_survivor_unposted(conn, channel_id: int) -> None:
         ),
         pytest.param(_seed_todo_board, "todo-board", "the todo board", False,
                      id="todo-board"),
+        pytest.param(
+            _seed_config_key("mod_stats_panel_channel_id"),
+            "mod-stats", "the moderator stats panel", False, id="mod-stats",
+        ),
         # The sharp one: the Survivor panel follows the bot's own Reckoning and
         # last-call posts down, so sharing its channel is the refuse case — and
         # it was the least visible of the six.

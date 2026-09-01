@@ -8,6 +8,7 @@ import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
 import { filterSelect, multiFilterSelect } from "../filter-select.js";
 import { onPickerChange, memberSearch } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 
 const RESOLUTIONS = [
   { value: "hour",        label: "Hourly (24h)" },
@@ -137,6 +138,9 @@ export function mount(container, initialParams) {
       </div>
       <div data-chart-table></div>
       <div data-slider-wrap></div>
+      <div class="card" style="margin-top:20px">
+        <div data-poster="mod-stats"></div>
+      </div>
     </div>
   `;
 
@@ -145,6 +149,17 @@ export function mount(container, initialParams) {
   const includeBotsEl = container.querySelector('[data-control="include-bots"]');
   const compareEl = container.querySelector('[data-control="compare"]');
   const compareField = container.querySelector('[data-field="compare"]');
+
+  // The same two overlays this page draws, as a self-refreshing panel in a
+  // Discord channel. It sits here rather than on a config page because this is
+  // where an admin is already looking at the charts it posts — and because its
+  // only setting is the channel the control itself asks for.
+  // Not awaited: the poster loads its own spec and channel list, and the report
+  // above must not wait on that before drawing.
+  mountPanelPoster(container.querySelector('[data-poster="mod-stats"]'), "mod-stats", {
+    heading: "Post this to a mod channel",
+    buttonLabel: "Post Panel",
+  });
 
   // Rebuild the window picker for the current period, greying out the windows
   // this mode cannot reach. XP is capped by raw retention because the overlay

@@ -35,11 +35,12 @@ including the panels that are deliberately *not* built on this.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Hashable, cast
+from typing import Any, Awaitable, Callable, Hashable, cast
 
 import discord
 
@@ -150,6 +151,30 @@ def should_restick(
 
 
 @dataclass(frozen=True)
+class PanelImage:
+    """An image a panel embeds, held as bytes rather than as a ``discord.File``.
+
+    A ``File`` wraps a stream that ``send``/``edit`` consumes, so one is good
+    for exactly one HTTP request. A panel's content is built once and may then
+    be posted, retried, or edited, and ``place`` can even run to completion
+    after its caller was cancelled — every one of those paths would be handing
+    Discord an exhausted buffer. Keeping the bytes and building a fresh ``File``
+    per request removes the whole class of bug.
+    """
+
+    filename: str
+    data: bytes
+
+    def to_file(self) -> discord.File:
+        return discord.File(io.BytesIO(self.data), filename=self.filename)
+
+    @property
+    def attachment_url(self) -> str:
+        """What an embed's ``set_image`` needs to point at this attachment."""
+        return f"attachment://{self.filename}"
+
+
+@dataclass(frozen=True)
 class PanelContent:
     """What a panel should currently look like.
 
@@ -158,6 +183,11 @@ class PanelContent:
     the API call when nothing changed — exclude anything that renders
     client-side (``<t:…:R>`` ages tick on their own) so an unchanged panel stays
     unchanged.
+
+    ``image`` is an optional attachment the embed displays. Panels that carry a
+    rendered chart need it: Discord will not show an embed image from anywhere
+    but a URL or an attachment on the same message, so the picture has to travel
+    with every send and every edit that keeps it.
     """
 
     embed: discord.Embed
@@ -165,6 +195,28 @@ class PanelContent:
     #: (None), and its send/edit overloads reject a bare None.
     view: discord.ui.View = discord.utils.MISSING
     signature: Hashable | None = None
+    image: PanelImage | None = None
+
+    def send_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``send``."""
+        kwargs: dict[str, Any] = {"embed": self.embed, "view": self.view}
+        if self.image is not None:
+            kwargs["file"] = self.image.to_file()
+        return kwargs
+
+    def edit_kwargs(self) -> dict[str, Any]:
+        """Keyword arguments for ``edit``.
+
+        ``attachments`` is passed as an explicit list — including an **empty**
+        one for an imageless panel. Omitting the argument keeps whatever the
+        message already carries, so a panel that stopped having an image would
+        otherwise keep displaying the last one it drew, forever.
+        """
+        kwargs: dict[str, Any] = {"embed": self.embed, "view": self.view}
+        kwargs["attachments"] = (
+            [self.image.to_file()] if self.image is not None else []
+        )
+        return kwargs
 
 
 class StickyPanel:
@@ -423,7 +475,7 @@ class StickyPanel:
             # unpostable — and if the target *is* the old channel there is
             # nothing left to heal from. Worst case here is two for a moment.
             try:
-                message = await target.send(embed=content.embed, view=content.view)
+                message = await target.send(**content.send_kwargs())
             except discord.HTTPException:
                 self._note_failure(guild.id, target.id)
                 # Not popping this would make a set max_burial permanently
@@ -554,7 +606,7 @@ class StickyPanel:
             content = await self._build(guild)
             try:
                 await target.get_partial_message(message_id).edit(
-                    embed=content.embed, view=content.view
+                    **content.edit_kwargs()
                 )
             except discord.NotFound:
                 pass  # deleted by hand — fall through to a fresh post
@@ -601,7 +653,7 @@ class StickyPanel:
             return False
         try:
             await channel.get_partial_message(message_id).edit(
-                embed=content.embed, view=content.view
+                **content.edit_kwargs()
             )
         except discord.NotFound:
             if repost_if_missing:

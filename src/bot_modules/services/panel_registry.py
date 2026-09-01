@@ -81,6 +81,20 @@ class PanelSpec:
 
 PANEL_SPECS: tuple[PanelSpec, ...] = (
     PanelSpec(
+        key="mod-stats",
+        label="Server Activity Panel",
+        description=(
+            "Today's traffic hour by hour, drawn against the last 8 days and "
+            "the last 30, with the day's totals and where it is on track to "
+            "land. Redraws itself every hour and keeps to the bottom of its "
+            "channel. A mod channel is the point of it — it is the Activity "
+            "report brought to the people who would otherwise never open it."
+        ),
+        cog="ModStatsCog",
+        method="post_mod_stats_panel",
+        host_page="activity",
+    ),
+    PanelSpec(
         # One spec where there were two ("economy-guide" and
         # "economy-leaderboard"): the panels merged on 2026-08-18.
         key="economy-panel",
