@@ -151,10 +151,15 @@ def _reconcile_125(conn):
 
 
 def test_migration_125_reconciles_existing_monthly_quests(db):
-    import datetime
-
-    this_month = datetime.date.today().strftime("%Y-%m")
     with open_db(db) as conn:
+        # Read the month from SQLite, not from Python's local date: migration
+        # 125's own DML filters on strftime('%Y-%m','now'), which is UTC. The
+        # two agree almost always and disagree for the last few hours of a
+        # month in any behind-UTC timezone -- seeding rows under the local
+        # month that the migration then looks for under the next one, summing
+        # nothing. Asking the same clock the migration asks makes the test
+        # deterministic everywhere instead of green until 17:00 on the 31st.
+        this_month = conn.execute("SELECT strftime('%Y-%m','now')").fetchone()[0]
         auto_a = _mk_old_monthly(conn, kind="message_sent")  # lowest id, kept
         auto_b = _mk_old_monthly(conn, kind="reply_sent")    # collapsed off
         kindless = _mk_old_monthly(conn, kind="")            # deactivated
