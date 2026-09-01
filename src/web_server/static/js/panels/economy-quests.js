@@ -7,6 +7,7 @@
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
 import { showStatus, guardForm, loadChannels, mountChannelPicker, mountAsync } from "../config-helpers.js";
 import { toast, confirmDialog } from "../ui.js";
+import { mountTabs } from "../tabs.js";
 import { KIND_LABELS, CHANNEL_SCOPED_KINDS } from "./economy-sources-shared.js";
 
 // Advisory reward bands (client-side hint only — the server saves any value).
@@ -61,7 +62,7 @@ export function mount(container) {
     boardCfg = cfgResult.status === "fulfilled" ? cfgResult.value : null;
     const economyOff = boardCfg != null && !boardCfg.enabled;
     const prefetched = questsResult.status === "fulfilled" ? questsResult.value.quests : null;
-    render(container, channels, boardCfg, economyOff, prefetched);
+    return render(container, channels, boardCfg, economyOff, prefetched);
   }, { errorMsg: "Couldn’t load the quest settings." });
 }
 
@@ -100,6 +101,17 @@ function boardSection(cfg) {
     </form>`;
 }
 
+// The page used to be one long scroll of four sections back to back; Billy
+// asked for tabs to break it up. Library (browse/manage, with the Community
+// Goals progress card nested underneath — it's progress on quests from that
+// same library) is its own tab, Board Size and the New Quest / Edit form get
+// one each. All three tabs' data was already fetched together in mount()
+// above, so — unlike the lazy-fetch-per-tab pattern this helper is built
+// for (see tabs.js's header comment and config-bios.js) — every tab is
+// wired up immediately below rather than only on first click: nothing here
+// is fetched over the network per tab, and the Library tab's "Edit" button
+// dispatches a dk-edit-quest event the New Quest form must already be
+// listening for, however the admin happens to be clicking around.
 function render(container, channels, cfg, economyOff, prefetchedQuests) {
   container.innerHTML = `
     <div class="panel">
@@ -111,7 +123,11 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
       ${economyOff ? `<div class="empty" role="status" style="margin-bottom:12px;">
         The economy is currently off, so nothing below takes effect until it is switched
         on under <a href="#/economy-config">Economy Settings</a>.</div>` : ""}
+      <div data-tabs></div>
+    </div>`;
 
+  function renderLibraryTab(pane) {
+    pane.innerHTML = `
       <section class="card" data-sec="library">
         <div class="section-label">Quest Library</div>
         <div class="field-hint" style="margin-bottom:8px;">
@@ -131,7 +147,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
         <div data-quests><div class="empty">Loading…</div></div>
       </section>
 
-      <section class="card" data-sec="community" style="display:none;">
+      <section class="card" data-sec="community" style="display:none; margin-top:12px;">
         <div class="section-label">Community Goals</div>
         <div class="field-hint" style="margin-bottom:8px;">
           Progress and payout for the goals in the library above. Settling pays
@@ -140,12 +156,26 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
         </div>
         <div data-community></div>
       </section>
+    `;
+    if (prefetchedQuests) {
+      renderQuestList(container, prefetchedQuests);
+    } else {
+      refreshQuests(container);
+    }
+  }
 
+  function renderBoardTab(pane) {
+    pane.innerHTML = `
       <section class="card" data-sec="board">
         <div class="section-label">Board Size</div>
         ${boardSection(cfg)}
       </section>
+    `;
+    wireBoard(container);
+  }
 
+  function renderAuthorTab(pane) {
+    pane.innerHTML = `
       <section class="card" data-sec="author">
         <div class="section-label" data-author-label>New Quest</div>
         <form data-form-quest class="form">
@@ -257,15 +287,25 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
           </div>
         </form>
       </section>
-    </div>`;
-
-  wireAuthoring(container, channels);
-  wireBoard(container);
-  if (prefetchedQuests) {
-    renderQuestList(container, prefetchedQuests);
-  } else {
-    refreshQuests(container);
+    `;
+    wireAuthoring(container, channels, () => tabsHandle.showTab("author"));
   }
+
+  const tabsHandle = mountTabs(container.querySelector("[data-tabs]"), [
+    { key: "library", label: "Quest Library", render: renderLibraryTab,
+      errorMsg: "Couldn’t load the quest library." },
+    { key: "board", label: "Board Size", render: renderBoardTab,
+      errorMsg: "Couldn’t load the board settings." },
+    { key: "author", label: "New Quest", render: renderAuthorTab,
+      errorMsg: "Couldn’t load the quest form." },
+  ], { ariaLabel: "Quest settings sections" });
+
+  // Warm the New Quest tab right away (see the comment above this function) —
+  // land back on Library, mountTabs' own default first tab, once it's done.
+  tabsHandle.showTab("author");
+  tabsHandle.showTab("library");
+
+  return tabsHandle;
 }
 
 // ── board size ───────────────────────────────────────────────────────
@@ -531,7 +571,7 @@ const COMPLETION_HINTS = {
   game: "Completes on its own when the member does this in a game. Daily/weekly: once per period. Event: every single time.",
 };
 
-function wireAuthoring(container, channels) {
+function wireAuthoring(container, channels, switchToAuthorTab) {
   const form = container.querySelector("[data-form-quest]");
   const status = form.querySelector("[data-status-quest]");
   const rewardInput = form.querySelector("[name=reward]");
@@ -651,6 +691,9 @@ function wireAuthoring(container, channels) {
   cancelBtn.addEventListener("click", exitEditMode);
 
   container.addEventListener("dk-edit-quest", (e) => {
+    // The form lives behind the New Quest tab now — bring it into view
+    // before filling it in, the same way this used to scroll it into view.
+    switchToAuthorTab();
     const q = e.detail;
     editingId = q.id;
     form.querySelector("[name=title]").value = q.title || "";

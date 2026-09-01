@@ -65,19 +65,10 @@ export function mount(container) {
                 Let ${name} read this server as well as the manual
               </label>
               <div class="field-hint">
-                <strong>Off by default.</strong> When checked, ${name} may also draw on
-                this server's channel topics, recent announcements, and dashboard docs —
-                on top of the Dungeon Keeper manual. It is always limited to what the
-                person asking can already <em>see</em> (their visible, non-age-restricted
-                channels) and shaped by what they can <em>do</em> (their roles), so
-                <code>/ask</code> cannot leak anything out of a channel a member has no
-                access to. Unchecked, answers come from the manual only.
-                <br /><br />
-                <strong>No member content either way.</strong> ${name} is never given
-                messages, bios, birthdays, confessions, wellness entries, DMs, balances
-                or stats — for anyone, including the person asking, and whether this box
-                is checked or not. Asked about a specific member, it says it has no
-                access rather than answering.
+                <strong>Off by default.</strong> Checked, ${name} can also cite this
+                server's channel topics, announcements, and dashboard docs — always
+                limited to the channels the asker can see. <strong>Either way</strong>,
+                it never sees member messages, DMs, bios, or stats.
               </div>
             </div>
             <div class="field">
@@ -86,12 +77,9 @@ export function mount(container) {
                 Let ${name} look up settings when an admin asks
               </label>
               <div class="field-hint">
-                <strong>On by default.</strong> When an admin or moderator asks about
-                a feature, ${name} fetches that feature's current settings on demand
-                and can offer a change for them to confirm in Discord. Unchecked, it
-                is handed a fixed summary of the server's setup instead — older,
-                blunter, and unable to propose anything. Members never get either:
-                this only affects people who can already see the config.
+                <strong>On by default.</strong> Admins and mods asking about a feature
+                get its live settings and a change to confirm in Discord. Unchecked,
+                they get a fixed summary instead. Members are unaffected either way.
               </div>
             </div>
           </div>

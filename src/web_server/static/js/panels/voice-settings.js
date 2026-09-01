@@ -26,7 +26,11 @@ export function mount(outer) {
         <h2>Voice Control</h2>
         <div class="subtitle">How member-owned voice rooms behave</div>
       </header>
-      <section data-region="settings"></section>
+      <!-- A plain div, not <section>: .panel > section gets boxed chrome,
+           which would wrap every card below in one outer tile. Each
+           large heading gets its own .card instead (Billy: separate boxes
+           on the large headings), so this wrapper stays invisible. -->
+      <div data-region="settings"></div>
     </div>
   `;
   const container = outer.querySelector('[data-region="settings"]');
@@ -147,29 +151,33 @@ export function mount(outer) {
           </div>
         </form>
 
-        <div style="margin-top:20px;" data-poster="voice-control"></div>
+        <div class="card" style="margin-top:20px;" data-poster="voice-control"></div>
 
-        <div class="section-label" style="margin-top:20px;">Post How-To Guide</div>
-        <form class="form" data-howto-form>
-          <div class="field">
-            <label>Guide Channel</label>
-            <span data-picker="howto_channel_id"></span>
-            <div class="field-hint">Posts a member-facing "how Voice Control works" embed here (e.g. in your lobby). Safe to re-run anytime.</div>
-          </div>
-          <div style="display:flex; gap:8px; align-items:center;">
-            <button type="submit" class="btn">Post Guide</button>
-            <span data-howto-status></span>
-          </div>
-        </form>
+        <div class="card" style="margin-top:20px;">
+          <div class="section-label">Post How-To Guide</div>
+          <form class="form" data-howto-form>
+            <div class="field">
+              <label>Guide Channel</label>
+              <span data-picker="howto_channel_id"></span>
+              <div class="field-hint">Posts a member-facing "how Voice Control works" embed here (e.g. in your lobby). Safe to re-run anytime.</div>
+            </div>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <button type="submit" class="btn">Post Guide</button>
+              <span data-howto-status></span>
+            </div>
+          </form>
+        </div>
 
-        <div class="section-label" style="margin-top:20px;">Room-Name Blocklist</div>
-        <div class="field-hint" style="margin-bottom:8px;">Room names containing any of these phrases are rejected. Matching ignores upper/lower case.</div>
-        <form class="form" data-bl-form style="display:flex; gap:8px; align-items:center;">
-          <label for="vm-bl-input" class="visually-hidden" style="position:absolute; left:-9999px;">Blocked phrase</label>
-          <input type="text" id="vm-bl-input" placeholder="Phrase to block…" />
-          <button type="submit" class="btn">Add</button>
-        </form>
-        <ul data-bl-list style="margin-top:10px;"></ul>
+        <div class="card" style="margin-top:20px;">
+          <div class="section-label">Room-Name Blocklist</div>
+          <div class="field-hint" style="margin-bottom:8px;">Room names containing any of these phrases are rejected. Matching ignores upper/lower case.</div>
+          <form class="form" data-bl-form style="display:flex; gap:8px; align-items:center;">
+            <label for="vm-bl-input" class="visually-hidden" style="position:absolute; left:-9999px;">Blocked phrase</label>
+            <input type="text" id="vm-bl-input" placeholder="Phrase to block…" />
+            <button type="submit" class="btn">Add</button>
+          </form>
+          <ul data-bl-list style="margin-top:10px;"></ul>
+        </div>
       </div>`;
 
     // The owner panel goes to the Control Channel set above, not a picked one —

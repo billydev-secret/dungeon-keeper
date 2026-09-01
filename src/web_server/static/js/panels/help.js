@@ -202,6 +202,102 @@ function rewriteInternalLinks(root) {
   }
 }
 
+// ── Getting Started: reshape from a flat scroll into scannable chunks ──
+//
+// The manual nests four h3 subsections under this one h2, and the last —
+// "Ask Billy-bot (AI)" — is a full explainer (4 paragraphs + a callout)
+// that also has its own dedicated nav page (help-ask). Shown in full here
+// too, it was most of what made this page read as a wall of text. This
+// reshapes the *rendered* DOM only — the manual's own text is untouched,
+// so the standalone manual and search snippets still show the complete
+// explainer — into: the intro paragraph, a side-by-side "which am I" card
+// row (member / admin) instead of stacked prose, the dashboard-search tip
+// as a callout so it reads as a tip rather than another paragraph, and a
+// one-line teaser + link standing in for the full AI-assistant explainer.
+function restructureGettingStarted(body) {
+  const byId = (id) => body.querySelector(`#${CSS.escape(id)}`);
+  const memberHeading = byId("start-member");
+  const adminHeading = byId("start-admin");
+  const searchHeading = byId("dashboard-search");
+  const askHeading = byId("ask-guide");
+  // If the manual's shape here ever changes, fall back to the plain
+  // extracted scroll rather than half-transforming an unexpected structure.
+  if (!memberHeading || !adminHeading || !searchHeading || !askHeading) return;
+
+  // Moves (not clones) heading + its following siblings up to the next
+  // h2/h3 — same block boundary extractSectionContent uses — out of `body`
+  // and into a fragment, so ids (and thus focus-scroll / search deep links)
+  // travel with the real nodes instead of being duplicated.
+  const takeBlock = (heading) => {
+    const frag = document.createDocumentFragment();
+    let node = heading;
+    while (node) {
+      const next = node.nextElementSibling;
+      frag.appendChild(node);
+      if (!next || next.tagName === "H2" || next.tagName === "H3") break;
+      node = next;
+    }
+    return frag;
+  };
+
+  const memberBlock = takeBlock(memberHeading);
+  const adminBlock = takeBlock(adminHeading);
+  const searchBlock = takeBlock(searchHeading);
+  takeBlock(askHeading); // full explainer discarded here — it has its own page
+
+  // `.dk-help > h3:first-child` (zero top margin) only matches a direct
+  // child of the section body; nested one level into a card, these would
+  // otherwise carry the normal heading's top margin as leading whitespace.
+  memberHeading.style.marginTop = "0";
+  adminHeading.style.marginTop = "0";
+
+  const paths = document.createElement("div");
+  paths.className = "card-grid";
+  for (const block of [memberBlock, adminBlock]) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.appendChild(block);
+    paths.appendChild(card);
+  }
+  body.appendChild(paths);
+
+  // "Finding a page" becomes a tip callout (matching the manual's own
+  // callout markup, so the shared .dk-help .callout styling applies)
+  // instead of just another heading-plus-paragraph in the scroll.
+  const tipHeading = searchBlock.firstElementChild;
+  const tip = document.createElement("div");
+  tip.className = "callout callout-tip";
+  tip.innerHTML = `<span class="callout-icon">💡</span><div class="callout-body"></div>`;
+  const tipBody = tip.querySelector(".callout-body");
+  const strong = document.createElement("strong");
+  strong.id = tipHeading.id;
+  strong.textContent = tipHeading.textContent;
+  tipBody.appendChild(strong);
+  Array.from(searchBlock.children).slice(1).forEach((p) => tipBody.appendChild(p));
+  body.appendChild(tip);
+
+  // Teaser card standing in for the discarded explainer, branded the same
+  // way the panel header and ask box are (assistantName() resolves the
+  // guild's own name for the assistant; DEFAULT_ASSISTANT_NAME is the
+  // fallback shown until then).
+  const askTeaser = document.createElement("div");
+  askTeaser.className = "card";
+  askTeaser.id = "ask-guide";
+  const nameNow = _assistantName || DEFAULT_ASSISTANT_NAME;
+  askTeaser.innerHTML = `
+    <h3 style="margin-top:0;">Need a hand?</h3>
+    <p><span data-ask-name>${esc(nameNow)}</span> is a guide-grounded AI that answers from this manual and won't invent commands. Admins get more: live server context, a setup review, and one-press Apply for settings changes.</p>
+    <a class="btn btn-secondary" href="#/help-ask" data-ask-cta>${esc(assistantHelpLabel(nameNow))} →</a>
+  `;
+  body.appendChild(askTeaser);
+  assistantName().then((name) => {
+    const nameSpot = askTeaser.querySelector("[data-ask-name]");
+    const cta = askTeaser.querySelector("[data-ask-cta]");
+    if (nameSpot) nameSpot.textContent = name;
+    if (cta) cta.textContent = `${assistantHelpLabel(name)} →`;
+  });
+}
+
 // ── Full-text search across the manual ─────────────────────────────
 
 let _searchIndex = null;
@@ -411,6 +507,7 @@ export async function mount(container, params = {}) {
       body.appendChild(sectionFragment.cloneNode(true));
       dropDuplicateHeading(body, meta.label);
       rewriteInternalLinks(body);
+      if (meta.page === "help-start") restructureGettingStarted(body);
     } else {
       const err = document.createElement("p");
       err.textContent = `Section "${meta.anchor}" not found in manual.`;

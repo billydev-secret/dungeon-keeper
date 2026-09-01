@@ -294,12 +294,23 @@ class ActivityResponse(BaseModel):
 # ── Invite effectiveness ───────────────────────────────────────────────
 
 
+class InviteeRowSchema(BaseModel):
+    invitee_id: str
+    invitee_name: str = ""
+    active: bool
+
+
 class InviterRowSchema(BaseModel):
     inviter_id: str
     inviter_name: str = ""
     invite_count: int
     still_active: int
     retention_pct: float
+    # Per-invitee detail behind the dashboard's expand row. Omitting this
+    # field used to make FastAPI's response_model silently strip it from
+    # every inviter — the summary totals (top-level fields, above) still
+    # matched, but expanding any inviter always rendered the empty state.
+    invitees: list[InviteeRowSchema] = []
 
 
 class InviteEffectivenessResponse(BaseModel):
@@ -495,6 +506,7 @@ class XpLeaderboardResponse(BaseModel):
     total_users: int
     leaderboard: list[XpUserRowSchema]
     level_distribution: list[XpLevelBucketSchema]
+    level_distribution_active_days: int
     source_totals: dict[str, float]
 
 

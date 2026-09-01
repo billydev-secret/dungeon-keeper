@@ -5,7 +5,7 @@ import {
   CHART_BAR, CHART_ACCENT,
 } from "../charts.js";
 import { renderSortableTable } from "../table.js";
-import { renderError } from "../states.js";
+import { renderError, renderEmpty } from "../states.js";
 
 // The table is unbounded server-side, so cap the DOM and say so (W-D14).
 const MAX_TABLE_ROWS = 200;
@@ -23,7 +23,7 @@ export function mount(container, initialParams = {}) {
         <h2>XP Leaderboard</h2>
         <div class="subtitle">Who is earning XP, and where members rank</div>
       </header>
-      <section data-region="leaderboard"></section>
+      <div data-region="leaderboard"></div>
     </div>
   `;
   return mountLeaderboard(container.querySelector('[data-region="leaderboard"]'), initialParams);
@@ -32,35 +32,47 @@ export function mount(container, initialParams = {}) {
 /**
  * The leaderboard body. Returns an object with unmount() so the caller can
  * destroy the charts.
+ *
+ * Laid out as its own stack of `.card` tiles — level distribution and source
+ * breakdown side by side, then the XP histogram, then the member table —
+ * rather than one undifferentiated block, so each reads as a distinct report
+ * rather than one giant tile (Billy).
  */
 export function mountLeaderboard(container, initialParams) {
   container.innerHTML = `
-    <div>
-      <div class="section-label">Leaderboard</div>
-      <div class="field-hint" style="margin-bottom:10px;">XP distribution, level spread, and top earners.</div>
-      <div class="controls">
-        <label data-slot="range"></label>
+    <div style="display:flex;flex-direction:column;gap:var(--s-5);">
+      <div>
+        <div class="controls">
+          <label data-slot="range"></label>
+        </div>
+        <div data-stats class="subtitle" style="margin-top:8px;"></div>
       </div>
-      <div data-stats class="subtitle" style="margin-bottom:8px;"></div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap;">
-        <div style="flex:2;min-width:300px;display:flex;flex-direction:column;">
-          <div class="chart-caption" data-caption-levels></div>
+
+      <div class="card-grid" style="grid-template-columns:repeat(auto-fit,minmax(300px,1fr));">
+        <section class="card">
+          <div class="section-label">Level Distribution</div>
+          <div class="field-hint" data-caption-levels></div>
           <div class="chart-wrap"><canvas data-chart-levels></canvas></div>
           <div data-chart-table-levels></div>
-        </div>
-        <div style="flex:1;min-width:200px;display:flex;flex-direction:column;">
-          <div class="chart-caption" data-caption-sources></div>
+        </section>
+        <section class="card">
+          <div class="section-label">XP by Source</div>
           <div class="chart-wrap"><canvas data-chart-sources></canvas></div>
           <div data-legend-sources></div>
           <div data-chart-table-sources></div>
-        </div>
+        </section>
       </div>
-      <div style="margin-top:12px;display:flex;flex-direction:column;">
-        <div class="chart-caption" data-caption-histogram></div>
+
+      <section class="card">
+        <div class="section-label">XP Distribution</div>
         <div class="chart-wrap" style="min-height:220px;"><canvas data-chart-histogram></canvas></div>
         <div data-chart-table-histogram></div>
-      </div>
-      <div data-table-wrap style="margin-top:12px; max-height:400px; overflow-y:auto;"></div>
+      </section>
+
+      <section class="card">
+        <div class="section-label">Leaderboard</div>
+        <div data-table-wrap style="max-height:400px; overflow-y:auto;"></div>
+      </section>
     </div>
   `;
 
@@ -75,12 +87,13 @@ export function mountLeaderboard(container, initialParams) {
   container.querySelector('[data-slot="range"]').replaceWith(rangeCtl);
   const statsEl = container.querySelector("[data-stats]");
   const tableWrap = container.querySelector("[data-table-wrap]");
+  // Not a chart title (the card's own section-label is that) — this is the
+  // "active in the last N days" scope note, so the reader can see the
+  // distribution isn't counting the whole membership (Billy, part b).
   const levelsCaptionEl = container.querySelector("[data-caption-levels]");
   const levelsTableEl = container.querySelector("[data-chart-table-levels]");
-  const sourcesCaptionEl = container.querySelector("[data-caption-sources]");
   const sourcesLegendEl = container.querySelector("[data-legend-sources]");
   const sourcesTableEl = container.querySelector("[data-chart-table-sources]");
-  const histCaptionEl = container.querySelector("[data-caption-histogram]");
   const histTableEl = container.querySelector("[data-chart-table-histogram]");
   let chartLevels = null;
   let chartSources = null;
@@ -109,48 +122,49 @@ export function mountLeaderboard(container, initialParams) {
         : "all time";
       statsEl.textContent = `${data.total_users} member${data.total_users === 1 ? "" : "s"} tracked · ${label}`;
 
-      // Level distribution — one series, so per the "none for one" rule it
-      // gets a caption and a table but no legend (the caption already names it).
+      // Level distribution — scoped server-side to members active in the
+      // trailing window (level_distribution_active_days), independent of the
+      // range picker above: that note stays visible even when the chart is
+      // empty, since it's the answer to "why is this empty".
+      const activeDays = data.level_distribution_active_days;
+      const activeWindowNote = `Members active in the last ${activeDays} day${activeDays === 1 ? "" : "s"}.`;
+      levelsCaptionEl.textContent = activeWindowNote;
       const levelWrap = container.querySelector("[data-chart-levels]").parentElement;
       if (data.level_distribution.length) {
         levelWrap.innerHTML = '<canvas data-chart-levels></canvas>';
-        const levelsTitle = "Level Distribution";
         const levelLabels = data.level_distribution.map((b) => `Lv ${b.level}`);
         const levelCounts = data.level_distribution.map((b) => b.count);
         chartLevels = makeBarChart(container.querySelector("[data-chart-levels]"), {
           labels: levelLabels,
           data: levelCounts,
-          title: levelsTitle,
+          title: "Level Distribution",
           yLabel: "Members",
           color: CHART_BAR,
         });
-        levelsCaptionEl.textContent = levelsTitle;
         renderChartTable(levelsTableEl, {
           labels: levelLabels,
           datasets: [{ label: "Members", data: levelCounts }],
           indexLabel: "Level",
         });
       } else {
-        levelsCaptionEl.textContent = "";
+        levelWrap.innerHTML = renderEmpty(`No members have been active in the last ${activeDays} days.`);
         levelsTableEl.replaceChildren();
       }
 
-      // Source breakdown — a doughnut: caption always, legend + table once
-      // there's more than one slice to distinguish (a single slice is just a
-      // full circle, so a legend would repeat the caption for no reason).
+      // Source breakdown — a doughnut: legend + table once there's more than
+      // one slice to distinguish (a single slice is just a full circle, so a
+      // legend would repeat the card title for no reason).
       const srcWrap = container.querySelector("[data-chart-sources]").parentElement;
       const srcLabels = Object.keys(data.source_totals);
       if (srcLabels.length) {
         srcWrap.innerHTML = '<canvas data-chart-sources></canvas>';
-        const sourcesTitle = "XP by Source";
         const srcDisplayLabels = srcLabels.map((s) => s.replace("_", " "));
         const srcData = srcLabels.map((s) => data.source_totals[s]);
         chartSources = makeDoughnutChart(container.querySelector("[data-chart-sources]"), {
           labels: srcDisplayLabels,
           data: srcData,
-          title: sourcesTitle,
+          title: "XP by Source",
         });
-        sourcesCaptionEl.textContent = sourcesTitle;
         sourcesLegendEl.replaceChildren();
         if (srcLabels.length > 1) renderPieLegend(sourcesLegendEl, chartSources);
         renderChartTable(sourcesTableEl, {
@@ -159,12 +173,13 @@ export function mountLeaderboard(container, initialParams) {
           indexLabel: "Source",
         });
       } else {
-        sourcesCaptionEl.textContent = "";
+        srcWrap.innerHTML = renderEmpty("No XP has been earned in this period.");
         sourcesLegendEl.replaceChildren();
         sourcesTableEl.replaceChildren();
       }
 
       // XP histogram – 10 buckets each spanning 10% of the range
+      const histWrap = container.querySelector("[data-chart-histogram]").parentElement;
       if (data.leaderboard.length > 1) {
         const xpValues = data.leaderboard.map((r) => r.total_xp);
         const minXp = Math.min(...xpValues);
@@ -183,26 +198,22 @@ export function mountLeaderboard(container, initialParams) {
           const hi = lo + bucketSize;
           return `${fmtXp(lo)}–${fmtXp(hi)}`;
         });
-        const histWrap = container.querySelector("[data-chart-histogram]").parentElement;
         histWrap.innerHTML = '<canvas data-chart-histogram></canvas>';
-        const histTitle = "XP Distribution";
         chartHistogram = makeBarChart(container.querySelector("[data-chart-histogram]"), {
           labels: histLabels,
           data: buckets,
-          title: histTitle,
+          title: "XP Distribution",
           xLabel: "XP Range",
           yLabel: "Members",
           color: CHART_ACCENT,
         });
-        // One series here too — caption + table, no legend.
-        histCaptionEl.textContent = histTitle;
         renderChartTable(histTableEl, {
           labels: histLabels,
           datasets: [{ label: "Members", data: buckets }],
           indexLabel: "XP Range",
         });
       } else {
-        histCaptionEl.textContent = "";
+        histWrap.innerHTML = renderEmpty("Not enough members in this period to show a spread.");
         histTableEl.replaceChildren();
       }
 
@@ -277,10 +288,8 @@ export function mountLeaderboard(container, initialParams) {
       container.querySelector("[data-chart-histogram]").parentElement.innerHTML = errMsg;
       levelsCaptionEl.textContent = "";
       levelsTableEl.replaceChildren();
-      sourcesCaptionEl.textContent = "";
       sourcesLegendEl.replaceChildren();
       sourcesTableEl.replaceChildren();
-      histCaptionEl.textContent = "";
       histTableEl.replaceChildren();
       tableWrap.innerHTML = "";
     }

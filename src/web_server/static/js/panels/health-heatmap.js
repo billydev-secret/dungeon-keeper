@@ -1,6 +1,7 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle, mountReloadable } from "../report-helpers.js";
+import { mountTabs } from "../tabs.js";
 
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -241,14 +242,12 @@ export function mount(container) {
     }
 
     const insights = computeInsights(grid);
+    const channels = d.per_channel || [];
 
-    const perChannelHTML = (d.per_channel || []).map(ch => {
-      const name = ch.channel_name || ch.channel_id;
-      return `<div class="home-card" style="margin-bottom:10px;">
-        ${heatmapGridHTML(ch.grid, { label: "#" + name, compact: true })}
-      </div>`;
-    }).join("");
-
+    // Every top-level box below is its own .home-grid (even the "wide"
+    // single-card ones) purely so the shared .panel > box + box rule in
+    // app.css puts a consistent gap between them — no per-section inline
+    // margin-top to keep in sync by hand.
     panel.innerHTML = `
       <header>
         <h2>Activity Heatmap</h2>
@@ -273,21 +272,25 @@ export function mount(container) {
         </div>
       </div>
 
-      <div class="home-card home-card-wide" style="margin-top:14px;">
-        <div class="home-card-label">Server-wide Heatmap</div>
-        ${heatmapGridHTML(d.grid, { showValues: true })}
+      <div class="home-grid">
+        <div class="home-card home-card-wide">
+          <div class="home-card-label">Server-wide Heatmap</div>
+          ${heatmapGridHTML(d.grid, { showValues: true })}
+        </div>
       </div>
 
       ${insights.length ? `
-        <div class="home-card home-card-wide" style="margin-top:14px;">
-          <div class="home-card-label">Insights</div>
-          <div class="hm-insights">
-            ${insights.map(i => `<div class="hm-insight">${i.icon} ${i.text}</div>`).join("")}
+        <div class="home-grid">
+          <div class="home-card home-card-wide">
+            <div class="home-card-label">Insights</div>
+            <div class="hm-insights">
+              ${insights.map(i => `<div class="hm-insight">${i.icon} ${i.text}</div>`).join("")}
+            </div>
           </div>
         </div>
       ` : ""}
 
-      <div class="home-grid" style="margin-top:14px;">
+      <div class="home-grid">
         <div class="home-card">
           <div class="home-card-label">Hourly Distribution</div>
           ${hourlyBarChartHTML(d.grid)}
@@ -298,15 +301,31 @@ export function mount(container) {
         </div>
       </div>
 
-      ${perChannelHTML ? `
-        <div style="margin-top:20px;">
-          <div class="home-card-label" style="margin-bottom:10px;">Per-Channel Heatmaps</div>
-          <div class="home-grid">
-            ${perChannelHTML}
+      ${channels.length ? `
+        <div class="home-grid">
+          <div class="home-card home-card-wide">
+            <div class="home-card-label">Per-Channel Heatmaps</div>
+            <div data-channel-tabs></div>
           </div>
         </div>
       ` : ""}
     `;
+
+    // One card per channel used to stack into a wall the grid wrapped
+    // raggedly (a last row that never quite filled) — tabbing through them
+    // keeps the panel to one channel's heatmap at a time, so there's no grid
+    // to go uneven. Every channel's grid is already in hand from the single
+    // /api/health/heatmap fetch above, so each tab's render is a synchronous
+    // innerHTML write, not a fetch — mountTabs still guards it the same way.
+    if (channels.length) {
+      mountTabs(panel.querySelector("[data-channel-tabs]"), channels.map((ch, i) => ({
+        key: String(ch.channel_id ?? i),
+        label: "#" + (ch.channel_name || ch.channel_id),
+        render: (pane) => {
+          pane.innerHTML = heatmapGridHTML(ch.grid, { compact: true });
+        },
+      })), { ariaLabel: "Per-channel heatmaps" });
+    }
   }
 
   // Bots are excluded from every metric by default; this is the per-report

@@ -57,13 +57,10 @@ export function mountSettings(container) {
                 <input type="checkbox" name="enabled" ${rw.enabled ? "checked" : ""} />
                 Screen public messages for rule breaks
               </label>
-              <div class="field-hint">When checked, public messages are screened and
-                anything flagged shows up under Moderation › Rules Watch for a
-                moderator to label as a real violation or a false positive. Nothing is
-                deleted and nobody is punished automatically. Checking this alone fills
-                the queue — the alert channel below is optional. This also starts the
-                <strong>Ledger</strong>, which records concrete direct-message consent
-                and cross-platform events for review and needs no AI model at all.</div>
+              <div class="field-hint">Flags messages into the Moderation › Rules Watch
+                queue for a moderator to review — nothing is deleted or punished
+                automatically. Also starts the <strong>Ledger</strong>, a separate
+                consent-and-cross-platform-event log that needs no AI model.</div>
             </div>
             <div class="field">
               <label>Immediate Alert Channel</label>

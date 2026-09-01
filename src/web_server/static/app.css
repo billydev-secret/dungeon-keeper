@@ -953,6 +953,23 @@ textarea.field-input { resize: vertical; }
   color: var(--ink-mute);
   line-height: 1.4;
 }
+/* A block-level hint (the overwhelming convention — a <div>/<p>, one field's
+   own description) had no space of its own below it, so it read as flush
+   against whatever came next: usually a hint ending a .field, immediately
+   above the next field's bold label — the margin inflates that .field's own
+   box, since a flex item's margin doesn't collapse away, so the gap shows up
+   before the next sibling regardless of nesting. The same rule covers a hint
+   placed directly in a .card (not wrapped in a .field — e.g. a caption under
+   a paired field-row) sitting right above the next field's label. Scoped to
+   div/p rather than every .field-hint: a handful of panels reuse the class on
+   an inline <label>/<span> checkbox or chip sitting *beside* other controls
+   in a flex row, where a bottom margin would pull its content off-center
+   against its row-mates. A hint that already carries its own inline margin
+   (many do) keeps that instead, this being the lower-priority class rule. */
+div.field-hint,
+p.field-hint {
+  margin-bottom: var(--s-4);
+}
 .save-status {
   font-size: var(--t-2);
   margin-left: var(--s-3);
@@ -1178,25 +1195,34 @@ textarea.field-input { resize: vertical; }
 }
 .section-label:first-child { margin-top: 0; }
 
-.panel > section,
-.panel > .form {
+/* A tabs.js pane is the panel's content area when a panel uses tabs, so it
+   has to be transparent to these panel-level rules — otherwise moving an
+   existing form into a tab silently drops it back to the 640px .form cap and
+   loses its box styling (it did exactly that to Bios and Music Playlist). */
+:is(.panel, [data-pane]) > section,
+:is(.panel, [data-pane]) > .form {
   background: var(--bg-card);
   border: 1px solid var(--rule-soft);
   border-radius: var(--r);
   padding: var(--s-4) var(--s-5);
 }
-.panel > .form { max-width: none; }
+:is(.panel, [data-pane]) > .form { max-width: none; }
 /* A form that is itself just a stack of .card sections: drop the outer box so
    each major heading reads as its own card (the .form flex gap spaces them). */
-.panel > .form.form-cards {
+:is(.panel, [data-pane]) > .form.form-cards {
   background: none;
   border: none;
   padding: 0;
 }
-.panel > section + section,
-.panel > .form   + .form,
-.panel > section + .form,
-.panel > .form   + section {
+/* Any of a panel's top-level section boxes, back to back — a bare .card or
+   .home-grid/.card-grid (report stat tiles) used to fall outside this rule
+   entirely (it only named section/.form), so two of them sitting directly in
+   a .panel with no wrapping .form touched with zero gap between them
+   (config-bump-tracker's Sites card against its Add-a-Site form,
+   health-gini's stacked stat/chart grids). One shared rule for the whole
+   family instead of re-deriving the pairing per panel. */
+:is(.panel, [data-pane]) > :is(section, .form, .card, .home-grid, .card-grid)
+       + :is(section, .form, .card, .home-grid, .card-grid) {
   margin-top: var(--s-5);
 }
 

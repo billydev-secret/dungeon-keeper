@@ -42,8 +42,7 @@ export function mount(container) {
     sub.className = "subtitle";
     sub.textContent =
       "House gambling games played for your server currency. Picking a channel " +
-      "opens the casino; the bot keeps its hub panel there. Rename it on the " +
-      "Branding panel.";
+      "opens the casino and hosts its hub panel there. Rename it on Branding.";
     hdr.append(h2, sub);
     panel.appendChild(hdr);
 
@@ -66,9 +65,8 @@ export function mount(container) {
     cardWiring.appendChild(field(
       "Casino Channel",
       chanSlot,
-      "Where the hub panel sits and every game is played. Choosing " +
-        "\"(disabled)\" closes the casino and removes the panel — members can " +
-        "no longer place any bet.",
+      "Where the hub panel sits and every game is played. \"(disabled)\" " +
+        "closes the casino and removes the panel — no more bets.",
     ));
     const chanPicker = mountChannelPicker(
       chanSlot, channels, String(c.channel_id || "0"),
@@ -87,9 +85,9 @@ export function mount(container) {
     ));
     cardStakes.appendChild(field(
       "Daily Wager Cap", numInput("daily_wager_cap", c.daily_wager_cap ?? 500, 0),
-      "The most one member can stake in a single server day, counting every " +
-        "table together. Enter 0 for no cap. This is your main lever on how " +
-        "fast the casino creates or destroys currency.",
+      "The most one member can stake in a server day, across every table. " +
+        "0 removes the cap. Your main lever on how fast the casino moves " +
+        "currency.",
     ));
 
     // Wrapping flex row (not fixed-width) so phones stack the toggles.
@@ -121,52 +119,48 @@ export function mount(container) {
     );
     cardJackpot.appendChild(field(
       "Jackpot", jackpotRow,
-      "When checked, a share of every losing bet builds one shared pot. " +
-        "Three 7️⃣ symbols on the slots wins whichever is bigger: the pot, or " +
-        "the standard 120× payout. Unchecked, the slots pay the flat 120×.",
+      "A share of every losing bet builds one shared pot. Three 7️⃣s on the " +
+        "slots wins whichever is bigger, the pot or the flat 120× payout. " +
+        "Unchecked, slots always pay the flat 120×.",
     ));
     cardJackpot.appendChild(field(
       "Share of Each Losing Bet (percent)",
       numInput("jackpot_cut_pct", c.jackpot_cut_pct ?? 5, 0, "1", 100),
-      "Between 0 and 100; 5 is the default. A bigger share grows the pot " +
-        "faster but destroys less currency — it parks those coins for one " +
-        "future winner instead. Raise it for drama, lower it for a healthier " +
-        "economy.",
+      "0–100; 5 is the default. A bigger share grows the pot faster but " +
+        "destroys less currency — it's parked for one future winner instead.",
     ));
     cardJackpot.appendChild(field(
       "Starting Pot After a Win",
       numInput("jackpot_seed", c.jackpot_seed ?? 100, 0),
-      "What the pot resets to once someone wins it. This amount is created " +
-        "out of nothing each time, so keep it modest.",
+      "What the pot resets to once someone wins it, created out of nothing " +
+        "each time — keep it modest.",
     ));
 
     const cardTiming = card("Table Timing");
     cardTiming.appendChild(field(
       "Abandoned Round Timeout (seconds)",
       numInput("round_idle_seconds", c.round_idle_seconds ?? 600, 60, "1", 840),
-      "Roulette, Derby, Baccarat, Dice and Keno are private: you place bets " +
-        "in your own window and press the button when you want to resolve. " +
-        "This is only the safety net \u2014 a round left untouched this long " +
-        "resolves itself, so a stake can never sit forever. Between 60 and " +
-        "840 seconds (Discord stops letting the bot update a private message " +
-        "after 15 minutes).",
+      "Roulette, Derby, Baccarat, Dice and Keno are private \u2014 you bet in " +
+        "your own window and press a button to resolve. This safety net " +
+        "auto-resolves a round left untouched this long. 60\u2013840 seconds " +
+        "(Discord stops updating a private message after 15 minutes).",
     ));
     cardTiming.appendChild(field(
       "Blackjack Idle Timeout (seconds)",
       numInput("blackjack_idle_seconds", Math.min(c.blackjack_idle_seconds ?? 180, 840), 30, "1", 840),
-      "A blackjack hand or War standoff nobody touches for this long " +
-        "resolves automatically so the table frees up. Between 30 and 840 " +
-        "seconds (private hand messages can only be updated for 14 minutes).",
+      "A blackjack hand or War standoff untouched this long resolves " +
+        "automatically. 30\u2013840 seconds (private hand messages can only " +
+        "be updated for 14 minutes).",
     ));
 
     const cardFloor = card("Casino Floor");
     cardFloor.appendChild(field(
       "Big-Win Broadcast Threshold",
       numInput("broadcast_min_payout", c.broadcast_min_payout ?? 0, 0),
-      "Players spin privately; the panel's floor ticker shows recent action. " +
-        "A win paying at least this much also gets its own public message in " +
-        "the casino channel, with a Play Again button anyone can press. " +
-        "Enter 0 to never broadcast wins (jackpot hits are always announced).",
+      "Players spin privately, but the floor ticker shows recent action. A " +
+        "win of at least this much also posts publicly in the casino " +
+        "channel with a Play Again button. 0 never broadcasts (jackpot " +
+        "hits are always announced).",
     ));
     const pingRow = document.createElement("div");
     pingRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";

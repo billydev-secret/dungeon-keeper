@@ -954,3 +954,433 @@ def test_activity_overlay_fits_on_phone(dashboard, browser):
     finally:
         context.close()
     _assert_fits(res, "Activity week overlay")
+
+
+# ── tabbed-panel interaction scenarios (S1 tabs.js extraction) ──────────────
+#
+# Seven panels moved their sections behind tabs.js (config-bios.js is the
+# reference caller; see its header comment and test_tabs_widget.py for the
+# lazy-per-tab-load contract). The generic sweep above only ever visits each
+# panel's DEFAULT tab, so every *other* tab's content — including the widest
+# thing several of these panels render — went blind the moment the reorg
+# landed. These scenarios click every non-default tab and audit what it
+# reveals, same as the rest of this "interaction scenarios" section.
+#
+# A wide table scrolling inside its own overflow-x:auto box is not a fault
+# (house rule, see the module docstring) — _assert_fits / AUDIT_JS already
+# encode that, same as everywhere else in this file.
+
+
+def _click_tab(page, key):
+    """Open a tabs.js pane (config-bios.js / tabs.js) and wait for it to settle.
+
+    Every never-yet-opened pane shows a literal "Loading…" placeholder while
+    its render is in flight (states.renderLoading, per mountAsync's contract —
+    see tabs.js's header comment); waiting for that text to clear works
+    whether the tab fetches its own data (e.g. chat-revive's Question Bank) or
+    just redraws data the page already had (e.g. economy-stats' tabs, or
+    health-heatmap's per-channel grids, which never show a "Loading…" state at
+    all — the wait is then a no-op and ``_settle`` below does the real work),
+    without needing a bespoke selector per tab.
+    """
+    page.click(f'[data-tab="{key}"]')
+    page.wait_for_function(
+        """(sel) => {
+          const p = document.querySelector(sel);
+          return !!p && !p.textContent.includes("Loading");
+        }""",
+        arg=f'[data-pane="{key}"]',
+        timeout=10_000,
+    )
+    _settle(page)
+
+
+def _tab_fits(page, key, label):
+    _click_tab(page, key)
+    res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    _assert_fits(res, label)
+
+
+# ── economy-stats: Overview / Income / Spending / Members ───────────────────
+#
+# Every section reads from one already-fetched blob (mountReloadable's `load`),
+# so unlike a lazy-fetch-per-tab panel, a tab's own render never hits the
+# network — but with the sweep's freshly-migrated (empty) DB there are no
+# holders, so every tab renders nothing but an empty-state card regardless.
+# The stub gives every section real content, Members above all: its 9-column
+# sortable table (MEMBER_COLS) is the widest thing the whole page renders, and
+# it was completely invisible to the sweep even before this reorg — Overview
+# was always the default tab, so there was never a page load that reached it.
+_ECON_STATS_STUB = {
+    "supply": {
+        "total": 458_230, "holders": 87, "median_balance": 1120,
+        "top10_share": 0.42, "gini": 0.383,
+    },
+    "distribution": [
+        {"lo": 0, "hi": 99, "count": 12},
+        {"lo": 100, "hi": 499, "count": 28},
+        {"lo": 500, "hi": 1999, "count": 30},
+        {"lo": 2000, "hi": None, "count": 17},
+    ],
+    "flow_7d": {"burn_rate": 0.18},
+    "income_sources": {
+        "groups": ["logins", "activity", "quests", "games", "grants"],
+        "buckets": [
+            {
+                "start": 1_755_000_000 + i * 604_800,
+                "totals": {
+                    "logins": 400 + i * 5, "activity": 900 + i * 10,
+                    "quests": 650 + i * 8, "games": 220 + i * 3, "grants": 50,
+                },
+                "total": 2220 + i * 26,
+            }
+            for i in range(8)
+        ],
+    },
+    # 9 rows so a sort (client-side, MEMBER_COLS) has something to reorder;
+    # user_id is a real-shaped snowflake since loadMembers() resolves nothing
+    # against an empty roster, so the Member column falls back to it verbatim
+    # — a 19-digit id is itself worth having in the width budget.
+    "members": [
+        {
+            "user_id": str(1469491362444480666 + i),
+            "balance": 12000 - i * 900,
+            "income_7d": 900 - i * 60,
+            "coins_per_day_7d": round((900 - i * 60) / 7, 1),
+            "income_30d": 3400 - i * 200,
+            "spent_7d": 150 + i * 15,
+            "top_faucet": ["quests", "activity", "games", "logins", "grants"][i % 5],
+            "rentals_live": i % 3,
+            "streak": 30 - i * 2,
+            "last_earned_at": 1_756_000_000 - i * 3600,
+        }
+        for i in range(9)
+    ],
+    "engagement": {
+        "active_members": 87, "earners_7d": 54, "earner_ratio": 0.62,
+        "spenders_7d": 19, "quest_claims_7d": 41,
+        "quest_approval_rate_30d": 0.88, "hoard_weeks": 3.4,
+    },
+    "transfers_top": [
+        {
+            "from_id": str(1469491362444480666 + i),
+            "to_id": str(1469491362444480666 + i + 1),
+            "total": 900 - i * 80,
+        }
+        for i in range(5)
+    ],
+    "burn_top": [
+        {
+            "user_id": str(1469491362444480666 + i),
+            "burned": 4200 - i * 300,
+            "share": round(0.22 - i * 0.02, 2),
+            "top_sink": "rental" if i % 2 == 0 else "quest_reroll",
+        }
+        for i in range(6)
+    ],
+    "affordability": {
+        "price_role_color": 2.1, "price_role_name": 3.4, "price_role_icon": 5.0,
+        "price_role_preset": 1.8, "price_role_gradient": 6.2,
+        "price_role_holographic": 8.0, "price_streak_shield": 0.9,
+        "price_voice_style": 1.2, "price_quest_reroll": 0.5,
+    },
+}
+
+
+def test_economy_stats_tabs_fit_on_phone(dashboard, browser):
+    """Economy Statistics: Income, Spending, and above all Members.
+
+    Members holds a 9-column sortable table (MEMBER_COLS) — the widest single
+    thing this page renders — and it only exists once its tab is opened.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/economy/stats*",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_ECON_STATS_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/economy-stats")
+        page.wait_for_selector('[data-tab="overview"]', timeout=15_000)
+        page.wait_for_selector('[data-summary] .stat', timeout=5000)
+
+        _tab_fits(page, "income", "Economy Stats Income tab")
+        _tab_fits(page, "spending", "Economy Stats Spending tab")
+
+        _click_tab(page, "members")
+        cols = page.eval_on_selector_all(
+            '[data-pane="members"] table.data-table thead th', "els => els.length"
+        )
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    assert cols == 9, (
+        f"expected the panel's 9 MEMBER_COLS, got {cols} — did the column "
+        "list or the stub shape drift?"
+    )
+    _assert_fits(res, "Economy Stats Members tab (9-column table)")
+
+
+# ── chat-revive: Channels / Question Bank / Scoreboard ───────────────────────
+#
+# Settings is the default tab; the other three are real DB-backed fetches (no
+# gateway dependency), but the sweep's DB starts empty, so Channels has no
+# rows, the Bank has no questions, and the Scoreboard shows "No revives yet" —
+# none of it is the shape a lived-in server actually renders. Stubbed so each
+# tab gets real width: 4 configured channels (8 columns of dials + a 4-button
+# action cell), 9 long questions in the Bank, and a populated Scoreboard.
+_CHAT_REVIVE_OVERVIEW_STUB = {
+    "config": {
+        "guild_id": "123", "enabled": True, "role_id": "1469491362444480777",
+        "quiet_start": 0, "quiet_end": 8, "daily_budget": 3,
+        "guild_gap_minutes": 90, "flourish_enabled": True,
+        "ping_max_per_day": 3, "ping_cooldown_minutes": 60,
+        "rhythm_max_age_seconds": 21600.0,
+    },
+    "channels": [
+        {
+            "guild_id": "123",
+            "channel_id": str(1469491362444480666 + i),
+            "enabled": True,
+            "categories": ["deep", "spicy"] if i % 2 else [],
+            "ping_enabled": i % 2 == 0,
+            "role_id_override": str(1469491362444480777 + i) if i == 1 else None,
+            "rest_hours": 8.0 + i,
+            "fire_multiplier": 1.0,
+        }
+        for i in range(4)
+    ],
+    "bank_size": 9,
+    "categories": ["general", "deep", "spicy", "icebreaker", "games"],
+}
+
+_CHAT_REVIVE_QUESTIONS_STUB = {
+    "questions": [
+        {
+            "id": i + 1,
+            "category": ["general", "deep", "spicy", "icebreaker", "games"][i % 5],
+            "nsfw": i % 4 == 0,
+            "active": i != 2,  # one retired row, to size that column too
+            "text": (
+                f"A fairly long conversation-starter question number {i + 1}, "
+                "with enough words in it to actually wrap across the full "
+                "width of a phone screen and back again"
+            ),
+            "use_count": 40 - i * 3,
+        }
+        for i in range(9)
+    ],
+}
+
+_CHAT_REVIVE_STATS_STUB = {
+    "total": 214, "week_revives": 9, "measured": 180, "successes": 132,
+    "channels": [
+        {
+            "channel_id": str(1469491362444480666 + i),
+            "revives": 20 - i * 2, "successes": 15 - i, "measured": 18 - i,
+        }
+        for i in range(6)
+    ],
+    "top_questions": [
+        {
+            "question_id": i + 1,
+            "text": f"Carrying-the-team long question example number {i + 1} with plenty of words",
+            "successes": 30 - i * 2, "uses": 34 - i * 2,
+        }
+        for i in range(5)
+    ],
+    "dud_questions": [
+        {
+            "question_id": 90 + i,
+            "text": f"Dead-weight question candidate {i + 1}, with long enough text to check wrapping",
+            "successes": 0, "uses": 12 - i,
+        }
+        for i in range(3)
+    ],
+}
+
+
+def test_chat_revive_tabs_fit_on_phone(dashboard, browser):
+    """Chat Revive: Channels, Question Bank, and Scoreboard, all populated.
+
+    Settings is the default tab reached by the plain sweep; the other three
+    are real DB-backed fetches the sweep's empty DB never exercises with data.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/chat-revive/overview",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_CHAT_REVIVE_OVERVIEW_STUB),
+            ),
+        )
+        page.route(
+            "**/api/chat-revive/questions*",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_CHAT_REVIVE_QUESTIONS_STUB),
+            ),
+        )
+        page.route(
+            "**/api/chat-revive/stats",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_CHAT_REVIVE_STATS_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/chat-revive")
+        page.wait_for_selector('[data-tab="settings"]', timeout=15_000)
+        page.wait_for_selector('[data-pane="settings"] [data-save-settings]', timeout=5000)
+
+        _tab_fits(page, "channels", "Chat Revive Channels tab")
+        channel_rows = page.eval_on_selector_all(
+            '[data-pane="channels"] tr[data-channel-id]', "els => els.length"
+        )
+
+        _tab_fits(page, "bank", "Chat Revive Question Bank tab")
+        bank_rows = page.eval_on_selector_all(
+            '[data-pane="bank"] tbody tr', "els => els.length"
+        )
+
+        _tab_fits(page, "stats", "Chat Revive Scoreboard tab")
+    finally:
+        context.close()
+    assert channel_rows == 4, (
+        f"expected 4 stub channel rows, got {channel_rows} — did the "
+        "overview stub shape drift?"
+    )
+    assert bank_rows == 9, (
+        f"expected 9 stub question rows, got {bank_rows} — did the "
+        "questions stub shape drift?"
+    )
+
+
+# ── health-heatmap: per-channel heatmap tabs ─────────────────────────────────
+#
+# The per-channel grids only render — as tabs, plural — once the whole-server
+# grid has data; the sweep's empty DB means the panel never gets past its
+# "No messages in the last 30 days" empty state, so both the tabbing *and*
+# every heatmap it holds are invisible to it. Six channels, two with long
+# names, so the tab strip itself is part of what gets audited.
+_HEATMAP_CHANNEL_NAMES = [
+    "general", "voice-text", "off-topic",
+    "a-fairly-long-channel-name-for-testing-tab-wrap",
+    "🎮-games",
+    "another-very-long-channel-name-to-stress-the-tab-strip",
+]
+
+
+def _hm_grid(offset=0):
+    return [[float((d * 7 + h * 3 + offset) % 19) for h in range(24)] for d in range(7)]
+
+
+_HEATMAP_STUB = {
+    "grid": _hm_grid(),
+    "peak_slot": "Sat 9p",
+    "peak_value": 42,
+    "quiet_slot": "Tue 4a",
+    "quiet_value": 0,
+    "dead_hours": 12,
+    "per_channel": [
+        {
+            "channel_id": str(1469491362444480666 + i),
+            "channel_name": name,
+            "grid": _hm_grid(offset=i * 3),
+        }
+        for i, name in enumerate(_HEATMAP_CHANNEL_NAMES)
+    ],
+}
+
+
+def test_health_heatmap_channel_tabs_fit_on_phone(dashboard, browser):
+    """Per-channel heatmaps, including a couple with long channel names.
+
+    Populated with data because the whole panel — tabs included — only
+    renders past its empty state once the server-wide grid has messages in
+    it, which the sweep's fresh DB never has.
+    """
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/health/heatmap*",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(_HEATMAP_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/health-heatmap")
+        page.wait_for_selector("[data-channel-tabs] [data-tab]", timeout=15_000)
+        tab_count = page.eval_on_selector_all(
+            "[data-channel-tabs] [data-tab]", "els => els.length"
+        )
+        # The first channel's grid is the tab strip's own default — already
+        # reachable without a click, but never populated under the sweep's
+        # empty DB, so it is worth auditing here too.
+        _settle(page)
+        res_default = page.evaluate(AUDIT_JS, CLIP_SLOP)
+
+        long_name_key = str(1469491362444480666 + 3)  # the first long name
+        last_key = str(1469491362444480666 + len(_HEATMAP_CHANNEL_NAMES) - 1)
+        _tab_fits(page, long_name_key, "Health Heatmap channel tab (long name)")
+        _tab_fits(page, last_key, "Health Heatmap last channel tab")
+    finally:
+        context.close()
+    assert tab_count == len(_HEATMAP_CHANNEL_NAMES), (
+        f"expected a tab per stub channel ({len(_HEATMAP_CHANNEL_NAMES)}), "
+        f"got {tab_count} — did the /api/health/heatmap stub shape drift?"
+    )
+    _assert_fits(res_default, "Health Heatmap default channel tab")
+
+
+# ── the four remaining panels: click every non-default tab, no stub needed ──
+#
+# These tabs' panes render straight off the (empty) test database — no
+# gateway data required to reach real DOM, just the click. A `pytest.param`
+# row apiece (CLAUDE.md's preference over near-identical test functions) since
+# the scenario is identical: navigate, click each non-default tab, audit.
+_SECONDARY_TAB_PANELS = [
+    pytest.param(
+        "economy-bank-manager", ["rentals", "ledger"],
+        id="economy-bank-manager",
+    ),
+    pytest.param(
+        "economy-quests", ["board", "author"],
+        id="economy-quests",
+    ),
+    pytest.param(
+        # The nested Color Palette sub-tabs (Colors is that widget's own
+        # default, and — being the panel's very first section — is already
+        # reachable without a click, so it's the plain sweep's job).
+        "economy-sinks", ["swatches", "sync", "showroom"],
+        id="economy-sinks",
+    ),
+    pytest.param(
+        "music-playlist", ["window", "queue", "history"],
+        id="music-playlist",
+    ),
+]
+
+
+@pytest.mark.parametrize("panel_id, tab_keys", _SECONDARY_TAB_PANELS)
+def test_secondary_tabs_fit_on_phone(dashboard, browser, panel_id, tab_keys):
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        _goto_panel(page, f"{dashboard.base}/#/{panel_id}")
+        page.wait_for_selector(f'[data-tab="{tab_keys[0]}"]', timeout=15_000)
+        for key in tab_keys:
+            _tab_fits(page, key, f"{panel_id} — {key} tab")
+    finally:
+        context.close()

@@ -752,16 +752,37 @@ export function mountMemberMultiPicker(slotEl, members, values, opts = {}) {
   return _hydrateSavedMembers(fs, options, _normalizeIds(values));
 }
 
+// A deleted channel/role is absent from the meta list forever — Discord has
+// forgotten it too, so no retry or reload brings a name back the way a
+// dangling *saved* id elsewhere in this file might resolve once the meta
+// fetch that failed succeeds. Say so in plain language instead of handing
+// back the bare snowflake (S3): a moderator reading an audit row could not
+// tell "deleted channel" from "some unrelated number" apart from a raw id,
+// and a `(disabled)`/`(none)`-shaped label would be actively misleading —
+// nobody chose to turn this off, it went away. The id stays in the text so
+// two different deleted channels are still distinguishable for forensics.
+// Same "⚠ Missing <kind> (id …)" wording as _danglingOption's <select>
+// equivalent just above, so the dashboard uses one visual language for "this
+// stored id doesn't resolve" everywhere it comes up.
+//
+// Both stay plain strings, same as the resolved-name case: callers pass the
+// result through esc() themselves, or interpolate it straight into HTML
+// (docs.js, role-menus.js), so this must never contain markup. Nothing reads
+// this string back to make a decision — every caller (grepped) only ever
+// displays it — so returning prose here instead of the bare id does not
+// change any comparison or link-building behavior.
 export function channelName(channels, id) {
   if (!id || id === "0") return "(disabled)";
   const ch = channels.find((c) => c.id === id);
-  return ch ? `#${ch.name}` : id;
+  if (ch) return `#${ch.name}`;
+  return `⚠ Missing channel (id ${id})`;
 }
 
 export function roleName(roles, id) {
   if (!id || id === "0") return "(none)";
   const r = roles.find((x) => x.id === id);
-  return r ? `@${r.name}` : id;
+  if (r) return `@${r.name}`;
+  return `⚠ Missing role (id ${id})`;
 }
 
 export function channelSelect(channels, selected, { allowNone = true } = {}) {

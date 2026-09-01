@@ -1,10 +1,20 @@
 // Chat Revive — the feature's entire management surface (no slash commands).
 // Settings, per-channel dials, the question bank, and the scoreboard, plus
 // the two Discord-side actions: "fire now" and posting the opt-in button.
+//
+// Laid out as tabs (mountTabs, see tabs.js) so the four sections — each a
+// fair amount of content on its own — don't all have to be scrolled past to
+// reach the one you want. Each tab loads its own data independently the
+// first time it's opened, same as config-bios.js (the reference caller);
+// there's no cross-tab live refresh, so an action in one tab (saving
+// settings, firing a revive) updates its own tab and lets an already-open
+// sibling tab go stale until it's next (re)opened — the page's Refresh
+// button is the escape hatch that resets every tab's load state at once.
 import { api, apiPost, apiPut, apiDelete, esc } from "../api.js";
-import { loadChannels, loadRoles, guardForm, metaLoadFailed, mountAsync } from "../config-helpers.js";
+import { loadChannels, loadRoles, guardForm, metaLoadFailed } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
 import { confirmDialog, toast } from "../ui.js";
+import { mountTabs } from "../tabs.js";
 
 let channels = [];   // guild text channels [{id,name}]
 let roles = [];      // guild roles [{id,name}]
@@ -39,21 +49,7 @@ function flash(el, text, isError) {
   if (!isError) setTimeout(() => { el.innerHTML = ""; }, 4000);
 }
 
-export function mount(container) {
-  container.innerHTML = `<div class="panel">${renderLoading("Loading Chat Revive…")}</div>`;
-  return mountAsync(container, async () => {
-    [channels, roles] = await Promise.all([
-      loadChannels().catch(() => []),
-      loadRoles().catch(() => []),
-    ]);
-    render(container);
-    if (metaLoadFailed()) {
-      toast("Couldn’t load the channel or role list — reload before saving.", "error");
-    }
-  }, { errorMsg: "Couldn’t load the chat revive settings." });
-}
-
-function render(container) {
+function buildPanel(container, initialTab) {
   container.innerHTML = `
     <div class="panel">
       <header style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
@@ -63,55 +59,57 @@ function render(container) {
         </div>
         <button class="btn" data-refresh>Refresh</button>
       </header>
-
-      <section class="card">
-        <div class="section-label">Settings</div>
-        <div data-settings>${renderLoading("Loading settings…")}</div>
-        <div data-settings-status></div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Channels</div>
-        <div class="field-hint">Chat Revive only ever posts in the channels listed here. Choose Check on any row for a plain-language answer to “would it fire right now, and why not?”</div>
-        <div data-channels>${renderLoading("Loading channels…")}</div>
-        <div data-check-output></div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Question Bank</div>
-        <div data-bank>${renderLoading("Loading the question bank…")}</div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Scoreboard</div>
-        <div data-stats>${renderLoading("Loading the scoreboard…")}</div>
-      </section>
+      <div data-tabs></div>
     </div>`;
 
-  container.querySelector("[data-refresh]").addEventListener("click", () => refresh(container));
-  refresh(container);
+  let activeTab = initialTab;
+  const handle = mountTabs(container.querySelector("[data-tabs]"), [
+    { key: "settings", label: "Settings", render: renderSettingsTab,
+      errorMsg: "Couldn’t load the chat revive settings." },
+    { key: "channels", label: "Channels", render: renderChannelsTab,
+      errorMsg: "Couldn’t load the channels." },
+    { key: "bank", label: "Question Bank", render: renderBankTab,
+      errorMsg: "Couldn’t load the question bank." },
+    { key: "stats", label: "Scoreboard", render: renderStatsTab,
+      errorMsg: "Couldn’t load the scoreboard." },
+  ], {
+    ariaLabel: "Chat Revive sections",
+    initial: initialTab,
+    onShow: (key) => { activeTab = key; },
+  });
+
+  // The one whole-page control this reorg keeps: a clean, fully fresh view
+  // of everything, not just the tab you're on. Tearing the strip down and
+  // rebuilding it resets every tab's lazy-load state, so each re-fetches the
+  // next time it's opened — the same "start over" the old single-page
+  // refresh gave, minus re-fetching tabs nobody's looking at right now.
+  container.querySelector("[data-refresh]").addEventListener("click", () => {
+    handle.unmount();
+    buildPanel(container, activeTab);
+  });
+
+  return handle;
 }
 
-async function refresh(container) {
-  let overview;
-  try {
-    overview = await api("/api/chat-revive/overview");
-  } catch (err) {
-    const msg = renderError(`Couldn’t load Chat Revive — try again. (${err.message})`);
-    container.querySelector("[data-settings]").innerHTML = msg;
-    container.querySelector("[data-channels]").innerHTML = "";
-    container.querySelector("[data-bank]").innerHTML = "";
-    container.querySelector("[data-stats]").innerHTML = "";
-    return;
+export function mount(container) {
+  return buildPanel(container, "settings");
+}
+
+// ── settings tab ─────────────────────────────────────────────────────
+
+async function renderSettingsTab(pane) {
+  pane.innerHTML = `
+    <div data-settings>${renderLoading("Loading settings…")}</div>
+    <div data-settings-status></div>`;
+  const [ch, rl] = await Promise.all([loadChannels(), loadRoles()]);
+  channels = ch;
+  roles = rl;
+  if (metaLoadFailed()) {
+    toast("Couldn’t load the channel or role list — reload before saving.", "error");
   }
-  categories = overview.categories || [];
-  renderSettings(container, overview);
-  renderChannels(container, overview.channels || []);
-  renderBank(container);
-  renderStats(container);
+  const overview = await api("/api/chat-revive/overview");
+  renderSettings(pane, overview);
 }
-
-// ── settings ─────────────────────────────────────────────────────────
 
 function renderSettings(container, overview) {
   const cfg = overview.config;
@@ -182,7 +180,11 @@ function renderSettings(container, overview) {
     try {
       const res = await apiPut("/api/chat-revive/config", body);
       flash(status, res.seeded ? `Saved — seeded ${res.seeded} starter questions.` : "Saved.");
-      refresh(container);
+      // Re-render this tab from a fresh fetch (picks up the seeded-count hint
+      // and echoes back what actually saved) without the channel/role lists,
+      // which a settings save can't change — same scope the old whole-page
+      // refresh had for this section.
+      renderSettings(container, await api("/api/chat-revive/overview"));
     } catch (err) {
       flash(status, `Couldn’t save — ${err.message}`, true);
     }
@@ -201,7 +203,20 @@ function renderSettings(container, overview) {
   guardForm(host);
 }
 
-// ── channels ─────────────────────────────────────────────────────────
+// ── channels tab ─────────────────────────────────────────────────────
+
+async function renderChannelsTab(pane) {
+  pane.innerHTML = `
+    <div class="field-hint" style="margin-bottom:8px;">Chat Revive only ever posts in the channels listed here. Choose Check on any row for a plain-language answer to “would it fire right now, and why not?”</div>
+    <div data-channels>${renderLoading("Loading channels…")}</div>
+    <div data-check-output></div>`;
+  const [ch, rl] = await Promise.all([loadChannels(), loadRoles()]);
+  channels = ch;
+  roles = rl;
+  const overview = await api("/api/chat-revive/overview");
+  categories = overview.categories || [];
+  renderChannels(pane, overview.channels || []);
+}
 
 function channelRow(c) {
   return `
@@ -254,7 +269,8 @@ function renderChannels(container, rows) {
     if (!sel.value) return;
     try {
       await apiPut(`/api/chat-revive/channels/${sel.value}`, {});
-      refresh(container);
+      const overview = await api("/api/chat-revive/overview");
+      renderChannels(container, overview.channels || []);
     } catch (err) {
       flash(status(), `Couldn’t enable that channel — ${err.message}`, true);
     }
@@ -286,7 +302,8 @@ function renderChannels(container, rows) {
         } else if (act === "fire") {
           const r = await apiPost("/api/chat-revive/fire", { channel_id: cid });
           flash(status(), `Revived ${chanName(cid)}${r.pinged ? " with a ping" : ""}: ${r.question}`);
-          renderStats(container);
+          // Scoreboard tab picks this up next time it's (re)opened — tabs
+          // are independent, no live push into an already-loaded sibling.
         } else if (act === "remove") {
           const ok = await confirmDialog(
             `Stop reviving ${chanName(cid)}? Its per-channel settings are discarded; the question bank is untouched.`,
@@ -294,7 +311,8 @@ function renderChannels(container, rows) {
           );
           if (!ok) return;
           await apiDelete(`/api/chat-revive/channels/${cid}`);
-          refresh(container);
+          const overview = await api("/api/chat-revive/overview");
+          renderChannels(container, overview.channels || []);
         }
       } catch (err) {
         flash(status(), `That didn’t work — ${err.message}`, true);
@@ -323,7 +341,14 @@ function renderCheck(cid, r) {
     </div>`;
 }
 
-// ── question bank ────────────────────────────────────────────────────
+// ── question bank tab ────────────────────────────────────────────────
+
+async function renderBankTab(pane) {
+  pane.innerHTML = `<div data-bank>${renderLoading("Loading the question bank…")}</div>`;
+  const overview = await api("/api/chat-revive/overview");
+  categories = overview.categories || [];
+  await renderBank(pane);
+}
 
 async function renderBank(container) {
   const host = container.querySelector("[data-bank]");
@@ -427,7 +452,13 @@ async function renderBank(container) {
   });
 }
 
-// ── scoreboard ───────────────────────────────────────────────────────
+// ── scoreboard tab ───────────────────────────────────────────────────
+
+async function renderStatsTab(pane) {
+  pane.innerHTML = `<div data-stats>${renderLoading("Loading the scoreboard…")}</div>`;
+  channels = await loadChannels();
+  await renderStats(pane);
+}
 
 async function renderStats(container) {
   const host = container.querySelector("[data-stats]");

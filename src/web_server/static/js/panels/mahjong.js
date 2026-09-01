@@ -172,7 +172,7 @@ export function mount(container) {
           </div>
         </form>
 
-        <div class="card" style="margin-top:16px;">
+        <div class="card">
           <div class="section-label">Meadow Cards</div>
           <div data-cards></div>
           <details style="margin-top:12px;">
@@ -189,15 +189,15 @@ export function mount(container) {
           </details>
         </div>
 
-        <div class="card" style="margin-top:16px;">
+        <div class="card">
           <div class="section-label">Live Tables</div>
           <div data-tables></div>
         </div>
-        <div class="card" style="margin-top:16px;">
+        <div class="card">
           <div class="section-label">Recent Hands</div>
           <div data-results></div>
         </div>
-        <div class="card" style="margin-top:16px;">
+        <div class="card">
           <div class="section-label">Player Aggregates</div>
           <div data-aggregates></div>
         </div>

@@ -35,7 +35,7 @@ export function mount(container) {
   container.innerHTML = `
     <div class="panel">
       <header>
-        <h2>Overview &amp; Logs</h2>
+        <h2>Play Statistics</h2>
         <div class="subtitle">Game session statistics and history.</div>
       </header>
 
