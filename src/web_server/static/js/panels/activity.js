@@ -3,6 +3,7 @@ import { withLoading } from "../report-helpers.js";
 import {
   makeBarChart, makeOverlayChart, renderChartLegend, renderChartTable,
   CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, CHART_SURFACE, ROLE_COLORS,
+  SERIES_OVERFLOW,
 } from "../charts.js";
 import { mountTimeSlider } from "../slider.js";
 import { renderEmpty, renderError } from "../states.js";
@@ -73,11 +74,13 @@ const MODES = [
 const DEFAULT_EXCLUDED_CHANNEL_NAMES = ["games", "cat-bot"];
 
 const SOURCE_LABELS = {
-  text:        "Messages",
-  reply:       "Reply bonus",
-  image_react: "Image reaction",
-  voice:       "Voice",
-  grant:       "Manual grant",
+  text:           "Messages",
+  reply:          "Reply bonus",
+  image_react:    "Image reaction",
+  voice:          "Voice",
+  quest:          "Quests",
+  reaction_given: "Reactions given",
+  grant:          "Manual grant",
 };
 // XP-source series colors, drawn from the shared categorical palette so the
 // panel reads as part of the same chart system as every other report.
@@ -91,14 +94,22 @@ const SOURCE_LABELS = {
 // legal is the 2px surface gap on every segment — the secondary encoding the
 // 6-8 band requires — plus the legend and table. The gap is load-bearing, not
 // decorative; do not remove it on the grounds that the colours look distinct.
+//
+// All six slots are spoken for. `quest` and `reaction_given` began paying XP in
+// July 2026 and had been falling through to the fallback ever since — both the
+// same grey, so the two of them were indistinguishable from each other and from
+// everything else unnamed, on a chart where they are now the 3rd and 5th largest
+// sources. They take the last two slots; `grant` (41 events in the guild's whole
+// history) is the tail that folds into "Other" under the rule above.
 const SOURCE_COLORS = {
-  text:        ROLE_COLORS[0],
-  reply:       ROLE_COLORS[1],
-  image_react: ROLE_COLORS[2],
-  voice:       ROLE_COLORS[3],
-  grant:       ROLE_COLORS[4],
+  text:           ROLE_COLORS[0],
+  reply:          ROLE_COLORS[1],
+  image_react:    ROLE_COLORS[2],
+  voice:          ROLE_COLORS[3],
+  quest:          ROLE_COLORS[4],
+  reaction_given: ROLE_COLORS[5],
 };
-const FALLBACK_SOURCE_COLOR = ROLE_COLORS[5];
+const FALLBACK_SOURCE_COLOR = SERIES_OVERFLOW;
 
 export function mount(container, initialParams) {
   container.innerHTML = `

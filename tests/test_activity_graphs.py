@@ -52,6 +52,10 @@ from bot_modules.services.activity_graphs import (
     render_nsfw_gender_chart,
     render_nsfw_gender_line_chart,
     render_overlay_panel,
+    render_mod_stats_panel,
+    query_xp_all_time_with_breakdown,
+    PresenceSeries,
+    StackedBarChart,
     smooth_series,
 )
 from tests.db_template import migrated_db
@@ -1421,3 +1425,137 @@ def test_render_overlay_panel_survives_a_day_with_no_data_at_all():
 def test_render_overlay_panel_needs_a_chart():
     with pytest.raises(ValueError):
         render_overlay_panel([])
+
+
+# ── The mod stats panel: all-time XP and its three-row renderer ───────
+
+
+def _seed_xp_event(conn, *, user, source, amount, created_at, guild=1):
+    conn.execute(
+        "INSERT INTO xp_events (guild_id, user_id, source, amount, created_at)"
+        " VALUES (?,?,?,?,?)",
+        (guild, user, source, amount, created_at),
+    )
+
+
+def test_all_time_breakdown_buckets_from_the_first_event(db_conn):
+    """The window does not roll: it starts at the guild's first XP event.
+
+    Every other graph here is anchored to now and a fixed number of buckets;
+    this one grows with the server, so the bucket count is a fact about the
+    data rather than a constant.
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    for week in range(4):
+        _seed_xp_event(
+            db_conn, user=1, source="text", amount=10.0,
+            created_at=now - (3 - week) * 7 * 86400 - 3600,
+        )
+
+    labels, totals, by_source, _starts = query_xp_all_time_with_breakdown(
+        db_conn, 1
+    )
+
+    assert len(labels) == len(totals) == 4
+    assert by_source["text"] == [10.0, 10.0, 10.0, 10.0]
+
+
+def test_all_time_breakdown_reports_where_each_source_started(db_conn):
+    """The chart's whole honesty rests on these.
+
+    A stack that grows two new colours in one week is the bot gaining XP
+    sources, not the community getting busier — and without a rule marking
+    where that happened the reader reads it as a surge.
+    """
+    now = datetime.now(timezone.utc).timestamp()
+    for week in range(4):
+        at = now - (3 - week) * 7 * 86400 - 3600
+        _seed_xp_event(db_conn, user=1, source="text", amount=10.0, created_at=at)
+        if week >= 2:
+            _seed_xp_event(db_conn, user=1, source="quest", amount=5.0, created_at=at)
+
+    _labels, _totals, _by_source, starts = (
+        query_xp_all_time_with_breakdown(db_conn, 1)
+    )
+
+    assert starts["text"] == 0
+    assert starts["quest"] == 2
+
+
+def test_all_time_breakdown_on_an_empty_guild(db_conn):
+    assert query_xp_all_time_with_breakdown(db_conn, 1) == ([], [], {}, {})
+
+
+def _stack(values):
+    return StackedBarChart(
+        title="XP", labels=[str(i) for i in range(len(values))],
+        series=[("text", values)],
+    )
+
+
+def _overlay_stub():
+    return OverlayChart(
+        title="Today", labels=[f"{h}" for h in range(24)],
+        current=[1.0] * 24, band_low=[], band_mid=[], band_high=[],
+    )
+
+
+def test_render_mod_stats_panel_returns_png():
+    out = render_mod_stats_panel(
+        _overlay_stub(),
+        PresenceSeries(values=[1] * 24),
+        [_stack([1.0, 2.0, 3.0])],
+    )
+    assert out[:8] == PNG_MAGIC
+
+
+def test_render_mod_stats_panel_without_a_presence_row():
+    out = render_mod_stats_panel(_overlay_stub(), None, [_stack([1.0, 2.0])])
+    assert out[:8] == PNG_MAGIC
+
+
+def test_render_mod_stats_panel_scales_each_axis_to_its_data():
+    """Regression: every axis came out pinned to matplotlib's empty 0-1 default.
+
+    The shared axis dressing called ``set_ylim(bottom=0)`` before anything was
+    drawn, which switches autoscaling *off* — so bars of 3 and bars of 30,000
+    both rendered as full-height blocks against an axis labelled 0.0 to 1.0,
+    and only the first series of a stack was visible at all. Two charts three
+    orders of magnitude apart must not come out as the same picture.
+    """
+    small = render_mod_stats_panel(
+        _overlay_stub(), None, [_stack([1.0, 2.0, 3.0])]
+    )
+    large = render_mod_stats_panel(
+        _overlay_stub(), None, [_stack([10000.0, 20000.0, 30000.0])]
+    )
+
+    assert small != large
+
+
+def test_presence_peak_ignores_the_unlived_hours():
+    """``None`` is "not yet", not a value the peak should trip over."""
+    assert PresenceSeries(values=[1, 4, 2] + [None] * 21).peak == 4
+    assert PresenceSeries(values=[None] * 24).peak == 0
+
+
+def test_presence_line_changes_what_is_drawn():
+    """The mods line shares the overlay's axes, so nothing about the figure's
+    shape would reveal it going missing — pin that it is actually drawn."""
+    without = render_mod_stats_panel(_overlay_stub(), None, [_stack([1.0, 2.0])])
+    with_mods = render_mod_stats_panel(
+        _overlay_stub(), PresenceSeries(values=[2] * 24), [_stack([1.0, 2.0])]
+    )
+
+    assert without != with_mods
+
+
+def test_unconfigured_presence_draws_no_line():
+    """No moderator role is a note, not a flat line at zero — the two say very
+    different things to whoever reads the panel."""
+    silent = render_mod_stats_panel(
+        _overlay_stub(),
+        PresenceSeries(values=[None] * 24, empty_note="No moderator role configured."),
+        [_stack([1.0, 2.0])],
+    )
+    assert silent[:8] == PNG_MAGIC

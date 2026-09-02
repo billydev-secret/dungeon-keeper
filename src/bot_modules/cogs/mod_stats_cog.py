@@ -1,9 +1,11 @@
 """The moderator stats panel — server activity, sticky in a mod channel.
 
-A read-only board: today's traffic drawn against the last 8 days and the last
-30, with a short volume-and-pace block underneath. It is a *report* delivered
-where the mod team already is, on the theory that a chart nobody opens the
-dashboard for is a chart nobody reads.
+A read-only board in four rows: today's traffic against the last 8 *matching
+weekdays*, who was moderating during those same hours, and where the XP came
+from over 30 days and over the guild's whole life — with a short
+volume-and-pace block above them. It is a *report* delivered where the mod team
+already is, on the theory that a chart nobody opens the dashboard for is a
+chart nobody reads.
 
 Everything configurable about it lives on the dashboard (Reports → Activity),
 per CLAUDE.md: there is no slash command, and the only setting is which channel
@@ -33,11 +35,13 @@ from bot_modules.core.sticky import PanelContent, PanelImage, StickyPanel
 from bot_modules.services.activity_graphs import (
     OverlayChart,
     OverlayResult,
-    render_overlay_panel,
+    PresenceSeries,
+    StackedBarChart,
+    render_mod_stats_panel,
 )
 from bot_modules.services.mod_stats_service import (
-    FAR_WINDOW_DAYS,
-    NEAR_WINDOW_DAYS,
+    SAME_WEEKDAY_COUNT,
+    XP_STACK_DAYS,
     ModStatsData,
     build_mod_stats,
     render_description,
@@ -127,7 +131,34 @@ class ModStatsCog(commands.Cog):
 
     # ── the panel itself ─────────────────────────────────────────────────
 
-    def _read_data(self, guild_id: int) -> ModStatsData:
+    def _mod_ids(self, guild: discord.Guild) -> set[int]:
+        """Who counts as a moderator, for the presence row.
+
+        The guild's configured ``mod_role_ids`` **and** ``admin_role_ids``: an
+        admin reading a channel is watching it, and a server whose owners are
+        the only staff would otherwise show an empty presence row forever.
+
+        This is a **narrower** circle than the Mod Coverage report's, which
+        counts anyone holding Manage Messages. The two will not agree, and that
+        is the intended reading: this panel answers "was one of the people we
+        appointed around?", not "could anyone present have deleted a message?".
+        Role membership is read live from Discord rather than from
+        ``role_events``, which is an append-only log of grants and so cannot
+        answer who holds a role *now*.
+        """
+        config = self.bot.ctx.guild_config(guild.id)
+        wanted = set(config.mod_role_ids) | set(config.admin_role_ids)
+        if not wanted:
+            return set()
+        return {
+            member.id
+            for role_id in wanted
+            if (role := guild.get_role(role_id)) is not None
+            for member in role.members
+            if not member.bot
+        }
+
+    def _read_data(self, guild_id: int, mod_ids: set[int]) -> ModStatsData:
         with self.bot.ctx.open_db() as conn:
             tz = get_tz_offset_hours(conn, guild_id)
             # Bots excluded, matching the Activity report's own default. Read
@@ -142,6 +173,7 @@ class ModStatsCog(commands.Cog):
                 guild_id,
                 utc_offset_hours=tz,
                 exclude_user_ids=bot_ids or None,
+                mod_ids=mod_ids,
             )
 
     def _render(self, guild_id: int, data: ModStatsData) -> bytes:
@@ -149,17 +181,40 @@ class ModStatsCog(commands.Cog):
         cached = self._renders.get(guild_id)
         if cached is not None and cached[0] == signature:
             return cached[1]
-        png = render_overlay_panel(
+        weekday = data.weekday
+        png = render_mod_stats_panel(
+            _chart(
+                f"Today vs the last {SAME_WEEKDAY_COUNT} {weekday}s",
+                data.near,
+                band_label=f"Typical {weekday}",
+            ),
+            PresenceSeries(
+                values=list(data.presence.by_hour),
+                empty_note="No moderator role configured.",
+            ),
             [
-                _chart(f"Today vs the last {NEAR_WINDOW_DAYS} days", data.near),
-                _chart(f"Today vs the last {FAR_WINDOW_DAYS} days", data.far),
-            ]
+                StackedBarChart(
+                    title=f"XP by source, last {XP_STACK_DAYS} days",
+                    labels=data.xp_recent.labels,
+                    series=data.xp_recent.series,
+                ),
+                StackedBarChart(
+                    title="XP by source, all time",
+                    labels=data.xp_all_time.labels,
+                    series=data.xp_all_time.series,
+                    note="Dotted rule = the week a source started paying XP.",
+                    starts=data.xp_all_time.fold_starts,
+                ),
+            ],
         )
         self._renders[guild_id] = (signature, png)
         return png
 
     async def build_panel(self, guild: discord.Guild) -> PanelContent:
-        data = await asyncio.to_thread(self._read_data, guild.id)
+        # Role membership comes off the Discord cache, so it is read on the
+        # event loop and handed to the worker rather than looked up inside it.
+        mod_ids = self._mod_ids(guild)
+        data = await asyncio.to_thread(self._read_data, guild.id, mod_ids)
         # Both the SQL and matplotlib are blocking, but they are two threads
         # rather than one: the render is skipped entirely on a cache hit, and
         # bundling them would hold a worker for the query either way.
@@ -248,10 +303,13 @@ class ModStatsCog(commands.Cog):
         await self.panel.on_channel_delete(channel)
 
 
-def _chart(title: str, result: OverlayResult) -> OverlayChart:
+def _chart(
+    title: str, result: OverlayResult, *, band_label: str = "Typical day"
+) -> OverlayChart:
     """One overlay's series, dressed for the renderer."""
     return OverlayChart(
         title=title,
+        band_label=band_label,
         labels=result.labels,
         # current_smooth is empty for a day overlay (OVERLAY_SMOOTH_WINDOW),
         # but read it when it is there so this panel and the dashboard chart
@@ -260,7 +318,7 @@ def _chart(title: str, result: OverlayResult) -> OverlayChart:
         band_low=list(result.band_low),
         band_mid=list(result.band_mid),
         band_high=list(result.band_high),
-        empty_note="Not enough history to compare against yet.",
+        empty_note="Not enough matching weekdays to compare against yet.",
     )
 
 
