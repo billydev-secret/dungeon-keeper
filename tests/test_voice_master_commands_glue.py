@@ -996,7 +996,8 @@ async def test_on_rename_opens_modal(ctx, voice_channel):
 
 
 @pytest.mark.asyncio
-async def test_on_limit_opens_modal(ctx, voice_channel):
+async def test_on_limit_sends_picker(ctx, voice_channel):
+    """Setting a cap opens the ladder, not a box to type a number into."""
     from bot_modules.commands.voice_master_commands import _on_limit
 
     with open_db(ctx.db_path) as conn:
@@ -1005,7 +1006,53 @@ async def test_on_limit_opens_modal(ctx, voice_channel):
     assert row is not None
     inter = _wire_interaction(ctx)
     await _on_limit(inter, voice_channel, row)
-    inter.response.send_modal.assert_awaited_once()
+    inter.response.send_modal.assert_not_awaited()
+    inter.response.send_message.assert_awaited_once()
+    view = inter.response.send_message.await_args.kwargs["view"]
+    assert [c.label for c in view.children] == [
+        "Custom…", "No cap", "2", "4", "6", "10",
+    ]
+    assert inter.response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_limit_preset_button_applies_its_own_value(ctx, voice_channel, monkeypatch):
+    """A rung of the ladder sets that cap; typing is only the Custom… path."""
+    import bot_modules.commands.voice_master_commands as vmc
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER, now=1.0)
+    applied = AsyncMock()
+    monkeypatch.setattr(vmc, "_apply_limit", applied)
+    view = vmc._LimitPickerView(channel_id=CH, owner_id=OWNER)
+    four = next(c for c in view.children if c.label == "4")
+    inter = _wire_interaction(ctx)
+    inter.guild.get_channel = MagicMock(return_value=voice_channel)
+
+    await four.callback(inter)
+
+    assert applied.await_args.kwargs["new_limit"] == 4
+
+
+@pytest.mark.asyncio
+async def test_limit_preset_refuses_a_channel_that_changed_hands(ctx, voice_channel, monkeypatch):
+    """Ownership is re-checked per press — the panel can outlive the claim."""
+    import bot_modules.commands.voice_master_commands as vmc
+
+    with open_db(ctx.db_path) as conn:
+        insert_active_channel(
+            conn, channel_id=CH, guild_id=GUILD, owner_id=OWNER + 1, now=1.0
+        )
+    applied = AsyncMock()
+    monkeypatch.setattr(vmc, "_apply_limit", applied)
+    view = vmc._LimitPickerView(channel_id=CH, owner_id=OWNER)
+    four = next(c for c in view.children if c.label == "4")
+    inter = _wire_interaction(ctx)
+    inter.guild.get_channel = MagicMock(return_value=voice_channel)
+
+    await four.callback(inter)
+
+    applied.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -20,12 +20,13 @@ from bot_modules.core.db_utils import (
     parse_bool,
 )
 from bot_modules.services.birthday_service import (
-    MAX_DAYS as _MAX_DAYS,
     announce_hour as _announce_hour,
     clear_pin as _clear_pin,
     delete_birthday as _delete_birthday,
     get_birthday_preference as _get_birthday_preference,
     mark_announced as _mark_announced,
+    month_choices as _month_choices,
+    parse_birthday_day as _parse_birthday_day,
     pins_before as _pins_before,
     record_pin as _record_pin,
     todays_unannounced as _todays_unannounced,
@@ -266,49 +267,47 @@ async def birthday_loop(bot: discord.Client, db_path: Path) -> None:
 
 
 class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
-    month: discord.ui.TextInput = discord.ui.TextInput(
-        label="Month (1–12)",
-        placeholder="e.g. 7 for July",
-        min_length=1,
-        max_length=2,
-    )
-    day: discord.ui.TextInput = discord.ui.TextInput(
-        label="Day (1–31)",
-        placeholder="e.g. 15",
-        min_length=1,
-        max_length=2,
-    )
-    preference: discord.ui.TextInput = discord.ui.TextInput(
-        label="Birthday request (optional)",
-        placeholder="e.g. Ping me with cake reactions!",
-        required=False,
-        max_length=100,
-    )
+    """Month is picked, day and request are typed.
+
+    Twelve months fit a select comfortably, so the month stopped being a
+    number to type — and the "must be between 1 and 12" error it produced
+    stopped existing. The day stays a text box: 31 values overflow
+    Discord's 25-option select cap, and its valid range depends on which
+    month was chosen anyway.
+    """
 
     def __init__(self, ctx: AppContext) -> None:
         super().__init__()
         self._ctx = ctx
+        self.month: discord.ui.Select = discord.ui.Select(
+            placeholder="Pick your birth month",
+            options=[
+                discord.SelectOption(label=name, value=str(number))
+                for name, number in _month_choices()
+            ],
+        )
+        self.day: discord.ui.TextInput = discord.ui.TextInput(
+            placeholder="e.g. 15", min_length=1, max_length=2
+        )
+        self.preference: discord.ui.TextInput = discord.ui.TextInput(
+            placeholder="e.g. Ping me with cake reactions!",
+            required=False,
+            max_length=100,
+        )
+        self.add_item(discord.ui.Label(text="Month", component=self.month))
+        self.add_item(discord.ui.Label(text="Day (1–31)", component=self.day))
+        self.add_item(
+            discord.ui.Label(
+                text="Birthday request (optional)", component=self.preference
+            )
+        )
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        try:
-            m = int(self.month.value.strip())
-            d = int(self.day.value.strip())
-        except ValueError:
+        m = int(self.month.values[0])
+        d, day_err = _parse_birthday_day(str(self.day.value), m)
+        if day_err is not None or d is None:
             await interaction.response.send_message(
-                "❌ Month and day must be whole numbers.", ephemeral=True
-            )
-            return
-
-        if not (1 <= m <= 12):
-            await interaction.response.send_message(
-                "❌ Month must be between 1 and 12.", ephemeral=True
-            )
-            return
-
-        if not (1 <= d <= _MAX_DAYS[m]):
-            await interaction.response.send_message(
-                f"❌ {calendar.month_name[m]} has at most {_MAX_DAYS[m]} days.",
-                ephemeral=True,
+                day_err or "❌ Day must be a whole number.", ephemeral=True
             )
             return
 

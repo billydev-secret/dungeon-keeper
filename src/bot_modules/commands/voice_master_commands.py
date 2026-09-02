@@ -69,6 +69,7 @@ from bot_modules.voice_master.logic import (
     format_transfer_result,
     panel_group_placeholder,
     panel_metas_for_group,
+    limit_presets,
     parse_limit_input,
     plan_hide_text_grants,
     plan_lock_text_grants,
@@ -1340,7 +1341,38 @@ class _RenameModal(discord.ui.Modal, title="Rename voice channel"):
         await _apply_rename(interaction, channel, row, new_name=self.new_name.value)
 
 
+async def _set_limit_for_owner(
+    interaction: discord.Interaction, channel_id: int, value: int
+) -> None:
+    """Re-check ownership, then apply — shared by the picker and the modal.
+
+    Ownership was already true when the panel opened, but a channel can
+    change hands while the picker sits on screen, so every press pays for
+    its own look-up.
+    """
+    ctx = _ctx_from_interaction(interaction)
+    if ctx is None or interaction.guild is None:
+        return
+    channel = interaction.guild.get_channel(channel_id)
+    if not isinstance(channel, discord.VoiceChannel):
+        await _ephemeral(interaction, "That channel no longer exists.")
+        return
+    _limit_ch_id = channel.id
+
+    def _fetch_limit_row():
+        with ctx.open_db() as conn:
+            return get_active_channel(conn, _limit_ch_id)
+
+    row = await asyncio.to_thread(_fetch_limit_row)
+    if row is None or row.owner_id != interaction.user.id:
+        await _ephemeral(interaction, "You no longer own that channel.")
+        return
+    await _apply_limit(interaction, channel, row, new_limit=value)
+
+
 class _LimitModal(discord.ui.Modal, title="Set user limit"):
+    """The typed path, now reached only through the picker's Custom…."""
+
     new_limit: discord.ui.TextInput = discord.ui.TextInput(
         label="User limit (0–99, 0 = no cap)",
         placeholder="e.g. 5",
@@ -1353,30 +1385,57 @@ class _LimitModal(discord.ui.Modal, title="Set user limit"):
         self._channel_id = channel_id
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
-        ctx = _ctx_from_interaction(interaction)
-        if ctx is None or interaction.guild is None:
-            return
         value, parse_err = parse_limit_input(self.new_limit.value)
         if parse_err is not None or value is None:
             await _ephemeral(
                 interaction, parse_err or "Limit must be a whole number."
             )
             return
-        channel = interaction.guild.get_channel(self._channel_id)
-        if not isinstance(channel, discord.VoiceChannel):
-            await _ephemeral(interaction, "That channel no longer exists.")
-            return
-        _limit_ch_id = channel.id
+        await _set_limit_for_owner(interaction, self._channel_id, value)
 
-        def _fetch_limit_row():
-            with ctx.open_db() as conn:
-                return get_active_channel(conn, _limit_ch_id)
 
-        row = await asyncio.to_thread(_fetch_limit_row)
-        if row is None or row.owner_id != interaction.user.id:
-            await _ephemeral(interaction, "You no longer own that channel.")
-            return
-        await _apply_limit(interaction, channel, row, new_limit=value)
+class _LimitPresetButton(discord.ui.Button):
+    """One rung of the ladder; carries the value it sets."""
+
+    def __init__(self, *, label: str, value: int, channel_id: int) -> None:
+        super().__init__(label=label, style=discord.ButtonStyle.secondary, row=0)
+        self._value = value
+        self._channel_id = channel_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _set_limit_for_owner(interaction, self._channel_id, self._value)
+
+
+class _LimitPickerView(discord.ui.View):
+    """Ephemeral ladder of the limits people actually pick.
+
+    Setting a cap used to cost a modal round-trip to type a number from a
+    range of 100, almost all of which nobody ever wants. The common ones
+    are taps now; Custom… still opens the text box.
+    """
+
+    def __init__(self, *, channel_id: int, owner_id: int) -> None:
+        super().__init__(timeout=120)
+        self._channel_id = channel_id
+        self._owner_id = owner_id
+        for label, value in limit_presets():
+            self.add_item(
+                _LimitPresetButton(
+                    label=label, value=value, channel_id=channel_id
+                )
+            )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self._owner_id:
+            await _ephemeral(interaction, "These buttons aren't for you.")
+            return False
+        return True
+
+    @discord.ui.button(label="Custom…", style=discord.ButtonStyle.secondary, row=1)
+    async def custom(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        await interaction.response.send_modal(_LimitModal(self._channel_id))
 
 
 class _TransferPickerView(discord.ui.View):
@@ -1620,7 +1679,11 @@ async def _on_rename(
 async def _on_limit(
     interaction: discord.Interaction, channel: discord.VoiceChannel, row: ActiveChannel
 ) -> None:
-    await interaction.response.send_modal(_LimitModal(channel.id))
+    await interaction.response.send_message(
+        "How many people can be in here?",
+        view=_LimitPickerView(channel_id=channel.id, owner_id=interaction.user.id),
+        ephemeral=True,
+    )
 
 
 async def _on_invite(

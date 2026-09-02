@@ -214,6 +214,12 @@ Those are correct as modals and should stay.
 **Cost: S each**, independent of the casino work, and both sit in features
 nobody is currently editing.
 
+**Both shipped 2026-09-01.** The birthday month is a **select inside the
+modal** (discord.py 2.7.1 supports one via `ui.Label`, which this audit assumed
+was unavailable), so it costs no extra step and the "must be between 1 and 12"
+branch is gone; the day stays typed because 31 values overflow the select cap
+and its bound depends on the month. The voice limit became the ladder above.
+
 ---
 
 ## Suggested order

@@ -98,7 +98,7 @@ A personal self-disconnect timer: after `hours` (any value >0 up to 24, fraction
 The control panel is an embed plus **three grouped dropdown menus** (not buttons):
 
 - **Access** — the four access states.
-- **Settings** — Rename (modal), Limit (modal), Reset (two-button confirm: "Reset just this channel" vs "Reset channel + my saved profile").
+- **Settings** — Rename (modal), Limit (ephemeral ladder: **No cap / 2 / 4 / 6 / 10**, plus **Custom…** which opens the old typed modal), Reset (two-button confirm: "Reset just this channel" vs "Reset channel + my saved profile"). The ladder and the modal both land on `_set_limit_for_owner`, which re-checks ownership per press — a panel can outlive the claim it was opened under.
 - **Permissions** — Invite and Kick (ephemeral user-picker with two buttons: one-off vs remember), Transfer (select limited to non-bot members currently in the channel).
 
 Menus act on the channel the clicker currently owns; if they don't own one, the bot replies ephemerally "You don't own a voice channel right now — join the Hub to create one." After each pick, the menu resets to its placeholder. The dropdowns are persistent dynamic items and survive restarts.
