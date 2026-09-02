@@ -11,7 +11,7 @@ import { renderSortableTable } from "../table.js";
 // saturated fills of the same hues.
 function scoreColor(score) {
   if (score >= 75) return "var(--green-text)";
-  if (score >= 50) return "var(--yellow)";
+  if (score >= 50) return "var(--yellow-text)";
   return "var(--red-text)";
 }
 

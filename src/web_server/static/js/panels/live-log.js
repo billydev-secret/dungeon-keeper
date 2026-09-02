@@ -47,7 +47,7 @@ export function mount(container) {
 
   const LEVEL_COLORS = {
     "ERROR": "var(--red-text)",
-    "WARNING": "var(--yellow)",
+    "WARNING": "var(--yellow-text)",
     "CRITICAL": "var(--red-text)",
     "DEBUG": "var(--ink-dim)",
   };

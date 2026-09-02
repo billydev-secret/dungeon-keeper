@@ -324,7 +324,7 @@ function render(container, cfg, channels, roles, members) {
         </div>
       </form>
 
-      <div class="card" style="margin-top:16px;">
+      <div class="card">
         <div class="section-label">Post to Discord</div>
         <div class="field-hint" style="margin-bottom:10px;">Re-posting a panel into
           the channel it already occupies refreshes it in place rather than moving it

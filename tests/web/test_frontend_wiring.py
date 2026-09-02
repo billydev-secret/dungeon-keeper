@@ -399,7 +399,6 @@ def test_member_name_columns_never_opt_out_of_escaping():
 # fetch is an error state with a retry, not a spinner that never clears.
 _IIFE_EXEMPT = {
     # secondary loads inside an already-mounted panel, each with its own catch
-    "config-spoiler.js",   # the "recent activity" box (try/catch → .empty)
     "config-ai.js",        # model-status poller
     "message-search.js",   # top-level try
     "grant-audit.js",      # try/catch → statusEl error text

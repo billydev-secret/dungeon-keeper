@@ -2195,7 +2195,7 @@
 
     <p>Each flagged pair is presented as plain-language <strong>evidence chips</strong> — how one-sided it is, whether the other person ever responded, how far below their usual they answered this one person, whether contact <em>increased</em> after they went quiet, how much of the initiator's attention is aimed at them, times they followed them into voice, and any rapid bursts. Where a reading has an innocent explanation, the report says so itself (a small friend circle, contact that's cooling off, mostly-reactions that read as ordinary support, or simply too few approaches to tell either way).</p>
 
-    <p>The bar is set low on purpose, so expect a short list with some thin cases on it rather than a permanently empty one. An empty report reads as "nothing concerning here", and that's a promise a report can only keep if it's capable of firing in the first place.</p>
+    <p>The bar is set low on purpose, so expect a short list with some thin cases on it rather than a permanently empty one — read a thin case as "worth a glance," not a false alarm.</p>
 
     <div class="callout callout-warn">
       <span class="callout-icon">⚠️</span>
@@ -2301,6 +2301,29 @@
       Whether monitoring is on and which channel gets immediate alerts lives on
       <strong>Config → Rules Watch</strong>. The old <code>/rules-watch digest</code>,
       <code>label</code>, <code>stats</code>, and <code>status</code> commands were removed.</p>
+
+    <h3 id="rules-watch-bulk">Bulk Labeling &amp; Keyboard Shortcuts</h3>
+    <p>Each row in the Alert Queue also carries a checkbox, and a toolbar above the list tracks
+      how many are checked. <strong>Select all shown</strong> checks every row in your current
+      view — whatever tier filter and the <strong>Unlabeled Only</strong> toggle you have set —
+      never every event that exists. <strong>Mark violation</strong> and <strong>Mark false
+      positive</strong> stay greyed out until at least one row is checked; clicking either asks
+      you to confirm the exact count and direction first ("Mark 3 events as ❌ False positive?"),
+      then applies that one label to the whole batch. Afterward a toast reports how many were
+      actually labeled, and says so plainly if any were skipped — an id that no longer exists, or
+      belongs to a different server, is left alone rather than labeled. The queue reloads once it's
+      done, so labeled rows drop out of the default Unlabeled Only view.</p>
+
+    <p>A <strong>Keyboard</strong> line stays visible above the queue: <kbd>↓</kbd> / <kbd>↑</kbd>
+      moves to the next or previous event in the list (wrapping at either end) and opens its
+      detail; <kbd>V</kbd> marks the open event a confirmed violation, <kbd>F</kbd> marks it a
+      false positive. Both keys do exactly what clicking the matching button does — reading
+      whatever's typed in the <strong>Correct rule</strong> box and auto-advancing to the next
+      unlabeled event — and the two buttons in the detail pane carry a "Shortcut: V" / "Shortcut:
+      F" tooltip as a reminder. Shortcuts go inert the moment focus is inside a text field (the
+      Correct rule box, or any other text input, textarea, or dropdown), so typing a rule number
+      never also fires a label; checking a row's box or tabbing onto a button doesn't count as
+      typing, so the shortcuts still work while you move through checkboxes with the keyboard.</p>
 
     <p>The one Rules Watch action that stays in Discord is the
       <strong>Report Rule Violation</strong> message context menu — right-click a message →
@@ -2918,7 +2941,7 @@
         <tr><td><strong><a href="/#/config-prune">Auto-Remove Role (Inactive)</a></strong></td><td>Inactivity pruning threshold, exemptions, and next-run preview</td></tr>
         <tr><td><strong><a href="/#/config-inactive">Inactive Sweep</a></strong></td><td>Idle-day threshold, per-run cap, automatic-sweep toggle, per-member exemptions, and a dry-run listing of who would be swept right now, for the shared <a href="#inactive">Inactive Members</a> channel</td></tr>
         <tr><td><strong><a href="/#/rules-watch">Rules Watch</a></strong></td><td>Moved to Moderation, below the alert queue: enable/disable passive monitoring and set the immediate-alert channel</td></tr>
-        <tr><td><strong><a href="/#/config-spoiler">Image Guard</a></strong></td><td>Everything the bot does about explicit images. <strong>Spoiler-required channels</strong> — only images detected as explicit are removed there, so memes and screenshots posted without a spoiler tag are left alone (an image the bot can't read, or can't check because something went wrong, is removed anyway, so a failed check is never a way through). A <strong>bare chest of any gender</strong> always needs a spoiler in these channels, whatever the score says — the detector rates male and female chests differently, and this rule overrides that so the same rule applies to everyone. Covered chests (swimwear, lingerie) don't count. Adding a channel here also means the bot records content labels for pictures posted in it, the same way it does in age-gated channels. <strong>Nudity in SFW channels</strong> — off, log-only, or enforce; removed images are DM'd back to the poster, and age-gated channels, exempt channels, bypass roles and anything the bot itself posts are always skipped. <strong>Detection tuning</strong> — the confidence thresholds (a stricter one for actually deleting), how sure the bot must be it's looking at a bare chest, and a 30-day summary of what's been checked. <strong>Recording</strong> — normally an image is only checked when a rule might act on it, so the summary covers an unrepresentative slice; tick <em>Check every image in age-gated channels</em> for figures worth tuning against. It removes nothing, and records a verdict and content labels for every image in those channels. Every removal, from either rule, is listed on the <a href="/#/nsfw-blocks">Blocked Images</a> report</td></tr>
+        <tr><td><strong><a href="/#/config-spoiler">Image Guard</a></strong></td><td>Everything the bot does about explicit images. <strong>Spoiler-required channels</strong> — only images detected as explicit are removed there, so memes and screenshots posted without a spoiler tag are left alone (an image the bot can't read, or can't check because something went wrong, is removed anyway, so a failed check is never a way through). A <strong>bare chest of any gender</strong> always needs a spoiler in these channels, whatever the score says — the detector rates male and female chests differently, and this rule overrides that so the same rule applies to everyone. Covered chests (swimwear, lingerie) don't count. Adding a channel here also means the bot records content labels for pictures posted in it, the same way it does in age-gated channels. <strong>Nudity in SFW channels</strong> — off, log-only, or enforce; removed images are DM'd back to the poster, and age-gated channels, exempt channels, bypass roles and anything the bot itself posts are always skipped. <strong>Detection tuning</strong> — the confidence thresholds (a stricter one for actually deleting), and how sure the bot must be it's looking at a bare chest. <strong>Recording</strong> — normally an image is only checked when a rule might act on it; tick <em>Check every image in age-gated channels</em> to get a true picture on the <a href="/#/nsfw-tags">Image Guard Tags</a> report instead of a small, unrepresentative slice. It removes nothing, and records a verdict and content labels for every image in those channels. This page is settings only — every removal is listed on the <a href="/#/nsfw-blocks">Blocked Images</a> report, and what's been detected overall (classified/explicit counts, average inference time, most common tags) is on <a href="/#/nsfw-tags">Image Guard Tags</a></td></tr>
         <tr><td><strong><a href="/#/config-auto-role">Auto-Role</a></strong></td><td>Roles applied automatically on join</td></tr>
         <tr><td><strong><a href="/#/config-cleanup">Cleanup</a></strong></td><td>Server-wide sweep (delete everything older than a set age, with protected channels; pinned messages are kept) plus per-channel age + schedule rules</td></tr>
         <tr><td><strong><a href="/#/config-quote-border">Quote Tool</a></strong></td><td>Custom border image for <a href="#quote-cards">quote cards</a></td></tr>
@@ -3006,21 +3029,17 @@
       <thead><tr><th>Command</th><th>Permission</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><a href="#jail"><code>/jail</code> / <code>/unjail</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Move member to jail / release with restored roles</td></tr>
-        <tr><td><a href="#warnings"><code>/warn user:@u reason:...</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Log a warning — member isn't DM'd, but the confirmation posts in-channel, so run it in a mod channel</td></tr>
-        <tr><td><a href="#warnings"><code>/revokewarn user:@u warning_id:N</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Revoke a warning by ID — stays in history, stops counting</td></tr>
+        <tr><td><a href="#warnings"><code>/warn</code> / <code>/revokewarn</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Log a warning (confirmation posts in-channel, not DM'd) or revoke one by ID — a revoked warning stays in history but stops counting</td></tr>
         <tr><td><a href="#info"><code>/info</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Your own card — activity, level, roles, wallet and opt-ins, with buttons to change them</td></tr>
         <tr><td><a href="#modinfo"><code>/modinfo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Full mod profile for a member (jail, warnings, tickets, age)</td></tr>
         <tr><td><a href="#purge"><code>/purge</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Bulk-delete messages</td></tr>
         <tr><td><a href="#ticket-cmds"><code>/ticket open</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private support ticket</td></tr>
         <tr><td><a href="#ticket-cmds"><code>/ticket claim</code> / <code>close</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Daily ticket lifecycle</td></tr>
-        <tr><td><a href="#watch"><code>/watch add</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Silently forward a member's messages to your DMs</td></tr>
         <tr><td><a href="#voice-user"><code>/voice access</code> / <code>rename</code> / <code>limit</code></a></td><td>Channel owner</td><td>Personal voice channel controls</td></tr>
         <tr><td><a href="#music-cmds"><code>/play</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Music — YouTube / Spotify / search</td></tr>
         <tr><td><a href="#games"><code>/games play &lt;mode&gt;</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Start a party game (17 modes)</td></tr>
         <tr><td><a href="#economy-cmds"><code>/bank wallet</code> / <code>pay</code> / <code>shop</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Economy — balance, transfers, and the perk shop</td></tr>
         <tr><td><a href="#economy-cmds"><code>/bank quests</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>View your quest board and claim rewards</td></tr>
-        <tr><td><a href="#emoji-stealer"><code>/steal_emoji url: name:</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Add an emoji from an image URL (or right-click → Steal Emoji)</td></tr>
-        <tr><td><a href="#hidden-channels"><code>/hidden hide</code> / <code>restore</code> / <code>list</code></a></td><td><span class="perm perm-admin">Admin</span></td><td>Hide a channel from everyone, restore it exactly as it was</td></tr>
         <tr><td><a href="#confess"><code>/confess</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Anonymous post (mods see emoji ID mapping)</td></tr>
         <tr><td><a href="#self-service-cmds"><code>/todo</code></a></td><td><span class="perm perm-mod">Mod</span></td><td>Add to the server's shared todo list</td></tr>
         <tr><td><a href="#self-service-cmds"><code>/help</code></a></td><td><span class="perm perm-all">Everyone</span></td><td>Browse all commands by category</td></tr>

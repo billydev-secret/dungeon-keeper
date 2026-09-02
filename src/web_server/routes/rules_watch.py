@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from bot_modules.rules_watch import ledger, service
 from web_server.auth import AuthenticatedUser
@@ -17,6 +17,13 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 class LabelBody(BaseModel):
+    is_violation: bool
+    corrected_rule: str | None = None
+    notes: str | None = None
+
+
+class BulkLabelBody(BaseModel):
+    event_ids: list[int] = Field(min_length=1, max_length=service.MAX_BULK_LABEL)
     is_violation: bool
     corrected_rule: str | None = None
     notes: str | None = None
@@ -70,10 +77,11 @@ async def get_event(
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            row = service.get_event(conn, event_id)
+            row = service.get_event(conn, event_id, guild_id)
             if row is None:
                 return None
             return _row_to_dict(row)
@@ -92,10 +100,11 @@ async def label_event(
     user: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
 
     def _q():
         with ctx.open_db() as conn:
-            ev = service.get_event(conn, event_id)
+            ev = service.get_event(conn, event_id, guild_id)
             if ev is None:
                 return False
             service.upsert_label(
@@ -112,6 +121,46 @@ async def label_event(
     if not ok:
         raise HTTPException(status_code=404, detail="Event not found")
     return {"ok": True}
+
+
+@router.post("/rules-watch/events/bulk-label")
+async def label_events_bulk(
+    body: BulkLabelBody,
+    request: Request,
+    user: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """Label many events with one call, one label applied to every id.
+
+    Guild-scoped: an id belonging to another guild — or that doesn't exist
+    at all — is skipped, never labelled, and reported back under
+    ``skipped`` rather than silently dropped. Capped at
+    ``service.MAX_BULK_LABEL`` ids per call; the panel should send exactly
+    the ids it is currently showing, never "everything matching the active
+    filter".
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return service.bulk_upsert_labels(
+                conn,
+                guild_id,
+                body.event_ids,
+                is_violation=body.is_violation,
+                corrected_rule=body.corrected_rule,
+                labeled_by=user.user_id if hasattr(user, "user_id") else None,
+                notes=body.notes,
+            )
+
+    result = await run_query(_q)
+    return {
+        "ok": True,
+        "labeled": result["labeled"],
+        "labeled_count": len(result["labeled"]),
+        "skipped": result["skipped"],
+        "skipped_count": len(result["skipped"]),
+    }
 
 
 @router.get("/rules-watch/stats")

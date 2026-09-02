@@ -24,7 +24,7 @@ function fmtDaysUntil(n) {
 
 function badgeColor(n) {
   if (n === 0) return "var(--red-text)";
-  if (n <= 7)  return "var(--yellow)";
+  if (n <= 7)  return "var(--yellow-text)";
   return "var(--ink-dim)";
 }
 
