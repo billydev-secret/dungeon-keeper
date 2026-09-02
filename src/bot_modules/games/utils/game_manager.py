@@ -86,6 +86,19 @@ DEFAULT_LAUNCH_PERMS_HINT = (
 async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) -> None:
     """Tick off a "run a game" chore on the todo board. Never raises.
 
+    **Moderators only.** The chore board is a mod worklist, and "run a game" is
+    a thing a mod is supposed to do for the server — so two ordinary members
+    accepting a duel is a multiplayer game being run, but it is not the mod
+    having done their chore. Without this gate the chore went green on any
+    active day with no moderator involved, which makes it a report on how busy
+    the server was rather than a checklist.
+
+    "Moderator" is ``AppContext.member_is_mod`` — the one definition the rest of
+    the bot uses (Discord's manage_guild/administrator, then the guild's
+    configured mod/admin roles). An uncached member is treated as not a mod: a
+    chore left open is recoverable with the board's own Complete button, where
+    a tick that should not have happened is not.
+
     **This is the seam that makes the chore mean what it says.** Every party
     game reaches its board through two doors: a member's ``/games play``, and
     the scheduler calling the same ``launch()`` on a timer. Only the
@@ -115,6 +128,11 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
         from bot_modules.services.todo_recurring_service import (  # noqa: PLC0415
             auto_complete_chores,
         )
+
+        guild = bot.get_guild(int(guild_id))
+        member = guild.get_member(int(user_id)) if guild is not None else None
+        if member is None or not ctx.member_is_mod(member):
+            return
 
         def _work() -> list[int]:
             with ctx.open_db() as conn:

@@ -236,8 +236,9 @@ function recurringEditor(editing) {
         </select>
         <div class="field-hint">
           The bot never does the chore for you — it just notices when you have.
-          “A game is run” means a game someone starts by hand; a scheduled game
-          firing on its own doesn't count. A chore left on “Nothing” behaves
+          “A game is run” means a game a <em>moderator</em> starts by hand;
+          neither a scheduled game firing on its own nor two members playing
+          each other counts. A chore left on “Nothing” behaves
           exactly as it always has.
           <strong>Set the time above to at or before the earliest you'd do
           it</strong> — a chore can only be ticked once it's due, so doing the

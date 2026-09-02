@@ -397,6 +397,15 @@ demonstrably happened is worse than no scoreboard.
   multiplayer game: `finish_launch_response` (a party game from `/games play`),
   `BaseDuel._handle_accept` (a challenge accepted) and
   `BaseGame._handle_lobby_start` (an N-player lobby reaching its start).
+- **The game trigger is moderator-only** (`AppContext.member_is_mod`, the same
+  definition as every other mod gate). "Run a game" is a chore a mod owes the
+  server, so two ordinary members accepting a duel is a multiplayer game being
+  run but is not that chore being done — ungated, it went green on any active
+  day with nobody on staff involved, which made it a report on how busy the
+  server was rather than a checklist. An **uncached member is treated as not a
+  mod**: a chore left open is recoverable with the board's Complete button,
+  where a tick that should not have happened is not. The QOTD trigger needs no
+  equivalent gate — registration already requires the economy manager role.
 - **A scheduled game does not count**, and this is enforced by *where* the call
   sits rather than by a flag. Party games reach the board through two doors —
   `/games play` and the scheduler calling the same `launch()` — and only the
@@ -409,7 +418,8 @@ demonstrably happened is worse than no scoreboard.
   "run a game" is done once the room has a game in it; waiting for the archive
   would leave the board claiming a skip for a game that was played but never
   formally ended, or one that flopped with nobody joining.
-- **Credit goes to the human**, not the bot: the QOTD's poster, the game's host,
+- **Credit goes to the human**, not the bot: the QOTD's poster, the game's host
+  (a mod, per the gate above),
   a duel's challenger (not the acceptor — they answered an invitation rather
   than issuing one). `completed_by` is a real member id everywhere else on the
   board and a mod reading it wants to know who did it.

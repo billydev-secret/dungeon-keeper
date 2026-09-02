@@ -48,12 +48,29 @@ def db(tmp_path):
     return db_path
 
 
+class _StubMember:
+    def __init__(self, user_id, is_mod):
+        self.id = user_id
+        self.is_mod = is_mod
+
+
+class _StubGuild:
+    def __init__(self, members):
+        self._members = {m.id: m for m in members}
+
+    def get_member(self, user_id):
+        return self._members.get(user_id)
+
+
 class _StubCtx:
     def __init__(self, db_path):
         self.db_path = db_path
 
     def open_db(self):
         return open_db(self.db_path)
+
+    def member_is_mod(self, member):
+        return member.is_mod
 
 
 class _StubCog:
@@ -66,12 +83,16 @@ class _StubCog:
 
 
 class _StubBot:
-    """Just enough bot for the helper: ``ctx``, and the cog it repaints through."""
+    """Just enough bot: ``ctx``, the guild it resolves the actor in, and the cog."""
 
-    def __init__(self, ctx=None):
+    def __init__(self, ctx=None, *, members=(_StubMember(HOST, True),)):
         if ctx is not None:
             self.ctx = ctx
         self.repainted: list[int] = []
+        self._guild = _StubGuild(members)
+
+    def get_guild(self, guild_id):
+        return self._guild if guild_id == GUILD else None
 
     def get_cog(self, name):
         return _StubCog(self) if name == "TodoCog" else None
@@ -184,6 +205,34 @@ def test_auto_complete_chores_never_raises(db, monkeypatch):
         # The first blew up; the second still got its tick.
         assert len(done) == 1
         assert not has_open_instance(conn, second)
+
+
+async def test_an_ordinary_member_does_not_tick_the_mod_chore(db):
+    """Two members duelling is a game being run — not a mod doing their chore.
+
+    Without this the chore went green on any active day with no moderator
+    involved, which makes it a report on how busy the server was.
+    """
+    with open_db(db) as conn:
+        rid = _game_chore(conn)
+
+    bot = _StubBot(_StubCtx(db), members=(_StubMember(HOST, False),))
+    await sign_off_game_chore(bot, GUILD, HOST)
+
+    with open_db(db) as conn:
+        assert has_open_instance(conn, rid)
+    assert bot.repainted == []
+
+
+async def test_an_unresolvable_member_is_not_treated_as_a_mod(db):
+    """A chore left open is recoverable; a tick that shouldn't have happened isn't."""
+    with open_db(db) as conn:
+        rid = _game_chore(conn)
+
+    await sign_off_game_chore(_StubBot(_StubCtx(db), members=()), GUILD, HOST)
+
+    with open_db(db) as conn:
+        assert has_open_instance(conn, rid)
 
 
 # ── where it is (and isn't) called ────────────────────────────────────
