@@ -108,11 +108,21 @@ for the scheduler) once the lobby message has landed. A failed send keeps its
 claimed row, like the other push sources, because nothing would re-offer it.
 
 **Every start echoes**, including the daily scheduled and rotation launches —
-those are the rounds nobody is in the room to notice. The host is named only
-when a member actually opened one: the feature rotation launches with
-`host_id=0` and the bot's own id is excluded explicitly (by id, never by name
-— the account displays as "Poppy"), so an auto-launched round carries no
-author line.
+those are the rounds nobody is in the room to notice. The footer names the
+opener, and the two automated paths do **not** behave the same way:
+
+| Path | `host_id` | Footer |
+|---|---|---|
+| `/risky start` | the member who ran it | their name |
+| Feature rotation | `0` (hosted by nobody) | none |
+| Games scheduler | `created_by` — whoever set the schedule up | **their name**, though they may not be present |
+
+The bot's own id is excluded explicitly (by id, never by name — the account
+displays as "Poppy"). The scheduler case is left as-is rather than
+special-cased: it is exactly what every scheduled *party* game footer already
+does, and diverging here would make Risky Rolls the odd one out. It is called
+out because the footer reads as "this person is here", and for a scheduled
+round that is not what it means.
 
 **Guess Who is swept**, from `guess_rounds` via `guess_repo.fresh_rounds`, for
 the same reason party games are: the table records what actually got posted
@@ -136,8 +146,13 @@ Discord's `nsfw` flag is the only age gate that counts (CLAUDE.md), and these
 two sources were the first that could cross it. The decision (Ben, 2026-09-02)
 was to **echo, and report the crossing** rather than block it:
 
-* The copy that leaves the room is the game name and a jump link. No member
-  name, no confession text, no image, no round type.
+* The copy that leaves the room is the game name and a jump link — plus, for
+  **Risky Rolls only**, the footer naming whoever opened the round. Ben was
+  asked specifically about that footer, given it announces a named member is
+  in the adult room, and kept it; the exclusion is the *bot*, not members. No
+  confession text, no image, no round type.
+* **Guess Who names nobody**, which is not the same kind of decision — see
+  above. It is a constraint, not a preference.
 * The link is still enforced by Discord's gate on the room it points at — a
   member without access can read the line but cannot follow it.
 * Both sources pass `origin_channel_name`, so the room renders as a masked

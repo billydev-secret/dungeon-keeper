@@ -51,12 +51,21 @@ below — and a ``SOURCE_SPECS`` row, not another dispatch path.
 **Age-gated rooms.** Risky Rolls and Guess Who were the first sources that can
 start behind Discord's ``nsfw`` flag while the destination carries no such
 flag, and the decision (Ben, 2026-09-02) was to echo them the same as any
-other source: the copy is a game name and a jump link, no member is named, and
-the link is still enforced by the gate on the room it points at. Nothing here
-consults ``is_nsfw()`` to *skip* — the mismatch is reported instead, once per
-boot by :func:`warn_gate_crossing` and standingly on Config → Event Echo, so
-an admin who would rather it stayed in the room can age-gate the destination.
-Read that decision before adding a skip rule.
+other source, with the link still enforced by the gate on the room it points
+at. What crosses differs by source, and the difference is deliberate:
+
+* **Risky Rolls** carries the game, the room and **the name of whoever opened
+  the round** — the same footer every party game echo has always had. Ben was
+  asked specifically whether to keep it here, given that it announces a named
+  member is in the adult room, and kept it (the exclusion is the *bot*, not
+  members).
+* **Guess Who** names nobody, ever. Not a preference: the submitter is the
+  answer, so a name would solve the round.
+
+Nothing here consults ``is_nsfw()`` to *skip* — the mismatch is reported
+instead, once per boot by :func:`warn_gate_crossing` and standingly on
+Config → Event Echo, so an admin who would rather it stayed in the room can
+age-gate the destination. Read that decision before adding a skip rule.
 
 **Why a poll loop for party games.** Not because hooking would mean touching
 28 call sites — those funnel through one ``update_game_message``, and
@@ -96,7 +105,11 @@ from bot_modules.core.db_utils import (
     open_db,
     open_db_immediate,
 )
-from bot_modules.core.utils import jump_url, resolve_bot_channel
+from bot_modules.core.utils import (
+    get_guild_channel_or_thread,
+    jump_url,
+    resolve_bot_channel,
+)
 from bot_modules.economy import logic as econ_logic
 from bot_modules.economy import quests
 from bot_modules.games.constants import GAME_NAMES
@@ -313,29 +326,44 @@ def echo_channel_id(conn: sqlite3.Connection, guild_id: int) -> int | None:
 _gate_warned: set[int] = set()
 
 
+def _is_age_gated(channel) -> bool:
+    """Whether Discord considers this room age-gated.
+
+    ``is_nsfw()`` rather than the ``nsfw`` attribute, per CLAUDE.md — and not
+    merely as house style. :class:`discord.Thread` has **no** ``nsfw``
+    attribute at all; it inherits its parent's gate and exposes it only
+    through the method, so an attribute read scores every thread under an
+    age-gated channel as safe. Guess Who rounds can live in a thread.
+    """
+    probe = getattr(channel, "is_nsfw", None)
+    if callable(probe):
+        return bool(probe())
+    return bool(getattr(channel, "nsfw", False))
+
+
 def warn_gate_crossing(guild: discord.Guild, origin, destination) -> None:
     """Warn once per boot when an echo leaves an age-gated room for one that isn't.
 
-    Discord's ``nsfw`` flag is the only age gate that counts (CLAUDE.md), so
-    both sides are read off the live channel objects rather than any bot-side
-    setting. A channel that can't carry the flag at all (a thread, a voice
-    channel) reports ``False``, which is the safe reading in both positions:
-    an origin that isn't gated raises nothing, and a destination that isn't
-    gated is exactly what this warns about.
+    Both sides are read off the live channel objects rather than any bot-side
+    setting — Discord's own gate is the only one that counts (CLAUDE.md). An
+    origin that can't be resolved at all reports ungated, which costs a
+    warning rather than causing a false one.
 
-    Nothing is blocked. The echo still goes out — the copy is a game name and
-    a link, and the link is still enforced by the gate on the room it points
-    at. This only makes the crossing visible.
+    Nothing is blocked. The echo still goes out, and this only makes the
+    crossing visible. Note it is the *rooms* being compared, not the copy: a
+    Risky Rolls echo names whoever opened the round (Ben, 2026-09-02), so
+    there is a member name in what crosses, not only a game name.
     """
     if guild.id in _gate_warned:
         return
-    if not getattr(origin, "nsfw", False) or getattr(destination, "nsfw", False):
+    if not _is_age_gated(origin) or _is_age_gated(destination):
         return
     _gate_warned.add(guild.id)
     log.warning(
         "event echo: #%s is age-gated but the echo channel #%s is not — "
-        "game names and jump links from that room will be posted where "
-        "everyone can see them (Config → Event Echo)",
+        "game names, jump links and the name of whoever opened a Risky Rolls "
+        "round will be posted where everyone can see them "
+        "(Config → Event Echo)",
         getattr(origin, "name", "?"),
         getattr(destination, "name", "?"),
     )
@@ -446,7 +474,9 @@ async def echo_event(
             return False
 
         if origin_channel_id is not None:
-            warn_gate_crossing(guild, guild.get_channel(origin_channel_id), channel)
+            warn_gate_crossing(
+                guild, get_guild_channel_or_thread(guild, origin_channel_id), channel
+            )
 
         color = await safe_resolve_accent(db_path, guild, log_label="event echo")
         embed = build_echo_embed(
@@ -955,22 +985,23 @@ async def _sweep_guess(bot, now: float) -> None:
             return guess_candidates(conn, guild_ids, now)
 
     cands = await asyncio.to_thread(_read)
-    # Resolved here rather than in the query: the name is Discord state, not
-    # a column, and the room is age-gated (see EchoCandidate.channel_name).
-    named = [
-        replace(
-            cand,
-            channel_name=getattr(
-                bot.get_guild(cand.guild_id).get_channel(cand.channel_id)
-                if bot.get_guild(cand.guild_id) is not None
-                else None,
-                "name",
-                None,
-            ),
-        )
-        for cand in cands
-    ]
-    await _dispatch_candidates(bot, named, now)
+
+    def _room_name(cand) -> str | None:
+        # Resolved here rather than in the query: the name is Discord state,
+        # not a column, and the room is age-gated (see
+        # EchoCandidate.channel_name). Thread-aware, because a Guess Who round
+        # can live in one (guess_cog: "the Guess prompt can live in a thread,
+        # and so can the rounds posted under it") and `Guild.get_channel`
+        # returns None for a thread — which would drop the name and fall the
+        # copy back to the bare mention this field exists to avoid.
+        guild = bot.get_guild(cand.guild_id)
+        if guild is None:
+            return None
+        return getattr(get_guild_channel_or_thread(guild, cand.channel_id), "name", None)
+
+    await _dispatch_candidates(
+        bot, [replace(c, channel_name=_room_name(c)) for c in cands], now
+    )
 
 
 # ── Source 11: Risky Rolls rounds opening ───────────────────────────────────
@@ -994,10 +1025,10 @@ async def echo_risky_round(
     also why a failed send keeps its claimed row (``retry=False``) — nothing
     would re-offer it.
 
-    Every start echoes, scheduled ones included (Ben, 2026-09-02). The host is
-    named only when a member actually opened the round: the feature rotation
-    launches with ``host_id=0`` and the games scheduler with the id of whoever
-    set the schedule up, and an auto-launched round has no author line to give.
+    Every start echoes, scheduled ones included (Ben, 2026-09-02), and the
+    footer names the opener — see :func:`_round_host_name` for exactly who
+    that turns out to be on the two automated paths, which is not the same
+    answer for both.
     """
     return await echo_event(
         bot,
@@ -1016,12 +1047,21 @@ async def echo_risky_round(
 
 
 def _round_host_name(bot, guild: discord.Guild, host_id) -> str | None:
-    """The opener's display name, or None when nobody opened it.
+    """The opener's display name, or None when no member opened it.
 
     ``host_id=0`` is the feature rotation's "hosted by nobody" sentinel and
     resolves to no member anyway; the bot's own id is excluded explicitly, by
     id rather than by name, because the account displays as "Poppy" and a
     name check would be one rename away from wrong.
+
+    **The games scheduler is not covered by either.** It passes
+    ``created_by`` — the member who set the schedule up, possibly weeks ago
+    and not in the room — so a scheduled round is footed with their name.
+    That is the behaviour every scheduled party game already has
+    (``_host_name`` over ``games_active_games.host_id``), so it is left
+    consistent rather than special-cased here; only the rotation path is
+    genuinely authorless. Worth knowing before reading the footer as "this
+    person is here right now".
     """
     try:
         host_id = int(host_id)

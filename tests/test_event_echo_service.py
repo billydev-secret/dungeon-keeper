@@ -1270,3 +1270,77 @@ class TestGateCrossingWarning:
         with caplog.at_level("WARNING"):
             svc.warn_gate_crossing(guild, None, self._ch(False))
         assert caplog.text == ""
+
+
+class TestAgeGateDetection:
+    """`is_nsfw()`, not the `nsfw` attribute — the difference is threads.
+
+    `discord.Thread` has no `nsfw` attribute at all; it inherits its parent's
+    gate and exposes it only through the method. An attribute read therefore
+    scores every thread under an age-gated channel as safe, and a Guess Who
+    round can live in a thread.
+    """
+
+    def test_a_channel_reports_its_own_flag(self):
+        ch = MagicMock(spec=discord.TextChannel)
+        ch.is_nsfw = MagicMock(return_value=True)
+        assert svc._is_age_gated(ch) is True
+
+    def test_a_thread_under_a_gated_parent_is_gated(self):
+        """The regression: no `.nsfw` to read, so only the method knows."""
+        thread = MagicMock(spec=discord.Thread)
+        thread.is_nsfw = MagicMock(return_value=True)
+        assert not hasattr(thread, "nsfw")
+        assert svc._is_age_gated(thread) is True
+
+    def test_an_unresolvable_room_is_not_gated(self):
+        assert svc._is_age_gated(None) is False
+
+
+@pytest.mark.asyncio
+class TestGuessSweepResolvesThreads:
+    async def test_a_round_in_a_thread_still_names_its_room(
+        self, bot, guild, sync_db_path
+    ):
+        """`Guild.get_channel` returns None for a thread.
+
+        Left unresolved, `channel_name` is dropped and the copy falls back to
+        the bare `<#id>` — which renders as "#deleted-channel" for exactly the
+        readers who can't see the room. That is the failure this field exists
+        to prevent, so the sweep has to resolve threads too.
+        """
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1)
+        thread = MagicMock(spec=discord.Thread)
+        thread.name = "guess-who-thread"
+        guild.get_channel = MagicMock(return_value=None)  # as Discord behaves
+        guild.get_channel_or_thread = MagicMock(return_value=thread)
+        bot.get_guild = MagicMock(return_value=guild)
+
+        await svc._sweep_guess(bot, NOW)
+
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "[#guess-who-thread]" in (embed.description or "")
+        assert "<#777>" not in (embed.description or "")
+
+
+class TestScheduledRoundHostName:
+    """The games scheduler is covered by neither exclusion, deliberately.
+
+    It passes `created_by` — the member who set the schedule up, possibly
+    weeks ago and not in the room — so a scheduled round is footed with their
+    name. That is what every scheduled party game already does, so Risky Rolls
+    is left consistent with them rather than special-cased. Pinned here
+    because it reads as "this person is here right now" and isn't.
+    """
+
+    def test_the_schedule_creator_is_named(self):
+        bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1001))
+        guild = MagicMock(spec=discord.Guild)
+        member = MagicMock()
+        member.display_name = "Ada"
+        guild.get_member = MagicMock(
+            side_effect=lambda uid: member if uid == 4242 else None
+        )
+        assert svc._round_host_name(bot, guild, 4242) == "Ada"

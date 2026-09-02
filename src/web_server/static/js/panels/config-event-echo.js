@@ -118,9 +118,10 @@ export function mount(container) {
         `⚠️ #${dest.name} is not age-gated, but this server has rooms that are ` +
         `(${names}${more}). Risky Rolls and Guess Who can start in one of them — ` +
         "when they do, the game name and a link are echoed here, where everyone " +
-        "can see them. The link itself still respects the room's age gate, and no " +
-        "member is ever named. Age-gate this channel if you'd rather that didn't " +
-        "leave the room.";
+        "can see them, and a Risky Rolls note also names the member who opened " +
+        "the round. Guess Who notes never name anyone. The link itself still " +
+        "respects the room's age gate. Age-gate this channel if you'd rather " +
+        "none of that left the room.";
     }
     syncBanner();
     onPickerChange(chanPicker, syncBanner);

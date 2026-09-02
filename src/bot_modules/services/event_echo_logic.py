@@ -47,11 +47,15 @@ SOURCE_GUESS_ROUND = "guess_round"
 
 # The two sources above are the first that can originate in an **age-gated**
 # room, and the destination usually isn't one. Deliberate (2026-09-02): the
-# echo carries the game name and a jump link and nothing else, the link is
-# still enforced by Discord's own age gate, and the mismatch is surfaced to
-# admins rather than silently blocked -- see `warn_gate_crossing` in the
-# service and the notice on Config -> Event Echo. Do not add an `is_nsfw()`
-# skip here without checking that decision is still what Ben wants.
+# link is still enforced by Discord's own age gate, and the mismatch is
+# surfaced to admins rather than silently blocked -- see `warn_gate_crossing`
+# in the service and the notice on Config -> Event Echo.
+#
+# What crosses is NOT the same for both. Risky Rolls carries the game, the
+# room and the name of whoever opened the round (kept on purpose, asked and
+# answered); Guess Who names nobody, because there the submitter is the
+# answer. Do not add an `is_nsfw()` skip here without checking that decision
+# is still what Ben wants.
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
