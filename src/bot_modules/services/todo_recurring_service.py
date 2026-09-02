@@ -646,7 +646,10 @@ def auto_complete_chores(
 
     Never raises on a definition it cannot tick — a chore that fails to sign
     itself off must not take down the QOTD registration or the game launch it
-    is hanging off.
+    is hanging off. The guard is **per definition** rather than around the
+    whole loop, so one unhappy row cannot swallow the sign-off of the ones
+    behind it. Both current callers guard as well; this is here so a third one
+    can trust the sentence above rather than having to know to add its own.
     """
     if not trigger or trigger not in VALID_AUTO_COMPLETE:
         return []
@@ -659,11 +662,17 @@ def auto_complete_chores(
 
     done: list[int] = []
     for row in rows:
-        todo_id = open_instance_id(conn, row["id"])
-        if todo_id is None:
-            continue
-        if complete_todo(conn, todo_id, guild_id, completed_by, now_ts=now_ts):
-            done.append(todo_id)
+        try:
+            todo_id = open_instance_id(conn, row["id"])
+            if todo_id is None:
+                continue
+            if complete_todo(conn, todo_id, guild_id, completed_by, now_ts=now_ts):
+                done.append(todo_id)
+        except Exception:
+            log.exception(
+                "auto sign-off failed for recurring %s in guild %s",
+                row["id"], guild_id,
+            )
     if done:
         log.info(
             "Auto-completed chores %s in guild %s on trigger %s (by %s)",

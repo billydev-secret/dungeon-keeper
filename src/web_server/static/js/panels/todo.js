@@ -239,6 +239,10 @@ function recurringEditor(editing) {
           “A game is run” means a game someone starts by hand; a scheduled game
           firing on its own doesn't count. A chore left on “Nothing” behaves
           exactly as it always has.
+          <strong>Set the time above to at or before the earliest you'd do
+          it</strong> — a chore can only be ticked once it's due, so doing the
+          thing at 08:00 when the chore is set to 09:00 leaves the day marked
+          missed.
         </div>
       </div>
       <div class="field" data-rec-days style="${weekly ? "" : "display:none"}">

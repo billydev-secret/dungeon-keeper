@@ -602,6 +602,27 @@ class TodoCog(commands.Cog):
         await self.board.on_channel_delete(channel)
 
 
+async def repaint_board(bot, guild_id: int) -> None:
+    """Repaint a guild's sticky board after an out-of-band mutation. Never raises.
+
+    ``todo_board_loop`` deliberately does **not** poll for changes — it repaints
+    only what it just spawned plus failed retries, because "every user-facing
+    mutation repaints the board itself" (see its docstring). Automatic chore
+    sign-off is such a mutation, and it happens in `events_cog` and in the game
+    launch paths, neither of which holds the cog. Without this the QOTD chore
+    would sit on the board looking outstanding until the next daily spawn — the
+    row correct in the database, the surface a mod actually reads stale for
+    most of a day, which to them is indistinguishable from the feature not
+    working.
+    """
+    try:
+        cog = bot.get_cog("TodoCog")
+        if cog is not None:
+            await cog.refresh_board(int(guild_id))
+    except Exception:
+        log.exception("todo board repaint failed for %s", guild_id)
+
+
 def _tick(ctx) -> tuple[set[int], set[int]]:
     """One scheduler pass: spawn what is due, report what needs repainting.
 

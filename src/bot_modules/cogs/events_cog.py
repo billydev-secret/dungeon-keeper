@@ -1195,6 +1195,10 @@ class EventsCog(commands.Cog):
             thread_deep_id = message.channel.id
         hop_channel_id = parent_id or channel_id
 
+        #: Chore instances the QOTD registration below signed off, carried out
+        #: of the worker thread so the board can be repainted on the loop.
+        chores_ticked: list[int] = []
+
         def _econ_work() -> (
             tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None, str]
             | None
@@ -1249,13 +1253,16 @@ class EventsCog(commands.Cog):
                     # ``completed_by`` is a real member everywhere else on the
                     # board, and a mod reading it wants to know who did it.
                     #
-                    # The board repaints on its own minute loop rather than
-                    # here: this is the message handler, and a chore sign-off
-                    # is not worth a Discord edit on the hot path.
+                    # The repaint happens after this worker thread returns —
+                    # the board loop only repaints what it spawned itself, so
+                    # an unrepainted sign-off would leave the chore looking
+                    # outstanding on the surface a mod actually reads.
                     try:
-                        auto_complete_chores(
-                            conn, guild_id, "qotd",
-                            completed_by=user_id, now_ts=time.time(),
+                        chores_ticked.extend(
+                            auto_complete_chores(
+                                conn, guild_id, "qotd",
+                                completed_by=user_id, now_ts=time.time(),
+                            )
                         )
                     except Exception:
                         log.exception("QOTD chore auto sign-off failed")
@@ -1432,6 +1439,13 @@ class EventsCog(commands.Cog):
             settings, outcome, prior_streak, quests_out, gains,
             wellness_value, today_local,
         ) = result
+
+        # Before anything else that can return early: the chore is already
+        # ticked in the database, and the board is the only place a mod sees it.
+        if chores_ticked:
+            from bot_modules.cogs.todo_cog import repaint_board
+
+            await repaint_board(self.bot, guild_id)
 
         # Two individual opt-ins, one DM: the digest itself requires the
         # opt-in economy game role (deliver_econ_dm's gate); the wellness

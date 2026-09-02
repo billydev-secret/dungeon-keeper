@@ -422,8 +422,28 @@ demonstrably happened is worse than no scoreboard.
   ticking it while paused would make the pause invisible and the streak wrong on
   resume. A failure never propagates — a chore that can't sign itself off must
   not take down the QOTD registration or the game launch it hangs off.
-- **The board repaints on its own minute loop**, not from the trigger: a chore
-  sign-off is not worth a Discord edit on the message-handling hot path.
+- **The trigger can only tick what already exists**, and that is a real sharp
+  edge: a chore due at 09:00 whose event happens at 08:00 has no open instance
+  to credit, so 09:00 spawns one that nobody ticks and it ages into `missed_at`
+  — the exact failure this feature exists to fix, now silent. Fixing it in code
+  would mean either pre-crediting an instance that does not exist or teaching
+  `spawn_due` that today's slot is already accounted for, which changes the
+  reset semantics the streak is computed from. It is instead a **configuration
+  rule**, stated in the panel hint and the manual: set the chore's time at or
+  before the earliest the thing would ever be done.
+- **The board is repainted by the caller** (`todo_cog.repaint_board`), not by
+  the board loop. That loop deliberately repaints only what it spawned plus
+  failed retries — "every user-facing mutation repaints the board itself" — so
+  an unrepainted sign-off would leave the chore looking outstanding on the
+  surface a mod reads until the next daily spawn, which is indistinguishable
+  from the feature not working. The repaint is skipped when nothing was ticked,
+  and the DB work on the game paths goes through `asyncio.to_thread` like every
+  other `open_db` there.
+- **Not every hand-started game reaches the seam.** The 16 party-game cogs share
+  `finish_launch_response`; Risky Rolls has its own command and carries the call
+  itself. A game type added later that does neither simply never fires the
+  trigger — a silent gap, so check for the seam when adding one.
+
 
 ### Web list
 

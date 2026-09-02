@@ -56,12 +56,25 @@ class _StubCtx:
         return open_db(self.db_path)
 
 
+class _StubCog:
+    def __init__(self, bot):
+        self._bot = bot
+
+    async def refresh_board(self, guild_id):
+        self._bot.repainted.append(guild_id)
+        return True
+
+
 class _StubBot:
-    """Just enough bot for the helper: it only ever reaches for ``ctx``."""
+    """Just enough bot for the helper: ``ctx``, and the cog it repaints through."""
 
     def __init__(self, ctx=None):
         if ctx is not None:
             self.ctx = ctx
+        self.repainted: list[int] = []
+
+    def get_cog(self, name):
+        return _StubCog(self) if name == "TodoCog" else None
 
 
 def _game_chore(conn, *, guild=GUILD):
@@ -114,6 +127,65 @@ async def test_sign_off_game_chore_never_breaks_the_launch(db):
     await sign_off_game_chore(_StubBot(_StubCtx(db.parent / "no-such.db")), GUILD, HOST)
 
 
+async def test_sign_off_game_chore_repaints_the_board(db):
+    """The row is only half the job — the board is where a mod reads it.
+
+    ``todo_board_loop`` repaints only what it spawned itself plus failed
+    retries, so without this the chore stays visibly outstanding until the next
+    daily spawn even though the database says otherwise.
+    """
+    with open_db(db) as conn:
+        _game_chore(conn)
+
+    bot = _StubBot(_StubCtx(db))
+    bot.repainted = []
+    await sign_off_game_chore(bot, GUILD, HOST)
+
+    assert bot.repainted == [GUILD]
+
+
+async def test_a_game_with_no_chore_behind_it_costs_no_board_edit(db):
+    """Every game start would otherwise repaint a board it never changed."""
+    bot = _StubBot(_StubCtx(db))
+    bot.repainted = []
+    await sign_off_game_chore(bot, GUILD, HOST)
+
+    assert bot.repainted == []
+
+
+def test_auto_complete_chores_never_raises(db, monkeypatch):
+    """Its docstring promises this, and a third caller will believe it.
+
+    One unhappy definition must also not swallow the chores behind it.
+    """
+    import bot_modules.services.todo_recurring_service as svc
+
+    with open_db(db) as conn:
+        _game_chore(conn)
+        second = create_recurring(
+            conn, GUILD, task="Run a second game", recurrence="daily",
+            time_of_day=540, auto_complete="game", now_ts=NOW,
+        )
+
+        real = svc.open_instance_id
+        calls = {"n": 0}
+
+        def _explode_once(conn_, recurring_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("db went away")
+            return real(conn_, recurring_id)
+
+        monkeypatch.setattr(svc, "open_instance_id", _explode_once)
+        done = svc.auto_complete_chores(
+            conn, GUILD, "game", completed_by=HOST, now_ts=NOW
+        )
+
+        # The first blew up; the second still got its tick.
+        assert len(done) == 1
+        assert not has_open_instance(conn, second)
+
+
 # ── where it is (and isn't) called ────────────────────────────────────
 
 
@@ -149,6 +221,9 @@ def _calls(node: ast.AST) -> set[str]:
         ("bot_modules/duels/base_duel.py", "_handle_accept"),
         # An N-player lobby game that reached its start.
         ("bot_modules/duels/base_game.py", "_handle_lobby_start"),
+        # Risky Rolls opened by hand — it has its own command and does not
+        # share the party games' finish_launch_response.
+        ("bot_modules/cogs/risky_roll_cog.py", "_start_game"),
     ],
 )
 def test_the_human_launch_paths_sign_the_chore_off(module, function):

@@ -100,8 +100,11 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
     game that was played but never formally ended — or one that flopped with
     nobody joining — left the board claiming the chore was skipped.
 
-    Synchronous DB work on the launch path is a handful of indexed reads
-    against definitions with a trigger set, which in practice is one row.
+    The DB work goes through ``asyncio.to_thread`` like every other
+    ``open_db`` on these paths. It is only a couple of indexed reads, but it
+    sits in front of ``interaction.response.edit_message`` on the duel paths,
+    and ``open_db`` will wait up to its 30s busy timeout if another writer
+    holds the lock — long enough to stall the heartbeat and drop the gateway.
     """
     try:
         if not guild_id or not user_id:
@@ -113,11 +116,19 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
             auto_complete_chores,
         )
 
-        with ctx.open_db() as conn:
-            auto_complete_chores(
-                conn, int(guild_id), "game",
-                completed_by=int(user_id), now_ts=time.time(),
-            )
+        def _work() -> list[int]:
+            with ctx.open_db() as conn:
+                return auto_complete_chores(
+                    conn, int(guild_id), "game",
+                    completed_by=int(user_id), now_ts=time.time(),
+                )
+
+        if await asyncio.to_thread(_work):
+            # Only when something was actually ticked: a game started in a
+            # guild with no game chore must not cost a board edit.
+            from bot_modules.cogs.todo_cog import repaint_board  # noqa: PLC0415
+
+            await repaint_board(bot, int(guild_id))
     except Exception:
         log.exception("game chore auto sign-off failed")
 

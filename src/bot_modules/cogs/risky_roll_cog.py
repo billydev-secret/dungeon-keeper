@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.role_provision import ensure_config_role
-from bot_modules.games.utils.game_manager import check_game_enabled
+from bot_modules.games.utils.game_manager import check_game_enabled, sign_off_game_chore
 from bot_modules.services.feature_roles import RISKY_PING
 from bot_modules.services.risky_roll import state as rr_state
 from bot_modules.services.risky_roll.formatters import (
@@ -279,6 +279,16 @@ class RiskyRollCog(commands.Cog):
                     rr_state.auto_close_tasks[state.game_id] = asyncio.create_task(
                         schedule_auto_close(interaction.client, state.game_id, state.auto_close_minutes * 60)
                     )
+
+                # Risky Rolls does not go through the party games' shared
+                # finish_launch_response, so it needs the seam itself or a mod
+                # opening a round by hand would still be marked as not having
+                # run a game. This is the interactive path only — the
+                # scheduler's daily rounds come in through launch(), which
+                # deliberately reaches nothing here.
+                await sign_off_game_chore(
+                    self.bot, interaction.guild.id, interaction.user.id
+                )
             except Exception:
                 rr_state.active_games.pop(state.game_id, None)
                 if rr_state.store is not None:
