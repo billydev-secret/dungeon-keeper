@@ -1152,3 +1152,137 @@ def test_purge_clears_wellness_counter_children_before_their_parent(db):
             assert (
                 conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
             ), table
+
+
+# ── The five decisions settled 2026-09-02 ────────────────────────────────────
+
+
+def test_purge_clears_quote_rows_from_either_side(db):
+    """A quote row names two members and is incoherent with one removed."""
+    with open_db(db) as conn:
+        for quoter, quoted in ((USER, OTHER_USER), (OTHER_USER, USER),
+                               (OTHER_USER, 1003)):
+            conn.execute(
+                "INSERT INTO quote_audit_log (ts, guild_id, channel_id, "
+                "quoter_id, quoted_user_id, quoted_message_id, "
+                "posted_message_id, theme, font) "
+                "VALUES (0, ?, 1, ?, ?, 2, 3, 't', 'f')",
+                (GUILD, quoter, quoted),
+            )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            "SELECT quoter_id, quoted_user_id FROM quote_audit_log"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, 1003)]
+
+
+@pytest.mark.parametrize(
+    "table, subject_sql, actor_column, blanked",
+    [
+        pytest.param(
+            "inactive_members",
+            "INSERT INTO inactive_members (guild_id, user_id, moderator_id, "
+            "created_at) VALUES (?, ?, ?, 0)",
+            "moderator_id",
+            0,
+            id="inactive-members",
+        ),
+        pytest.param(
+            "promotion_review_cards",
+            "INSERT INTO promotion_review_cards (guild_id, user_id, "
+            "channel_id, message_id, created_at, resolved_by) "
+            "VALUES (?, ?, 1, 2, 0, ?)",
+            "resolved_by",
+            None,
+            id="promotion-review-cards",
+        ),
+    ],
+)
+def test_purge_deletes_the_subjects_row_but_only_blanks_the_actors(
+    db, table, subject_sql, actor_column, blanked
+):
+    """Erasing a mod must not delete an unrelated member's record."""
+    with open_db(db) as conn:
+        # The member as subject — this row is about them and goes.
+        conn.execute(subject_sql, (GUILD, USER, 999))
+        # The member as actor on someone else's row — the row stands, the id
+        # is blanked, because the record belongs to OTHER_USER.
+        conn.execute(subject_sql, (GUILD, OTHER_USER, USER))
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            f"SELECT user_id, {actor_column} FROM {table}"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, blanked)]
+
+
+def test_purge_clears_qa_verdicts_but_only_unsigns_the_test(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO qa_tests (id, guild_id, entry_key, title, body_md, "
+            "verified_by, created_at, updated_at) "
+            "VALUES (1, ?, 'k', 't', 'b', ?, '', '')",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO qa_verdicts (test_id, guild_id, user_id, verdict, "
+            "note, created_at, updated_at) "
+            "VALUES (1, ?, ?, 'pass', 'my note', '', '')",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO qa_verdicts (test_id, guild_id, user_id, verdict, "
+            "voided_by, created_at, updated_at) "
+            "VALUES (1, ?, ?, 'fail', ?, '', '')",
+            (GUILD, OTHER_USER, USER),
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        # The test itself survives — it is the project's work product.
+        assert tuple(conn.execute(
+            "SELECT COUNT(*), verified_by FROM qa_tests"
+        ).fetchone()) == (1, None)
+        # Their own verdict goes; the one they merely voided stands, unsigned.
+        assert [
+            tuple(r) for r in conn.execute(
+                "SELECT user_id, voided_by FROM qa_verdicts"
+            ).fetchall()
+        ] == [(OTHER_USER, None)]
+
+
+def test_purge_clears_the_members_own_blocks_but_not_blocks_against_them(db):
+    """A block list withholds something — the other member's entry stands."""
+    with open_db(db) as conn:
+        for owner, target in ((USER, OTHER_USER), (OTHER_USER, USER)):
+            conn.execute(
+                "INSERT INTO voice_master_blocked (guild_id, owner_id, "
+                "target_id, added_at) VALUES (?, ?, ?, 0)",
+                (GUILD, owner, target),
+            )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            "SELECT owner_id, target_id FROM voice_master_blocked"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, USER)]

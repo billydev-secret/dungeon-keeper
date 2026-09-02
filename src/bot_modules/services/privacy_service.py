@@ -402,6 +402,103 @@ def purge_user_data(
         table="mahjong_results.winner_id",
     )
 
+    # ── The five decisions the 2026-09-02 GDPR review left open, settled by
+    # Billy on 2026-09-02. Each register row carries the reasoning.
+
+    # Quote cards. A row says "X quoted Y's message" and names two members, so
+    # it goes whole from either side — with one of them removed it records
+    # nothing coherent. Decided as purge rather than preserve: it is named an
+    # audit log, but it logs a decorative feature, not a moderation decision,
+    # so the sanctions ground does not reach it.
+    _delete(
+        conn,
+        "DELETE FROM quote_audit_log WHERE guild_id = ? AND "
+        "(quoter_id = ? OR quoted_user_id = ?)",
+        (guild_id, user_id, user_id),
+        table="quote_audit_log",
+    )
+
+    # Inactivity records and promotion review cards each name a member in two
+    # different roles, and the two roles get different treatment — the same
+    # split `todos` makes.
+    #
+    # As the SUBJECT (`user_id`), the row is a record about them and goes.
+    # As the ACTOR (the `moderator_id` who set them inactive, the
+    # `resolved_by` who closed the card), the row belongs to somebody else:
+    # deleting it would take an unrelated member's inactivity record or review
+    # card away because a mod asked to be erased. So the actor id is blanked
+    # and the row stands — `moderator_id` to 0 (its own NOT NULL default) and
+    # `resolved_by` to NULL, in both cases the "unknown member" every surface
+    # already renders.
+    for table in ("inactive_members", "promotion_review_cards"):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+            table=table,
+        )
+    _scrub(
+        conn,
+        "UPDATE inactive_members SET moderator_id = 0 "
+        "WHERE guild_id = ? AND moderator_id = ?",
+        (guild_id, user_id),
+        table="inactive_members.moderator_id",
+    )
+    _scrub(
+        conn,
+        "UPDATE promotion_review_cards SET resolved_by = NULL "
+        "WHERE guild_id = ? AND resolved_by = ?",
+        (guild_id, user_id),
+        table="promotion_review_cards.resolved_by",
+    )
+
+    # QA tracker. The verdict is the member's own — their pass/fail call, the
+    # note they wrote, what they were paid — and goes. The test itself is the
+    # project's work product like a `todos` row, so the signature on it is
+    # blanked rather than the test deleted: removing it would take a recorded
+    # sign-off off the board because the tester left. `voided_by` names a
+    # different mod on someone else's verdict and is blanked for the same
+    # reason. The coins already paid live on in the preserved `econ_ledger`.
+    _delete(
+        conn,
+        "DELETE FROM qa_verdicts WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+        table="qa_verdicts",
+    )
+    _scrub(
+        conn,
+        "UPDATE qa_verdicts SET voided_by = NULL "
+        "WHERE guild_id = ? AND voided_by = ?",
+        (guild_id, user_id),
+        table="qa_verdicts.voided_by",
+    )
+    _scrub(
+        conn,
+        "UPDATE qa_tests SET verified_by = NULL "
+        "WHERE guild_id = ? AND verified_by = ?",
+        (guild_id, user_id),
+        table="qa_tests.verified_by",
+    )
+
+    # Voice Master per-room block lists — ASYMMETRIC, deliberately.
+    #
+    # The member's OWN list goes: it is their preference about their own room,
+    # with no ground to outlive them. Rows where they are the `target_id` are
+    # KEPT: that entry is somebody else's protection, and erasing it at the
+    # request of the person it excludes is exactly what Art 17(3)'s "rights of
+    # others" carve-out exists to prevent — the `no_contact_pairs` ground.
+    #
+    # This is neither the symmetric delete `voice_master_trusted` does nor a
+    # blanket preserve, so it is a deliberate call rather than an oversight:
+    # a trust list confers something and can be dropped freely, a block list
+    # withholds something and cannot.
+    _delete(
+        conn,
+        "DELETE FROM voice_master_blocked WHERE guild_id = ? AND owner_id = ?",
+        (guild_id, user_id),
+        table="voice_master_blocked.owner_id",
+    )
+
     # Shared todo list — ANONYMISED, NOT DELETED, and deliberately so.
     #
     # A todos row is two different things at once: the task text, which is the
@@ -719,7 +816,8 @@ SUBJECT_ID_COLUMNS = frozenset(
         "target_author_id", "target_id", "to_user_id", "updated_by",
         "updated_by_user_id",
         "user1_id", "user2_id", "user_a", "user_a_id", "user_b", "user_b_id",
-        "user_high", "user_id", "user_low", "verified_by", "voter_id",
+        "user_high", "user_id", "user_low", "verified_by", "voided_by",
+        "voter_id",
         "watched_user_id", "watcher_user_id", "winner_id",
     }
 )
