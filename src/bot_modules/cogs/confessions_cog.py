@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 from functools import partial
 
 import discord
@@ -22,8 +22,13 @@ from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.services import no_contact_service
 from bot_modules.services.no_contact_logic import SURFACE_CONFESSION_REPLY
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.confessions.approval_views import (
+    notify_confession_expired,
+    refresh_confessions_board,
+)
 from bot_modules.confessions.logic import (
     HELP_TEXT,
+    QUEUED_ACK,
     audit_channel_id,
     build_dm_notification_text,
     compute_confession_max_chars,
@@ -48,6 +53,7 @@ from bot_modules.services.confessions_service import (
     build_anon_reply,
     build_confession_embed,
     check_and_bump_limits,
+    enqueue_confession,
     get_config,
     get_discord_thread_id,
     get_ephemeral_anon_identity,
@@ -56,6 +62,7 @@ from bot_modules.services.confessions_service import (
     init_db,
     log_confession,
     log_reply,
+    purge_expired_pending,
     purge_old_thread_posts,
     thread_name_from_content,
     update_discord_thread_id,
@@ -114,7 +121,8 @@ async def _record_confession_audit(
 
 
 async def _fire_confession_trigger(
-    interaction: discord.Interaction, *, occurrence: str, kind: str = "confession"
+    bot: "Bot", guild_id: int, author_id: int, *, occurrence: str,
+    kind: str = "confession",
 ) -> None:
     """Credit a confession-feed economy quest trigger — privately.
 
@@ -125,18 +133,14 @@ async def _fire_confession_trigger(
     and non-raising by ``fire_member_trigger`` — a no-op when the economy is
     off. ``occurrence`` is the posted message/thread id so each post pays at
     most once.
+
+    Takes the ids rather than the interaction that used to carry them: under
+    mod-approve mode the post is made by a moderator on the author's behalf, so
+    the member who earns the quest is no longer the member who clicked.
     """
     from bot_modules.economy.game_rewards import fire_member_trigger  # noqa: PLC0415
 
-    if interaction.guild is None:
-        return
-    await fire_member_trigger(
-        cast("Bot", interaction.client),
-        interaction.guild.id,
-        interaction.user.id,
-        kind,
-        occurrence=occurrence,
-    )
+    await fire_member_trigger(bot, guild_id, author_id, kind, occurrence=occurrence)
 
 
 # ---------------------------------------------------------------------------
@@ -197,8 +201,10 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             )
             return
 
+        # Checked here as well as in ``publish_confession``, so a guild whose
+        # destination channel is gone refuses the submission at the modal
+        # instead of accepting it into a queue that can never drain.
         dest_channel = interaction.guild.get_channel(cfg.dest_channel_id)
-        log_channel = interaction.guild.get_channel(cfg.log_channel_id)
         if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
             await _safe_ephemeral(interaction, "❌ Bot config is invalid (missing destination channel).")
             return
@@ -211,101 +217,54 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             await _safe_ephemeral(interaction, msg)
             return
 
+        if cfg.require_approval:
+            # Mod-approve mode: park it and tell the member so. Queued before
+            # the defer because the write is local and fast — a "thinking"
+            # spinner it never fills would be the wrong shape for an answer
+            # this immediate.
+            try:
+                await asyncio.to_thread(
+                    enqueue_confession,
+                    db_path,
+                    guild_id=interaction.guild.id,
+                    author_id=interaction.user.id,
+                    content=content,
+                    notify_original_author=1 if ping_pref else 0,
+                )
+            except Exception:
+                # The cooldown and the daily slot were already spent above, so
+                # a bare "This interaction failed" would cost the member their
+                # turn *and* tell them nothing. Say it didn't store; the slot
+                # is not refunded, but they know to try later rather than
+                # assuming a mod is sitting on it.
+                log.exception("confessions: failed to queue a submission")
+                await _safe_ephemeral(
+                    interaction,
+                    "❌ Couldn't hand that to the mods — try again in a moment.",
+                )
+                return
+            await _safe_ephemeral(interaction, QUEUED_ACK)
+            # After the member has been answered, never before: the repaint is
+            # a REST edit on somebody else's channel and must not be able to
+            # keep a submitter waiting, or to fail their submission.
+            await refresh_confessions_board(self.cog.bot, interaction.guild.id)
+            return
+
         try:
             await interaction.response.defer(ephemeral=True, thinking=True)
         except discord.HTTPException:
             return
 
-        accent = await safe_resolve_accent(self.cog.bot.ctx, interaction.guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR)
-        confession_embed = build_confession_embed(content, color=accent)
-
-        if isinstance(dest_channel, discord.ForumChannel):
-            tag_kwargs: dict = {}
-            if dest_channel.flags.require_tag and dest_channel.available_tags:
-                tag_kwargs["applied_tags"] = [dest_channel.available_tags[0]]
-            try:
-                forum_result = await dest_channel.create_thread(
-                    name=thread_name_from_content(content),
-                    embed=confession_embed,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                    auto_archive_duration=10080,
-                    **tag_kwargs,
-                )
-            except discord.HTTPException:
-                await _safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
-                return
-            forum_thread = forum_result.thread
-            root_message_id = forum_thread.id
-            if isinstance(log_channel, discord.TextChannel):
-                await log_confession(
-                    log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-                    dest_channel_id=forum_thread.id, dest_message_id=forum_thread.id, content=content,
-                )
-            upsert_thread_post(
-                db_path, guild_id=interaction.guild.id, message_id=root_message_id,
-                channel_id=dest_channel.id, root_message_id=root_message_id,
-                original_author_id=interaction.user.id,
-                notify_original_author=1 if ping_pref else 0,
-            )
-            await _record_confession_audit(
-                db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
-                message_id=root_message_id,
-                channel_id=audit_channel_id(
-                    dest_channel_id=dest_channel.id,
-                    thread_id=forum_thread.id,
-                    is_forum=True,
-                ),
-                root_message_id=root_message_id,
-            )
-            update_discord_thread_id(db_path, interaction.guild.id, root_message_id, forum_thread.id)
-            try:
-                await forum_result.message.edit(view=ConfessionsCog.build_reply_button_view(root_message_id))
-            except discord.HTTPException:
-                pass
-            await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
-            await _fire_confession_trigger(interaction, occurrence=str(root_message_id))
-            await self.cog._safe_complete(interaction)
-            return
-
-        try:
-            sent = await dest_channel.send(
-                embed=confession_embed,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-        except discord.HTTPException:
-            await _safe_ephemeral(interaction, "❌ Failed to post confession (missing perms?).")
-            return
-
-        if isinstance(log_channel, discord.TextChannel):
-            await log_confession(
-                log_channel=log_channel, author=interaction.user, guild_id=interaction.guild.id,
-                dest_channel_id=dest_channel.id, dest_message_id=sent.id, content=content,
-            )
-        upsert_thread_post(
-            db_path, guild_id=interaction.guild.id, message_id=sent.id,
-            channel_id=dest_channel.id, root_message_id=sent.id,
-            original_author_id=interaction.user.id,
-            notify_original_author=1 if ping_pref else 0,
+        ok, err = await self.cog.publish_confession(
+            interaction.guild,
+            cfg,
+            content=content,
+            author_id=interaction.user.id,
+            notify=ping_pref,
         )
-        await _record_confession_audit(
-            db_path, guild_id=interaction.guild.id, author_id=interaction.user.id,
-            message_id=sent.id,
-            channel_id=audit_channel_id(
-                dest_channel_id=dest_channel.id, thread_id=sent.id, is_forum=False
-            ),
-            root_message_id=sent.id,
-        )
-        try:
-            thread = await sent.create_thread(name=thread_name_from_content(content), auto_archive_duration=10080)
-            update_discord_thread_id(db_path, interaction.guild.id, sent.id, thread.id)
-            try:
-                await thread.send(view=ConfessionsCog.build_reply_button_view(sent.id))
-            except discord.HTTPException:
-                pass
-        except discord.HTTPException:
-            pass
-        await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
-        await _fire_confession_trigger(interaction, occurrence=str(sent.id))
+        if not ok:
+            await _safe_ephemeral(interaction, err)
+            return
         await self.cog._safe_complete(interaction)
 
 
@@ -500,8 +459,8 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
                 # confession_reply quest — engaging with someone ELSE's
                 # confession; the OP replying to their own thread never fires.
                 await _fire_confession_trigger(
-                    interaction, occurrence=str(reply_msg.id),
-                    kind="confession_reply",
+                    self.cog.bot, interaction.guild.id, interaction.user.id,
+                    occurrence=str(reply_msg.id), kind="confession_reply",
                 )
             await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=parent_channel_id)
             await self.cog._safe_complete(interaction)
@@ -559,7 +518,8 @@ class ReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         if not is_op:
             # confession_reply quest — same rule as the thread path above.
             await _fire_confession_trigger(
-                interaction, occurrence=str(reply_msg.id), kind="confession_reply"
+                self.cog.bot, interaction.guild.id, interaction.user.id,
+                occurrence=str(reply_msg.id), kind="confession_reply",
             )
         await self.cog.refresh_confess_launcher(interaction.guild.id, trigger_channel_id=dest_channel.id)
         await self.cog._safe_complete(interaction)
@@ -590,6 +550,39 @@ class ConfessionsCog(commands.Cog):
             purge_old_thread_posts(self.bot.ctx.db_path)
         except Exception:
             log.exception("Error during confession thread purge")
+        await self._sweep_expired_pending()
+
+    async def _sweep_expired_pending(self) -> None:
+        """Drop confessions nobody reviewed inside the seven-day window.
+
+        Not an optimisation. ``confession_pending`` is the only place the bot
+        keeps a confession's text beside its author's real id, and manual.html
+        promises members that link self-destructs after a week — a queue the
+        mods stopped working must not quietly become the exception to it. So
+        the sweep runs whether or not anyone ever turns approval on, and the
+        row goes even if the DM below fails.
+
+        Each author is told, because from where they sit the outcome is
+        indistinguishable from a rejection: it never appeared, and nobody said
+        why. Guilds that lost a row get their board repainted once, not once
+        per confession.
+        """
+        try:
+            expired = await asyncio.to_thread(
+                purge_expired_pending, self.bot.ctx.db_path
+            )
+        except Exception:
+            log.exception("Error sweeping the confession approval queue")
+            return
+        touched: set[int] = set()
+        for row in expired:
+            guild = self.bot.get_guild(int(row["guild_id"]))
+            if guild is None:
+                continue
+            touched.add(guild.id)
+            await notify_confession_expired(self.bot, guild, int(row["author_id"]))
+        for guild_id in touched:
+            await refresh_confessions_board(self.bot, guild_id)
 
     @_cleanup_loop.before_loop
     async def _before_cleanup(self) -> None:
@@ -699,6 +692,155 @@ class ConfessionsCog(commands.Cog):
             custom_id=f"crh|{guild_id}",
         ))
         return view
+
+    # ── Publishing ───────────────────────────────────────────────────────────
+
+    async def publish_confession(
+        self,
+        guild: discord.Guild,
+        cfg: "GuildConfig",
+        *,
+        content: str,
+        author_id: int,
+        notify: bool,
+    ) -> tuple[bool, str]:
+        """Post a confession for real: destination, thread, audit, launcher, quest.
+
+        Everything that happens *after* a confession is cleared to go public,
+        with no interaction in sight. It used to be the back half of
+        ``ConfessModal.on_submit``, which was fine while submitting and posting
+        were the same act; with mod-approve mode they are two acts, minutes or
+        days apart, and the second one is performed by a moderator whose
+        interaction has nothing to do with the confession. So it takes an
+        ``author_id`` rather than a member and returns ``(ok, error)`` rather
+        than replying — the caller knows who it owes an answer to.
+
+        The quest trigger fires from here, which means in approve mode it fires
+        on **approval**, not submission: a confession that never posts must
+        never pay, and the occurrence id it dedupes on doesn't exist until the
+        message does.
+
+        The mod-log mirror needs a real user object for its embed. When the
+        author can't be resolved — they left, or Discord is unhappy — the
+        mirror is skipped rather than the post abandoned: it is the optional,
+        off-by-default surface, and ``anon_audit_log`` (written below either
+        way) is the record that actually matters.
+        """
+        db_path = self.bot.ctx.db_path
+        dest_channel = guild.get_channel(cfg.dest_channel_id)
+        log_channel = guild.get_channel(cfg.log_channel_id)
+        if not isinstance(dest_channel, (discord.TextChannel, discord.ForumChannel)):
+            return False, "❌ Bot config is invalid (missing destination channel)."
+
+        author: discord.Member | discord.User | None = guild.get_member(author_id)
+        if author is None and isinstance(log_channel, discord.TextChannel):
+            try:
+                author = await self.bot.fetch_user(author_id)
+            except discord.HTTPException:
+                author = None
+
+        accent = await safe_resolve_accent(
+            self.bot.ctx, guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR
+        )
+        confession_embed = build_confession_embed(content, color=accent)
+        notify_flag = 1 if notify else 0
+
+        if isinstance(dest_channel, discord.ForumChannel):
+            tag_kwargs: dict = {}
+            if dest_channel.flags.require_tag and dest_channel.available_tags:
+                tag_kwargs["applied_tags"] = [dest_channel.available_tags[0]]
+            try:
+                forum_result = await dest_channel.create_thread(
+                    name=thread_name_from_content(content),
+                    embed=confession_embed,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                    auto_archive_duration=10080,
+                    **tag_kwargs,
+                )
+            except discord.HTTPException:
+                return False, "❌ Failed to post confession (missing perms?)."
+            forum_thread = forum_result.thread
+            root_message_id = forum_thread.id
+            if isinstance(log_channel, discord.TextChannel) and author is not None:
+                await log_confession(
+                    log_channel=log_channel, author=author, guild_id=guild.id,
+                    dest_channel_id=forum_thread.id, dest_message_id=forum_thread.id,
+                    content=content,
+                )
+            upsert_thread_post(
+                db_path, guild_id=guild.id, message_id=root_message_id,
+                channel_id=dest_channel.id, root_message_id=root_message_id,
+                original_author_id=author_id,
+                notify_original_author=notify_flag,
+            )
+            await _record_confession_audit(
+                db_path, guild_id=guild.id, author_id=author_id,
+                message_id=root_message_id,
+                channel_id=audit_channel_id(
+                    dest_channel_id=dest_channel.id,
+                    thread_id=forum_thread.id,
+                    is_forum=True,
+                ),
+                root_message_id=root_message_id,
+            )
+            update_discord_thread_id(db_path, guild.id, root_message_id, forum_thread.id)
+            try:
+                await forum_result.message.edit(
+                    view=ConfessionsCog.build_reply_button_view(root_message_id)
+                )
+            except discord.HTTPException:
+                pass
+            await self.refresh_confess_launcher(
+                guild.id, trigger_channel_id=dest_channel.id
+            )
+            await _fire_confession_trigger(
+                self.bot, guild.id, author_id, occurrence=str(root_message_id)
+            )
+            return True, ""
+
+        try:
+            sent = await dest_channel.send(
+                embed=confession_embed,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            return False, "❌ Failed to post confession (missing perms?)."
+
+        if isinstance(log_channel, discord.TextChannel) and author is not None:
+            await log_confession(
+                log_channel=log_channel, author=author, guild_id=guild.id,
+                dest_channel_id=dest_channel.id, dest_message_id=sent.id, content=content,
+            )
+        upsert_thread_post(
+            db_path, guild_id=guild.id, message_id=sent.id,
+            channel_id=dest_channel.id, root_message_id=sent.id,
+            original_author_id=author_id,
+            notify_original_author=notify_flag,
+        )
+        await _record_confession_audit(
+            db_path, guild_id=guild.id, author_id=author_id,
+            message_id=sent.id,
+            channel_id=audit_channel_id(
+                dest_channel_id=dest_channel.id, thread_id=sent.id, is_forum=False
+            ),
+            root_message_id=sent.id,
+        )
+        try:
+            thread = await sent.create_thread(
+                name=thread_name_from_content(content), auto_archive_duration=10080
+            )
+            update_discord_thread_id(db_path, guild.id, sent.id, thread.id)
+            try:
+                await thread.send(view=ConfessionsCog.build_reply_button_view(sent.id))
+            except discord.HTTPException:
+                pass
+        except discord.HTTPException:
+            pass
+        await self.refresh_confess_launcher(guild.id, trigger_channel_id=dest_channel.id)
+        await _fire_confession_trigger(
+            self.bot, guild.id, author_id, occurrence=str(sent.id)
+        )
+        return True, ""
 
     # ── DM notification ──────────────────────────────────────────────────────
 

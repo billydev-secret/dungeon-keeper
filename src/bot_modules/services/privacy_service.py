@@ -466,6 +466,26 @@ def purge_user_data(
                 table=f"{table}.{col}",
             )
 
+    # Confessions held by mod-approve mode (migration 200). Deleted outright,
+    # and it is the one confessions table that is: `confession_threads` relies
+    # on its seven-day TTL because it holds routing metadata, but a pending row
+    # holds the member's confession *text*, and it is queued to be published.
+    # Erasing somebody and then posting what they wrote — because a moderator
+    # got to the queue before the sweep did — is not a defensible outcome, so
+    # the row goes now. Nothing is announced to the mods. Note this path cannot
+    # repaint the board — erasure is run out-of-band, with no bot in hand, and
+    # the board's own loop only repaints guilds where a recurring chore spawned
+    # — so a clipped copy of the confession stays rendered in the sticky embed
+    # until something else moves it. The stored row is gone either way, which is
+    # what the erasure owes; the stale pixels are a display lag, and pressing
+    # the board's Confessions button will already find nothing there.
+    _delete(
+        conn,
+        "DELETE FROM confession_pending WHERE guild_id = ? AND author_id = ?",
+        (guild_id, user_id),
+        table="confession_pending",
+    )
+
     for table in (
         "wellness_users",
         "wellness_caps",

@@ -1092,6 +1092,7 @@ def _confessions_section(guild_id: int, bot, conn) -> dict:
         "replies_enabled": cfg.replies_enabled,
         "notify_op_on_reply": cfg.notify_op_on_reply,
         "per_day_limit": cfg.per_day_limit,
+        "require_approval": cfg.require_approval,
         "launcher_channel_id": str(cfg.launcher_channel_id),
         "launcher_message_id": str(cfg.launcher_message_id),
         "blocked_users": [
@@ -3793,6 +3794,7 @@ class ConfessionsConfigUpdate(BaseModel):
     replies_enabled: bool | None = None
     notify_op_on_reply: bool | None = None
     per_day_limit: int | None = None
+    require_approval: bool | None = None
 
 
 @router.put("/config/confessions")
@@ -3829,6 +3831,8 @@ async def update_confessions(
             cfg.notify_op_on_reply = body.notify_op_on_reply
         if body.per_day_limit is not None:
             cfg.per_day_limit = body.per_day_limit
+        if body.require_approval is not None:
+            cfg.require_approval = body.require_approval
         _confessions_upsert_config(ctx.db_path, cfg)
         return {"ok": True}
 

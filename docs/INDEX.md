@@ -34,7 +34,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [birthday_spec.md](birthday_spec.md) | Birthday set/remove, daily celebration, announcement message format |
 | [bump_tracker_spec.md](bump_tracker_spec.md) | Bump Tracker (`/bump log`/`status`, multi-site cooldown reminders); dashboard panel shipped 2026-07-23 — before that the routes existed with no UI and live guilds were configured by hand |
 | [clapback_spec.md](clapback_spec.md) | Clapback head-to-head comedy game: bracketing rules (3-player round-robin, fewest-byes-first rotation, duplicate-answer avoidance) and scoring (vote %, CLAPBACK bonus, bye = the round's average). Complements the suite-wide `games_system_spec.md` |
-| [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies. Moderation is the admin-gated audit panel; the Discord mod-log channel is optional and off by default. Its metadata-plus-message-pointer shape is the model `anon_audit_spec.md` copied |
+| [confessions_spec.md](confessions_spec.md) | Anonymous confessions, anon replies, and the optional mod-approve queue on the todo board. Moderation is the admin-gated audit panel; the Discord mod-log channel is optional and off by default. Its metadata-plus-message-pointer shape is the model `anon_audit_spec.md` copied |
 | [dk_pvp_games_suite_spec.md](dk_pvp_games_suite_spec.md) | PvP duel/group games (Pressure Cooker, Quickdraw, Chicken, Hot Potato, Musical Chairs) |
 | [dm_perms_spec.md](dm_perms_spec.md) | DM permission system (open/ask/closed, consent pairs) |
 | [docs_cog_spec.md](docs_cog_spec.md) | Channel docs: dashboard posts authored docs into channels (not this docs/ folder) |

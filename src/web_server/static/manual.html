@@ -878,8 +878,28 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Mod capabilities in confessions</strong>
-        <p>Mods can see who is really behind every confession and anonymous reply on the <a href="/#/confessions-audit">Confessions Audit Log</a> panel, block a specific member from confessing (without revealing their identity), and enable <em>panic mode</em> to temporarily suspend all new confessions.</p>
+        <p>Mods can see who is really behind every confession and anonymous reply on the <a href="/#/confessions-audit">Confessions Audit Log</a> panel, block a specific member from confessing (without revealing their identity), require every confession to be approved before it posts, and enable <em>panic mode</em> to temporarily suspend all new confessions.</p>
         <p>The audit panel is admin-only and needs no setup. You <em>can</em> also point confessions at a mod-log channel in Discord, but it's optional and off by default — anyone who can read that channel can put a name to every confession in it, so the dashboard is the safer place to review them.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🕵️</span>
+      <div class="callout-body">
+        <strong>Some servers hold confessions for a moderator</strong>
+        <p>Admins can switch on <em>moderator approval</em>. When it's on, submitting a confession doesn't post it — you'll be told it has gone to the mods for review, and it appears in the confessions channel once one of them approves it. If they turn it down you get a private message saying so, with their reason if they gave one; nobody else is told, and nothing is posted.</p>
+        <p><strong>You stay anonymous through all of it.</strong> The card a moderator reviews shows what you wrote and how long it has been waiting — it does not show your name, and neither does the queue they pick it from. Putting a real name to a confession is still only possible on the admin-only <a href="/#/confessions-audit">Confessions Audit Log</a>, exactly as it is for a confession that posted normally. The message telling you it was rejected doesn't name the moderator either.</p>
+        <p>If nobody reviews it within a week it's discarded and you're told — nothing was wrong with it, and you're welcome to send it again. A rejected or expired confession isn't kept anywhere.</p>
+      </div>
+    </div>
+
+    <div class="callout callout-info">
+      <span class="callout-icon">🛠️</span>
+      <div class="callout-body">
+        <strong>Working the approval queue (mods)</strong>
+        <p>Waiting confessions appear as a <strong>🕵️ Confessions to approve</strong> section on the server todo board, and the <strong>🕵️ Confessions</strong> button there opens them: pick one, read it, then <strong>Approve</strong> to post it or <strong>Reject</strong> to bin it with an optional note back to the member. Approving posts it exactly as if the member had posted it themselves — same channel, same reply bar, still anonymous.</p>
+        <p>You will not see who wrote it. That's deliberate: the todo board is open to every moderator, while naming a confession's author is admin-only, and approving isn't meant to be a second way in. If you need to know who sent something, that's the audit panel.</p>
+        <p>Two things carry over from the ordinary rules: while <em>panic mode</em> is on nothing in the queue can be approved (you can still reject), and if someone is added to the block list after they submitted, their waiting confession won't post. Rejecting tells the member by private message — the card says whether that message actually reached them, since someone with DMs closed hears nothing.</p>
       </div>
     </div>
 
@@ -1758,7 +1778,7 @@
       <span class="callout-icon">🎭</span>
       <div class="callout-body">
         <strong>"Anonymous" means anonymous to other members</strong>
-        <p>Whispers, confessions, anonymous game submissions and Guess rounds are all recorded with your name attached in an audit trail only admins and moderators can see. This is deliberate — an anonymous channel with no accountability becomes a harassment tool. What it means for you is that anonymity protects you from <em>other members</em>, not from the mod team. Some of it expires: the link between a confession and its author self-destructs after <strong>7 days</strong>, and the anonymous-games audit trail is swept after <strong>90 days</strong>. Whisper and Guess records are kept until you remove them.</p>
+        <p>Whispers, confessions, anonymous game submissions and Guess rounds are all recorded with your name attached in an audit trail only admins and moderators can see. This is deliberate — an anonymous channel with no accountability becomes a harassment tool. What it means for you is that anonymity protects you from <em>other members</em>, not from the mod team. Some of it expires: the link between a confession and its author self-destructs after <strong>7 days</strong>, and the anonymous-games audit trail is swept after <strong>90 days</strong>. On a server where confessions are held for moderator approval, a confession waiting in that queue is stored with your name attached until a moderator resolves it — the only place the bot keeps a confession's text itself — and is deleted the moment they approve or reject it, or after 7 days if neither happens. Moderators reviewing the queue are not shown your name. Whisper and Guess records are kept until you remove them.</p>
       </div>
     </div>
 

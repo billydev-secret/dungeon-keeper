@@ -788,3 +788,27 @@ async def test_the_approvals_button_hands_off_to_the_economy(board_db):
         await TodoBoardView()._approvals.callback(interaction)
 
     picker.assert_awaited_once_with(interaction)
+
+
+@pytest.mark.asyncio
+async def test_the_confessions_button_hands_off_to_the_picker(board_db):
+    """A door, like the other two — but the gate behind it is the board's own
+    moderator check, applied inside the picker, since no currency moves."""
+    channel, _ = _fake_channel()
+    cog = _board_cog(board_db, _fake_guild(channel))
+    interaction = _interaction(_member(mod=False))
+    interaction.client = MagicMock()
+    interaction.client.get_cog = MagicMock(return_value=cog)
+
+    with patch(
+        "bot_modules.cogs.todo_cog.open_confessions_picker", new=AsyncMock()
+    ) as picker:
+        await TodoBoardView()._confessions.callback(interaction)
+
+    picker.assert_awaited_once_with(interaction)
+
+
+def test_the_board_fits_discords_five_buttons_to_a_row():
+    """Confessions is the fifth and last button the board can carry. A sixth
+    would silently wrap onto a second action row."""
+    assert len(TodoBoardView().children) == 5
