@@ -14,6 +14,8 @@ import pytest
 
 from bot_modules.services.advisor_chat_logic import (
     BOT_MARKER,
+    EMBED_TOTAL_LIMIT,
+    FIELD_BUDGET,
     FIELD_VALUE_LIMIT,
     MAX_EXCHANGES,
     MAX_FIELDS,
@@ -115,6 +117,45 @@ def test_a_very_long_chat_keeps_its_most_recent_turns():
 
     assert len(fields) == MAX_FIELDS
     assert fields[-1][1] == f"q{MAX_FIELDS + 5}"
+
+
+def test_a_full_chat_of_long_turns_still_fits_in_one_embed():
+    """Regression: the per-field caps do not imply Discord's 6000-character
+    whole-embed limit. Five near-limit answers and five long questions run past
+    it, and the failure compounds — the edit 400s, the window never updates, and
+    every later turn rebuilds an equal-or-larger embed that fails identically,
+    so the chat can never progress."""
+    history = _history(
+        [
+            t
+            for i in range(MAX_EXCHANGES)
+            for t in (("user", "q" * 500), ("assistant", "a" * FIELD_VALUE_LIMIT))
+        ]
+    )
+
+    fields = transcript_fields(history, NAME)
+    total = sum(len(n) + len(v) for n, v in fields)
+
+    assert total <= FIELD_BUDGET < EMBED_TOTAL_LIMIT
+
+
+def test_the_whole_embed_budget_drops_the_oldest_turns_first():
+    """What is still being discussed is the far end of the chat."""
+    history = _history([("assistant", f"{i}" * FIELD_VALUE_LIMIT) for i in range(9)])
+
+    values = [v for _, v in transcript_fields(history, NAME)]
+
+    assert values[-1].startswith("8")
+    assert len(values) < 9  # something was dropped, and it was the opening
+    assert not any(v.startswith("0") for v in values)
+
+
+def test_one_oversized_turn_is_still_shown_rather_than_dropped_entirely():
+    """Budgeting must never render an empty transcript — a member would see a
+    chat window with nothing in it and no way to tell why."""
+    history = _history([("assistant", "x" * FIELD_VALUE_LIMIT)] )
+
+    assert len(transcript_fields(history, NAME)) == 1
 
 
 # ── parsing anything that isn't ours ─────────────────────────────────

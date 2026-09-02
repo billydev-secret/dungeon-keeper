@@ -268,12 +268,13 @@ async def test_a_chat_turn_gets_the_smaller_answer_budget(monkeypatch, chat, exp
     assert client.messages.create.call_args.kwargs["max_tokens"] == expected
 
 
-def test_the_chat_budget_fits_inside_one_embed_field():
-    """Four characters per token is the rough floor for English prose; the cap
-    has to leave a normal answer inside Discord's field limit."""
-    from bot_modules.services.advisor_chat_logic import FIELD_VALUE_LIMIT
-
-    assert adv.MAX_CHAT_TOKENS * 4 <= FIELD_VALUE_LIMIT * 2
+def test_the_chat_budget_is_well_under_the_one_shot_budget():
+    """The cap is a backstop, not a guarantee: at ~4 characters per token even
+    400 tokens can outrun Discord's 1024-character field, which is why
+    ``_clip`` exists and why the history fed back is the clipped text. What is
+    worth pinning is the relationship — a chat turn must be a fraction of a
+    one-shot answer, or the register and the budget disagree."""
+    assert adv.MAX_CHAT_TOKENS <= adv.MAX_TOKENS // 2
 
 
 # ── config: model + server-context toggle ───────────────────────────────────

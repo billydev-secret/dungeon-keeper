@@ -139,11 +139,14 @@ def set_advisor_tools_enabled(
 MAX_QUESTION_CHARS = 500
 MAX_TOKENS = 800
 # The Ask panel's chat window renders each turn as an embed field, and Discord
-# caps a field value at 1024 characters — a full 800-token answer overflows it
-# and would be clipped out of both the member's view and the history fed back
-# on their next reply. Shorter answers are also simply right for a chat: a
-# follow-up is one button away, so there is no need to pre-empt it. The budget
-# and CHAT_INSTRUCTIONS enforce the same thing from two directions.
+# caps a field value at 1024 characters. This does NOT guarantee a turn fits:
+# 400 tokens is roughly 1600 characters of English prose, so a verbose answer
+# is still clipped by advisor_chat_logic._clip, and the clipped text is what is
+# fed back as history on the next reply. What the budget buys is that a typical
+# chat answer lands well inside the field, making the clip a rare edge rather
+# than the normal path — an 800-token answer would overflow it routinely.
+# CHAT_INSTRUCTIONS pushes the same way from the prompt side, and is the more
+# effective of the two; this cap is the backstop.
 MAX_CHAT_TOKENS = 400
 # History is untrusted client input on the web surface — cap turns and size.
 MAX_HISTORY_TURNS = 8
@@ -728,8 +731,8 @@ async def answer_advisor(
 
     ``chat`` switches the register for the Ask panel's multi-turn chat window
     (see :data:`CHAT_INSTRUCTIONS`) and trims the answer budget to
-    :data:`MAX_CHAT_TOKENS`, which keeps a turn inside the embed field it will
-    be rendered into.
+    :data:`MAX_CHAT_TOKENS`, which keeps a typical turn inside the embed field
+    it will be rendered into — see that constant for what it does not promise.
     """
     q = (question or "").strip()
     if not q:

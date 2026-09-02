@@ -108,7 +108,9 @@ export function mount(container) {
     // Where members meet the assistant in Discord. Admin-only, like every
     // other panel poster, so it renders locked for a non-admin who lands here.
     mountPanelPoster(container.querySelector('[data-poster="ask-panel"]'), "ask-panel", {
-      heading: `Post the Ask ${name} Panel`,
+      // Raw, not the pre-escaped `name`: mountPanelPoster escapes heading
+      // itself, and an assistant called "Poppy's Helper" would double-escape.
+      heading: `Post the Ask ${cfg.assistant_name || "Billy-bot"} Panel`,
       buttonLabel: "Post Panel",
     });
 

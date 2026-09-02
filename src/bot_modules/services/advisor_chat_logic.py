@@ -55,6 +55,18 @@ FIELD_VALUE_LIMIT = 1024
 FIELD_NAME_LIMIT = 256
 MAX_FIELDS = 25
 
+#: Discord *also* rejects an embed whose title, field names, field values and
+#: footer exceed 6000 characters together — a limit neither of the per-field
+#: caps above implies. Five near-limit answers plus five long questions run
+#: past it, and the failure is nasty rather than cosmetic: the edit 400s, the
+#: window never updates, and every later turn rebuilds an equal-or-larger embed
+#: that fails the same way, so the chat can never progress and the member only
+#: ever sees a generic error. The transcript is therefore budgeted as a whole.
+EMBED_TOTAL_LIMIT = 6000
+#: Headroom for the title and footer, which this module doesn't render.
+EMBED_CHROME_RESERVE = 400
+FIELD_BUDGET = EMBED_TOTAL_LIMIT - EMBED_CHROME_RESERVE
+
 #: Seconds between Reply presses, per member. Mirrors the 12s cooldown on
 #: ``/ask`` — the same shared Anthropic budget is behind both surfaces, and a
 #: button is easier to lean on than a slash command.
@@ -83,16 +95,27 @@ def transcript_fields(
 ) -> list[tuple[str, str]]:
     """Render a conversation as embed fields, oldest first.
 
-    Keeps the most recent turns when a conversation somehow runs past
-    :data:`MAX_FIELDS` — the far end of the chat is the part still being talked
-    about, and dropping the opening beats Discord rejecting the whole embed.
+    Keeps the most recent turns when a conversation runs past either of
+    Discord's two ceilings — :data:`MAX_FIELDS` or the :data:`FIELD_BUDGET`
+    share of the whole-embed limit. The far end of the chat is the part still
+    being talked about, so dropping the opening beats Discord rejecting the
+    embed outright and stranding the conversation.
     """
     fields = [
         turn_field(str(t.get("role", "")), str(t.get("content", "")), assistant_name)
         for t in history
         if str(t.get("content", "")).strip()
     ]
-    return fields[-MAX_FIELDS:]
+    fields = fields[-MAX_FIELDS:]
+    kept: list[tuple[str, str]] = []
+    total = 0
+    for name, value in reversed(fields):
+        total += len(name) + len(value)
+        if total > FIELD_BUDGET and kept:
+            break
+        kept.append((name, value))
+    kept.reverse()
+    return kept
 
 
 def history_from_fields(

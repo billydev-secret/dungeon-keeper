@@ -449,3 +449,51 @@ async def test_the_panel_posts_a_button_that_survives_a_restart(monkeypatch):
     view = channel.send.await_args.kwargs["view"]
     assert [c.custom_id for c in view.children] == ["advisor_panel:ask"]
     assert "Billy-bot" in channel.send.await_args.kwargs["embed"].title
+
+
+async def test_opening_a_fresh_chat_is_rate_limited_like_replying(monkeypatch):
+    """Regression: the panel button used to go straight to the modal.
+
+    Guarding only Reply leaves the guard unarmed on the path members actually
+    use — MAX_EXCHANGES caps one window, and a new window is one click away, so
+    a member could open chat after chat as fast as they could type, each one a
+    billed call carrying the whole manual.
+    """
+    monkeypatch.setattr(
+        advisor_cog, "_REPLY_COOLDOWN", advisor_chat_logic.ReplyCooldown()
+    )
+    button = advisor_cog.AskPanelButton()
+    first, second = _interaction(_member()), _interaction(_member())
+    for i in (first, second):
+        i.response.send_modal = AsyncMock()
+        i.response.send_message = AsyncMock()
+
+    await button.callback(first)
+    await button.callback(second)
+
+    first.response.send_modal.assert_awaited_once()
+    second.response.send_modal.assert_not_called()
+    assert "sec" in second.response.send_message.await_args.args[0]
+
+
+async def test_the_two_entry_points_share_one_budget(monkeypatch):
+    """Opening a chat and replying inside one are both billed calls, so a
+    member cannot alternate between them to halve the wait."""
+    monkeypatch.setattr(
+        advisor_cog, "_REPLY_COOLDOWN", advisor_chat_logic.ReplyCooldown()
+    )
+    panel = _interaction(_member())
+    panel.response.send_modal = AsyncMock()
+    await advisor_cog.AskPanelButton().callback(panel)
+
+    reply = _interaction(_member())
+    reply.response.send_modal = AsyncMock()
+    reply.response.send_message = AsyncMock()
+    reply.message = MagicMock(embeds=[advisor_cog._chat_embed(
+        [{"role": "user", "content": "hi"}], "Billy-bot", None
+    )])
+
+    await advisor_cog.AskChatReplyButton(7).callback(reply)
+
+    reply.response.send_modal.assert_not_called()
+    assert "sec" in reply.response.send_message.await_args.args[0]

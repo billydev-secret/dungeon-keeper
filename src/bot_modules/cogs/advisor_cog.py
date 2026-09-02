@@ -26,6 +26,7 @@ click, re-permission-checked and re-validated (``advisor_actions``).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import TYPE_CHECKING, cast
@@ -434,6 +435,26 @@ _REPLY_COOLDOWN = ReplyCooldown()
 _CHAT_NOT_YOURS = "That isn't your chat — press **Ask a question** on the panel to start your own."
 
 
+async def _cooldown_blocked(interaction: discord.Interaction, user_id: int) -> bool:
+    """Refuse and report if this member asked too recently; otherwise record it.
+
+    Shared by *both* entry points on purpose. Guarding only Reply would leave
+    the guard unarmed on the path members actually use: opening a fresh chat is
+    one click away, so ``MAX_EXCHANGES`` caps a window, not a member's spend.
+    Every ask here is a billed call carrying the whole manual, so what needs
+    rate-limiting is the model call, not the button that happens to make it.
+    """
+    now = time.monotonic()
+    wait = _REPLY_COOLDOWN.remaining(user_id, now)
+    if wait > 0:
+        await interaction.response.send_message(
+            f"❌ Give me a sec — try again in {wait:.0f}s.", ephemeral=True
+        )
+        return True
+    _REPLY_COOLDOWN.mark(user_id, now)
+    return False
+
+
 def _ask_panel_embed(assistant_name: str, color: int | discord.Colour | None):
     """The public panel members press to open a chat."""
     return discord.Embed(
@@ -522,10 +543,15 @@ async def _show_chat(
 ) -> None:
     """Draw the chat window, updating it in place where there is one to update.
 
-    ``edit`` is False only for the first turn, which has no window yet. The
-    fallback matters: if the in-place edit is ever refused (an expired token, a
-    dismissed message), the member still gets their answer in a fresh window
-    rather than losing the round-trip they just waited for.
+    ``edit`` is False only for the first turn, which has no window yet.
+
+    The fallback covers a window that can no longer be edited — a dead token, a
+    message the member dismissed mid-answer — where a resend is the only way
+    they get the answer they waited for. It is *not* a retry of a payload
+    Discord rejected on its merits: an over-length embed is prevented upstream
+    by ``transcript_fields``' whole-embed budget, precisely so this path never
+    resends something guaranteed to fail again. When it does fire the member
+    can briefly hold two windows, so the replacement says which one is live.
     """
     embed = _chat_embed(history, assistant_name, color)
     view = _ChatView(user_id, full=is_full(history))
@@ -537,6 +563,9 @@ async def _show_chat(
             return
         except discord.HTTPException:
             log.exception("advisor chat: in-place edit failed, opening a new window")
+            notice = (
+                f"{notice}\n" if notice else ""
+            ) + "-# Your earlier chat window is out of date — keep using this one."
     await interaction.followup.send(
         content=notice or discord.utils.MISSING,
         embed=embed,
@@ -566,6 +595,8 @@ class AskPanelButton(
         return cls()
 
     async def callback(self, interaction: discord.Interaction) -> None:
+        if await _cooldown_blocked(interaction, interaction.user.id):
+            return
         await interaction.response.send_modal(_AskModal(history=None))
 
 
@@ -617,13 +648,8 @@ class AskChatReplyButton(
                 ephemeral=True,
             )
             return
-        wait = _REPLY_COOLDOWN.remaining(self.user_id, time.monotonic())
-        if wait > 0:
-            await interaction.response.send_message(
-                f"❌ Give me a sec — try again in {wait:.0f}s.", ephemeral=True
-            )
+        if await _cooldown_blocked(interaction, self.user_id):
             return
-        _REPLY_COOLDOWN.mark(self.user_id, time.monotonic())
         await interaction.response.send_modal(_AskModal(history=history))
 
 
@@ -706,6 +732,17 @@ class _AskModal(discord.ui.Modal):
             # *message update* — edit_original_response then rewrites the chat
             # window in place instead of stacking a second one beneath it.
             await interaction.response.defer()
+            # That defer is deliberately invisible, which on its own leaves the
+            # window unchanged and the Reply button live for the seconds the
+            # model takes. The member's natural second press then comes back as
+            # "give me a sec", which reads as being told off for spamming
+            # rather than "still thinking". Cosmetic, so a failure here is
+            # swallowed: the answer below still lands.
+            with contextlib.suppress(discord.HTTPException):
+                await interaction.edit_original_response(
+                    content="💭 Thinking…",
+                    view=_ChatView(interaction.user.id, full=True),
+                )
 
         bot = cast("Bot", interaction.client)
         guild = interaction.guild
