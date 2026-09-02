@@ -113,15 +113,15 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
     game that was played but never formally ended — or one that flopped with
     nobody joining — left the board claiming the chore was skipped.
 
-    All DB work goes through ``asyncio.to_thread`` — **including the mod
-    check**, which reads the guild config and so hits the database on a cold
-    cache (the first hand-started game after a restart). It is only a couple of
-    indexed reads, but it sits in front of
-    ``interaction.response.edit_message`` on the duel paths, and a connection
-    will wait up to its 30s busy timeout if another writer holds the lock —
-    long enough to stall the heartbeat and drop the gateway. Resolving the
-    member itself is a cache lookup and stays on the loop, since Discord
-    objects do not cross into the DB thread.
+    All DB work goes through ``asyncio.to_thread``, including the guild-config
+    load the mod check needs — that hits the database on a cold cache (the
+    first hand-started game after a restart), and it sits in front of
+    ``interaction.response.edit_message`` on the duel paths, where a connection
+    waiting out its 30s busy timeout would stall the heartbeat and drop the
+    gateway. The config is **warmed** in the thread and the mod check itself
+    then runs on the loop against the warm cache, so the ``Member`` never
+    crosses into the worker: reading its roles walks the guild's live role
+    cache, which another gateway event can mutate underneath a thread.
 
     The tick opens with ``BEGIN IMMEDIATE``: it reads the wired definitions and
     then writes the completion, and on a plain deferred transaction that
@@ -145,11 +145,15 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
         if member is None:
             return
 
+        # Warm the per-guild config off-loop, then ask the one shared question
+        # ("is this member staff?") on-loop against the now-cached answer.
+        await asyncio.to_thread(ctx.guild_config, int(guild_id))
+        if not ctx.member_is_mod(member):
+            return
+
         from bot_modules.core.db_utils import open_db_immediate  # noqa: PLC0415
 
         def _work() -> list[int]:
-            if not ctx.member_is_mod(member):
-                return []
             with open_db_immediate(ctx.db_path) as conn:
                 return auto_complete_chores(
                     conn, int(guild_id), "game",

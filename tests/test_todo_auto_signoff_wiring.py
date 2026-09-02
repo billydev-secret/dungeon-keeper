@@ -65,9 +65,15 @@ class _StubGuild:
 class _StubCtx:
     def __init__(self, db_path):
         self.db_path = db_path
+        self.config_loads = 0
 
     def open_db(self):
         return open_db(self.db_path)
+
+    def guild_config(self, guild_id):
+        """Warmed off-loop before the mod check, so the Member stays on it."""
+        self.config_loads += 1
+        return object()
 
     def member_is_mod(self, member):
         return member.is_mod
@@ -273,13 +279,50 @@ def _calls(node: ast.AST) -> set[str]:
         # Risky Rolls opened by hand — it has its own command and does not
         # share the party games' finish_launch_response.
         ("bot_modules/cogs/risky_roll_cog.py", "_start_game"),
-        # "Run Again" on a recap goes straight to launch(), missing the seam.
+        # Recap relaunch buttons go straight to the launcher, missing the seam.
         ("bot_modules/cogs/games_price_cog.py", "run_again"),
         ("bot_modules/cogs/games_rushmore_cog.py", "run_again"),
+        ("bot_modules/cogs/games_clapback_cog.py", "play_again"),
+        ("bot_modules/cogs/games_clapback_cog.py", "play_again_shuffled"),
     ],
 )
 def test_the_human_launch_paths_sign_the_chore_off(module, function):
     assert "sign_off_game_chore" in _calls(_function(_module(module), function))
+
+
+#: Relaunching a game from its recap — the shape that keeps being missed.
+#: These call a launcher directly rather than going through the shared
+#: ``finish_launch_response``, so each one has to carry the sign-off itself.
+_RELAUNCHERS = ("self.cog.launch(", "self.cog._start_new_game(")
+
+
+def test_no_recap_relaunch_button_is_left_without_the_seam():
+    """Found by hand three times, once per game. Found by the suite from now on.
+
+    The list above is a list, so it can be short by one and look complete —
+    which is exactly what happened to Clapback. This asks the tree instead: any
+    button handler that relaunches a game by calling a launcher directly must
+    sign the chore off, or a mod restarting a round gets no credit for it.
+    """
+    missing = []
+    found = []
+    for path in (SRC / "bot_modules/cogs").rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        source = path.read_text(encoding="utf-8")
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            body = ast.get_source_segment(source, node) or ""
+            if not any(call in body for call in _RELAUNCHERS):
+                continue
+            found.append(f"{path.name}:{node.name}")
+            if "sign_off_game_chore" not in body:
+                missing.append(f"{path.name}:{node.name}")
+
+    # A scan that matches nothing passes trivially, which would make this test
+    # a decoration rather than a guard.
+    assert len(found) >= 4, f"the relaunch scan stopped matching: {found}"
+    assert not missing, f"relaunch without a chore sign-off: {missing}"
 
 
 def test_the_scheduler_never_signs_the_chore_off():

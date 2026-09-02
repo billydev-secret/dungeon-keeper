@@ -456,15 +456,7 @@ class PriceRecapView(discord.ui.View):
             pass
         self.stop()
         await interaction.response.defer()
-        # Run Again goes straight to launch(), so it misses the shared
-        # finish_launch_response seam that signs the "run a game" chore off.
-        # A mod restarting a round from the recap has demonstrably run a game
-        # by hand, so it carries the call itself. After the defer, per the
-        # interaction-window rule.
-        await sign_off_game_chore(
-            self.cog.bot, interaction.guild_id, interaction.user.id
-        )
-        await self.cog.launch(
+        game_id = await self.cog.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
@@ -476,6 +468,16 @@ class PriceRecapView(discord.ui.View):
                 "source": self._settings.get("source", "host"),
             },
         )
+        # A recap's relaunch button goes straight to the launcher, missing the
+        # shared finish_launch_response seam — but a mod restarting a round by
+        # hand has run a game. Signed off only on a launch that actually
+        # produced a game (a falsy id means it failed, e.g. no send permission),
+        # and after it, so a chore is never ticked green for a round that never
+        # started.
+        if game_id:
+            await sign_off_game_chore(
+                self.cog.bot, interaction.guild_id, interaction.user.id
+            )
 
     @discord.ui.button(label="🔄 Hand Off", style=discord.ButtonStyle.secondary, custom_id="price_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):

@@ -605,6 +605,10 @@ class TodoCog(commands.Cog):
 async def repaint_board(bot, guild_id: int) -> None:
     """Repaint a guild's sticky board after an out-of-band mutation. Never raises.
 
+    The single implementation: the quest sign-off path wraps this rather than
+    keeping its own copy, so the two cannot drift into different defensive
+    shapes and different log messages for the same failure.
+
     ``todo_board_loop`` deliberately does **not** poll for changes — it repaints
     only what it just spawned plus failed retries, because "every user-facing
     mutation repaints the board itself" (see its docstring). Automatic chore
@@ -615,10 +619,16 @@ async def repaint_board(bot, guild_id: int) -> None:
     most of a day, which to them is indistinguishable from the feature not
     working.
     """
+    # ``bot`` may be annotated as the bare Client on some callers (the quest
+    # expiry sweep holds one); only a commands.Bot carries cogs, which the
+    # runtime one always is.
+    get_cog = getattr(bot, "get_cog", None)
+    cog = get_cog("TodoCog") if get_cog is not None else None
+    refresh = getattr(cog, "refresh_board", None)
+    if refresh is None:
+        return
     try:
-        cog = bot.get_cog("TodoCog")
-        if cog is not None:
-            await cog.refresh_board(int(guild_id))
+        await refresh(int(guild_id))
     except Exception:
         log.exception("todo board repaint failed for %s", guild_id)
 

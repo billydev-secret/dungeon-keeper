@@ -402,9 +402,9 @@ demonstrably happened is worse than no scoreboard.
   starts a multiplayer game by hand: `finish_launch_response` (the 16 party
   games from `/games play`), `BaseDuel._handle_accept` (a challenge accepted),
   `BaseGame._handle_lobby_start` (an N-player lobby reaching its start),
-  `risky_roll_cog._start_game`, and the `run_again` recap buttons on Name Your
-  Price and Mt. Rushmore, which go straight to `launch()` and so miss the
-  shared seam.
+  `risky_roll_cog._start_game`, and the recap relaunch buttons on Name Your
+  Price, Mt. Rushmore and Clapback, which go straight to a launcher and so miss
+  the shared seam.
 - **The game trigger is moderator-only** (`AppContext.member_is_mod`, the same
   definition as every other mod gate). "Run a game" is a chore a mod owes the
   server, so two ordinary members accepting a duel is a multiplayer game being
@@ -473,11 +473,13 @@ demonstrably happened is worse than no scoreboard.
 - **Not every hand-started game reaches the seam** automatically — a cog with
   its own command or its own restart button has to carry the call. Risky Rolls
   does (after its response, outside its channel lock, and outside the `try`
-  whose handler tears a live round down), as do the two `run_again` buttons. A
-  game type added later that shares neither seam simply never fires the trigger,
-  silently, so check for it when adding one. Mahjong is deliberately out: it is
-  closer to solo play. A game type added later that does neither simply never fires the
-  trigger — a silent gap, so check for the seam when adding one.
+  whose handler tears a live round down), as do the recap relaunch buttons on
+  Name Your Price, Mt. Rushmore and Clapback — each signing off only when the
+  relaunch actually produced a game, so a failed rematch never ticks a chore
+  green. Missing one of those is the mistake that has been made three times, so
+  a test now scans the cogs for a handler that calls a launcher directly without
+  signing off, rather than trusting a list. Mahjong is deliberately out: it is
+  closer to solo play.
 
 
 ### Web list

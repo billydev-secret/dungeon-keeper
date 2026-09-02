@@ -734,21 +734,9 @@ async def refresh_signoff_board(bot: discord.Client, guild_id: int) -> None:
     side, the member has been paid; a Discord hiccup must never surface as a
     failed claim or a failed payout.
     """
-    # ``bot`` is annotated as the bare Client because the expiry sweep holds
-    # one; only a commands.Bot carries cogs, which the runtime one always is.
-    get_cog = getattr(bot, "get_cog", None)
-    cog = get_cog("TodoCog") if get_cog is not None else None
-    refresh = getattr(cog, "refresh_board", None)
-    if refresh is None:
-        return
-    try:
-        await refresh(guild_id)
-    except Exception:  # pragma: no cover - defensive
-        log.warning(
-            "econ quests: failed to repaint the todo board for %s after a "
-            "sign-off change.",
-            guild_id,
-        )
+    from bot_modules.cogs.todo_cog import repaint_board  # noqa: PLC0415
+
+    await repaint_board(bot, guild_id)
 
 
 # ── the board's Sign-Offs button ─────────────────────────────────────────────
