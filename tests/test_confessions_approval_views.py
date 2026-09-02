@@ -30,6 +30,7 @@ from bot_modules.confessions.approval_views import (
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.confessions_service import (
     GuildConfig,
+    PENDING_TTL_SECONDS,
     enqueue_confession,
     pending_confession_count,
     pending_confessions,
@@ -369,8 +370,10 @@ async def test_a_rejection_does_not_publish(db):
 
 
 @pytest.mark.asyncio
-async def test_a_closed_dm_does_not_undo_the_rejection(db):
-    """The decision has landed; a member who blocked DMs cannot resurrect it."""
+async def test_a_broken_dm_does_not_undo_the_rejection(db):
+    """The decision has landed and the row is already deleted, so nothing that
+    goes wrong delivering the DM may resurrect it — or escape and leave the mod
+    on "This interaction failed"."""
     from bot_modules.confessions.approval_views import RejectModal
 
     pending_id = _queue(db)
@@ -401,3 +404,177 @@ async def test_an_expiry_dm_is_not_a_rejection(db):
     body = dm.await_args.kwargs["embed"].description
     assert "didn't approve" not in body
     assert "week" in body
+
+
+# ── requeue keeps the promise, not just the text ──────────────────────
+
+
+def _configure(db, **overrides) -> None:
+    values = dict(
+        guild_id=GUILD_ID, dest_channel_id=777, log_channel_id=0,
+        require_approval=True,
+    )
+    values.update(overrides)
+    upsert_config(db, GuildConfig(**values))
+
+
+@pytest.mark.asyncio
+async def test_a_requeued_confession_keeps_its_original_age(db):
+    """The seven-day sweep is a promise to the member. A row that restamped
+    itself on every retry would outlive it for as long as the failure lasted —
+    a deleted destination channel would keep a confession's text beside its
+    author's id forever."""
+    import time
+
+    old = int(time.time()) - PENDING_TTL_SECONDS + 3600  # an hour left to live
+    pending_id = enqueue_confession(
+        db, guild_id=GUILD_ID, author_id=AUTHOR, content=BODY,
+        notify_original_author=1, created_at=old,
+    )
+    bot = _bot(db, publish=AsyncMock(return_value=(False, "❌ Failed to post.")))
+
+    await _press(ConfessionReviewView(pending_id), _interaction(bot), "Approve")
+
+    with open_db(db) as conn:
+        row = conn.execute(
+            "SELECT created_at FROM confession_pending"
+        ).fetchone()
+    assert row["created_at"] == old
+
+
+@pytest.mark.asyncio
+async def test_a_requeued_confession_keeps_its_place_in_the_queue(db):
+    """Oldest-first is how a mod works the queue; a failed retry must not send
+    a confession that has waited six days to the back of the line."""
+    import time
+
+    now = int(time.time())
+    first = enqueue_confession(
+        db, guild_id=GUILD_ID, author_id=AUTHOR, content="oldest",
+        notify_original_author=0, created_at=now - 5000,
+    )
+    enqueue_confession(
+        db, guild_id=GUILD_ID, author_id=AUTHOR, content="newer",
+        notify_original_author=0, created_at=now,
+    )
+    bot = _bot(db, publish=AsyncMock(return_value=(False, "nope")))
+
+    await _press(ConfessionReviewView(first), _interaction(bot), "Approve")
+
+    with open_db(db) as conn:
+        assert [r["content"] for r in pending_confessions(conn, GUILD_ID)] == [
+            "oldest", "newer",
+        ]
+
+
+@pytest.mark.asyncio
+async def test_a_publish_that_raises_does_not_destroy_the_confession(db):
+    """The row is deleted before the post, so anything escaping the publish —
+    a locked DB inside the audit write, say — would lose a member's text with
+    nobody told."""
+    pending_id = _queue(db)
+    bot = _bot(db, publish=AsyncMock(side_effect=RuntimeError("database is locked")))
+    interaction = _interaction(bot)
+
+    await _press(ConfessionReviewView(pending_id), interaction, "Approve")
+
+    with open_db(db) as conn:
+        assert [r["content"] for r in pending_confessions(conn, GUILD_ID)] == [BODY]
+    assert "Put back in the queue" in (
+        interaction.edit_original_response.await_args.kwargs["embed"].description
+    )
+
+
+# ── the existing safety gates cover the delayed path too ──────────────
+
+
+@pytest.mark.asyncio
+async def test_panic_mode_stops_the_queue_being_posted(db):
+    """An admin hitting the kill switch means nothing else appears in that
+    channel. A queue that kept publishing under it would be a documented gate
+    with a hole in it."""
+    _configure(db, panic=True)
+    pending_id = _queue(db)
+    bot = _bot(db)
+    interaction = _interaction(bot)
+
+    await _press(ConfessionReviewView(pending_id), interaction, "Approve")
+
+    assert bot.publish.await_count == 0
+    with open_db(db) as conn:
+        assert pending_confession_count(conn, GUILD_ID) == 1
+    assert "paused" in (
+        interaction.edit_original_response.await_args.kwargs["embed"].description
+    )
+
+
+@pytest.mark.asyncio
+async def test_panic_mode_still_lets_a_backlog_be_rejected(db):
+    """Clearing a backlog is not posting, so the kill switch must not trap
+    confessions in the queue until it comes off."""
+    from bot_modules.confessions.approval_views import RejectModal
+
+    _configure(db, panic=True)
+    pending_id = _queue(db)
+    with patch(
+        "bot_modules.confessions.approval_views.send_branded_dm", new=AsyncMock()
+    ):
+        await RejectModal(pending_id).on_submit(_interaction(_bot(db)))
+
+    with open_db(db) as conn:
+        assert pending_confession_count(conn, GUILD_ID) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_member_blocked_after_submitting_is_not_posted(db):
+    """Usually they were blocked over this very confession."""
+    _configure(db, blocked_user_ids=[AUTHOR])
+    pending_id = _queue(db, author_id=AUTHOR)
+    bot = _bot(db)
+    interaction = _interaction(bot)
+
+    await _press(ConfessionReviewView(pending_id), interaction, "Approve")
+
+    assert bot.publish.await_count == 0
+    with open_db(db) as conn:
+        assert pending_confession_count(conn, GUILD_ID) == 1
+    assert "block list" in (
+        interaction.edit_original_response.await_args.kwargs["embed"].description
+    )
+
+
+# ── telling the moderator the truth ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_bounced_rejection_dm_is_reported_to_the_mod(db):
+    """"The member has been told" over a DM that never arrived leaves a
+    moderator with a false account of their own click."""
+    from bot_modules.confessions.approval_views import RejectModal
+
+    pending_id = _queue(db)
+    interaction = _interaction(_bot(db), members=[_member(AUTHOR)])
+    with patch(
+        "bot_modules.confessions.approval_views.send_branded_dm",
+        new=AsyncMock(return_value=None),  # closed DMs
+    ):
+        await RejectModal(pending_id).on_submit(interaction)
+
+    said = interaction.edit_original_response.await_args.kwargs["embed"].description
+    assert "haven\'t been told" in said
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_rejection_dm_says_so(db):
+    from bot_modules.confessions.approval_views import RejectModal
+
+    pending_id = _queue(db)
+    interaction = _interaction(_bot(db), members=[_member(AUTHOR)])
+    with patch(
+        "bot_modules.confessions.approval_views.send_branded_dm",
+        new=AsyncMock(return_value=MagicMock()),
+    ):
+        await RejectModal(pending_id).on_submit(interaction)
+
+    said = interaction.edit_original_response.await_args.kwargs["embed"].description
+    assert "has been told" in said

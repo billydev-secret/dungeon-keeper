@@ -52,16 +52,29 @@ gate is the *moderator* tier, which is a wider circle than admin — approving m
 not become a second, wider way to de-anonymise. The rejection DM likewise names no
 moderator; the mod team answers as a team.
 
+**Panic mode and the block list cover this path too.** Approving is the one
+confession surface that posts on a delay, so both guards are re-checked at
+approval, not just at submission: with panic on nothing can be approved (the row
+stays put, and rejecting still works — clearing a backlog is not posting), and a
+member added to the block list after submitting has their queued confession
+refused rather than posted, leaving the reject call to the moderator.
+
 Approve claims the row and deletes it in a single immediate transaction, so two
 moderators pressing Approve together cannot post the same confession twice; the
 second is told it has already been handled. The confession then publishes exactly
 as an unqueued one would — same embed, thread, audit row, mod-log mirror, launcher
 re-pin — and the quest trigger fires **here**, on approval, so a confession that
-never posts never pays. If the post fails (a permission gone since submission) the
-claimed row is put back rather than lost.
+never posts never pays. If the post fails — a permission gone since submission, or
+anything at all raising out of the publish — the claimed row is put back rather
+than lost, **keeping its original timestamp**: the seven-day sweep is a promise
+to the member, and a row that restamped itself on every retry would outlive it
+for as long as the failure lasted. Keeping the timestamp also keeps the
+oldest-first queue honest.
 
 Reject opens a modal with an optional reason and DMs the author a branded embed
-saying their confession wasn't posted, quoting the reason if one was given.
+saying their confession wasn't posted, quoting the reason if one was given. The
+card reports whether that DM actually landed — a member with DMs closed is told
+nothing at all, and a moderator assured otherwise has no reason to follow up.
 Approval is not announced: the confession simply appears, which the member can
 already see. A rejection does **not** refund the member's daily slot or reset
 their cooldown — refunding would invite resubmit-until-approved.
@@ -71,7 +84,10 @@ A pending row is swept after **seven days** and its author DMed a distinct
 judged it. Seven is not a tuning choice: the row holds a confession's text beside
 its author's real id, and the privacy notice promises members that link
 self-destructs after a week, so a queue the mods stop working must not become the
-exception to it. An erasure request deletes any pending rows immediately.
+exception to it. An erasure request deletes any pending rows immediately, though it cannot
+repaint the board — erasure runs out-of-band with no bot in hand — so a clipped
+copy may stay rendered in the sticky embed until something else moves it. The
+stored row is gone, and the Confessions button finds nothing.
 
 There is deliberately **no dashboard queue** for this. Approving is a mod action
 and mod actions live in Discord; a second approval surface would be a duplicated

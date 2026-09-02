@@ -540,8 +540,20 @@ def enqueue_confession(
     author_id: int,
     content: str,
     notify_original_author: int,
+    created_at: int | None = None,
 ) -> int:
-    """Park a submission for review. Returns its queue id."""
+    """Park a submission for review. Returns its queue id.
+
+    ``created_at`` defaults to now, which is right for a fresh submission and
+    wrong for a **requeue**. A confession put back after a failed post keeps its
+    original timestamp: the seven-day sweep is a promise to the member, not a
+    housekeeping heuristic, and a row that restamped itself on every retry would
+    outlive that promise for as long as the failure lasted — a destination
+    channel deleted from under an always-failing publish would keep a
+    confession's text beside its author's id indefinitely. It also keeps the
+    oldest-first queue honest, rather than sending a confession that has waited
+    six days to the back of the line.
+    """
     with open_db(db_path) as conn:
         cur = conn.execute(
             """
@@ -549,7 +561,10 @@ def enqueue_confession(
                 guild_id, author_id, content, notify_original_author, created_at
             ) VALUES (?, ?, ?, ?, ?)
             """,
-            (guild_id, author_id, content, notify_original_author, now_ts()),
+            (
+                guild_id, author_id, content, notify_original_author,
+                now_ts() if created_at is None else int(created_at),
+            ),
         )
         return int(cur.lastrowid or 0)
 

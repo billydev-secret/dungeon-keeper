@@ -67,6 +67,14 @@ _PICKER_TIMEOUT = 180
 
 MOD_DENIED_MSG = "❌ Only moderators can review confessions."
 GONE_MSG = "❌ That confession has already been handled."
+PANIC_MSG = (
+    "❌ Confessions are paused, so nothing can be posted right now. "
+    "It stays in the queue — approve it once panic mode is off."
+)
+BLOCKED_MSG = (
+    "❌ Whoever sent this is on the confessions block list now, so it "
+    "wasn't posted. It stays in the queue — reject it if it should go."
+)
 EMPTY_MSG = "No confessions are waiting for approval. ✨"
 
 refresh_confessions_board = partial(refresh_todo_board, log_label="confessions")
@@ -200,29 +208,58 @@ async def _resolve(
     except discord.HTTPException:
         return
 
-    row = await asyncio.to_thread(
-        resolve_pending_confession, bot.ctx.db_path, guild.id, pending_id
-    )
+    cfg = await asyncio.to_thread(get_config, bot.ctx.db_path, guild.id)
     accent = await safe_resolve_accent(
         bot.ctx, guild, log_label="confessions", default=DEFAULT_ACCENT_COLOR
+    )
+
+    # Panic is checked *before* the claim, so a refusal leaves the row exactly
+    # where it was. It has to be checked at all because approving is the one
+    # confession path that posts on a delay: an admin who hits the kill switch
+    # during a raid means "nothing else appears in that channel", and a queue
+    # that kept publishing under it would be a documented gate with a hole in
+    # it. Rejecting stays available — clearing a backlog is not posting.
+    if approve and cfg is not None and cfg.panic:
+        await _repaint(interaction, build_resolved_embed(PANIC_MSG, accent))
+        return
+
+    row = await asyncio.to_thread(
+        resolve_pending_confession, bot.ctx.db_path, guild.id, pending_id
     )
     if row is None:
         await _repaint(interaction, build_resolved_embed(GONE_MSG, accent))
         return
 
     if approve:
+        # Blocked *after* submitting — usually because a mod blocked them over
+        # this very confession. Needs the claim first, since the block list is
+        # keyed on the author id and nothing before the claim has one. Put it
+        # back rather than post it or bin it: rejecting is the mod's call.
+        if cfg is not None and int(row["author_id"]) in cfg.blocked_set():
+            await _requeue(bot, guild.id, row)
+            await _repaint(interaction, build_resolved_embed(BLOCKED_MSG, accent))
+            await refresh_confessions_board(bot, guild.id)
+            return
+
         cog = bot.get_cog("ConfessionsCog")
         publish = getattr(cog, "publish_confession", None)
-        cfg = await asyncio.to_thread(get_config, bot.ctx.db_path, guild.id)
         ok, err = False, "❌ Confessions aren't available right now."
         if publish is not None and cfg is not None:
-            ok, err = await publish(
-                guild,
-                cfg,
-                content=str(row["content"]),
-                author_id=int(row["author_id"]),
-                notify=bool(int(row["notify_original_author"]) == 1),
-            )
+            try:
+                ok, err = await publish(
+                    guild,
+                    cfg,
+                    content=str(row["content"]),
+                    author_id=int(row["author_id"]),
+                    notify=bool(int(row["notify_original_author"]) == 1),
+                )
+            except Exception:
+                # Not just the (ok, err) contract: the row is already deleted,
+                # so anything that escapes here — a locked DB inside the audit
+                # write, a Discord object misbehaving — would destroy a member's
+                # text with nobody told. A raise is a failed post like any other.
+                log.exception("confessions: publishing %s raised", pending_id)
+                ok, err = False, "❌ Something went wrong posting that."
         if not ok:
             # The row is already claimed and cannot be un-deleted, so the
             # confession would otherwise vanish silently. Put it back rather
@@ -241,17 +278,30 @@ async def _resolve(
             build_resolved_embed("✅ Approved and posted.", accent),
         )
     else:
-        await _notify_rejected(bot, guild, int(row["author_id"]), reason)
+        told = await _notify_rejected(bot, guild, int(row["author_id"]), reason)
+        # Say which actually happened. A member with DMs closed is told nothing
+        # at all, and a moderator assured otherwise has no reason to follow up.
         await _repaint(
             interaction,
-            build_resolved_embed("🚫 Rejected. The member has been told.", accent),
+            build_resolved_embed(
+                "🚫 Rejected. The member has been told."
+                if told
+                else "🚫 Rejected. Couldn't DM them — their DMs are closed, so "
+                     "they haven't been told.",
+                accent,
+            ),
         )
 
     await refresh_confessions_board(bot, guild.id)
 
 
 async def _requeue(bot: "Bot", guild_id: int, row: dict[str, Any]) -> None:
-    """Return a claimed confession to the queue after a failed post."""
+    """Return a claimed confession to the queue after a failed post.
+
+    Keeping ``created_at`` is the point: the seven-day sweep is a promise to the
+    member, and a row that restamped itself every time a mod retried a failing
+    post would outlive it for as long as the failure lasted.
+    """
     try:
         await asyncio.to_thread(
             enqueue_confession,
@@ -260,6 +310,7 @@ async def _requeue(bot: "Bot", guild_id: int, row: dict[str, Any]) -> None:
             author_id=int(row["author_id"]),
             content=str(row["content"]),
             notify_original_author=int(row["notify_original_author"]),
+            created_at=int(row["created_at"]),
         )
     except Exception:  # pragma: no cover - defensive
         log.exception("confessions: failed to requeue %s after a failed post", row["id"])
@@ -267,38 +318,47 @@ async def _requeue(bot: "Bot", guild_id: int, row: dict[str, Any]) -> None:
 
 async def _dm_author(
     bot: "Bot", guild: discord.Guild, author_id: int, text: str
-) -> None:
-    """Tell the member their confession wasn't posted. Best effort, always.
+) -> bool:
+    """Tell the member their confession wasn't posted. Returns whether it landed.
 
-    A closed DM is not a failure the moderator should hear about — the decision
-    stands either way, and there is nothing they could do differently.
-    ``AllowedMentions.none()`` because the body can quote a moderator's free
-    text.
+    Never raises: the decision has already been written and must not be undone
+    by a closed DM. But the caller is told, because "the member has been told"
+    printed over a DM that bounced is a moderator given a false account of what
+    their own click did. ``send_branded_dm`` swallows the failure itself and
+    signals with ``None``. ``AllowedMentions.none()`` because the body can quote
+    a moderator's free text.
     """
     user = guild.get_member(author_id)
     if user is None:
         try:
             user = await bot.fetch_user(author_id)
         except discord.HTTPException:
-            return
+            return False
     if user is None:
-        return
+        return False
     try:
-        await send_branded_dm(
+        sent = await send_branded_dm(
             user,
             db_path=bot.ctx.db_path,
             guild=guild,
             embed=discord.Embed(description=text),
             allowed_mentions=discord.AllowedMentions.none(),
         )
-    except discord.HTTPException:
-        log.debug("confessions: outcome DM failed", exc_info=True)
+    except Exception:
+        # ``send_branded_dm`` already swallows a closed DM and returns None, so
+        # reaching here means something further in (accent resolution, say)
+        # broke. Caught all the same: by the time this runs the queue row is
+        # deleted, and letting it escape would lose the confession *and* leave
+        # the moderator staring at "This interaction failed".
+        log.exception("confessions: outcome DM failed")
+        return False
+    return sent is not None
 
 
 async def _notify_rejected(
     bot: "Bot", guild: discord.Guild, author_id: int, reason: str
-) -> None:
-    await _dm_author(
+) -> bool:
+    return await _dm_author(
         bot, guild, author_id,
         build_rejection_dm_text(guild_name=guild.name, reason=reason),
     )

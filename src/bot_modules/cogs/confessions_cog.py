@@ -222,14 +222,27 @@ class ConfessModal(discord.ui.Modal, title="Anonymous Confession"):
             # the defer because the write is local and fast — a "thinking"
             # spinner it never fills would be the wrong shape for an answer
             # this immediate.
-            await asyncio.to_thread(
-                enqueue_confession,
-                db_path,
-                guild_id=interaction.guild.id,
-                author_id=interaction.user.id,
-                content=content,
-                notify_original_author=1 if ping_pref else 0,
-            )
+            try:
+                await asyncio.to_thread(
+                    enqueue_confession,
+                    db_path,
+                    guild_id=interaction.guild.id,
+                    author_id=interaction.user.id,
+                    content=content,
+                    notify_original_author=1 if ping_pref else 0,
+                )
+            except Exception:
+                # The cooldown and the daily slot were already spent above, so
+                # a bare "This interaction failed" would cost the member their
+                # turn *and* tell them nothing. Say it didn't store; the slot
+                # is not refunded, but they know to try later rather than
+                # assuming a mod is sitting on it.
+                log.exception("confessions: failed to queue a submission")
+                await _safe_ephemeral(
+                    interaction,
+                    "❌ Couldn't hand that to the mods — try again in a moment.",
+                )
+                return
             await _safe_ephemeral(interaction, QUEUED_ACK)
             # After the member has been answered, never before: the repaint is
             # a REST edit on somebody else's channel and must not be able to

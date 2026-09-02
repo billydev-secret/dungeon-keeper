@@ -472,9 +472,13 @@ def purge_user_data(
     # holds the member's confession *text*, and it is queued to be published.
     # Erasing somebody and then posting what they wrote — because a moderator
     # got to the queue before the sweep did — is not a defensible outcome, so
-    # the row goes now. Nothing is announced to the mods: the confession simply
-    # leaves the board, exactly as it would if the member's own submission had
-    # been rejected.
+    # the row goes now. Nothing is announced to the mods. Note this path cannot
+    # repaint the board — erasure is run out-of-band, with no bot in hand, and
+    # the board's own loop only repaints guilds where a recurring chore spawned
+    # — so a clipped copy of the confession stays rendered in the sticky embed
+    # until something else moves it. The stored row is gone either way, which is
+    # what the erasure owes; the stale pixels are a display lag, and pressing
+    # the board's Confessions button will already find nothing there.
     _delete(
         conn,
         "DELETE FROM confession_pending WHERE guild_id = ? AND author_id = ?",
