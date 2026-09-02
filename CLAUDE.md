@@ -67,8 +67,8 @@ SQLite-backed. Tests in `tests/`.
 
 - Do edits in a git worktree; merge back to main when ready for user testing.
   `/dk-feature [model] <name>` creates one — worktree, branch, tmux window, and a
-  `claude` running in it, all sharing one name — and `/dk-ship` merges it and tears
-  it down. See `docs/dev_sessions.md`.
+  `claude` running in it, all sharing one name — and `/dk-ship` reviews it (a
+  `/code-review --fix` pass, on by default), merges it and tears it down. See `docs/dev_sessions.md`.
 - This checkout **is production**. Never restart the bot or dashboard
   (`sudo systemctl restart dungeon-keeper`) unasked — code changes apply on
   restart, and the user pushes that button.

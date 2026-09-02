@@ -187,11 +187,23 @@ as "working" is exactly how a stalled worker goes unnoticed.
 
 1. commits anything uncommitted (pre-commit gate runs);
 2. `git fetch` + `git rebase origin/main`;
-3. `python scripts/gate.py --scoped` (skip with `--no-test` for docs-only ships);
-4. under `flock .git/dk-ship.lock`, verifies prod is on a clean `main` and
+3. runs `/code-review high --fix main...HEAD` and commits whatever it fixed as its
+   own `Review:` commit (skip with `--no-review`, change the level with
+   `--review LEVEL`);
+4. `python scripts/gate.py --scoped` (skip with `--no-test` for docs-only ships);
+5. under `flock .git/dk-ship.lock`, verifies prod is on a clean `main` and
    `git merge --no-ff` the branch, then pushes (skip with `--no-push`);
-5. tears the session down: removes the worktree, deletes the merged branch, kills the
+6. tears the session down: removes the worktree, deletes the merged branch, kills the
    window.
+
+The review is step 3 and not step 4 so its fixes are gated by the run that follows,
+and it targets `main...HEAD` explicitly rather than the working tree, which step 1
+just left clean. The target is the whole feature measured against the `main` the
+rebase just caught it up to — the same diff the merge will land. Findings the review
+declined to fix stop the ship and ask; they are not merged past silently.
+
+`ultra` can't run here — it launches a billed cloud review and is user-triggered
+only. Run `/code-review ultra` by hand before shipping if you want it.
 
 The lock matters because every session merges into the same prod checkout. If it's
 held, the ship waits — `/dk-ship` says so explicitly, because a blocked ship and a
