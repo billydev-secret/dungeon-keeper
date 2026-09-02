@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 from functools import partial
 
@@ -23,6 +24,14 @@ from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 
 if TYPE_CHECKING:
     from bot_modules.cogs.casino.cog import CasinoCog
+
+#: Builds the typed modal for a bet whose target is already chosen. The
+#: ladder uses it twice over: Custom… opens it, and a rung borrows its
+#: ``_place`` so the tap and the typed path route identically.
+ModalFactory = Callable[[], "_AmountBetModal"]
+#: Puts a private round's board back when a step that replaced it ends.
+CancelFn = Callable[[discord.Interaction], Awaitable[None]]
+ExpiryFn = Callable[[], Awaitable[None]]
 
 
 def _cog(interaction: discord.Interaction) -> CasinoCog | None:
@@ -124,7 +133,7 @@ class BetModal(_AmountBetModal):
             await cog.play_war(interaction, amount)
 
 
-_ROULETTE_KINDS = {
+ROULETTE_KINDS = {
     "red": ("red", 0),
     "black": ("black", 0),
     "d1": ("dozen", 1),
@@ -134,45 +143,36 @@ _ROULETTE_KINDS = {
 
 
 class RouletteBetModal(_AmountBetModal):
-    """Amount box, plus the straight-number box when the bet needs one."""
+    """One amount box; the wager was resolved before this opened.
+
+    A straight-up bet used to carry a second box asking for a number 0–36,
+    typed and then validated. The number comes off a pair of selects now
+    (37 values overflow one select's 25-option cap), so by the time this
+    modal exists the bet is fully decided and only the stake is open.
+    """
 
     def __init__(
         self,
         round_id: int,
-        kind: str,
+        bet_type: str,
+        selection: int,
         *,
         limits_label: str = "Your bet",
         default_amount: int | None = None,
     ) -> None:
         super().__init__(
-            title="Roulette bet",
+            title=f"Back {logic.describe_bet(bet_type, selection)}",
             limits_label=limits_label, default_amount=default_amount,
         )
         self.round_id = round_id
-        self.kind = kind
-        self.number: discord.ui.TextInput | None = None
-        if kind == "num":
-            self.number = discord.ui.TextInput(
-                label="Your number (0–36)",
-                placeholder="17",
-                max_length=2,
-            )
-            self.add_item(self.number)
+        self.bet_type = bet_type
+        self.selection = selection
 
     async def _place(
         self, cog: CasinoCog, interaction: discord.Interaction, amount: int
     ) -> None:
-        if self.kind == "num":
-            assert self.number is not None
-            raw = str(self.number.value).strip()
-            if not raw.isdigit() or not 0 <= int(raw) <= 36:
-                await safe_ephemeral(interaction, "❌ Pick a number from 0 to 36.")
-                return
-            bet_type, selection = "number", int(raw)
-        else:
-            bet_type, selection = _ROULETTE_KINDS[self.kind]
         await cog.place_roulette_bet(
-            interaction, self.round_id, bet_type, selection, amount
+            interaction, self.round_id, self.bet_type, self.selection, amount
         )
 
 
@@ -240,6 +240,145 @@ class DiceBetModal(_AmountBetModal):
         )
 
 
+# ── the amount ladder (one tap for the usual stake) ────────────────────
+
+
+class _LadderButton(discord.ui.Button):
+    """One rung. Routes through the same ``_place`` the modal would."""
+
+    def __init__(self, option: logic.BetOption, make_modal: ModalFactory) -> None:
+        super().__init__(
+            label=option.label, style=discord.ButtonStyle.primary, row=0
+        )
+        self.amount = option.amount
+        self._make_modal = make_modal
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await self._make_modal()._place(cog, interaction, self.amount)
+
+
+class _CustomAmountButton(discord.ui.Button):
+    """The typed path, kept for every stake the ladder doesn't carry."""
+
+    def __init__(self, make_modal: ModalFactory) -> None:
+        super().__init__(
+            label="Custom…", style=discord.ButtonStyle.secondary, row=1
+        )
+        self._make_modal = make_modal
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(self._make_modal())
+
+
+class _BackButton(discord.ui.Button):
+    """Puts the surface a step replaced back on screen.
+
+    ``row`` is a parameter rather than a constant because the two steps have
+    different shapes: the ladder's rungs leave row 1 free, while the number
+    step spends rows 0 and 1 on selects — a select occupies a whole row, so
+    a hardcoded row 1 made the view refuse to build at all.
+    """
+
+    def __init__(self, on_cancel: CancelFn, *, row: int = 1) -> None:
+        super().__init__(
+            label="Back", emoji="↩️", style=discord.ButtonStyle.secondary, row=row
+        )
+        self._on_cancel = on_cancel
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await self._on_cancel(interaction)
+
+
+class AmountPickerView(discord.ui.View):
+    """The stake, as buttons.
+
+    Every wager used to cost a modal round-trip to type a number, on tables
+    where prod says one player often bets several times in a round. The
+    ladder comes from ``logic.bet_amount_options`` and is built so no rung
+    can be refused; Custom… still opens the box for anything else.
+
+    ``on_cancel`` / ``on_expiry`` exist for the private-round tables, where
+    this step replaces the round's own board and something has to put the
+    board back — on the player's press, and on the view timing out under
+    them.
+    """
+
+    def __init__(
+        self,
+        make_modal: ModalFactory,
+        options: list[logic.BetOption],
+        *,
+        on_cancel: CancelFn | None = None,
+        on_expiry: ExpiryFn | None = None,
+    ) -> None:
+        # Comfortably inside the ~15 minutes an ephemeral stays editable,
+        # so the board can still be restored when this expires.
+        super().__init__(timeout=600)
+        self._on_expiry = on_expiry
+        for option in options:
+            self.add_item(_LadderButton(option, make_modal))
+        self.add_item(_CustomAmountButton(make_modal))
+        if on_cancel is not None:
+            self.add_item(_BackButton(on_cancel))
+
+    async def on_timeout(self) -> None:
+        if self._on_expiry is not None:
+            await self._on_expiry()
+
+
+_WHEEL_EMOJI = {"red": "🔴", "black": "⚫", "green": "🟢"}
+
+
+class _RouletteNumberSelect(discord.ui.Select):
+    """Half the wheel — 37 numbers overflow one select's 25-option cap."""
+
+    def __init__(self, round_id: int, low: int, high: int, row: int) -> None:
+        super().__init__(
+            placeholder=f"{low}–{high}",
+            row=row,
+            options=[
+                discord.SelectOption(
+                    label=str(n),
+                    value=str(n),
+                    emoji=_WHEEL_EMOJI[logic.wheel_color(n)],
+                )
+                for n in range(low, high + 1)
+            ],
+        )
+        self.round_id = round_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.open_roulette_amount_picker(
+                interaction, self.round_id, "number", int(self.values[0])
+            )
+
+
+class RouletteNumberView(discord.ui.View):
+    """The straight-up picker: two selects, then the amount ladder."""
+
+    def __init__(
+        self,
+        round_id: int,
+        *,
+        on_cancel: CancelFn | None = None,
+        on_expiry: ExpiryFn | None = None,
+    ) -> None:
+        super().__init__(timeout=600)
+        self._on_expiry = on_expiry
+        self.add_item(_RouletteNumberSelect(round_id, 0, 18, row=0))
+        self.add_item(_RouletteNumberSelect(round_id, 19, 36, row=1))
+        if on_cancel is not None:
+            self.add_item(_BackButton(on_cancel, row=2))
+
+    async def on_timeout(self) -> None:
+        if self._on_expiry is not None:
+            await self._on_expiry()
+
+
 # ── the hub panel ──────────────────────────────────────────────────────
 
 
@@ -255,7 +394,7 @@ class CoinflipSideView(discord.ui.View):
     ) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_bet_modal(interaction, "coinflip", side="heads")
+            await cog.open_bet_picker(interaction, "coinflip", side="heads")
 
     @discord.ui.button(label="Tails", emoji="🌙", style=discord.ButtonStyle.primary)
     async def tails(
@@ -263,7 +402,7 @@ class CoinflipSideView(discord.ui.View):
     ) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_bet_modal(interaction, "coinflip", side="tails")
+            await cog.open_bet_picker(interaction, "coinflip", side="tails")
 
 
 class CasinoHubView(discord.ui.View):
@@ -292,7 +431,7 @@ class CasinoHubView(discord.ui.View):
     ) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_bet_modal(interaction, "slots")
+            await cog.open_bet_picker(interaction, "slots")
 
     @discord.ui.button(
         label="Blackjack", emoji="🃏",
@@ -303,7 +442,7 @@ class CasinoHubView(discord.ui.View):
     ) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_bet_modal(interaction, "blackjack")
+            await cog.open_bet_picker(interaction, "blackjack")
 
     @discord.ui.button(
         label="Roulette", emoji="🎡",
@@ -358,7 +497,7 @@ class CasinoHubView(discord.ui.View):
     ) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_bet_modal(interaction, "war")
+            await cog.open_bet_picker(interaction, "war")
 
     @discord.ui.button(
         label="Keno", emoji="🔢",
@@ -557,7 +696,7 @@ class RouletteBetButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_roulette_bet_modal(
+            await cog.open_roulette_bet_step(
                 interaction, self.round_id, self.kind
             )
 
@@ -662,7 +801,7 @@ class DerbyBetButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_derby_bet_modal(
+            await cog.open_derby_bet_picker(
                 interaction, self.round_id, self.runner
             )
 
@@ -729,7 +868,7 @@ class BaccaratBetButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_baccarat_bet_modal(
+            await cog.open_baccarat_bet_picker(
                 interaction, self.round_id, self.side
             )
 
@@ -797,7 +936,7 @@ class DiceBetButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_dice_bet_modal(
+            await cog.open_dice_bet_picker(
                 interaction, self.round_id, self.kind
             )
 
@@ -876,7 +1015,7 @@ class KenoTierButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_keno_ticket_modal(
+            await cog.open_keno_ticket_picker(
                 interaction, self.round_id, self.spots
             )
 
@@ -997,7 +1136,7 @@ class MinesRiskButton(
     async def callback(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
         if cog is not None:
-            await cog.open_mines_bet_modal(interaction, self.bombs)
+            await cog.open_mines_bet_picker(interaction, self.bombs)
 
 
 class MinesBetModal(_AmountBetModal):

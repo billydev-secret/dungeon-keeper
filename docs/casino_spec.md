@@ -27,7 +27,8 @@ jackpot embed titles interpolate the configured name directly.
 **Zero slash commands.** The bot maintains a persistent **hub panel** in the
 casino channel (🪙 Coinflip · 🎰 Slots · 🃏 Blackjack · 🎡 Roulette ·
 🏇 Derby · 🎴 Baccarat · 🎲 Dice · ⚔️ War · 🔢 Keno · 💣 Mines ·
-📊 My Stats · ❓ How It Works); every flow is buttons + amount modals. Tables
+📊 My Stats · ❓ How It Works); every flow is buttons, ending in the amount
+ladder (below). Tables
 sit **three to a row** with the two grey utility buttons on the row below
 (2026-07-30, todo #87): a five-wide row wraps on narrow clients, so Derby used
 to drop to a short line of its own.
@@ -301,7 +302,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
 
 ## Games
 
-- **Coinflip** — heads/tails picker → amount modal. Win pays total
+- **Coinflip** — heads/tails picker → amount ladder. Win pays total
   `stake*37//20` (1.85×).
 - **Slots** — one weighted 26-symbol reel × 3 pulls
   (🌻6 🍀5 🐝5 🌾4 🦋3 🍯2 7️⃣1). Precedence triple > two-sevens (5×) >
@@ -326,7 +327,9 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   (migration 158: partial unique index on `(guild_id, user_id)`, replacing the
   channel-scoped one), rendered in that player's own ephemeral message. Bets
   (red/black 2×, dozens 3×, straight 0–36 36×) debit at placement via buttons
-  (`casino_rl:{kind}:{round_id}`) + amount modal, and the board repaints
+  (`casino_rl:{kind}:{round_id}`) + amount ladder — **🎯 Number** inserts a
+  number step first, two selects splitting the wheel 0–18 / 19–36 because 37
+  values overflow a select's 25-option cap — and the board repaints
   immediately — the old 2s debounce coalesced bursts from *several* bettors,
   which a private round cannot have. The player presses **🎡 Spin**
   (`casino_go:roulette:{round_id}`) when ready; there is no betting deadline.
@@ -345,7 +348,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   (`casino_logic.DERBY_FIELD`, weights /100 × total-return ratios:
   🐇 38·2.5×, 🦔 19·5×, 🐝 13·7×, 🦋 12·8×, 🐢 10·9.5×, 🐌 8·12×), win
   bets only. One open race per player; runner buttons
-  (`casino_dy:{runner}:{round_id}`) + amount modal debit at placement; **🏇
+  (`casino_dy:{runner}:{round_id}`) + amount ladder debit at placement; **🏇
   Race** draws the winner (weighted), settles exactly-once, then plays
   `derby_frames` into the player's own ephemeral message (money **before**
   the first frame). Same boot refund, idle backstop and void rules as
@@ -353,7 +356,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
 - **Baccarat** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1a) — punto banco
   on the shared windowed machinery: side buttons
-  (`casino_bc:{player|banker|tie}:{round_id}`) + amount modal, fixed
+  (`casino_bc:{player|banker|tie}:{round_id}`) + amount ladder, fixed
   third-card tableau (`casino_logic._banker_draws`), cards drawn from an
   **infinite shoe** (rank uniform /13) so the RTP is exact enumeration,
   not sampling. Paytable is **EZ-Baccarat commission-free**: Player/Banker
@@ -369,7 +372,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
 - **Dice / Sic Bo** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1b) — three dice,
   one roll on the shared machinery: call buttons
-  (`casino_dc:{big|small|odd|even}:{round_id}`) + amount modal. v1 keeps
+  (`casino_dc:{big|small|odd|even}:{round_id}`) + amount ladder. v1 keeps
   the classic even-money quartet — Big 11–17, Small 4–10, Odd, Even, each
   2× total return, **all losing to any triple** (that exclusion is the
   house edge). Every bet enumerates to exactly 105/216 wins → 97.22% RTP,
@@ -381,7 +384,7 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
 - **Keno** (plan: [plans/casino-classics-and-prediction-market.md](
   plans/casino-classics-and-prediction-market.md) Stage 1d) — 20 of 80
   drawn once per private round on the shared machinery. Tier buttons
-  (`casino_kn:{4|6|8|10}:{round_id}`) + amount modal; the ticket's numbers
+  (`casino_kn:{4|6|8|10}:{round_id}`) + amount ladder; the ticket's numbers
   are **quick-picked by the house** at placement (`keno_quick_pick`,
   echoed back in the confirmation and on the bets board; a manual-numbers
   modal is a possible later iteration). Paytables are **bespoke**
@@ -608,9 +611,31 @@ Stage 2.
   a third (`_auto_resolve_hand`, the blackjack/war idle sweep) was never in
   scope of it at all. Pinned by `tests/cogs/test_casino_big_win_broadcast.py`,
   which asserts the send reaches `channel.send` with no view.
-- **Informed bets:** the bet modal's label carries live limits and cap
+- **The amount ladder** (2026-09-01, todo #96 / audit M2): choosing a stake
+  is buttons, not typing. `logic.bet_amount_options` builds at most four
+  rungs — **Last · Half · Double · Max** off the remembered last stake, or
+  **Min · a round middle · Max** on a first bet — plus **Custom…**, which
+  opens the old modal unchanged. Every rung is placeable: the ceiling is the
+  table maximum, the balance and the daily-cap headroom, whichever binds
+  first, so a tap can never come back as an error. An empty ladder (broke, or
+  capped out) falls back to the modal, whose service call gives the real
+  reason. A press from inside a private surface **replaces it in place**
+  (`_show_step`), so a wager still costs no extra message; a press on the
+  public hub opens one. On the five private-round tables the step covers the
+  board, so it carries **Back**, and a timeout restores the board too — but
+  only if that step still owns the board (`_window_steps`): discord.py starts
+  a fresh timeout per view and cancels none of the ones it replaces, so an
+  abandoned step would otherwise wake minutes later and repaint over whatever
+  the player is in the middle of. A **refused** bet repaints too, since the
+  step is standing where the board was and the old modal left it intact.
+  Coinflip and Mines choose a side/risk first, so their ladder carries Back
+  as well, re-rendering that picker. The number step spends rows 0 and 1 on
+  its two selects, so its Back sits on row 2 — a select fills a whole row,
+  and a Back hardcoded to row 1 made the view refuse to build at all.
+- **Informed bets:** the label on the Custom… modal carries live limits and cap
   headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
-  member's last stake per game (in-memory). The cap error names its reset
+  member's last stake per game (in-memory) — the same numbers that shape the
+  ladder. The cap error names its reset
   time; the hub's 📊 My Stats button shows the personal tally + today's
   cap usage ephemerally.
 - **Players are named, never mentioned** (todo #90, 2026-08-11): every card

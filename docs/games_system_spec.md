@@ -175,7 +175,7 @@ The games cluster by shape; each cluster shares interaction patterns.
 
 ### Anonymous-submission games
 
-**Anonymous Truth or Dare (FFA), Hot Takes, Fantasies & Dealbreakers, Anonymous AMA** post submissions to the play channel without the author's name attached. Every such submission is recorded in `anon_audit_log` — who posted it, when, and a pointer to the message — and is reviewable on the admin dashboard's **Anonymous Features** audit panel (`anon_audit_spec.md`). If an audit channel is also configured, the submission is mirrored there with the original author visible, so staff watching Discord see it without opening the dashboard. `hottakes` runs in two phases (submit, then a 5-step temperature vote per take with a live results bar). `fantasies` is multi-round; each round runs Submit → Reveal → Same/Not-for-me per entry, and the host can keep running rounds before the final recap.
+**Anonymous Truth or Dare (FFA), Hot Takes, Fantasies & Dealbreakers, Anonymous AMA** post submissions to the play channel without the author's name attached. Every such submission is recorded in `anon_audit_log` — who posted it, when, and a pointer to the message — and is reviewable on the admin dashboard's **Anonymous Features** audit panel (`anon_audit_spec.md`). If an audit channel is also configured, the submission is mirrored there with the original author visible, so staff watching Discord see it without opening the dashboard. `hottakes` runs in two phases (submit, then a 5-step temperature vote per take with a live results bar). `fantasies` is multi-round; each round runs Submit → Reveal → Same/Not-for-me per entry, and the host can keep running rounds before the final recap. The category is **chosen by button** — the round's submit message carries *Submit a Fantasy* and *Submit a Dealbreaker*, each opening a modal holding only the entry box. It used to be typed into a text field beside the entry, and a word the parser didn't recognise closed the modal with an error, discarding up to 500 characters the member had just written.
 
 `ama` is the largest and longest-running game, with **two independent axes**:
 
@@ -190,7 +190,7 @@ AMA carries a per-question lifecycle (pending → answered / passed / rejected /
 
 ### Sequential storytelling
 
-**Story Builder** builds a story sentence-by-sentence; the default "blind" visibility shows only the previous sentence in the modal while `full` shows everything so far. The host can skip a slow player. Max 30 sentences, default 10.
+**Story Builder** builds a story sentence-by-sentence; the default "blind" visibility shows only the previous sentence in the modal while `full` shows everything so far. The host can skip a slow player. Max 30 sentences, default 10. Each turn posts one panel — the ping plus Write/Skip buttons — and that panel is **deleted when the turn resolves**, the way Price is Right deletes its host prompt; it used to be edited to a disabled state and left in place, so a 5-player 4-round story interleaved its own text with twenty spent panels.
 
 ### LegitLibs
 

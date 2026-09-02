@@ -60,6 +60,7 @@ from bot_modules.voice_master.logic import (
     panel_button_meta,
     panel_group_placeholder,
     panel_metas_for_group,
+    limit_presets,
     parse_limit_input,
     plan_hide_text_grants,
     plan_initial_overwrites,
@@ -1061,6 +1062,18 @@ def test_validate_rename_input_ignores_empty_pattern_in_blocklist():
         "Safe", max_len=100, blocklist_patterns=["", "bad"]
     )
     assert out.error_message is None
+
+
+# ── limit_presets ────────────────────────────────────────────────────
+
+
+def test_limit_presets_are_all_legal_limits():
+    presets = limit_presets()
+    assert [label for label, _ in presets] == ["No cap", "2", "4", "6", "10"]
+    # Every rung must be settable, or a tap would answer with an error.
+    assert all(validate_limit_value(value) is None for _, value in presets)
+    # Five rungs plus Custom… is exactly one Discord button row.
+    assert len(presets) == 5
 
 
 # ── validate_limit_value / parse_limit_input ─────────────────────────

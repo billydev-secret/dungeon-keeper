@@ -37,42 +37,42 @@ from bot_modules.games_fantasies.embeds import (
     build_vote_embed,
 )
 from bot_modules.games_fantasies.logic import (
+    CATEGORY_DEALBREAKER,
+    CATEGORY_FANTASY,
     add_entry,
     apply_vote,
     build_result_entry,
     get_round_entries,
-    normalize_category,
 )
 
 log = logging.getLogger(__name__)
 
 
-class SubmitEntryModal(discord.ui.Modal, title="Submit a Fantasy or Dealbreaker"):
-    category = discord.ui.TextInput(
-        label='Type "Fantasy" or "Dealbreaker"',
-        max_length=20,
-        placeholder="Fantasy",
-    )
-    entry = discord.ui.TextInput(
+class SubmitEntryModal(discord.ui.Modal):
+    """The entry box alone — the button that opened it chose the category.
+
+    It used to ask members to *type* "Fantasy" or "Dealbreaker" into a box
+    beside their 500-character entry. An unrecognised word closed the modal
+    with an ephemeral error, and the entry went with it: a binary choice was
+    costing people everything they had just written.
+    """
+
+    entry: discord.ui.TextInput = discord.ui.TextInput(
         label="Your Entry",
         style=discord.TextStyle.paragraph,
         max_length=500,
     )
 
-    def __init__(self, game_id: str, db, round_num: int):
-        super().__init__()
+    def __init__(self, game_id: str, db, round_num: int, category: str):
+        super().__init__(title=f"Submit a {category}")
         self.game_id = game_id
         self.db = db
         self.round_num = round_num
+        self.category = category
 
     async def on_submit(self, interaction: discord.Interaction):
         log.info("%s submitted '%s' modal in #%s", interaction.user.display_name, "Submit Entry", channel_name(interaction.channel))
-        category = normalize_category(self.category.value)
-        if category is None:
-            await interaction.response.send_message(
-                "Category must be 'Fantasy' or 'Dealbreaker'.", ephemeral=True
-            )
-            return
+        category = self.category
 
         def _add_entry(payload):
             add_entry(
@@ -147,10 +147,20 @@ class SubmitRoundView(discord.ui.View):
         self.db = db
         self.bot = bot
 
-    @discord.ui.button(label="Submit", style=discord.ButtonStyle.primary, custom_id="fan_submit_entry")
-    async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Submit a Fantasy", emoji="💖", style=discord.ButtonStyle.primary, custom_id="fan_submit_fantasy")
+    async def submit_fantasy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_entry_modal(interaction, button, CATEGORY_FANTASY)
+
+    @discord.ui.button(label="Submit a Dealbreaker", emoji="🚩", style=discord.ButtonStyle.primary, custom_id="fan_submit_dealbreaker")
+    async def submit_dealbreaker(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._open_entry_modal(interaction, button, CATEGORY_DEALBREAKER)
+
+    async def _open_entry_modal(
+        self, interaction: discord.Interaction, button: discord.ui.Button, category: str
+    ) -> None:
+        """One button per category — the choice is made before any typing."""
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        modal = SubmitEntryModal(self.game_id, self.db, self.round_num)
+        modal = SubmitEntryModal(self.game_id, self.db, self.round_num, category)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Close Submissions", style=discord.ButtonStyle.secondary, custom_id="fan_close_sub")

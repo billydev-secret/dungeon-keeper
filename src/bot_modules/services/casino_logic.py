@@ -936,3 +936,93 @@ def mines_risk_label(bombs: int) -> str:
         f"{bombs} {bomb_word} · {len(ladder)} {tiles} "
         f"to {mines_mult_label(ladder[-1])}"
     )
+
+
+# ── the bet ladder (what the amount buttons offer) ────────────────────
+
+#: Round numbers a mid-range button is allowed to land on, as 1/2/5 ×10^k.
+_NICE_STEPS = (1, 2, 5)
+
+
+class BetOption(NamedTuple):
+    """One button on the amount picker."""
+
+    label: str
+    amount: int
+
+
+def _nice_below(value: int) -> int:
+    """The largest 1/2/5 ×10^k round number at or below ``value``."""
+    if value < 1:
+        return 1
+    magnitude = 1
+    while magnitude * 10 <= value:
+        magnitude *= 10
+    best = magnitude
+    for step in _NICE_STEPS:
+        candidate = step * magnitude
+        if candidate <= value:
+            best = candidate
+    return best
+
+
+def bet_amount_options(
+    *,
+    min_bet: int,
+    max_bet: int,
+    balance: int,
+    cap_left: int | None,
+    last_bet: int | None,
+) -> list[BetOption]:
+    """The amount buttons to offer, in order — never more than four.
+
+    Every rung is a stake the player can actually place right now: the
+    ceiling is the table maximum, their balance and whatever is left of
+    the daily cap, whichever binds first. A button that answered with an
+    error would be worse than the modal it replaced.
+
+    With a remembered last bet the ladder is built around their own habit
+    — **Last, Half, Double, Max** — because the modal's pre-fill already
+    proved the answer is usually "the same as last time", and a player
+    drifting up or down over a session drags the whole ladder with them.
+    With no last bet there is no habit to anchor on, so it falls back to
+    **Min, a round middle, Max**.
+
+    An empty list means no legal stake exists (broke, or the daily cap is
+    spent); the caller falls back to the typed modal, whose service call
+    produces the real explanation.
+    """
+    floor = max(1, min_bet)
+    ceiling = balance
+    if max_bet > 0:
+        ceiling = min(ceiling, max_bet)
+    if cap_left is not None:
+        ceiling = min(ceiling, cap_left)
+    if ceiling < floor:
+        return []
+
+    last = last_bet if last_bet is not None and floor <= last_bet <= ceiling else None
+    if last is not None:
+        raw = [
+            ("Last", last),
+            ("Half", max(floor, last // 2)),
+            ("Double", min(ceiling, last * 2)),
+            ("Max", ceiling),
+        ]
+    else:
+        raw = [
+            ("Min", floor),
+            ("", _nice_below((floor + ceiling) // 2)),
+            ("Max", ceiling),
+        ]
+
+    seen: set[int] = set()
+    options: list[BetOption] = []
+    for name, amount in raw:
+        if not floor <= amount <= ceiling or amount in seen:
+            continue
+        seen.add(amount)
+        options.append(
+            BetOption(f"{name} · {amount:,}" if name else f"{amount:,}", amount)
+        )
+    return options[:4]

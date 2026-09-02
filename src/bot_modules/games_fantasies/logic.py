@@ -10,10 +10,6 @@ The shape of this game is closest to Hot Takes — anonymous submission
 of free-form text entries, then per-entry binary voting (✅ Same vs
 ❌ Not for me). Three extracted pieces:
 
-* :func:`normalize_category` — maps the modal's free-text "Fantasy"/
-  "Dealbreaker" field to a canonical category name (or ``None`` for
-  invalid input). The cog's modal echoes ``None`` back as a validation
-  error.
 * :func:`add_entry` — append an anonymous entry to the round's
   ``entries`` list, lazily creating the ``rounds``/round-key scaffolding
   in the payload. Mirrors the modal's ``_add_entry`` closure.
@@ -28,26 +24,12 @@ from __future__ import annotations
 
 from typing import Any
 
-# Canonical category names emitted by ``normalize_category``. Kept here
-# so tests and embed builders don't redeclare the strings.
+# The two categories. One submit button carries each, so these are the
+# only values ``add_entry`` ever stores — no parsing stands between a
+# member's choice and the payload. Kept here so the cog's buttons, the
+# tests and the embed builders don't redeclare the strings.
 CATEGORY_FANTASY = "Fantasy"
 CATEGORY_DEALBREAKER = "Dealbreaker"
-
-
-def normalize_category(raw: str) -> str | None:
-    """Map a user-typed category to its canonical form, or ``None``.
-
-    The modal accepts any string starting with ``f``/``F`` for Fantasy
-    or ``d``/``D`` for Dealbreaker (case-insensitive, leading/trailing
-    whitespace stripped). Anything else returns ``None`` so the cog can
-    reject the submission with an ephemeral error.
-    """
-    cleaned = raw.strip().lower()
-    if cleaned.startswith("f"):
-        return CATEGORY_FANTASY
-    if cleaned.startswith("d"):
-        return CATEGORY_DEALBREAKER
-    return None
 
 
 def add_entry(

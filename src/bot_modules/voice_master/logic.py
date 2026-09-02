@@ -819,6 +819,16 @@ def validate_limit_value(value: int) -> str | None:
     return None
 
 
+def limit_presets() -> list[tuple[str, int]]:
+    """The user-limit ladder the picker renders: ``(label, value)``.
+
+    A room is either uncapped or capped small, so almost all of the 100
+    legal values are never chosen. These five become taps; the typed box
+    survives behind the picker's Custom… button for everything else.
+    """
+    return [("No cap", 0), ("2", 2), ("4", 4), ("6", 6), ("10", 10)]
+
+
 def parse_limit_input(raw: str) -> tuple[int | None, str | None]:
     """Parse the limit modal text input. Returns ``(value, error)``."""
     try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import calendar
 import re
 import sqlite3
 import time
@@ -10,6 +11,36 @@ from bot_modules.core.db_utils import get_config_value
 
 # Max valid day per month; Feb capped at 28 (Feb 29 skips 3/4 years)
 MAX_DAYS = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+
+def month_choices() -> list[tuple[str, int]]:
+    """(name, number) for every month, in calendar order.
+
+    The set-birthday modal renders these as a select. Twelve options sit
+    well inside Discord's 25-option cap, which is what lets the month stop
+    being a typed number — and takes the "must be between 1 and 12" error
+    with it.
+    """
+    return [(calendar.month_name[m], m) for m in range(1, 13)]
+
+
+def parse_birthday_day(raw: str, month: int) -> tuple[int | None, str | None]:
+    """A day-of-month from the modal's text box: ``(day, error)``.
+
+    The month arrives from a select and is trusted. The day is still typed
+    because 31 values overflow the select cap, and because its upper bound
+    depends on which month was picked.
+    """
+    try:
+        day = int(raw.strip())
+    except ValueError:
+        return None, "❌ Day must be a whole number."
+    if not 1 <= day <= MAX_DAYS[month]:
+        return None, (
+            f"❌ {calendar.month_name[month]} has at most "
+            f"{MAX_DAYS[month]} days."
+        )
+    return day, None
 
 # Guild-local hour the announcement pass waits for. Configurable per guild on
 # the Birthdays panel; 09:00 stays the default so guilds that never touch the

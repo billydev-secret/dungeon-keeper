@@ -1023,3 +1023,110 @@ def test_mines_grid_leaves_room_for_the_cash_out_button():
     assert rows == int(rows)
     assert int(rows) + 1 <= 5
     assert logic.MINES_TILES + logic.MINES_GRID_WIDTH <= 25
+
+
+# ── the bet ladder (ephemeral-UI audit M2) ───────────────────────────
+
+
+def _amounts(**kwargs) -> list[int]:
+    return [o.amount for o in logic.bet_amount_options(**kwargs)]
+
+
+def _labels(**kwargs) -> list[str]:
+    return [o.label for o in logic.bet_amount_options(**kwargs)]
+
+
+def test_ladder_is_built_around_the_last_bet():
+    assert _labels(
+        min_bet=5, max_bet=100, balance=1_000, cap_left=None, last_bet=25
+    ) == ["Last · 25", "Half · 12", "Double · 50", "Max · 100"]
+
+
+def test_ladder_falls_back_to_min_mid_max_on_a_first_bet():
+    """No habit to anchor on, so offer the shape of the table instead."""
+    assert _labels(
+        min_bet=5, max_bet=100, balance=1_000, cap_left=None, last_bet=None
+    ) == ["Min · 5", "50", "Max · 100"]
+
+
+@pytest.mark.parametrize(
+    ("min_bet", "max_bet", "balance", "expected_mid"),
+    [
+        (5, 100, 1_000, 50),
+        (5, 0, 1_000, 500),      # no table maximum: the balance is the ceiling
+        (1, 30, 1_000, 10),      # 15 is not round; 10 is the nearest below
+        (10, 12, 1_000, 10),     # nothing round fits between, so it dedupes out
+    ],
+)
+def test_the_middle_rung_lands_on_a_round_number(
+    min_bet, max_bet, balance, expected_mid
+):
+    amounts = _amounts(
+        min_bet=min_bet, max_bet=max_bet, balance=balance,
+        cap_left=None, last_bet=None,
+    )
+    assert expected_mid in amounts
+
+
+@pytest.mark.parametrize(
+    ("balance", "cap_left", "expected_max"),
+    [
+        (1_000, None, 100),   # the table maximum binds
+        (40, None, 40),       # their balance binds
+        (1_000, 25, 25),      # what is left of the daily cap binds
+        (30, 60, 30),         # the tightest of the three wins
+    ],
+)
+def test_max_is_what_they_can_actually_stake(balance, cap_left, expected_max):
+    """A rung that answered with an error would be worse than the modal."""
+    amounts = _amounts(
+        min_bet=5, max_bet=100, balance=balance,
+        cap_left=cap_left, last_bet=None,
+    )
+    assert max(amounts) == expected_max
+
+
+@pytest.mark.parametrize(
+    ("balance", "cap_left"),
+    [(4, None), (1_000, 0), (1_000, 4), (0, None)],
+)
+def test_no_legal_stake_yields_no_ladder(balance, cap_left):
+    """Broke or capped out: the caller falls back to the typed modal, whose
+    service call produces the real explanation."""
+    assert logic.bet_amount_options(
+        min_bet=5, max_bet=100, balance=balance,
+        cap_left=cap_left, last_bet=None,
+    ) == []
+
+
+@pytest.mark.parametrize("last_bet", [4, 101, 5_000])
+def test_an_unplayable_last_bet_is_ignored(last_bet):
+    """A stake that has since gone out of range can't anchor the ladder —
+    the table's limits or their balance moved under it."""
+    assert _labels(
+        min_bet=5, max_bet=100, balance=1_000, cap_left=None, last_bet=last_bet
+    ) == ["Min · 5", "50", "Max · 100"]
+
+
+def test_the_ladder_never_repeats_an_amount():
+    # Last sits at the floor: Half clamps onto it and drops out.
+    assert _amounts(
+        min_bet=5, max_bet=100, balance=1_000, cap_left=None, last_bet=5
+    ) == [5, 10, 100]
+    # Last sits at the ceiling: Double and Max both collapse onto it.
+    assert _amounts(
+        min_bet=5, max_bet=100, balance=1_000, cap_left=None, last_bet=100
+    ) == [100, 50]
+
+
+@pytest.mark.parametrize("last_bet", [None, 5, 25, 100])
+@pytest.mark.parametrize("balance", [5, 37, 1_000])
+def test_every_rung_is_inside_the_limits_and_fits_one_row(last_bet, balance):
+    options = logic.bet_amount_options(
+        min_bet=5, max_bet=100, balance=balance, cap_left=80, last_bet=last_bet
+    )
+    ceiling = min(100, balance, 80)
+    # Four rungs plus Custom… is exactly one Discord button row.
+    assert len(options) <= 4
+    assert all(5 <= o.amount <= ceiling for o in options)
+    assert all(str(o.amount) in o.label.replace(",", "") for o in options)

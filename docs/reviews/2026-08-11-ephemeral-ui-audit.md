@@ -5,8 +5,9 @@ they're using now"*, widened on request to cover two more axes — private
 moments inside **multiplayer** games, and places where an **ephemeral panel
 would beat a modal**.
 
-This is a recommendation, not a change. Nothing here is implemented; the only
-code shipping alongside it is the casino work from #94/#95.
+This was a recommendation, not a change. **Every finding it raised has since
+been worked** — see the "Shipped" notes under E3, M1, M2, M3 and M4, all
+2026-09-01; E1 and E2 needed no work. Nothing here is outstanding.
 
 **Verdict up front.** The solo-play question is closed: every one-person game in
 the bot is in the casino, and the five that were still public are being moved
@@ -112,6 +113,10 @@ belongs only to the two bare pings that already use it.
 **Cost: S** — one delete call plus its failure branch, in a file no other
 session is touching.
 
+**Shipped 2026-09-01.** `games_story_cog.py` now deletes `turn_msg` when the
+turn resolves, before the game-closed break, so a story closed mid-turn leaves
+nothing behind either.
+
 <a name="m1"></a>
 ## M1 — Fantasies asks members to type one of two words · **best win in the audit**
 
@@ -145,6 +150,11 @@ only the entry box, category already decided. One tap replaces a typed word,
 disappears with them. **Cost: S.** One cog, one logic function deleted, its
 tests fold into the button test.
 
+**Shipped 2026-09-01**, one better than proposed: rather than a picker step
+before the modal, the round's submit message carries *Submit a Fantasy* and
+*Submit a Dealbreaker* directly, so the fix costs **no** extra tap.
+`normalize_category` is deleted.
+
 <a name="m2"></a>
 ## M2 — Every casino bet costs a modal round-trip
 
@@ -169,6 +179,17 @@ is already restructuring how these games open and repaint, and the bet-entry
 surface is the natural next layer on top of it rather than a competing edit to
 the same file.
 
+**Shipped 2026-09-01**, once that rewrite had landed. The ladder is
+`casino_logic.bet_amount_options` — **Last · Half · Double · Max** off the
+remembered stake (Billy's pick over a fixed 10/25/50/100), falling back to
+**Min · a round middle · Max** on a first bet. Every rung is capped by the
+table maximum, the balance *and* the daily-cap headroom together, so a tap
+can never be refused; with no legal stake at all the surface falls back to
+the modal, whose service call gives the real reason. A press inside a private
+surface replaces it in place rather than opening a second message, and on the
+five private-round tables the step carries **Back** (and restores the board on
+timeout) because it covers the round's own board.
+
 <a name="m3"></a>
 ## M3 — Roulette makes you type a number 0–36
 
@@ -184,6 +205,11 @@ action.
 
 **Cost: S–M.** Reasonable to fold into M2 when the bet surface is rebuilt;
 not worth a standalone change.
+
+**Shipped 2026-09-01** with M2, as suggested. Two selects split the wheel
+0–18 / 19–36, and `RouletteBetModal` lost its number box along with the
+0–36 validation branch behind it — by the time that modal opens the bet is
+fully decided and only the stake is open.
 
 <a name="m4"></a>
 ## M4 — Two more constrained values typed as free text
@@ -204,6 +230,12 @@ Those are correct as modals and should stay.
 
 **Cost: S each**, independent of the casino work, and both sit in features
 nobody is currently editing.
+
+**Both shipped 2026-09-01.** The birthday month is a **select inside the
+modal** (discord.py 2.7.1 supports one via `ui.Label`, which this audit assumed
+was unavailable), so it costs no extra step and the "must be between 1 and 12"
+branch is gone; the day stays typed because 31 values overflow the select cap
+and its bound depends on the month. The voice limit became the ladder above.
 
 ---
 

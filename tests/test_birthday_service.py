@@ -16,6 +16,8 @@ from bot_modules.services.birthday_service import (
     is_birthday_wish,
     list_all_birthdays,
     mark_announced,
+    month_choices,
+    parse_birthday_day,
     todays_unannounced,
     upsert_birthday,
 )
@@ -290,3 +292,56 @@ def test_announce_hour_is_per_guild(db):
         assert announce_hour(conn, GUILD) == 17
         # A guild with no row of its own still gets the default.
         assert announce_hour(conn, 424242) == 9
+
+
+# ── the month is picked, the day is typed (ephemeral-UI audit M4) ──────
+
+
+def test_month_choices_covers_the_calendar_in_order():
+    choices = month_choices()
+    assert len(choices) == 12  # comfortably inside Discord's 25-option cap
+    assert choices[0] == ("January", 1)
+    assert choices[-1] == ("December", 12)
+    assert [n for _, n in choices] == list(range(1, 13))
+
+
+@pytest.mark.parametrize(
+    ("raw", "month", "expected"),
+    [("15", 7, 15), (" 1 ", 1, 1), ("31", 1, 31), ("28", 2, 28), ("30", 4, 30)],
+)
+def test_parse_birthday_day_accepts_a_day_that_month_has(raw, month, expected):
+    assert parse_birthday_day(raw, month) == (expected, None)
+
+
+@pytest.mark.parametrize(
+    ("raw", "month"),
+    [("29", 2), ("31", 4), ("0", 7), ("32", 7), ("-3", 7)],
+)
+def test_parse_birthday_day_rejects_a_day_outside_that_month(raw, month):
+    day, err = parse_birthday_day(raw, month)
+    assert day is None
+    assert err is not None and str(MAX_DAYS[month]) in err
+
+
+@pytest.mark.parametrize("raw", ["", "  ", "abc", "1.5", "七"])
+def test_parse_birthday_day_rejects_a_non_number(raw):
+    day, err = parse_birthday_day(raw, 7)
+    assert day is None
+    assert err == "❌ Day must be a whole number."
+
+
+def test_birthday_modal_picks_the_month_and_types_the_day():
+    """The month select replaces a typed 1–12 and the error it produced."""
+    import discord
+
+    from bot_modules.cogs.birthday_cog import _BirthdayModal
+
+    modal = _BirthdayModal(ctx=None)  # type: ignore[arg-type]
+    assert isinstance(modal.month, discord.ui.Select)
+    assert [o.label for o in modal.month.options] == [
+        name for name, _ in month_choices()
+    ]
+    assert isinstance(modal.day, discord.ui.TextInput)
+    assert [label.text for label in modal.children] == [
+        "Month", "Day (1–31)", "Birthday request (optional)",
+    ]

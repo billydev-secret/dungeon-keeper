@@ -573,3 +573,69 @@ def test_lobby_embed_renders_the_start_countdown():
 def test_lobby_embed_omits_the_countdown_when_none_was_set():
     embed = build_lobby_embed(host_name="Alice", visibility="blind", max_sentences=10)
     assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+# ── the turn panel is deleted, not left behind (ephemeral-UI audit E3) ──
+
+import asyncio  # noqa: E402
+
+
+class _SpyMessage:
+    """A sent message that records whether it was deleted or merely edited."""
+
+    def __init__(self) -> None:
+        self.delete = AsyncMock()
+        self.edit = AsyncMock()
+
+
+class _SpyChannel:
+    """Hands back a distinct spy per send so the turn panel is identifiable."""
+
+    id = 100
+    guild = None
+
+    def __init__(self) -> None:
+        self.sent: list[_SpyMessage] = []
+
+    async def send(self, *args, **kwargs) -> _SpyMessage:
+        msg = _SpyMessage()
+        self.sent.append(msg)
+        return msg
+
+
+class _InstantTurnView:
+    """StoryTurnView stand-in whose player has already written their line."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        self._submitted_event = asyncio.Event()
+        self._submitted_event.set()
+        self._submitted_text = "And then the door opened."
+        self._skipped = False
+
+
+async def test_run_story_deletes_the_spent_turn_panel(monkeypatch, sync_db_path):
+    """A resolved turn takes its panel with it.
+
+    Story used to disable the buttons and edit the message, leaving one
+    dead "it's your turn!" panel per player per round interleaved with the
+    story itself — the single biggest contributor to channel clutter the
+    ephemeral-UI audit found.
+    """
+    monkeypatch.setattr(story_cog, "StoryTurnView", _InstantTurnView)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "story", payload={"players": [1]})
+    bot.active_views[gid] = object()
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_reveal_story", AsyncMock())
+    channel = _SpyChannel()
+
+    await cog._run_story(
+        None, gid,
+        {"host_id": 1, "players": [1], "max_sentences": 2},
+        channel,
+    )
+
+    # 0 = the story opening, 1 = the turn panel, 2 = the written sentence.
+    turn_panel = channel.sent[1]
+    assert turn_panel.delete.await_count == 1
+    assert turn_panel.edit.await_count == 0
