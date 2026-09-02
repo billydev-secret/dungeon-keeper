@@ -1111,6 +1111,37 @@ def test_create_and_update_round_trip_the_trigger(db):
         assert get_recurring(conn, rid, GUILD).auto_complete is None
 
 
+def test_an_update_that_omits_the_trigger_leaves_it_alone(db):
+    """"Field absent" must not mean "switch the automation off".
+
+    None already means off, so without a distinct sentinel any caller that
+    simply doesn't mention the trigger — a script, a curl, a stale cached copy
+    of the panel JS — silently un-wires a working chore.
+    """
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        update_recurring(
+            conn, rid, GUILD, task="Do a QOTD (reworded)", recurrence="daily",
+            time_of_day=600, now_ts=AUTO_NOW,
+        )
+        task = get_recurring(conn, rid, GUILD)
+
+    assert task.task == "Do a QOTD (reworded)"  # the edit landed
+    assert task.time_of_day == 600
+    assert task.auto_complete == "qotd"         # and the trigger survived it
+
+
+def test_clearing_the_trigger_is_still_possible(db):
+    """The sentinel must not make "off" unreachable."""
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        update_recurring(
+            conn, rid, GUILD, task="Do a QOTD", recurrence="daily",
+            time_of_day=540, auto_complete=None, now_ts=AUTO_NOW,
+        )
+        assert get_recurring(conn, rid, GUILD).auto_complete is None
+
+
 def test_a_chore_defaults_to_hand_ticked(db):
     """Every definition that predates migration 200 is one of these."""
     with open_db(db) as conn:

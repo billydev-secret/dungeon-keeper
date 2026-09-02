@@ -54,6 +54,16 @@ VALID_STATUS = ("active", "paused")
 #: would be a chore that silently never signs itself off.
 VALID_AUTO_COMPLETE = ("qotd", "game")
 
+#: Passed to ``update_recurring`` for "leave the trigger as it is".
+#:
+#: Needed because ``None`` already means something specific here — switch the
+#: automation off — so a caller that simply doesn't mention the field cannot be
+#: told apart from one that means to clear it. Without this, any PUT that omits
+#: ``auto_complete`` (a script, a curl, a stale cached copy of the panel JS)
+#: silently un-wires a working chore, with no error and nothing visible but a
+#: missing chip.
+KEEP_AUTO_COMPLETE = "__keep__"
+
 DESCRIPTION_MAX_LEN = 1000
 
 #: Weekday labels for rendering, Mon=0 (matches ``datetime.weekday()``).
@@ -336,15 +346,20 @@ def update_recurring(
     time_of_day: int,
     recur_days: Iterable | None = None,
     description: str | None = None,
-    auto_complete: str | None = None,
+    auto_complete: str | None = KEEP_AUTO_COMPLETE,
     offset_hours: float = 0.0,
     now_ts: float,
 ) -> bool:
-    """Rewrite a definition's schedulable fields and recompute ``next_run_at``."""
+    """Rewrite a definition's schedulable fields and recompute ``next_run_at``.
+
+    ``auto_complete`` defaults to ``KEEP_AUTO_COMPLETE``: a caller that does not
+    mention the trigger leaves it alone rather than switching it off.
+    """
     task, recurrence, minutes, days = validate(
         task=task, recurrence=recurrence, time_of_day=time_of_day, recur_days=recur_days
     )
-    trigger = normalize_auto_complete(auto_complete)
+    keep_trigger = auto_complete == KEEP_AUTO_COMPLETE
+    trigger = None if keep_trigger else normalize_auto_complete(auto_complete)
     next_run = compute_next_run(
         now_utc=now_ts,
         offset_hours=offset_hours,
@@ -354,7 +369,8 @@ def update_recurring(
     )
     cur = conn.execute(
         "UPDATE todo_recurring SET task = ?, description = ?, recurrence = ?,"
-        " time_of_day = ?, recur_days = ?, next_run_at = ?, auto_complete = ?"
+        " time_of_day = ?, recur_days = ?, next_run_at = ?,"
+        " auto_complete = CASE WHEN ? THEN auto_complete ELSE ? END"
         " WHERE id = ? AND guild_id = ?",
         (
             task,
@@ -363,6 +379,7 @@ def update_recurring(
             minutes,
             json.dumps(list(days)) if days else None,
             next_run,
+            1 if keep_trigger else 0,
             trigger,
             recurring_id,
             guild_id,

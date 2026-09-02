@@ -1051,6 +1051,9 @@ class BaseGame(commands.Cog):
             )
 
     async def _handle_lobby_start(self, interaction: discord.Interaction, game_id: int) -> None:
+        #: Set once the game really starts, so the chore sign-off can happen
+        #: after the interaction is answered and outside the per-game lock.
+        started: tuple[int, int] | None = None
         async with self._get_lock(game_id):
             game = await self._db_get_game(game_id)
             if not game or game.state != "LOBBY":
@@ -1097,7 +1100,7 @@ class BaseGame(commands.Cog):
             # roster is real by here, where at lobby-open time it was one
             # person and an invitation. Credited to the host who opened it,
             # not whoever pressed Start.
-            await sign_off_game_chore(self.bot, game.guild_id, game.host_id)
+            started = (game.guild_id, game.host_id)
             await self.on_game_start(game)
             game = await self._db_get_game(game_id)
             if not game:
@@ -1108,6 +1111,14 @@ class BaseGame(commands.Cog):
             await interaction.response.edit_message(embed=embed, view=view)
             if nick_notice:
                 await interaction.followup.send(nick_notice, ephemeral=True)
+
+        # Outside the lock and after the interaction is answered. Signing the
+        # chore off can repaint the todo board, and a repaint is a REST edit
+        # that discord.py sleeps through under per-channel rate limiting — long
+        # enough to burn the three-second window (the hazard todo_cog.add_todo
+        # documents) and, in here, to hold the per-game lock while it does.
+        if started is not None:
+            await sign_off_game_chore(self.bot, *started)
 
     # ── Group resolution (timer-driven, posts to channel like duel _explode) ──
 

@@ -1433,19 +1433,25 @@ class EventsCog(commands.Cog):
                 )
 
         result = await asyncio.to_thread(_econ_work)
+
+        # BEFORE the `result is None` return, not after. _econ_work returns
+        # None once the poster has already had their daily login for this local
+        # day — which is most QOTD posts, since a mod usually chats before
+        # posting the question. The registration (and its chore sign-off) sits
+        # above that return and still happened, so keying the repaint on a
+        # non-None result would leave the board stale in exactly the common
+        # case, which is the bug the repaint exists to fix.
+        if chores_ticked:
+            from bot_modules.cogs.todo_cog import repaint_board
+
+            await repaint_board(self.bot, guild_id)
+
         if result is None:
             return
         (
             settings, outcome, prior_streak, quests_out, gains,
             wellness_value, today_local,
         ) = result
-
-        # Before anything else that can return early: the chore is already
-        # ticked in the database, and the board is the only place a mod sees it.
-        if chores_ticked:
-            from bot_modules.cogs.todo_cog import repaint_board
-
-            await repaint_board(self.bot, guild_id)
 
         # Two individual opt-ins, one DM: the digest itself requires the
         # opt-in economy game role (deliver_econ_dm's gate); the wellness

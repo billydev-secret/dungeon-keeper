@@ -345,6 +345,21 @@ def test_auto_complete_round_trips(authed_client):
     assert updated["auto_complete"] is None
 
 
+def test_a_put_without_the_field_keeps_the_trigger(authed_client):
+    """A stale client editing the schedule must not un-wire the automation."""
+    _make(authed_client, auto_complete="game")
+    item = authed_client.get("/api/todos/recurring").json()["items"][0]
+
+    resp = authed_client.put(
+        f"/api/todos/recurring/{item['id']}",
+        json={"task": "Run any game", "recurrence": "daily", "time_of_day": 600},
+    )
+    assert resp.status_code == 200
+    updated = authed_client.get("/api/todos/recurring").json()["items"][0]
+    assert updated["time_of_day"] == 600
+    assert updated["auto_complete"] == "game"
+
+
 def test_a_chore_is_hand_ticked_unless_asked_otherwise(authed_client):
     """Every definition that predates the picker sends no field at all."""
     _make(authed_client)

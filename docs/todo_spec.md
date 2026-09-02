@@ -439,9 +439,18 @@ demonstrably happened is worse than no scoreboard.
   from the feature not working. The repaint is skipped when nothing was ticked,
   and the DB work on the game paths goes through `asyncio.to_thread` like every
   other `open_db` there.
+
+  Every game seam signs off **after** its interaction has been answered, never
+  before: a repaint is a REST edit that discord.py sleeps through under
+  per-channel rate limiting, which is long enough to burn the three-second
+  window and fail an accept whose game is already ACTIVE (the hazard
+  `todo_cog.add_todo` documents). The QOTD repaint likewise sits *before*
+  `events_cog`'s `result is None` return — that return fires whenever the
+  poster has already had their daily login, which is most QOTD posts.
 - **Not every hand-started game reaches the seam.** The 16 party-game cogs share
   `finish_launch_response`; Risky Rolls has its own command and carries the call
-  itself. A game type added later that does neither simply never fires the
+  itself (after its response, outside its channel lock, and outside the `try`
+  whose handler tears a live round down). A game type added later that does neither simply never fires the
   trigger — a silent gap, so check for the seam when adding one.
 
 

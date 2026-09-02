@@ -319,11 +319,6 @@ class BaseDuel(BaseGame):
                 return
 
         await self._db_set_state(game_id, "ACTIVE")
-        # An accepted challenge is two humans playing, which is the clearest
-        # "a multiplayer game ran" the bot ever sees. Credited to the
-        # challenger: they are the one who ran a game, and the acceptor is
-        # answering an invitation rather than issuing one.
-        await sign_off_game_chore(self.bot, game.guild_id, game.challenger_id)
         await self.on_game_start(game)
 
         # Re-fetch after on_game_start (subclass may have set additional fields)
@@ -336,6 +331,18 @@ class BaseDuel(BaseGame):
         embed = self.render_game_state(game, guild)
         self.bot.add_view(view, message_id=game.message_id)
         await interaction.response.edit_message(embed=embed, view=view)
+
+        # AFTER the interaction is answered, never before. An accepted
+        # challenge is two humans playing, which is the clearest "a multiplayer
+        # game ran" the bot ever sees — but signing the chore off can repaint
+        # the todo board, and a repaint is a REST edit that discord.py will
+        # sleep through under per-channel rate limiting, long enough to burn
+        # the three-second window and fail an accept whose game is already
+        # ACTIVE (the same hazard todo_cog.add_todo documents).
+        #
+        # Credited to the challenger: they ran a game, where the acceptor
+        # answered an invitation rather than issuing one.
+        await sign_off_game_chore(self.bot, game.guild_id, game.challenger_id)
 
     async def _handle_decline(self, interaction: discord.Interaction, game_id: int) -> None:
         game = await self._db_get_game(game_id)
