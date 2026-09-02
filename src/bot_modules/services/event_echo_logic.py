@@ -42,6 +42,16 @@ SOURCE_POOLS_CLOSING = "pools_closing"
 SOURCE_RAFFLE_CLOSING = "raffle_closing"
 SOURCE_QUEST_FLIP = "quest_flip"
 SOURCE_COMMUNITY_TIER = "community_tier"
+SOURCE_RISKY_ROLL = "risky_roll"
+SOURCE_GUESS_ROUND = "guess_round"
+
+# The two sources above are the first that can originate in an **age-gated**
+# room, and the destination usually isn't one. Deliberate (2026-09-02): the
+# echo carries the game name and a jump link and nothing else, the link is
+# still enforced by Discord's own age gate, and the mismatch is surfaced to
+# admins rather than silently blocked -- see `warn_gate_crossing` in the
+# service and the notice on Config -> Event Echo. Do not add an `is_nsfw()`
+# skip here without checking that decision is still what Ben wants.
 
 # How long before a deadline the "last chance" echo fires.
 CLOSING_LEAD_SECONDS = 3600
@@ -160,6 +170,25 @@ SOURCE_SPECS: dict[str, SourceSpec] = {
         icon="🏁",
         cta="See the board →",
         exempt=True,
+    ),
+    # Back to shape one, "this just started". Neither is exempt: both are game
+    # starts, another comes along, and skip-don't-queue is right for them.
+    # That matters more here than for the sources above -- Risky Rolls echoes
+    # every start including its daily scheduled rounds, so the global floor is
+    # the only thing between a busy evening and a stream of posts.
+    SOURCE_RISKY_ROLL: SourceSpec(
+        headline="{name} is starting", lead="A round is open", icon="🎲"
+    ),
+    # Names nobody, ever. In Guess Who the submitter *is* the answer
+    # (`quests.ANON_KINDS`, economy/quests.py), so a host line or a member name
+    # in the copy would solve the round for everyone who read the echo. `name`
+    # is the literal game, never a person, and the service passes no
+    # `host_name`. Guarded by a test.
+    SOURCE_GUESS_ROUND: SourceSpec(
+        headline="New {name} round",
+        lead="Someone's up for guessing",
+        icon="🤷",
+        cta="Take a guess →",
     ),
 }
 

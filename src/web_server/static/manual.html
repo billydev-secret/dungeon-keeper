@@ -2545,21 +2545,20 @@
 
     <h4>Three kinds of note</h4>
     <ul>
-      <li><strong>Something just started</strong> — a party game opening for players (including ones the scheduler launches by itself), a Cards Against Humanity game in the tracked Gamebot channel, a Discord server event going live, or a new bounty posted.</li>
+      <li><strong>Something just started</strong> — a party game opening for players (including ones the scheduler launches by itself), a Cards Against Humanity game in the tracked Gamebot channel, a Risky Rolls round opening, a new Guess Who round posted, a Discord server event going live, or a new bounty posted.</li>
       <li><strong>Last chance</strong> — an auction closing within the hour, a prediction-market round whose betting is about to shut, or the weekly raffle an hour before ticket sales close (that one links straight to the shop's buy button).</li>
       <li><strong>Something just happened</strong> — a new week of quests going up (with the pool size and the ⚡ spotlight reveal), or a community goal crossing one of its 40% / 70% / 100% tiers. Nothing to join here, so these link to the economy panel instead of inviting you in; they only appear if that panel has been posted.</li>
     </ul>
 
     <h4>It never pings</h4>
     <p>Echoes are silent by design: no role is tagged and nobody is notified — the note is there for people already reading the channel. You won't see one for how something turned out — only for something you can still join or act on: a game still open, a window about to close, a fresh week of quests.</p>
-    <p>Rate limits keep it rare: the same kind of game at most once an hour &mdash; unless the previous one in that channel has already finished, in which case a fresh round is announced as the new thing it is &mdash; and nothing at all within ten minutes of the previous echo; anything arriving inside those windows is skipped rather than announced late. Last-chance notes and the two "just happened" notes are the exception — they happen on a fixed, rare schedule and there's no later moment to retry them, so they always get through, but still only once each. There are no slash commands.</p>
-    <p class="note">The weekly "quests are up" announcement used to be a separate post in the leaderboard channel that pinged the economy game role. It now arrives here instead, which means it no longer notifies you — and community goal tiers used to be written up by the community host rather than posted by the bot.</p>
+    <p>Rate limits keep it rare: the same kind of game at most once an hour &mdash; unless the previous one in that channel has already finished, in which case a fresh round is announced as the new thing it is &mdash; and nothing at all within ten minutes of the previous echo; anything arriving inside those windows is skipped rather than announced late. Last-chance notes and the two "just happened" notes are the exception — they happen on a fixed, rare schedule and there's no later moment to retry them, so they always get through, but still only once each. There are no slash commands.</p>    <p class="note">The weekly "quests are up" announcement used to be a separate post in the leaderboard channel that pinged the economy game role. It now arrives here instead, which means it no longer notifies you — and community goal tiers used to be written up by the community host rather than posted by the bot.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/#/config-event-echo">web dashboard</a></strong>
-        <p>The Event Echo panel has one setting: which channel echoes are posted in. Leaving it on "(off)" disables the feature entirely.</p>
+        <p>The Event Echo panel has one setting: which channel echoes are posted in. Leaving it on "(off)" disables the feature entirely. If the channel you pick isn't age-restricted while other channels on the server are, the panel says so — notes from those rooms will be visible to everyone, and age-restricting the echo channel is how you stop that.</p>
       </div>
     </div>
 
