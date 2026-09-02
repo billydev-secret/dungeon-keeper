@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import bisect
 import io
+import math
 import os
 import sqlite3
 import statistics
@@ -11,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
 from bot_modules.services import xp_rollup_service
@@ -75,23 +76,50 @@ _TEXT = "#dcddde"
 _GRID = "#40444b"
 
 # XP source palette — kept in lock-step with web/static/js/panels/activity.js
-# so the slash command and dashboard render the same product.
+# so the slash command, the dashboard and the mod stats panel render the same
+# product. These are the shared categorical slots from static/js/charts.js
+# (ROLE_COLORS), not Discord's brand hues: the brand set this file used to carry
+# had drifted out of that lock-step and fails the palette validator's lightness
+# band (#57f287 at L 0.86, #fee75c at L 0.92 against a band of 0.48–0.67).
+#
+# Six slots, and no seventh. charts.js states the rule: past six, adjacent
+# classes blur whatever you pick, so the tail folds into "Other" rather than
+# taking a generated hue. ``grant`` is the tail — 41 events in the guild's whole
+# history — and the two sources that came online in July get real identities
+# instead of all three sharing one anonymous grey.
+_SERIES_OVERFLOW = "#6b7076"
 _XP_SOURCE_COLORS = {
-    "text":        "#5865f2",
-    "reply":       "#57f287",
-    "image_react": "#fee75c",
-    "voice":       "#eb459e",
-    "grant":       "#faa61a",
+    "text":           "#B58030",  # amber
+    "reply":          "#4A7023",  # moss
+    "image_react":    "#00A29C",  # teal
+    "voice":          "#2167A1",  # slate
+    "quest":          "#9D79C3",  # orchid
+    "reaction_given": "#97435C",  # wine
 }
 _XP_SOURCE_LABELS = {
-    "text":        "Messages",
-    "reply":       "Reply bonus",
-    "image_react": "Image reaction",
-    "voice":       "Voice",
-    "grant":       "Manual grant",
+    "text":           "Messages",
+    "reply":          "Reply bonus",
+    "image_react":    "Image reaction",
+    "voice":          "Voice",
+    "quest":          "Quests",
+    "reaction_given": "Reactions given",
+    "grant":          "Manual grant",
+    "other":          "Other",
 }
-_XP_SOURCE_FALLBACK = "#949ba4"
-_XP_SOURCE_ORDER = ["text", "reply", "image_react", "voice", "grant"]
+_XP_SOURCE_FALLBACK = _SERIES_OVERFLOW
+_XP_SOURCE_ORDER = [
+    "text",
+    "reply",
+    "quest",
+    "image_react",
+    "voice",
+    "reaction_given",
+]
+
+#: Public alias: callers that fold their own tail into "Other" need to know
+#: which sources have a palette slot. The fold key is ``"other"``.
+XP_SOURCE_ORDER = _XP_SOURCE_ORDER
+XP_SOURCE_OTHER = "other"
 
 
 # ---------------------------------------------------------------------------
@@ -616,6 +644,94 @@ def query_xp_activity_with_breakdown(
     ]
     member_counts = [members_by_key.get(k, 0) for k in keys]
     return labels, xp_totals, member_counts, by_source
+
+
+def query_xp_all_time_with_breakdown(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    exclude_user_ids: set[int] | None = None,
+    exclude_channel_ids: set[int] | None = None,
+) -> tuple[list[str], list[float], dict[str, list[float]], dict[str, int]]:
+    """Weekly XP per source across the guild's whole history.
+
+    Unlike every other graph in this module the window does not roll: it starts
+    at the guild's first XP event and runs to now, so the bar count grows with
+    the server rather than staying at a fixed 12 or 30.
+
+    Weeks, not days: a guild a year old is 365 daily bars in a picture Discord
+    renders about 400px wide on a phone, which is not a chart. Weeks, not
+    months, because the shape this exists to show — a new XP source coming
+    online and the stack getting taller for a reason that is not the community
+    getting busier — disappears into a monthly average.
+
+    Returns ``(labels, totals, by_source, source_starts)``. ``source_starts``
+    maps each source to the index of the first bucket it earned anything in,
+    which is what the panel draws its "this source started here" rules from:
+    without them the stack growing two new colours in one week reads as a surge
+    in activity rather than as a change in what the bot pays XP for.
+
+    Reads through :func:`_xp_row_source`, so it stays correct once raw
+    ``xp_events`` below the retention boundary have been pruned to ``xp_daily``.
+    """
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+
+    # since_ts=0 so the union covers the rollup as well as raw: the guild's
+    # first event may well sit below the retention boundary.
+    src, src_params = _xp_row_source(conn, 0)
+    row = conn.execute(
+        f"SELECT MIN(created_at) FROM {src} WHERE guild_id = ?",
+        [*src_params, guild_id],
+    ).fetchone()
+    if row is None or row[0] is None:
+        return [], [], {}, {}
+    start_ts = float(row[0])
+
+    bucket_count = max(1, math.ceil((now_ts - start_ts) / _WEEK_SECS))
+    keys = [str(int(start_ts + (i + 1) * _WEEK_SECS)) for i in range(bucket_count)]
+    labels = [
+        datetime.fromtimestamp(
+            start_ts + (i + 1) * _WEEK_SECS, timezone.utc
+        ).strftime("%b %d")
+        for i in range(bucket_count)
+    ]
+    key_to_idx = {k: i for i, k in enumerate(keys)}
+
+    bucket_expr = _strftime_expr("week", since_ts=start_ts)
+    params: list[object] = [*src_params, guild_id, start_ts]
+    where = "guild_id = ? AND created_at >= ?"
+    where = _append_exclusions(where, params, exclude_user_ids, exclude_channel_ids)
+
+    rows = conn.execute(
+        f"""
+        SELECT {bucket_expr} AS bucket, source,
+               COALESCE(SUM(amount), 0) AS xp_total
+        FROM {src}
+        WHERE {where}
+        GROUP BY bucket, source
+        """,
+        params,
+    ).fetchall()
+
+    by_source: dict[str, list[float]] = {}
+    for bucket_key, source, total in rows:
+        idx = key_to_idx.get(str(bucket_key))
+        if idx is None:
+            continue
+        series = by_source.setdefault(str(source), [0.0] * bucket_count)
+        series[idx] = round(float(total), 1)
+
+    source_starts = {
+        source: next(i for i, v in enumerate(values) if v)
+        for source, values in by_source.items()
+        if any(values)
+    }
+    totals = [
+        round(sum(series[i] for series in by_source.values()), 1)
+        for i in range(bucket_count)
+    ]
+    return labels, totals, by_source, source_starts
 
 
 def query_xp_histogram_with_breakdown(
@@ -1866,6 +1982,7 @@ def render_activity_chart(
 
 _OVERLAY_CURRENT = "#B58030"   # amber — the subject
 _OVERLAY_BAND = "#00A29C"      # teal — the comparison
+_PRESENCE = "#9D79C3"          # orchid — who was watching
 
 
 @dataclass(frozen=True)
@@ -2006,6 +2123,335 @@ def render_overlay_panel(
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+
+@dataclass(frozen=True)
+class PresenceSeries:
+    """Distinct moderators present in each hour of today.
+
+    Drawn as a second line *on* the overlay rather than as a row of its own, so
+    "was anyone around when it was busy?" is one glance at one picture.
+
+    ``None`` past the hour in progress, exactly as ``OverlayChart.current`` is,
+    so the two lines stop at the same place instead of one of them diving to the
+    floor across hours nobody has lived yet.
+    """
+
+    values: list[int | None]
+    #: Said in place of the line when the guild has no moderator role set.
+    empty_note: str = ""
+
+    @property
+    def has_data(self) -> bool:
+        return any(v for v in self.values)
+
+    @property
+    def peak(self) -> int:
+        return max((v for v in self.values if v is not None), default=0)
+
+
+@dataclass(frozen=True)
+class StackedBarChart:
+    """One stacked-bar row: a series per XP source, aligned to *labels*."""
+
+    title: str
+    labels: list[str]
+    #: ``(source key, values)`` in draw order, bottom of the stack first.
+    series: list[tuple[str, list[float]]]
+    y_label: str = "XP"
+    #: A line under the title, for things the bars cannot say themselves.
+    note: str = ""
+    #: ``source key -> bucket index`` where that source first paid out. Drawn as
+    #: a dotted rule in the source's own colour.
+    starts: dict[str, int] = field(default_factory=dict)
+
+
+def _thin(count: int, target: int = 8) -> list[int]:
+    """Tick positions for *count* bars, at most roughly *target* of them.
+
+    Phone-first: the panel is read in an image Discord renders about 400px wide,
+    where thirty date labels are a grey smear. The reader is locating a week,
+    not reading a value off a gridline.
+    """
+    if count <= 0:
+        return []
+    step = max(1, math.ceil(count / target))
+    return list(range(0, count, step))
+
+
+@_serialized_render
+def render_mod_stats_panel(
+    overlay: OverlayChart,
+    presence: PresenceSeries | None,
+    stacks: Sequence[StackedBarChart],
+) -> bytes:
+    """The moderator stats panel's single PNG: overlay, presence, XP stacks.
+
+    Separate from :func:`render_overlay_panel` because that one shares an x-axis
+    across every row — right for two hour-of-day overlays, wrong the moment a
+    date-bucketed bar chart joins them.
+
+    **Mod presence rides on the overlay as a second line, sharing its zero
+    baseline — not a second y-axis.** A dual-scale chart lets the author put any
+    two lines into any relationship just by choosing the scales, so its crossing
+    points carry a meaning nobody put there. The line is rescaled to fit and the
+    scaling is named in the legend, so what the reader is invited to read off it
+    is the shape — when were mods around against when was it busy — while the
+    magnitudes are printed as words above the picture.
+
+    Sized for a phone. The figure is deliberately **narrow** (6in) rather than
+    short: Discord scales an embed image to the message column, so the width is
+    fixed at about 400px whatever we render, and only the ratio of type size to
+    figure width survives that. 11pt on 6in lands at ~10px on the phone; the
+    9in-wide 8pt this panel used before landed at ~5px. Height is free — the
+    reader can scroll — so rows are given room instead of being compressed.
+    """
+    rows: list[str] = ["overlay"]
+    heights: list[float] = [3.9]
+    for _ in stacks:
+        rows.append("stack")
+        heights.append(2.5)
+
+    fig, axes = plt.subplots(
+        len(rows),
+        1,
+        figsize=(6.0, sum(heights)),
+        gridspec_kw={"height_ratios": heights},
+        squeeze=False,
+    )
+    fig.patch.set_facecolor(_BG)
+    flat = [row[0] for row in axes]
+
+    def _dress(ax) -> None:
+        # Note what is *not* here: set_ylim. Pinning the floor before anything
+        # is drawn switches autoscaling off, and every axis then stays at
+        # matplotlib's empty 0-1 default while the data sails off the top. The
+        # floor is set after each row draws, not here.
+        ax.set_facecolor(_BG)
+        ax.tick_params(axis="y", colors=_TEXT, labelsize=10)
+        ax.tick_params(length=0)
+        ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=0)
+        ax.set_axisbelow(True)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    def _title(ax, text: str, note: str = "") -> None:
+        ax.set_title(text, color=_TEXT, fontsize=13, pad=14 if note else 8, loc="left")
+        if note:
+            ax.text(
+                0.0,
+                1.02,
+                note,
+                transform=ax.transAxes,
+                color=_TEXT,
+                fontsize=9,
+                alpha=0.7,
+                va="bottom",
+            )
+
+    index = 0
+
+    # ── row 1: today against its band ────────────────────────────────────
+    ax = flat[index]
+    index += 1
+    _dress(ax)
+    n_hours = len(overlay.labels)
+    x = list(range(n_hours))
+    if overlay.band_mid:
+        ax.fill_between(
+            x[: len(overlay.band_low)],
+            overlay.band_low,
+            overlay.band_high,
+            color=_OVERLAY_BAND,
+            alpha=0.18,
+            linewidth=0,
+            zorder=1,
+            label=f"{overlay.band_label} (middle half)",
+        )
+        ax.plot(
+            x[: len(overlay.band_mid)],
+            overlay.band_mid,
+            color=_OVERLAY_BAND,
+            linewidth=1.6,
+            linestyle="--",
+            zorder=2,
+            label=f"{overlay.band_label} (median)",
+        )
+    ax.plot(
+        x[: len(overlay.current)],
+        overlay.current,
+        color=_OVERLAY_CURRENT,
+        linewidth=2.2,
+        zorder=3,
+        label=overlay.current_label,
+    )
+    # ── mod presence, as a second line on the same axes ──────────────────
+    #
+    # Same zero baseline, **not** a second y-axis. A dual-scale chart lets the
+    # author put any two series into any relationship just by choosing the
+    # scales, so its crossing points carry a meaning nobody put there. But
+    # moderators peak at a handful an hour against hundreds of messages, so an
+    # unscaled line would lie flat on the floor and say nothing.
+    #
+    # So the line is rescaled to share the axis and the factor is *stated in
+    # the legend*. The reader is being shown a shape — when were mods around,
+    # against when was it busy — and the magnitudes are printed as words in the
+    # block above the picture, where they need no scale at all.
+    if presence is not None and presence.has_data:
+        peak = presence.peak
+        ceiling = max(
+            (v for v in overlay.current if v is not None),
+            default=0.0,
+        )
+        band_ceiling = max(overlay.band_high, default=0.0)
+        ceiling = max(ceiling, band_ceiling)
+        factor = (ceiling * 0.7 / peak) if peak and ceiling else 1.0
+        ax.plot(
+            list(range(len(presence.values))),
+            [None if v is None else v * factor for v in presence.values],
+            color=_PRESENCE,
+            linewidth=1.8,
+            linestyle="-",
+            marker="o",
+            markersize=3,
+            zorder=4,
+            label=f"Mods around (0-{peak}, rescaled)",
+        )
+    elif presence is not None and presence.empty_note:
+        ax.text(
+            0.01,
+            0.02,
+            presence.empty_note,
+            transform=ax.transAxes,
+            color=_TEXT,
+            fontsize=9,
+            va="bottom",
+            alpha=0.75,
+        )
+
+    _title(ax, overlay.title)
+    ax.set_ylabel("Messages", color=_TEXT, fontsize=10)
+    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=5))
+    ax.set_ylim(bottom=0)
+    ax.set_xlim(0, max(1, n_hours - 1))
+    positions = list(range(0, n_hours, 3))
+    ax.set_xticks(positions)
+    ax.set_xticklabels(
+        [overlay.labels[i] for i in positions], color=_TEXT, fontsize=10
+    )
+    ax.set_xlabel("Hour of day", color=_TEXT, fontsize=10)
+    if overlay.band_mid or (presence is not None and presence.has_data):
+        # Below the axes, not floating inside them. Sitting in the upper left it
+        # covered the band across the quiet morning hours — and on a phone, at a
+        # third of this figure's width, a box that overlaps the data is a box
+        # that hides a fifth of it. Two columns: four entries in one row will not
+        # fit 6 inches at a legible size.
+        ax.legend(
+            facecolor=_BG,
+            edgecolor=_GRID,
+            labelcolor=_TEXT,
+            fontsize=9,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.22),
+            ncol=2,
+            framealpha=0.85,
+        )
+    elif overlay.empty_note:
+        ax.text(
+            0.01,
+            0.95,
+            overlay.empty_note,
+            transform=ax.transAxes,
+            color=_TEXT,
+            fontsize=9,
+            va="top",
+            alpha=0.75,
+        )
+
+    # ── the XP stacks ────────────────────────────────────────────────────
+    # BarContainer, which matplotlib's legend takes as a handle but which is
+    # not an Artist subclass, so it cannot be spelled more tightly than this.
+    seen: dict[str, Any] = {}
+    for stack in stacks:
+        ax = flat[index]
+        index += 1
+        _dress(ax)
+        count = len(stack.labels)
+        xs = list(range(count))
+        bottoms = [0.0] * count
+        for source, values in stack.series:
+            if not any(values):
+                continue
+            color = _XP_SOURCE_COLORS.get(source, _XP_SOURCE_FALLBACK)
+            label = _XP_SOURCE_LABELS.get(source, source)
+            # edgecolor=_BG is the 2px surface gap the shared palette's one weak
+            # pair depends on — the secondary encoding that makes teal/orchid
+            # legal where they share an edge. It is load-bearing, not decorative.
+            bars = ax.bar(
+                xs,
+                values,
+                bottom=bottoms,
+                color=color,
+                width=0.8,
+                zorder=2,
+                edgecolor=_BG,
+                linewidth=0.8,
+                label=label,
+            )
+            seen.setdefault(label, bars)
+            bottoms = [b + v for b, v in zip(bottoms, values)]
+
+        for source, at in sorted(stack.starts.items(), key=lambda kv: kv[1]):
+            if at <= 0:
+                continue
+            ax.axvline(
+                at - 0.5,
+                color=_XP_SOURCE_COLORS.get(source, _XP_SOURCE_FALLBACK),
+                linestyle=":",
+                linewidth=1.4,
+                alpha=0.9,
+                zorder=4,
+            )
+
+        _title(ax, stack.title, stack.note)
+        ax.set_ylabel(stack.y_label, color=_TEXT, fontsize=10)
+        ax.set_ylim(bottom=0)
+        positions = _thin(count)
+        ax.set_xticks(positions)
+        ax.set_xticklabels(
+            [stack.labels[i] for i in positions],
+            rotation=45,
+            ha="right",
+            color=_TEXT,
+            fontsize=10,
+        )
+        ax.set_xlim(-0.6, max(0.6, count - 0.4))
+
+    # One legend for both stacks rather than one each: they draw the same
+    # sources with the same meanings, and a second identical box on a phone is
+    # a whole row of chart lost to saying it twice.
+    if seen:
+        fig.legend(
+            list(seen.values()),
+            list(seen.keys()),
+            facecolor=_BG,
+            edgecolor=_GRID,
+            labelcolor=_TEXT,
+            fontsize=9,
+            loc="lower center",
+            ncol=3,
+            framealpha=0.9,
+            bbox_to_anchor=(0.5, -0.01),
+        )
+
+    fig.tight_layout(pad=1.1, h_pad=2.0, rect=(0, 0.05 if seen else 0, 1, 1))
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=200, bbox_inches="tight", facecolor=_BG)
     plt.close(fig)
     buf.seek(0)
     return buf.read()

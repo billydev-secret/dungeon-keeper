@@ -20,12 +20,22 @@ from tests.db_template import migrated_db
 GUILD = 123
 
 
+class _FakeGuildConfig:
+    def __init__(self, mod_role_ids=(), admin_role_ids=()):
+        self.mod_role_ids = frozenset(mod_role_ids)
+        self.admin_role_ids = frozenset(admin_role_ids)
+
+
 class _FakeCtx:
-    def __init__(self, db_path):
+    def __init__(self, db_path, guild_config=None):
         self.db_path = db_path
+        self._guild_config = guild_config or _FakeGuildConfig()
 
     def open_db(self):
         return open_db(self.db_path)
+
+    def guild_config(self, _guild_id):
+        return self._guild_config
 
 
 @pytest.fixture
@@ -114,3 +124,41 @@ async def test_a_deleted_panel_is_retired_rather_than_reposted(cog):
 
     channel.send.assert_not_called()
     assert cog._read_ids(GUILD) == (0, 0)
+
+
+def test_mod_ids_union_the_mod_and_admin_roles_and_drop_bots(tmp_path):
+    """The one piece of glue that is not service logic: who the panel treats as
+    a moderator is read live off Discord, because ``role_events`` is an
+    append-only log of grants and cannot say who holds a role *now*."""
+    db_path = migrated_db(tmp_path / "modstats-roles.db")
+    bot = MagicMock()
+    bot.ctx = _FakeCtx(db_path, _FakeGuildConfig(mod_role_ids=[1], admin_role_ids=[2]))
+    cog = ModStatsCog(bot)
+
+    def _member(member_id, *, bot_account=False):
+        member = MagicMock()
+        member.id = member_id
+        member.bot = bot_account
+        return member
+
+    roles = {
+        1: MagicMock(members=[_member(10), _member(11)]),
+        2: MagicMock(members=[_member(11), _member(12), _member(99, bot_account=True)]),
+    }
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+    guild.get_role = roles.get
+
+    # 11 holds both roles and is counted once; the bot account is dropped.
+    assert cog._mod_ids(guild) == {10, 11, 12}
+
+
+def test_mod_ids_is_empty_when_no_role_is_configured(tmp_path):
+    db_path = migrated_db(tmp_path / "modstats-noroles.db")
+    bot = MagicMock()
+    bot.ctx = _FakeCtx(db_path)
+    cog = ModStatsCog(bot)
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = GUILD
+
+    assert cog._mod_ids(guild) == set()

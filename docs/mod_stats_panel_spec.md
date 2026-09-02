@@ -3,8 +3,10 @@
 **Status: Reference** (built 2026-09-01).
 
 A sticky panel in a mod-only channel showing the server's day so far: today's
-message traffic hour by hour against a band over the previous 8 days, the same
-day against a band over the previous 30, and three figures underneath. Read-only.
+message traffic hour by hour against a band over the last **8 matching
+weekdays**, moderator presence across those same hours, and XP broken down by
+source over 30 days and over the guild's whole history. Four figures sit above
+them. Read-only.
 
 The reason it exists is distribution, not analysis. The Activity report on the
 dashboard has drawn this chart since 2026-08-27; a chart nobody opens the
@@ -21,30 +23,113 @@ shared panel registry — see `services/panel_registry.py`, key `mod-stats`.
 
 ### What it draws
 
-One PNG carrying two stacked charts, rendered by
-`activity_graphs.render_overlay_panel`:
+One PNG carrying three stacked rows, rendered by
+`activity_graphs.render_mod_stats_panel`:
 
-| Chart | Subject | Comparison |
+| Row | Subject | Comparison |
 |---|---|---|
-| Top | Today, hour by hour | p25–p75 band + median over the previous **8** days |
-| Bottom | The same day | p25–p75 band + median over the previous **30** days |
+| 1 | Today hour by hour, **+ moderators present** | p25–p75 band + median over the last **8 matching weekdays** |
+| 2 | XP by source, last **30** days | — |
+| 3 | XP by source, **all time**, weekly | dotted rule where each source began |
 
-Both come from `query_activity_overlay(period="day")`, the same call the
-dashboard's *Today vs Recent Days* view makes — so the panel and the report can
-never disagree about what a day looked like. Messages mode only; bots excluded,
-matching the Activity report's own default.
+Row 1 comes from `query_activity_overlay(period="day", same_weekday=True)`, the
+same call the dashboard's *Today vs Recent Days* view makes — so the panel and
+the report can never disagree about what a day looked like. Messages mode only;
+bots excluded, matching the Activity report's own default.
 
-**One image, not two.** Discord gives an embed a single image slot. Stacking the
-charts here is what lets a reader drop their eye from one band to the next on a
-shared x-axis, rather than comparing two pictures Discord laid out on its own
-terms. Each chart keeps its **own** y-axis: sharing one would let the wider
-30-day band set the scale and flatten the tighter one, which is the comparison
-the panel exists to make.
+**Why matching weekdays and not the last N days.** Weekday rhythm dominates this
+server: a Wednesday drawn against "the last 8 days" is drawn against five
+weekdays and two or three weekend days, so a server that gets busy at weekends
+reports a crash every Monday and a boom every Saturday, both artefacts of the
+calendar. Eight matching weekdays reaches back 56 days — far enough for a band,
+near enough that the server it describes is still recognisably this one.
+`overlay_stride_days` already stepped a week at a time for this; the panel had
+simply never asked for it.
 
-The palette is the dashboard chart's, validated in
-[plans/weekly-activity-comparison.md](plans/weekly-activity-comparison.md)
-against a dark surface — amber for the day in progress, teal for the band, with
-a dashed median so identity is never carried by colour alone.
+The member median strides to match (`query_partial_day_members(stride_days=7)`).
+Both halves of the panel have to compare today with the *same* past, or they
+disagree for a reason no reader can see.
+
+**One image, not three.** Discord gives an embed a single image slot. The figure
+is deliberately **narrow** (6in) rather than short: Discord scales an embed
+image to the message column, so its displayed width is fixed at roughly 400px on
+a phone whatever we render, and only the ratio of type size to figure width
+survives that. 11pt on 6in lands at ~10px on the phone; the 9in-wide 8pt this
+panel used before landed at ~5px. Height is free — the reader can scroll — so
+rows are given room instead of being compressed. Each row keeps its **own**
+y-axis.
+
+**Mod presence is a second line on row 1, sharing its zero baseline — not a
+second y-axis.** A dual-scale chart lets the author put any two series into any
+relationship just by choosing the scales, so its crossing points carry a meaning
+nobody put there. But moderators peak at a handful an hour against hundreds of
+messages, so an unscaled line would lie flat on the floor and say nothing. The
+line is therefore rescaled to share the axis and **the scaling is named in the
+legend** ("Mods around (0-5, rescaled)"). What the reader is invited to read off
+it is the *shape* — when were mods around, against when was it busy — while the
+magnitudes are printed as words in the block above the picture, where they need
+no scale at all.
+
+### Who counts as a moderator, and what counts as present
+
+Members holding any of the guild's configured `mod_role_ids` **or**
+`admin_role_ids`, read **live from Discord** rather than from `role_events`,
+which is an append-only log of grants and so cannot answer who holds a role now.
+Bots are dropped.
+
+This is a **narrower** circle than the Mod Coverage report's, which counts anyone
+with Manage Messages. The two will not agree, and that is the intended reading:
+this panel answers "was one of the people we appointed around?", not "could
+anyone present have deleted a message?".
+
+Present means **posted or reacted** in that hour — the two tables are `UNION`-ed
+on `(hour, user)`, so a mod who does both inside one hour counts once and a mod
+who only reacts still counts. A moderator reading a channel and reacting is
+watching it; counting only messages reports the quiet half of a mod team as
+absent. `reaction_log` begins 2026-04-05, which is a hard floor on any
+reaction-derived figure, but presence is a *today* measure and never reaches it.
+
+Hours the day has not reached are `None`, not 0, so the row stops at the live
+edge instead of drawing a cliff to the floor. An unconfigured moderator role
+returns all-`None` with `configured=False`, which is deliberately
+distinguishable from a day on which no moderator showed up: "nobody was
+watching" and "we were never told who the moderators are" want different
+responses from whoever reads the panel.
+
+### The XP stacks
+
+Row 3 is `query_xp_activity_with_breakdown(resolution="day")` — the dashboard's
+own call. Row 4 is `query_xp_all_time_with_breakdown`, added for this panel: the
+only graph in `activity_graphs` whose window does **not** roll, starting at the
+guild's first XP event and bucketing weekly to now, so the bar count grows with
+the server. Weeks rather than days because a year is 365 marks in a 400px-wide
+picture; weeks rather than months because the shape this exists to show
+disappears into a monthly average. It reads through `_xp_row_source`, so it
+stays correct once raw `xp_events` below the 90-day retention boundary have been
+pruned to `xp_daily`.
+
+**The dotted rules are what make row 4 honest.** XP sources did not all exist for
+the whole period — on the home guild `text` and `reply` run from 2026-02-07,
+`image_react` and `voice` from 2026-03-03, and `quest` and `reaction_given` only
+from mid-July 2026. Without a marker, the stack gaining two colours in one week
+reads as a surge in activity when it is the bot changing what it pays for. Each
+rule is drawn in its own source's colour, so it needs no separate legend, and
+sources folded into "Other" get no rule — a rule in a colour that appears
+nowhere in the legend is one the reader cannot attribute to anything.
+
+**Six colours and no seventh.** `static/js/charts.js` states the rule: past six
+categorical slots, adjacent classes blur whatever hue you pick, so the tail folds
+into "Other". `grant` is the tail (41 events in the guild's whole history).
+Fixing this exposed a defect on *both* surfaces: `quest` and `reaction_given`
+have paid XP since July and had no palette slot on either the dashboard or the
+bot, so the 3rd- and 5th-largest sources were rendering as the same anonymous
+grey. They now take the last two slots, in `activity_graphs` and in
+`panels/activity.js` together. The Python palette had also drifted out of the
+lock-step its own comment claimed — it still carried Discord's brand hues, which
+fail the palette validator's lightness band — and is now the shared `ROLE_COLORS`
+the dashboard uses. Stacked segments carry a 2px surface gap (`edgecolor=_BG`);
+that is the secondary encoding the palette's one weak pair depends on, and it is
+load-bearing, not decorative.
 
 ### The figures underneath
 
@@ -52,12 +137,18 @@ a dashed median so identity is never carried by colour alone.
 Messages today    1,204  ▲ 12%
 Members talking      87  ▼ 3.3%
 On track for     ~1,650  usual 1,480
+Mods around           6  peak 5 in an hour
 ```
+
+The mod row is omitted entirely when no moderator role is configured. The peak
+is not decoration: a bare "6" invites the reader to decide for themselves
+whether six is a lot, and the house standard set by `attention_report.py` and
+followed by the Contributors panel is that a count comes with its denominator.
 
 **Every comparison is part-day against part-day.** Today at 09:00 has lived nine
 hours; a day of history has lived twenty-four. Comparing the two would report a
 collapse in activity every morning and a recovery every evening, both artefacts
-of the clock. So "usual" sums the 8-day band's median over *only the hours today
+of the clock. So "usual" sums the band's median over *only the hours today
 has lived*, and the members figure truncates every comparison day at the same
 local hour.
 
@@ -69,7 +160,7 @@ itself across a quiet night.
 A percentage is printed only when there is something to divide by. Below
 `MIN_BAND_PERIODS` (3) comparable days the overlay suppresses the band, and
 every "vs usual" figure goes with it — the panel says
-"No comparison yet — needs 3 past days of history." rather than comparing
+"No comparison yet — needs 3 past Wednesdays of history." rather than comparing
 against nothing. A median of zero (04:00 on a quiet server) prints no percentage
 either.
 
@@ -135,21 +226,28 @@ home guild's message to edit, in the home guild's channel.
 
 ## Stored data
 
-None. No new tables, no per-user rows, nothing for
-[data_register.md](data_register.md) — every number is derived at read time from
-`processed_messages`, which is already registered.
+None. No new tables and no per-user rows, so nothing for
+[data_register.md](data_register.md). Every number is derived at read time from
+`processed_messages`, `reaction_log` and `xp_events`, all of which are already
+registered. The panel stores no moderator identity: presence is counted and the
+identities discarded inside the query.
 
 ## Non-goals
 
-- **XP mode.** Offered on the dashboard, not here: XP is capped by the 90-day
-  raw retention (the overlay cannot read hour-of-day out of the daily rollup)
-  and answers a different question from "how busy is the room".
-- **Stats *about* moderators.** Who is around and who takes action are
-  [mod_coverage](reporting_spec.md) and Mod Workload, which are deliberately
-  measured over different circles of "moderator". This panel adds no third
-  definition — the mod team is the audience, not the subject.
-- **A same-weekday band.** Considered for the 30-day chart, since weekday rhythm
-  dominates this server and a month of history mixes weekends into a weekday.
-  Left as consecutive days: the two bands are meant to read as "recently" and
-  "this month", and it is a one-parameter change if the wide band proves to be
-  noise on real data.
+- **Stats *about* moderators.** Row 2 says how many were *around*, which is a
+  coverage question. Who takes action, and how much, is
+  [mod_coverage](reporting_spec.md) and Mod Workload; this panel adds no third
+  definition of the work itself. It does add a second definition of *moderator*
+  (appointed roles, vs Mod Coverage's Manage Messages) — named on the chart and
+  above, because two panels silently counting different circles is worse than
+  two panels openly counting different circles.
+- **Naming individual moderators.** A count per hour, never a leaderboard. Who
+  was around is a coverage signal; who was around *least* is a performance
+  review, and a sticky panel in a shared channel is the wrong place for one.
+- **XP in the overlay.** Row 1 stays messages-only: XP cannot answer
+  hour-of-day past the 90-day raw retention, and "how busy is the room" is a
+  different question from "what is the bot paying for".
+- **Moderation *load*.** Warnings, jails and tickets were considered and left
+  out: on the home guild that is 5 warnings and 9 jails across five months, so
+  any trend line is flat at zero and a panel that says nothing for weeks is a
+  panel nobody keeps reading.
