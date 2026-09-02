@@ -190,7 +190,7 @@ AMA carries a per-question lifecycle (pending → answered / passed / rejected /
 
 ### Sequential storytelling
 
-**Story Builder** builds a story sentence-by-sentence; the default "blind" visibility shows only the previous sentence in the modal while `full` shows everything so far. The host can skip a slow player. Max 30 sentences, default 10.
+**Story Builder** builds a story sentence-by-sentence; the default "blind" visibility shows only the previous sentence in the modal while `full` shows everything so far. The host can skip a slow player. Max 30 sentences, default 10. Each turn posts one panel — the ping plus Write/Skip buttons — and that panel is **deleted when the turn resolves**, the way Price is Right deletes its host prompt; it used to be edited to a disabled state and left in place, so a 5-player 4-round story interleaved its own text with twenty spent panels.
 
 ### LegitLibs
 

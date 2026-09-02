@@ -112,6 +112,10 @@ belongs only to the two bare pings that already use it.
 **Cost: S** — one delete call plus its failure branch, in a file no other
 session is touching.
 
+**Shipped 2026-09-01.** `games_story_cog.py` now deletes `turn_msg` when the
+turn resolves, before the game-closed break, so a story closed mid-turn leaves
+nothing behind either.
+
 <a name="m1"></a>
 ## M1 — Fantasies asks members to type one of two words · **best win in the audit**
 

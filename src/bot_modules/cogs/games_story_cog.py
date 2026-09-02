@@ -409,10 +409,13 @@ class StoryCog(commands.Cog):
             except asyncio.TimeoutError:
                 turn_view._skipped = True
 
-            # Disable turn buttons
-            disable_all_items(turn_view)
+            # The turn is spent, so the panel goes rather than lingering as
+            # a dead disabled copy — Price is Right already deletes its host
+            # prompt this way. Story used to leave one behind per player per
+            # round, so a 5-player 4-round game buried its own story text
+            # under twenty exhausted panels.
             try:
-                await turn_msg.edit(view=turn_view)
+                await turn_msg.delete()
             except discord.HTTPException:
                 pass
 
