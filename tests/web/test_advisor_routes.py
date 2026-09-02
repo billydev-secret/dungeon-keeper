@@ -201,6 +201,64 @@ def test_advisor_config_reports_the_name(authed_client, fake_ctx):
     assert authed_client.get("/api/config/advisor").json()["assistant_name"] == "Sam-bot"
 
 
+# ── Branding reaches the Suggested Setup tile (todo #164) ──────────────────
+#
+# The tile named the assistant three times and hardcoded the default in every
+# one: the row's own title and its "where to fix it" line came from the
+# registry (label="Billy-bot", panel="Config → Billy-bot"), and the footer
+# sentence was a literal in the tile. A server that had branded its assistant
+# something else read "Billy-bot" throughout — and the panel line pointed at a
+# page that had since been relabelled "AI Assistant" in the nav.
+
+
+def test_suggestions_payload_carries_the_branded_assistant_name(open_client, fake_ctx):
+    assert open_client.get("/api/help/suggestions").json()["assistant_name"] == "Billy-bot"
+
+    upsert_branding(
+        fake_ctx.db_path,
+        BrandingConfig(guild_id=fake_ctx.guild_id, assistant_name="Sam-bot"),
+    )
+    body = open_client.get("/api/help/suggestions").json()
+    assert body["assistant_name"] == "Sam-bot"
+    # The rows themselves still come back — the name rides alongside them.
+    assert body["suggestions"]
+
+
+def test_the_assistant_feature_row_names_its_panel_not_its_brand():
+    """The registry row an admin reads is neutral, and points at a real page.
+
+    Read off the registry rather than the scan: whether this feature is a *gap*
+    on a bare server depends on its two flag defaults, and the strings are
+    wrong (or right) either way — they also reach the model's ``find_setup_gaps``
+    text and ``advisor_actions``' "set it from …" line.
+    """
+    from bot_modules.services.settings_registry import FEATURES_BY_SLUG
+
+    row = FEATURES_BY_SLUG["billy_bot"]
+    assert row.label == "AI Assistant"
+    assert row.panel == "Config → AI Assistant"
+
+
+def test_no_registry_row_hardcodes_the_default_assistant_name():
+    """Guard: a label or panel is static text, so it can never carry a brand.
+
+    Anything naming the assistant has to be resolved per guild (the payload
+    field above) — a hardcoded name here is invisible until someone rebrands.
+    """
+    from bot_modules.services.branding_service import DEFAULT_ASSISTANT_NAME
+    from bot_modules.services.settings_registry import FEATURES
+
+    offenders = [
+        f.slug
+        for f in FEATURES
+        if DEFAULT_ASSISTANT_NAME.lower() in f"{f.label} {f.panel}".lower()
+    ]
+    assert not offenders, (
+        f"registry rows hardcode {DEFAULT_ASSISTANT_NAME!r}: {offenders} — "
+        "these strings are rendered to admins on servers that renamed it"
+    )
+
+
 def test_advisor_name_requires_a_session(fake_ctx):
     """Member-facing, but still authenticated — no cookie, no name."""
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)

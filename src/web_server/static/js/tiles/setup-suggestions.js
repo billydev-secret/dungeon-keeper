@@ -1,5 +1,9 @@
 import { esc } from "./tile-helpers.js";
 import { api, apiPost } from "../api.js";
+// The assistant's name is per-guild branding (Config → Branding). The tile's
+// payload carries the resolved name; this is the same fallback the nav and the
+// Help panel use, for a payload that predates the field or a failed lookup.
+import { DEFAULT_ASSISTANT_NAME } from "../panels/help-sections.js";
 
 // Cheapest win first — mirrors advisor_gaps.STATUS_ORDER.
 // Keep labels short — they sit beside the feature name in a flex row that has
@@ -47,7 +51,7 @@ export function renderTile(el, d) {
   el.innerHTML = `
     <div class="home-card-label">Suggested setup</div>
     ${rows}
-    <div class="sugg-foot">Ask Billy-bot to set any of these up for you &middot;
+    <div class="sugg-foot">Ask ${esc(d?.assistant_name || DEFAULT_ASSISTANT_NAME)} to set any of these up for you &middot;
       dismissed rows come back from the <a href="#/config-advisor">AI Assistant</a> page.</div>
   `;
 

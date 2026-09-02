@@ -189,19 +189,25 @@ async def help_suggestions(
     cleared row before it can offer to bring it back. The tile never does.
     """
     from bot_modules.services.advisor_gaps import suggestions
+    from bot_modules.services.branding_service import resolve_assistant_name_conn
 
     ctx = get_ctx(request)
     limit = max(1, min(int(limit), 40))
 
     def _q():
         with ctx.open_db() as conn:
-            return suggestions(
-                conn, guild_id, limit, include_dismissed=include_dismissed
+            # Resolved on the same pass rather than leaving the tile to fetch
+            # it: the footer names the assistant in a sentence, and it used to
+            # say "Billy-bot" on servers that had branded it something else.
+            return (
+                suggestions(conn, guild_id, limit, include_dismissed=include_dismissed),
+                resolve_assistant_name_conn(conn, guild_id),
             )
 
-    gaps = await run_query(_q)
+    gaps, assistant_name = await run_query(_q)
     return {
         "guild_id": str(guild_id),
+        "assistant_name": assistant_name,
         "suggestions": [
             {
                 "slug": g.feature.slug,

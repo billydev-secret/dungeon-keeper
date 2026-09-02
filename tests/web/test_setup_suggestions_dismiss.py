@@ -253,6 +253,31 @@ def test_the_tile_points_at_where_dismissed_rows_come_back(page):
     assert page.locator("#host .sugg-foot a[href='#/config-advisor']").count() == 1
 
 
+# ── The footer names the guild's own assistant (todo #164) ──────────────────
+
+
+def test_the_footer_uses_the_guild_s_own_assistant_name(page):
+    """"Ask <name> to set any of these up" was a hardcoded "Billy-bot".
+
+    The name is per-guild branding (Config → Branding), so a server that had
+    renamed its assistant still read the default here — the one sentence on
+    this tile that names it at all.
+    """
+    branded = {**_SUGGESTIONS, "assistant_name": "Sam-bot"}
+    page.evaluate(_STUB_FETCH, branded)
+    page.evaluate(_MOUNT_TILE, branded)
+    foot = page.locator("#host .sugg-foot").inner_text()
+    assert "Ask Sam-bot to set any of these up" in foot
+    assert "Billy-bot" not in foot
+
+
+def test_the_footer_falls_back_when_the_name_is_missing(page):
+    """A payload without the field (an older cached response) still reads."""
+    page.evaluate(_STUB_FETCH, _SUGGESTIONS)
+    page.evaluate(_MOUNT_TILE, _SUGGESTIONS)
+    assert "Ask Billy-bot to set any of these up" in page.locator("#host .sugg-foot").inner_text()
+
+
 def test_the_assistant_page_lists_dismissed_rows_with_restore(page):
     page.evaluate(_STUB_FETCH, _SUGGESTIONS)
     page.evaluate(_MOUNT_PANEL)
