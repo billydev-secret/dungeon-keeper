@@ -27,6 +27,7 @@ import sqlite3
 import time
 
 from collections.abc import Awaitable, Callable
+from functools import partial
 from typing import NamedTuple
 
 import discord
@@ -36,6 +37,7 @@ from discord.ext import commands, tasks
 from bot_modules.cogs.casino import embeds as casino_embeds
 from bot_modules.cogs.casino.pools_panel import PoolsMixin
 from bot_modules.cogs.casino.views import (
+    AmountPickerView,
     BaccaratBetButton,
     BaccaratBetModal,
     BaccaratNextView,
@@ -54,9 +56,11 @@ from bot_modules.cogs.casino.views import (
     PlayAgainButton,
     PoolsPanelView,
     RoundResolveButton,
+    ROULETTE_KINDS,
     RouletteBetButton,
     RouletteBetModal,
     RouletteNextView,
+    RouletteNumberView,
     MinesBetModal,
     MinesCashOutButton,
     MinesRiskButton,
@@ -75,6 +79,7 @@ from bot_modules.cogs.casino.views import (
     play_again_view,
     safe_ephemeral,
 )
+from bot_modules.cogs.casino.views import _AmountBetModal
 from bot_modules.core.app_context import Bot
 from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.branding import safe_resolve_accent
@@ -954,55 +959,178 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return f"Your bet ({span} · {max(0, cap - used)} left today)"
         return f"Your bet ({span})"
 
-    async def _modal_context(
+    async def _bet_context(
         self, guild_id: int, user_id: int, game: str
-    ) -> tuple[str, int | None]:
-        """(limits label, last-bet prefill) for a bet modal."""
+    ) -> tuple[str, int | None, list[logic.BetOption]]:
+        """(limits label, last-bet prefill, ladder) for a bet surface.
 
-        def _read() -> tuple[svc.CasinoSettings, int, int]:
+        One read serves both halves: the ladder needs the balance and the
+        daily cap to know what the player can actually stake, and the modal
+        behind Custom… needs the same numbers for its label.
+        """
+
+        def _read() -> tuple[svc.CasinoSettings, int, int, int]:
             with self.bot.ctx.open_db() as conn:
                 used, cap, _ = svc.daily_cap_status(conn, guild_id, user_id)
-                return svc.load_casino_settings(conn, guild_id), used, cap
+                return (
+                    svc.load_casino_settings(conn, guild_id),
+                    used, cap,
+                    get_balance(conn, guild_id, user_id),
+                )
 
-        settings, used, cap = await asyncio.to_thread(_read)
-        return (
-            self._limits_label(settings, used, cap),
-            self._last_bets.get((guild_id, user_id, game)),
+        settings, used, cap, balance = await asyncio.to_thread(_read)
+        last = self._last_bets.get((guild_id, user_id, game))
+        options = logic.bet_amount_options(
+            min_bet=settings.min_bet,
+            max_bet=settings.max_bet,
+            balance=balance,
+            cap_left=max(0, cap - used) if cap > 0 else None,
+            last_bet=last,
+        )
+        return self._limits_label(settings, used, cap), last, options
+
+    async def _show_step(
+        self,
+        interaction: discord.Interaction,
+        *,
+        content: str,
+        view: discord.ui.View,
+    ) -> None:
+        """Render a bet step privately.
+
+        A press from inside a private surface (a round's board, the coinflip
+        or mines picker) replaces it in place, so a wager never costs the
+        player a second message; a press on the public hub opens one.
+        """
+        message = interaction.message
+        if message is not None and message.flags.ephemeral:
+            await interaction.response.edit_message(
+                content=content, embed=None, view=view
+            )
+        else:
+            await interaction.response.send_message(
+                content=content, view=view, ephemeral=True,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+
+    def _window_step_handlers(
+        self, guild: discord.Guild, ui: _WindowUI, round_id: int
+    ) -> tuple[
+        Callable[[discord.Interaction], Awaitable[None]],
+        Callable[[], Awaitable[None]],
+    ]:
+        """Put a private round's board back after a step that replaced it —
+        on the player's Back press, and on the step timing out under them."""
+
+        async def _cancel(interaction: discord.Interaction) -> None:
+            await interaction.response.defer()
+            await self._repaint_window(ui, guild, round_id)
+
+        async def _expiry() -> None:
+            await self._repaint_window(ui, guild, round_id)
+
+        return _cancel, _expiry
+
+    async def _open_amount_picker(
+        self,
+        interaction: discord.Interaction,
+        make_modal: Callable[[], _AmountBetModal],
+        options: list[logic.BetOption],
+        *,
+        prompt: str,
+        on_cancel: Callable[[discord.Interaction], Awaitable[None]] | None = None,
+        on_expiry: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """The ladder, or the typed box when no rung would be legal.
+
+        An empty ladder means nothing is stakeable — broke, or the daily cap
+        is spent — and the modal's own service call is what explains which,
+        in the member's own words rather than a greyed-out button.
+        """
+        if not options:
+            await interaction.response.send_modal(make_modal())
+            return
+        await self._show_step(
+            interaction,
+            content=prompt,
+            view=AmountPickerView(
+                make_modal, options, on_cancel=on_cancel, on_expiry=on_expiry
+            ),
         )
 
-    async def open_bet_modal(
+    async def open_bet_picker(
         self, interaction: discord.Interaction, game: str,
         side: str | None = None,
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, game
         )
         title = self._MODAL_TITLES.get(game, "Casino")
         if side is not None:
             title = f"Coinflip — {side}"
-        await interaction.response.send_modal(
-            BetModal(
-                title=title, game=game, side=side,
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                BetModal, title=title, game=game, side=side,
                 limits_label=label, default_amount=last,
-            )
+            ),
+            options,
+            prompt=f"**{title}** — how much?",
         )
 
-    async def open_roulette_bet_modal(
+    async def open_roulette_bet_step(
         self, interaction: discord.Interaction, round_id: int, kind: str
+    ) -> None:
+        """Red/black and the dozens go straight to the stake; a straight-up
+        number asks which one first, off two selects rather than a typed box
+        — 37 values overflow a single select's 25-option cap."""
+        guild = interaction.guild
+        if guild is None:
+            return
+        if kind == "num":
+            cancel, expiry = self._window_step_handlers(
+                guild, _ROULETTE_UI, round_id
+            )
+            await self._show_step(
+                interaction,
+                content="**Roulette** — which number?",
+                view=RouletteNumberView(
+                    round_id, on_cancel=cancel, on_expiry=expiry
+                ),
+            )
+            return
+        bet_type, selection = ROULETTE_KINDS[kind]
+        await self.open_roulette_amount_picker(
+            interaction, round_id, bet_type, selection
+        )
+
+    async def open_roulette_amount_picker(
+        self,
+        interaction: discord.Interaction,
+        round_id: int,
+        bet_type: str,
+        selection: int,
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "roulette"
         )
-        await interaction.response.send_modal(
-            RouletteBetModal(
-                round_id, kind, limits_label=label, default_amount=last
-            )
+        cancel, expiry = self._window_step_handlers(guild, _ROULETTE_UI, round_id)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                RouletteBetModal, round_id, bet_type, selection,
+                limits_label=label, default_amount=last,
+            ),
+            options,
+            prompt=f"**{logic.describe_bet(bet_type, selection)}** — how much?",
+            on_cancel=cancel,
+            on_expiry=expiry,
         )
 
     async def send_my_stats(self, interaction: discord.Interaction) -> None:
@@ -1043,7 +1171,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         the interaction's webhook, clear of the channel edit bucket."""
         message = interaction.message
         if message is not None and message.flags.ephemeral:
-            await interaction.response.edit_message(embed=embed, view=view)
+            # content=None clears the amount step's "how much?" prompt; the
+            # machine replaces that step rather than appearing under it.
+            await interaction.response.edit_message(
+                content=None, embed=embed, view=view
+            )
         elif view is not None:
             await interaction.response.send_message(
                 embed=embed, view=view, ephemeral=True,
@@ -1874,17 +2006,22 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             ephemeral=True,
         )
 
-    async def open_mines_bet_modal(
+    async def open_mines_bet_picker(
         self, interaction: discord.Interaction, bombs: int
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "mines"
         )
-        await interaction.response.send_modal(
-            MinesBetModal(bombs, limits_label=label, default_amount=last)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                MinesBetModal, bombs, limits_label=label, default_amount=last
+            ),
+            options,
+            prompt=f"**{logic.mines_risk_label(bombs)}** — how much?",
         )
 
     def _mines_render(
@@ -2337,7 +2474,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return
         webhook, message_id, _ = handle
         try:
-            await webhook.edit_message(message_id, embed=embed, view=view)
+            # content=None for the same reason as _respond_private: the board
+            # may be coming back over a bet step that set a prompt line.
+            await webhook.edit_message(
+                message_id, content=None, embed=embed, view=view
+            )
         except discord.HTTPException:
             pass
 
@@ -2499,20 +2640,26 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     # ── derby-only glue (everything else rides _WindowUI above) ────────
 
-    async def open_derby_bet_modal(
+    async def open_derby_bet_picker(
         self, interaction: discord.Interaction, round_id: int, runner: int
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "derby"
         )
-        await interaction.response.send_modal(
-            DerbyBetModal(
-                round_id, runner, logic.describe_runner(runner),
+        cancel, expiry = self._window_step_handlers(guild, _DERBY_UI, round_id)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                DerbyBetModal, round_id, runner, logic.describe_runner(runner),
                 limits_label=label, default_amount=last,
-            )
+            ),
+            options,
+            prompt=f"**{logic.describe_runner(runner)}** — how much?",
+            on_cancel=cancel,
+            on_expiry=expiry,
         )
 
     async def place_derby_bet(
@@ -2538,20 +2685,27 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     # ── baccarat-only glue (everything else rides _WindowUI above) ─────
 
-    async def open_baccarat_bet_modal(
+    async def open_baccarat_bet_picker(
         self, interaction: discord.Interaction, round_id: int, side: str
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "baccarat"
         )
-        await interaction.response.send_modal(
-            BaccaratBetModal(
-                round_id, side, logic.describe_baccarat_side(side),
+        cancel, expiry = self._window_step_handlers(guild, _BACCARAT_UI, round_id)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                BaccaratBetModal, round_id, side,
+                logic.describe_baccarat_side(side),
                 limits_label=label, default_amount=last,
-            )
+            ),
+            options,
+            prompt=f"**{logic.describe_baccarat_side(side)}** — how much?",
+            on_cancel=cancel,
+            on_expiry=expiry,
         )
 
     async def place_baccarat_bet(
@@ -2577,20 +2731,27 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     # ── dice-only glue (everything else rides _WindowUI above) ─────────
 
-    async def open_dice_bet_modal(
+    async def open_dice_bet_picker(
         self, interaction: discord.Interaction, round_id: int, bet_type: str
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "dice"
         )
-        await interaction.response.send_modal(
-            DiceBetModal(
-                round_id, bet_type, logic.describe_sicbo_bet(bet_type),
+        cancel, expiry = self._window_step_handlers(guild, _DICE_UI, round_id)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                DiceBetModal, round_id, bet_type,
+                logic.describe_sicbo_bet(bet_type),
                 limits_label=label, default_amount=last,
-            )
+            ),
+            options,
+            prompt=f"**{logic.describe_sicbo_bet(bet_type)}** — how much?",
+            on_cancel=cancel,
+            on_expiry=expiry,
         )
 
     async def place_dice_bet(
@@ -2616,19 +2777,26 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     # ── keno-only glue (everything else rides _WindowUI above) ─────────
 
-    async def open_keno_ticket_modal(
+    async def open_keno_ticket_picker(
         self, interaction: discord.Interaction, round_id: int, spots: int
     ) -> None:
         guild = interaction.guild
         if guild is None:
             return
-        label, last = await self._modal_context(
+        label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "keno"
         )
-        await interaction.response.send_modal(
-            KenoTicketModal(
-                round_id, spots, limits_label=label, default_amount=last
-            )
+        cancel, expiry = self._window_step_handlers(guild, _KENO_UI, round_id)
+        await self._open_amount_picker(
+            interaction,
+            partial(
+                KenoTicketModal, round_id, spots,
+                limits_label=label, default_amount=last,
+            ),
+            options,
+            prompt=f"**Pick {spots}** — how much?",
+            on_cancel=cancel,
+            on_expiry=expiry,
         )
 
     async def place_keno_ticket(
