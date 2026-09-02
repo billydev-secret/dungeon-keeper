@@ -16,7 +16,7 @@ const NUM = (v) => (v == null ? "" : String(v));
 // html:true — the markup is the point, and the interpolated value is a
 // computed number, never a name (see table.js's ESCAPING note).
 function liftCell(v) {
-  const color = v >= 2 ? "var(--green-text)" : v >= 1.25 ? "var(--yellow)" : "var(--ink-dim)";
+  const color = v >= 2 ? "var(--green-text)" : v >= 1.25 ? "var(--yellow-text)" : "var(--ink-dim)";
   return `<span style="color:${color};font-weight:700">${LIFT(v)}</span>`;
 }
 

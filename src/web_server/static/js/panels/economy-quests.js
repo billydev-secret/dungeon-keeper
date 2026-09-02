@@ -270,7 +270,7 @@ function render(container, channels, cfg, economyOff, prefetchedQuests) {
               "do this many times this period" — with a progress bar on the member's quest
               card. <strong>Weekly and monthly quests must be counted</strong> (2 or more):
               they show progress across the period, only dailies are one-shot.</div>
-            <div class="field-hint" data-target-hint style="color:var(--yellow);"></div></div>
+            <div class="field-hint" data-target-hint style="color:var(--yellow-text);"></div></div>
 
           <div class="field">
             <label style="display:flex; gap:6px; align-items:center;">

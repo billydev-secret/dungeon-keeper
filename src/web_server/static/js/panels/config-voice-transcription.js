@@ -29,7 +29,7 @@ function modelsWidget(models) {
       <span class="vt-model-state">${
         m.cached
           ? `<span style="color:var(--green-text)">✓ Downloaded</span>`
-          : `<span style="color:var(--yellow)">Not downloaded</span>`
+          : `<span style="color:var(--yellow-text)">Not downloaded</span>`
       }</span>
       <span style="flex:1"></span>
       <button type="button" class="btn btn-sm vt-dl-btn"
@@ -58,7 +58,7 @@ export function mount(container) {
     const vt = config.voice_transcription || {};
 
     const unavailable = vt.available === false
-      ? `<div class="field-hint" style="color:var(--yellow)">
+      ? `<div class="field-hint" style="color:var(--yellow-text)">
            The faster-whisper package is not installed on the machine running
            Dungeon Keeper, so nothing is transcribed even with this turned on.
            Ask whoever hosts the bot to install it and restart.
@@ -156,7 +156,7 @@ export function mount(container) {
             btn.disabled = false;
           }
         } catch (err) {
-          state.innerHTML = `<span style="color:var(--yellow)">${esc(err.message || "Download failed")}</span>`;
+          state.innerHTML = `<span style="color:var(--yellow-text)">${esc(err.message || "Download failed")}</span>`;
           btn.disabled = false;
         }
       });

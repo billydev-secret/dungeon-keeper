@@ -116,3 +116,143 @@ def test_relabelling_as_a_false_positive_clears_the_correction(db_path):
     assert row is not None
     assert row["is_violation"] == 0
     assert row["corrected_rule"] is None
+
+
+# ---------------------------------------------------------------------------
+# bulk_upsert_labels — the "rip through it real fast" path
+# ---------------------------------------------------------------------------
+
+OTHER_GUILD = 2
+
+
+def test_bulk_label_happy_path(db_path):
+    """All ids exist and belong to the caller's guild: every one is labelled
+    and reported in ``labeled``, none in ``skipped``."""
+    with open_db(db_path) as conn:
+        ids = [_event(conn) for _ in range(3)]
+        result = service.bulk_upsert_labels(
+            conn, GUILD, ids, is_violation=False, labeled_by=42
+        )
+        rows = [_labelled(conn, eid) for eid in ids]
+
+    assert result == {"labeled": ids, "skipped": []}
+    assert all(row["is_violation"] == 0 for row in rows)
+
+
+def test_bulk_label_mixed_batch_reports_missing_ids(db_path):
+    """A batch mixing real ids with one that was never inserted labels the
+    real ones and reports the phantom id back under ``skipped`` rather than
+    failing the whole call."""
+    with open_db(db_path) as conn:
+        real_ids = [_event(conn) for _ in range(2)]
+        phantom_id = max(real_ids) + 1000
+        result = service.bulk_upsert_labels(
+            conn,
+            GUILD,
+            [*real_ids, phantom_id],
+            is_violation=True,
+            corrected_rule="7",
+        )
+        rows = [_labelled(conn, eid) for eid in real_ids]
+
+    assert result == {"labeled": real_ids, "skipped": [phantom_id]}
+    assert all(row["is_violation"] == 1 and row["corrected_rule"] == "7" for row in rows)
+
+
+def test_bulk_relabel_overwrites_an_existing_label(db_path):
+    """An event labelled singly, then swept up in a later bulk pass, ends up
+    holding the bulk call's values — same upsert semantics as a lone
+    ``upsert_label`` call, just reached through the batch path."""
+    with open_db(db_path) as conn:
+        event_id = _event(conn)
+        service.upsert_label(conn, event_id, is_violation=True, corrected_rule="7")
+        result = service.bulk_upsert_labels(
+            conn, GUILD, [event_id], is_violation=False
+        )
+        row = _labelled(conn, event_id)
+
+    assert result == {"labeled": [event_id], "skipped": []}
+    assert row["is_violation"] == 0
+    assert row["corrected_rule"] is None
+
+
+def test_bulk_label_skips_a_foreign_guild_event(db_path):
+    """The core safety gate: an id that exists but belongs to a different
+    guild is refused, not labelled, and reported back — a moderator of one
+    guild cannot use the bulk path to write another guild's event."""
+    with open_db(db_path) as conn:
+        home_id = _event(conn)
+        foreign_id = service.insert_event(
+            conn,
+            guild_id=OTHER_GUILD,
+            message_id=2000,
+            author_id=99,
+            channel_id=CHANNEL,
+            guard_verdict="violation",
+            guard_rule="3",
+        )
+        result = service.bulk_upsert_labels(
+            conn, GUILD, [home_id, foreign_id], is_violation=False
+        )
+        home_row = _labelled(conn, home_id)
+        foreign_row = _labelled(conn, foreign_id)
+
+    assert result == {"labeled": [home_id], "skipped": [foreign_id]}
+    assert home_row["is_violation"] == 0
+    # Untouched: no label row was ever written for the other guild's event.
+    assert foreign_row["is_violation"] is None
+
+
+def test_bulk_label_rejects_a_batch_over_the_cap(db_path):
+    """The batch is bounded — the panel is expected to send exactly the ids
+    it is showing, never an unbounded 'everything matching the filter'."""
+    with open_db(db_path) as conn:
+        oversized = list(range(1, service.MAX_BULK_LABEL + 2))
+        with pytest.raises(ValueError):
+            service.bulk_upsert_labels(conn, GUILD, oversized, is_violation=False)
+
+
+def test_bulk_label_empty_list_is_a_no_op(db_path):
+    with open_db(db_path) as conn:
+        result = service.bulk_upsert_labels(conn, GUILD, [], is_violation=False)
+
+    assert result == {"labeled": [], "skipped": []}
+
+
+# ---------------------------------------------------------------------------
+# get_event guild scoping — the single-event path's own safety gate
+# ---------------------------------------------------------------------------
+
+
+def test_get_event_returns_an_event_of_the_callers_guild(db_path):
+    """The ordinary case: a moderator reads an event in the guild they are
+    actually viewing."""
+    with open_db(db_path) as conn:
+        event_id = _event(conn)
+        row = service.get_event(conn, event_id, GUILD)
+
+    assert row is not None
+    assert int(row["id"]) == event_id
+
+
+def test_get_event_refuses_a_foreign_guild_event(db_path):
+    """The safety gate. ``get_event`` used to select on id alone, so a
+    moderator of one guild could read another guild's event detail — message,
+    author and channel ids, the guard verdict, the priority score — simply by
+    knowing the id, and could write a label onto it too, because the label
+    route looks the event up through this same function and 404s only when it
+    comes back None. Scoping the lookup closes the read and the write at once.
+    """
+    with open_db(db_path) as conn:
+        foreign_id = service.insert_event(
+            conn,
+            guild_id=OTHER_GUILD,
+            message_id=2000,
+            author_id=99,
+            channel_id=CHANNEL,
+            guard_verdict="violation",
+            guard_rule="3",
+        )
+        row = service.get_event(conn, foreign_id, GUILD)
+
+    assert row is None

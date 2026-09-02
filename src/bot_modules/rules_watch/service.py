@@ -161,13 +161,109 @@ def upsert_label(
     )
 
 
+# The dashboard sends the exact ids the panel is showing — never "everything
+# matching the current filter", which is a far more dangerous primitive for a
+# guild-scoped moderation queue. This bounds how many one call can touch; the
+# panel's page size is capped at the same number (see /rules-watch/events).
+MAX_BULK_LABEL = 200
+
+
+def bulk_upsert_labels(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    event_ids: list[int],
+    *,
+    is_violation: bool,
+    corrected_rule: str | None = None,
+    labeled_by: int | None = None,
+    notes: str | None = None,
+) -> dict[str, list[int]]:
+    """Apply one label to many events at once, in the caller's transaction.
+
+    Same upsert semantics as :func:`upsert_label` — a second label on an
+    already-labelled event overwrites it, id for id — applied to every id in
+    ``event_ids`` that both exists and belongs to ``guild_id``. An id that
+    fails either check is skipped, never labelled, and reported back rather
+    than silently dropped.
+
+    This is the guild scoping the caller MUST get from here: unlike
+    :func:`get_event`, which looks an event up by id alone with no guild
+    check, this function never writes a row outside ``guild_id`` — an id
+    from another guild lands in ``skipped``, indistinguishable from an id
+    that plain doesn't exist.
+
+    Raises ``ValueError`` if ``event_ids`` has more than
+    :data:`MAX_BULK_LABEL` entries (callers behind the HTTP route never hit
+    this — the request body is capped at the same number before it reaches
+    here — but it is enforced here too so the invariant holds for any other
+    caller).
+
+    Returns ``{"labeled": [...], "skipped": [...]}``: the ids actually
+    labelled, and the ids not found in this guild, each in the order
+    ``event_ids`` was given (duplicates in the input collapse to one entry).
+    """
+    if len(event_ids) > MAX_BULK_LABEL:
+        raise ValueError(
+            f"cannot label more than {MAX_BULK_LABEL} events in one call "
+            f"(got {len(event_ids)})"
+        )
+
+    if not event_ids:
+        return {"labeled": [], "skipped": []}
+
+    seen: set[int] = set()
+    ordered_ids: list[int] = []
+    for eid in event_ids:
+        if eid not in seen:
+            seen.add(eid)
+            ordered_ids.append(eid)
+
+    placeholders = ",".join("?" for _ in ordered_ids)
+    rows = conn.execute(
+        f"SELECT id FROM rules_events WHERE guild_id = ? AND id IN ({placeholders})",
+        (guild_id, *ordered_ids),
+    ).fetchall()
+    valid_ids = {row["id"] for row in rows}
+
+    labeled: list[int] = []
+    skipped: list[int] = []
+    for eid in ordered_ids:
+        if eid in valid_ids:
+            upsert_label(
+                conn,
+                eid,
+                is_violation=is_violation,
+                corrected_rule=corrected_rule,
+                labeled_by=labeled_by,
+                notes=notes,
+            )
+            labeled.append(eid)
+        else:
+            skipped.append(eid)
+
+    return {"labeled": labeled, "skipped": skipped}
+
+
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
 
-def get_event(conn: sqlite3.Connection, event_id: int) -> sqlite3.Row | None:
+def get_event(
+    conn: sqlite3.Connection, event_id: int, guild_id: int
+) -> sqlite3.Row | None:
+    """One event, scoped to the guild the caller is actually viewing.
+
+    ``guild_id`` is required rather than optional on purpose. This function
+    used to select on id alone, and both of its callers -- the detail route
+    and the label route -- are reached with an event id straight from the URL,
+    so a moderator of one guild could read another guild's event detail, and
+    write a label onto it, by knowing nothing but the number. Making the scope
+    a required argument means a future caller cannot forget it; the failure
+    mode is a TypeError at import time rather than a silent cross-guild read.
+    """
     return conn.execute(
-        "SELECT * FROM rules_events WHERE id = ?", (event_id,)
+        "SELECT * FROM rules_events WHERE id = ? AND guild_id = ?",
+        (event_id, guild_id),
     ).fetchone()
 
 

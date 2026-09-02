@@ -1,4 +1,3 @@
-import { api } from "../api.js";
 import {
   loadConfig,
   loadChannels,
@@ -17,10 +16,6 @@ const MODE_HINTS = {
   enforce:
     "Removes explicit images, DMs the image back to the poster, and posts a brief notice.",
 };
-
-function labelText(label) {
-  return label.replace(/_/g, " ").toLowerCase();
-}
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -116,18 +111,11 @@ export function mount(container) {
                 Check every image in age-gated channels
               </label>
               <div class="field-hint">Nothing is ever removed because of this. Normally an
-                image is only checked when a rule might act on it, so the figures below
-                cover a small, unrepresentative slice — a poor basis for the thresholds
-                above. Turn this on for a true picture; every image in those channels then
-                has a verdict and content labels recorded.</div>
+                image is only checked when a rule might act on it, so the Image Guard Tags
+                report covers a small, unrepresentative slice — a poor basis for the
+                thresholds above. Turn this on for a true picture; every image in those
+                channels then has a verdict and content labels recorded.</div>
             </div>
-          </div>
-
-          <div class="card">
-            <div class="section-label">Recent Activity</div>
-            <div data-metrics><div class="empty">Loading…</div></div>
-            <div class="field-hint">Images checked in age-gated channels over the last
-              30 days. Only those channels are recorded — checks elsewhere leave no trace.</div>
           </div>
 
           <div style="display:flex; gap:8px; align-items:center;">
@@ -169,31 +157,6 @@ export function mount(container) {
     modeSelect.addEventListener("change", syncModeHint);
 
     guardForm(form);
-
-    (async () => {
-      const box = container.querySelector("[data-metrics]");
-      try {
-        const m = await api("/api/nsfw-classifier/metrics", { days: 30 });
-        if (!m.classified) {
-          box.innerHTML = `<div class="empty">Nothing checked yet.</div>`;
-          return;
-        }
-        const top = m.labels
-          .slice(0, 5)
-          .map((l) => `<li>${labelText(l.label)} — ${l.count}</li>`)
-          .join("");
-        box.innerHTML = `
-          <ul style="margin:0; padding-left:18px;">
-            <li><strong>${m.classified}</strong> images checked</li>
-            <li><strong>${m.explicit}</strong> judged explicit · ${m.not_explicit} not</li>
-            <li>average <strong>${m.avg_inference_ms}ms</strong> per image</li>
-          </ul>
-          ${top ? `<div class="section-label" style="margin-top:10px;">Most common detections</div><ul style="margin:0; padding-left:18px;">${top}</ul>` : ""}
-        `;
-      } catch {
-        box.innerHTML = `<div class="empty">Couldn't load activity.</div>`;
-      }
-    })();
 
     // Named-field validation, the pattern config-casino uses. Number("") is 0,
     // so a blanked Confidence Threshold used to post 0 — which makes the

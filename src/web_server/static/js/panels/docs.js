@@ -32,17 +32,17 @@ function renderPreview(embeds, accent) {
     </div>`).join("");
 }
 
-function syncSummary(sync) {
+function syncSummary(channels, sync) {
   if (!sync || !sync.length) return "";
   const bad = sync.filter((s) => s.status !== "ok");
   if (bad.length) {
-    return "⚠️ " + bad.map((s) => `#${channelName([], s.channel_id) || s.channel_id}: ${s.detail || s.status}`).join(" · ");
+    return "⚠️ " + bad.map((s) => `${channelName(channels, s.channel_id)}: ${s.detail || s.status}`).join(" · ");
   }
   const total = sync.reduce((a, s) => a + s.created + s.edited + s.deleted, 0);
   let msg = `Synced ${sync.length} channel${sync.length === 1 ? "" : "s"} (${total} message${total === 1 ? "" : "s"}).`;
   const pinIssues = sync.filter((s) => s.pin_detail);
   if (pinIssues.length) {
-    msg += " ⚠️ " + pinIssues.map((s) => `#${channelName([], s.channel_id) || s.channel_id}: ${s.pin_detail}`).join(" · ");
+    msg += " ⚠️ " + pinIssues.map((s) => `${channelName(channels, s.channel_id)}: ${s.pin_detail}`).join(" · ");
   }
   return msg;
 }
@@ -129,7 +129,7 @@ export function mount(container) {
     if (!doc.placements.length) return '<div class="field-hint" style="padding:4px 0">Not posted anywhere yet.</div>';
     return doc.placements.map((p) => `
       <div class="doc-place-row">
-        <span class="doc-place-ch">#${esc(channelName(state.channels, p.channel_id) || p.channel_id)}</span>
+        <span class="doc-place-ch">${esc(channelName(state.channels, p.channel_id))}</span>
         <span class="doc-place-count">${p.message_count} msg${p.message_count === 1 ? "" : "s"}</span>
         <button class="doc-pin${p.pinned ? " on" : ""}" data-pin-ch="${esc(p.channel_id)}"
                 data-pinned="${p.pinned ? "1" : "0"}" aria-pressed="${p.pinned ? "true" : "false"}"
@@ -275,7 +275,7 @@ export function mount(container) {
       try {
         const res = await apiPut(`/api/docs/${encodeURIComponent(doc.doc_key)}`, { title, accent, body_md });
         state.doc = res.doc;
-        const summary = syncSummary(res.sync);
+        const summary = syncSummary(state.channels, res.sync);
         showStatus(statusEl, true, summary ? `Saved — ${summary}` : "Saved");
         editorEl.querySelector("[data-place-list]").innerHTML = renderPlacements(res.doc);
         await refreshList();
@@ -311,7 +311,7 @@ export function mount(container) {
       btn.disabled = true;
       try {
         const res = await apiPost(`/api/docs/${encodeURIComponent(doc.doc_key)}/sync`, {});
-        showStatus(statusEl, true, syncSummary(res.sync) || "Nothing posted yet.");
+        showStatus(statusEl, true, syncSummary(state.channels, res.sync) || "Nothing posted yet.");
       } catch (err) {
         showStatus(statusEl, false, err.message);
       } finally { btn.disabled = false; }
@@ -325,7 +325,7 @@ export function mount(container) {
       btn.disabled = true;
       try {
         const res = await apiPost(`/api/docs/${encodeURIComponent(doc.doc_key)}/placements`, { channel_id: channelId });
-        showStatus(statusEl, res.ok, syncSummary([res.sync]) || (res.ok ? "Posted." : res.sync.detail));
+        showStatus(statusEl, res.ok, syncSummary(state.channels, [res.sync]) || (res.ok ? "Posted." : res.sync.detail));
         await selectDoc(doc.doc_key);
         await refreshList();
       } catch (err) {

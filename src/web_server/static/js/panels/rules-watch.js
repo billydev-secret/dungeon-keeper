@@ -39,7 +39,7 @@ function sigChips(ev) {
   return parts.join(" ");
 }
 
-function renderRow(ev, activeId) {
+function renderRow(ev, activeId, selectedIds) {
   const cls = ev.id === activeId ? "rw-row active" : "rw-row";
   const tier = TIER_BADGE[ev.priority_tier] || "";
   const label = ev.is_violation != null
@@ -47,13 +47,19 @@ function renderRow(ev, activeId) {
     : LABEL_BADGE["null"];
   const rule = ev.guard_rule ? `Rule ${esc(ev.guard_rule)}` : "?";
   const conf = ev.guard_confidence != null ? `${Math.round(ev.guard_confidence * 100)}%` : "?";
+  const id = Number(ev.id);
+  const checked = selectedIds && selectedIds.has(id) ? "checked" : "";
   return `
-    <div class="${cls}" data-id="${Number(ev.id)}" tabindex="0" role="button">
-      <div class="rw-row__tier">${tier}</div>
-      <div class="rw-row__rule">${rule} <span class="dim">${esc(conf)}</span></div>
-      <div class="rw-row__score">${ev.priority_score != null ? ev.priority_score.toFixed(1) : "?"}</div>
-      <div class="rw-row__ts">${fmtTs(ev.detected_at)}</div>
-      <div class="rw-row__label">${label}</div>
+    <div class="${cls}" data-id="${id}" tabindex="0" role="button">
+      <input type="checkbox" class="rw-row__select" data-select="${id}" ${checked}
+             aria-label="Select event #${id} for bulk labeling">
+      <div class="rw-row__body">
+        <div class="rw-row__tier">${tier}</div>
+        <div class="rw-row__rule">${rule} <span class="dim">${esc(conf)}</span></div>
+        <div class="rw-row__score">${ev.priority_score != null ? ev.priority_score.toFixed(1) : "?"}</div>
+        <div class="rw-row__ts">${fmtTs(ev.detected_at)}</div>
+        <div class="rw-row__label">${label}</div>
+      </div>
     </div>`;
 }
 
@@ -110,8 +116,8 @@ function renderDetail(ev) {
           <span class="rw-correction__hint">optional — only if this is a real violation the guard matched to the wrong rule</span>
         </div>
         <div class="rw-actions">
-          <button class="btn btn-danger" data-label="true">✅ Confirmed violation</button>
-          <button class="btn btn-secondary" data-label="false">❌ False positive</button>
+          <button class="btn btn-danger" data-label="true" title="Shortcut: V">✅ Confirmed violation</button>
+          <button class="btn btn-secondary" data-label="false" title="Shortcut: F">❌ False positive</button>
         </div>` : `<div class="dim" style="margin-top:8px">${labeledBy}</div>`}
     </div>`;
 }
@@ -215,6 +221,23 @@ export function mountQueue(container, initialParams = {}) {
           <input type="checkbox" data-pending-only checked> Unlabeled Only
         </label>
 
+        <div class="rw-hint">
+          <strong>Keyboard:</strong> <kbd>&darr;</kbd>/<kbd>&uarr;</kbd> next/previous event ·
+          <kbd>V</kbd> confirmed violation · <kbd>F</kbd> false positive — advances to the next
+          unlabeled event automatically. Off while typing in a text field.
+        </div>
+
+        <div class="rw-bulk-bar" data-bulk-bar>
+          <label class="rw-bulk-bar__all">
+            <input type="checkbox" data-select-all> Select all shown
+          </label>
+          <span class="rw-bulk-bar__count" data-selected-count>0 selected</span>
+          <div class="rw-bulk-bar__actions">
+            <button type="button" class="btn btn-danger" data-bulk-label="true" disabled>✅ Mark violation</button>
+            <button type="button" class="btn btn-secondary" data-bulk-label="false" disabled>❌ Mark false positive</button>
+          </div>
+        </div>
+
         <div class="rw-layout">
           <div class="rw-list" data-list>
             ${renderLoading("Loading alerts…")}
@@ -246,12 +269,26 @@ export function mountQueue(container, initialParams = {}) {
     </div>
 
     <style>
+      .rw-hint { font-size:12px; color:var(--ink-mute); margin-bottom:10px; line-height:1.6; }
+      .rw-hint kbd { display:inline-block; min-width:1.4em; padding:1px 5px; text-align:center;
+                     border:1px solid var(--rule); border-bottom-width:2px; border-radius:4px;
+                     background:var(--bg-input); font-family:inherit; font-size:11px; }
+      .rw-bulk-bar { display:flex; flex-wrap:wrap; align-items:center; gap:10px 16px;
+                     padding:8px 10px; margin-bottom:10px; border:1px solid var(--rule);
+                     border-radius:6px; background:var(--bg-input); font-size:13px; }
+      .rw-bulk-bar__all { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+      .rw-bulk-bar__count { color:var(--ink-mute); }
+      .rw-bulk-bar__actions { display:flex; gap:8px; margin-left:auto; }
+      .rw-bulk-bar__actions .btn:disabled { opacity:.5; cursor:not-allowed; }
       .rw-layout { display:flex; gap:16px; min-height:400px; }
       .rw-list { flex:0 0 340px; overflow-y:auto; border:1px solid var(--rule); border-radius:6px; }
       .rw-detail-pane { flex:1; overflow-y:auto; }
-      .rw-row { display:grid; grid-template-columns:90px 80px 50px 100px 1fr; gap:6px;
-                align-items:center; padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--rule); font-size:13px; }
+      .rw-row { display:flex; align-items:center; gap:8px;
+                padding:8px 10px; cursor:pointer; border-bottom:1px solid var(--rule); font-size:13px; }
       .rw-row:hover, .rw-row.active { background:var(--hover); }
+      .rw-row__select { flex:0 0 auto; margin:0; cursor:pointer; }
+      .rw-row__body { flex:1; min-width:0; display:grid; grid-template-columns:90px 80px 50px 100px 1fr;
+                      gap:6px; align-items:center; }
       .rw-row__score { font-weight:600; }
       .rw-row__ts { color:var(--ink-mute); font-size:12px; }
       .rw-detail { padding:12px; }
@@ -312,8 +349,12 @@ export function mountQueue(container, initialParams = {}) {
         .rw-layout--detail .rw-list { display:none; }
         .rw-layout--detail .rw-detail-pane { display:block; }
         .rw-back { display:inline-flex; margin-bottom:10px; }
-        .rw-row { grid-template-columns:72px 1fr auto; column-gap:8px; row-gap:2px; padding:12px 10px;
-                  grid-template-areas:"tier rule score" "tier ts label"; font-size:14px; }
+        .rw-bulk-bar__actions { margin-left:0; width:100%; }
+        .rw-bulk-bar__actions .btn { flex:1; }
+        .rw-row { align-items:flex-start; padding:12px 10px; font-size:14px; }
+        .rw-row__select { margin-top:4px; }
+        .rw-row__body { grid-template-columns:72px 1fr auto; column-gap:8px; row-gap:2px;
+                        grid-template-areas:"tier rule score" "tier ts label"; }
         .rw-row__tier { grid-area:tier; }
         .rw-row__rule { grid-area:rule; }
         .rw-row__score { grid-area:score; text-align:right; }
@@ -339,8 +380,15 @@ export function mountQueue(container, initialParams = {}) {
   const listEl = container.querySelector("[data-list]");
   const detailEl = container.querySelector("[data-detail]");
   const statsContent = container.querySelector("[data-stats-content]");
+  const bulkBarEl = container.querySelector("[data-bulk-bar]");
+  const selectAllEl = container.querySelector("[data-select-all]");
+  const selectedCountEl = container.querySelector("[data-selected-count]");
 
   let events = [];
+  // Ids checked for bulk labeling — scoped to "what's on screen right now":
+  // cleared whenever the queue is freshly fetched (filter change, reload, or
+  // after a bulk action lands) rather than carried across a different view.
+  const selectedIds = new Set();
   let activeId = initialParams.event ? Number(initialParams.event) : null;
   let currentTier = ["immediate", "digest", "logged"].includes(initialParams.tier) ? initialParams.tier : "";
   let pendingOnly = initialParams.pending !== "0";
@@ -435,19 +483,100 @@ export function mountQueue(container, initialParams = {}) {
     return null;
   }
 
+  // The event immediately next/previous in the (filtered) queue order, wrapping
+  // around either end — plain browsing, unlike nextUnlabeledId which skips
+  // already-labeled rows. delta is +1 or -1.
+  function adjacentId(fromId, delta) {
+    if (!events.length) return null;
+    const idx = events.findIndex(x => x.id === fromId);
+    if (idx === -1) return delta > 0 ? events[0].id : events[events.length - 1].id;
+    return events[(idx + delta + events.length) % events.length].id;
+  }
+
   // --- List click ---
   listEl.addEventListener("click", e => {
+    if (e.target.closest("[data-select]")) return; // the row's own checkbox — see the change listener below
     const row = e.target.closest("[data-id]");
     if (!row) return;
     selectEvent(Number(row.dataset.id));
   });
   // Rows are role="button" tabindex="0" — activate with Enter/Space too.
   listEl.addEventListener("keydown", e => {
+    if (e.target.closest("[data-select]")) return; // let Space toggle the checkbox, not open the row
     if (e.key !== "Enter" && e.key !== " ") return;
     const row = e.target.closest("[data-id]");
     if (!row) return;
     e.preventDefault();
     selectEvent(Number(row.dataset.id));
+  });
+
+  // --- Bulk selection: per-row checkboxes ---
+  listEl.addEventListener("change", e => {
+    const cb = e.target.closest("[data-select]");
+    if (!cb) return;
+    const id = Number(cb.dataset.select);
+    if (cb.checked) selectedIds.add(id); else selectedIds.delete(id);
+    updateBulkBar();
+  });
+
+  // --- Bulk selection: select/deselect everything currently shown ---
+  selectAllEl.addEventListener("change", () => {
+    if (selectAllEl.checked) {
+      events.forEach(ev => selectedIds.add(ev.id));
+    } else {
+      selectedIds.clear();
+    }
+    listEl.querySelectorAll("[data-select]").forEach(cb => {
+      cb.checked = selectedIds.has(Number(cb.dataset.select));
+    });
+    updateBulkBar();
+  });
+
+  function updateBulkBar() {
+    const count = selectedIds.size;
+    selectedCountEl.textContent = count === 1 ? "1 selected" : `${count} selected`;
+    bulkBarEl.querySelectorAll("[data-bulk-label]").forEach(b => { b.disabled = count === 0; });
+    const shown = events.length;
+    selectAllEl.disabled = shown === 0;
+    selectAllEl.checked = shown > 0 && events.every(ev => selectedIds.has(ev.id));
+    selectAllEl.indeterminate = !selectAllEl.checked && events.some(ev => selectedIds.has(ev.id));
+  }
+
+  // --- Bulk selection: apply one label to every selected id ---
+  bulkBarEl.addEventListener("click", async e => {
+    const btn = e.target.closest("[data-bulk-label]");
+    if (!btn || btn.disabled) return;
+    const isViolation = btn.dataset.bulkLabel === "true";
+    // Send exactly the ids on screen that are checked — never "everything
+    // matching the filter" (the server caps at service.MAX_BULK_LABEL anyway,
+    // but the panel's own page size already keeps this well under that).
+    const ids = events.filter(ev => selectedIds.has(ev.id)).map(ev => ev.id);
+    if (!ids.length) return;
+    const verb = isViolation ? "✅ Confirmed violation" : "❌ False positive";
+    const noun = ids.length === 1 ? "1 event" : `${ids.length} events`;
+    if (!window.confirm(`Mark ${noun} as ${verb}?\n\nThis cannot be easily undone.`)) return;
+
+    bulkBarEl.querySelectorAll("[data-bulk-label]").forEach(b => { b.disabled = true; });
+    try {
+      const result = await apiPost("/api/rules-watch/events/bulk-label", {
+        event_ids: ids,
+        is_violation: isViolation,
+      });
+      selectedIds.clear();
+      if (result.skipped_count > 0) {
+        toast(
+          `Labeled ${result.labeled_count} of ${ids.length} as ${verb} — `
+          + `${result.skipped_count} skipped (no longer in this view, or from another server).`,
+          "info",
+        );
+      } else {
+        toast(`Labeled ${result.labeled_count} event${result.labeled_count === 1 ? "" : "s"} as ${verb}.`);
+      }
+      await loadQueue();
+    } catch (err) {
+      toast(err.message, "error");
+      updateBulkBar();
+    }
   });
 
   // --- Back to queue (mobile) ---
@@ -494,15 +623,20 @@ export function mountQueue(container, initialParams = {}) {
       listEl.innerHTML = renderEmpty(pendingOnly
         ? "Nothing left to label in this view. Untick Unlabeled Only to see events you've already judged."
         : "No events match this filter. The monitor only records messages that trip a guard rule, so a quiet queue is a good sign.");
+      updateBulkBar();
       return;
     }
     const capNote = events.length >= QUEUE_LIMIT
       ? `<div class="field-hint" style="padding:8px 10px;">Showing the first ${QUEUE_LIMIT} events — more exist. Narrow by tier to see the rest.</div>`
       : "";
-    listEl.innerHTML = events.map(ev => renderRow(ev, activeId)).join("") + capNote;
+    listEl.innerHTML = events.map(ev => renderRow(ev, activeId, selectedIds)).join("") + capNote;
+    updateBulkBar();
   }
 
   async function loadQueue() {
+    // A fresh fetch invalidates whatever was checked for the previous view —
+    // selection is "what's on screen right now", not a standing set of ids.
+    selectedIds.clear();
     listEl.innerHTML = renderLoading("Loading alerts…");
     const params = { limit: QUEUE_LIMIT, pending_only: pendingOnly };
     if (currentTier) params.tier = currentTier;
@@ -514,7 +648,9 @@ export function mountQueue(container, initialParams = {}) {
         if (ev) { detailEl.innerHTML = renderDetail(ev); bindDetailActions(ev); }
       }
     } catch (err) {
+      events = [];
       listEl.innerHTML = renderError(`Couldn't load the alert queue — ${err.message}. Switch tabs and back to try again.`);
+      updateBulkBar();
     }
   }
 
@@ -550,7 +686,53 @@ export function mountQueue(container, initialParams = {}) {
     }
   }
 
+  // --- Keyboard triage: drain the queue without the mouse ---
+  //
+  // Text-entry focus (the corrected-rule field, or any other text input,
+  // textarea, select, or contenteditable) suppresses every shortcut below —
+  // a moderator typing "7" must never also fire the "V" binding. A checkbox
+  // or button holding focus is NOT treated as text entry, so the shortcuts
+  // still work while tabbing through the row checkboxes.
+  const TEXT_INPUT_TYPES = new Set(["text", "search", "email", "url", "tel", "password", "number", ""]);
+  function isTypingTarget(el) {
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    const tag = el.tagName;
+    if (tag === "TEXTAREA" || tag === "SELECT") return true;
+    if (tag === "INPUT") return TEXT_INPUT_TYPES.has((el.getAttribute("type") || "text").toLowerCase());
+    return false;
+  }
+
+  function handleKeydown(e) {
+    if (activeTab !== "queue") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (isTypingTarget(e.target)) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      selectEvent(adjacentId(activeId, 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      selectEvent(adjacentId(activeId, -1));
+    } else if (e.key === "v" || e.key === "V") {
+      // Reuse the real button's click handler (correction-field reading,
+      // request, auto-advance, error handling) instead of duplicating it.
+      const btn = detailEl.querySelector('[data-label="true"]');
+      if (btn) { e.preventDefault(); btn.click(); }
+    } else if (e.key === "f" || e.key === "F") {
+      const btn = detailEl.querySelector('[data-label="false"]');
+      if (btn) { e.preventDefault(); btn.click(); }
+    }
+  }
+  document.addEventListener("keydown", handleKeydown);
+
   loadQueue();
   if (activeTab === "ledger") loadLedger();
   if (activeTab === "stats") loadStats();
+
+  return {
+    unmount() {
+      document.removeEventListener("keydown", handleKeydown);
+    },
+  };
 }

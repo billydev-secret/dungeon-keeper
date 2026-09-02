@@ -82,6 +82,15 @@
      6.45:1 on --bg — use them wherever the colour carries meaning as text. */
   --red-text:      #f87a7d;
   --green-text:    #4ad17f;
+  /* Warning-tier text, same split as the pair above. --yellow (#f0b232) is
+     86% saturated and stays that way for fills and swatches -- the Discord
+     idle dot, ticket priority bars, sparklines -- where the intensity is the
+     signal and desaturating it costs recognisability. As small text it was
+     simply loud: every use is soft caution, never top severity (that is
+     --red). This calmer amber clears WCAG AA 4.5:1 on every surface it sits
+     on: .badge-warning's own pill 4.67, .home-mod-warn 5.40, --bg 6.60,
+     --bg-card 7.21, --bg-rail 8.61. */
+  --yellow-text:   #d7b77f;
   --blurple:       #5865f2;
   --plum:          #c07aa1;
   --plum-soft:     #c07aa11a;
@@ -2258,7 +2267,7 @@ p.field-hint {
 .badge-danger  { background: #9E3B2E33; color: var(--red-text); }
 .badge-success { background: #7F8F3A33; color: var(--green-text); }
 .badge-info    { background: #B36A9233; color: var(--plum); }
-.badge-warning { background: #E6B84C33; color: var(--yellow); }
+.badge-warning { background: #E6B84C33; color: var(--yellow-text); }
 .badge-dim     { background: var(--rule); color: var(--ink-dim); }
 
 .user-cell   { white-space: nowrap; }
@@ -2481,7 +2490,7 @@ p.field-hint {
 }
 .home-mod-danger { background: #9E3B2E22; color: var(--red-text); }
 .home-mod-info   { background: #B36A9222; color: var(--plum); }
-.home-mod-warn   { background: #E6B84C22; color: var(--yellow); }
+.home-mod-warn   { background: #E6B84C22; color: var(--yellow-text); }
 .home-mod-row {
   display: flex;
   align-items: center;
@@ -2577,7 +2586,7 @@ p.field-hint {
   margin-left: var(--s-1);
   vertical-align: middle;
 }
-.home-reset-btn:hover { color: var(--yellow); border-color: var(--yellow); }
+.home-reset-btn:hover { color: var(--yellow-text); border-color: var(--yellow); }
 
 /* Widget edit mode */
 
@@ -3046,7 +3055,7 @@ p.field-hint {
 .badge-healthy,
 .badge-clear     { background: var(--green-soft); color: var(--green-text); }
 .badge-needs_work,
-.badge-needs-work { background: var(--gold-soft); color: var(--yellow); }
+.badge-needs-work { background: var(--gold-soft); color: var(--yellow-text); }
 .badge-critical,
 .badge-active    { background: var(--red-soft); color: var(--red-text); }
 .badge-no_data,
@@ -3837,7 +3846,7 @@ p.field-hint {
    its own tint — passed/failed/archived all landed under 4.5:1. */
 .t-chip.passed   { background: var(--green-soft); color: var(--green-text); }
 .t-chip.failed   { background: var(--red-soft); color: var(--red-text); }
-.t-chip.blocked  { background: var(--gold-soft); color: var(--yellow); }
+.t-chip.blocked  { background: var(--gold-soft); color: var(--yellow-text); }
 .t-chip.pending,
 .t-chip.archived { background: var(--rule-soft); color: var(--ink-dim); }
 
