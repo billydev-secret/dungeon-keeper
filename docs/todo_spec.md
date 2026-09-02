@@ -391,12 +391,20 @@ demonstrably happened is worse than no scoreboard.
   second guild's phrasing silently stops it with no error anywhere. An
   unrecognised trigger is **rejected at write time** rather than stored, since a
   chore that claims to sign itself off and never does is the worst outcome.
-- **Where it fires.** `qotd` rides the existing QOTD registration in
-  `events_cog` (already gated to once per message). `game` rides
-  `sign_off_game_chore`, called from the three paths where a human starts a
-  multiplayer game: `finish_launch_response` (a party game from `/games play`),
-  `BaseDuel._handle_accept` (a challenge accepted) and
-  `BaseGame._handle_lobby_start` (an N-player lobby reaching its start).
+- **Where it fires.** `qotd` rides QOTD registration — **both** call sites: the
+  marker path in `events_cog` (already gated to once per message) and
+  `/qotd post` in `economy_cog`, which is the one that renders the card and
+  drains the sponsored queue. Wiring only the first left the chore marked missed
+  for the command a mod is most likely to use; a test now holds every
+  `create_qotd` call site to signing off.
+
+  `game` rides `sign_off_game_chore`, called from every path where a human
+  starts a multiplayer game by hand: `finish_launch_response` (the 16 party
+  games from `/games play`), `BaseDuel._handle_accept` (a challenge accepted),
+  `BaseGame._handle_lobby_start` (an N-player lobby reaching its start),
+  `risky_roll_cog._start_game`, and the `run_again` recap buttons on Name Your
+  Price and Mt. Rushmore, which go straight to `launch()` and so miss the
+  shared seam.
 - **The game trigger is moderator-only** (`AppContext.member_is_mod`, the same
   definition as every other mod gate). "Run a game" is a chore a mod owes the
   server, so two ordinary members accepting a duel is a multiplayer game being
@@ -404,8 +412,10 @@ demonstrably happened is worse than no scoreboard.
   day with nobody on staff involved, which made it a report on how busy the
   server was rather than a checklist. An **uncached member is treated as not a
   mod**: a chore left open is recoverable with the board's Complete button,
-  where a tick that should not have happened is not. The QOTD trigger needs no
-  equivalent gate — registration already requires the economy manager role.
+  where a tick that should not have happened is not. The check itself runs in
+  the worker thread, not on the loop — it reads the guild config, which hits the
+  DB on a cold cache. The QOTD trigger needs no equivalent gate — registration
+  already requires the economy manager role.
 - **A scheduled game does not count**, and this is enforced by *where* the call
   sits rather than by a flag. Party games reach the board through two doors —
   `/games play` and the scheduler calling the same `launch()` — and only the
@@ -448,7 +458,10 @@ demonstrably happened is worse than no scoreboard.
   surface a mod reads until the next daily spawn, which is indistinguishable
   from the feature not working. The repaint is skipped when nothing was ticked,
   and the DB work on the game paths goes through `asyncio.to_thread` like every
-  other `open_db` there.
+  other `open_db` there — under `open_db_immediate`, since reading the wired
+  definitions and then writing the completion is exactly the read-then-write a
+  deferred transaction can fail with `SQLITE_BUSY_SNAPSHOT`, which
+  `busy_timeout` does not retry and the per-definition guard would swallow.
 
   Every game seam signs off **after** its interaction has been answered, never
   before: a repaint is a REST edit that discord.py sleeps through under
@@ -457,10 +470,13 @@ demonstrably happened is worse than no scoreboard.
   `todo_cog.add_todo` documents). The QOTD repaint likewise sits *before*
   `events_cog`'s `result is None` return — that return fires whenever the
   poster has already had their daily login, which is most QOTD posts.
-- **Not every hand-started game reaches the seam.** The 16 party-game cogs share
-  `finish_launch_response`; Risky Rolls has its own command and carries the call
-  itself (after its response, outside its channel lock, and outside the `try`
-  whose handler tears a live round down). A game type added later that does neither simply never fires the
+- **Not every hand-started game reaches the seam** automatically — a cog with
+  its own command or its own restart button has to carry the call. Risky Rolls
+  does (after its response, outside its channel lock, and outside the `try`
+  whose handler tears a live round down), as do the two `run_again` buttons. A
+  game type added later that shares neither seam simply never fires the trigger,
+  silently, so check for it when adding one. Mahjong is deliberately out: it is
+  closer to solo play. A game type added later that does neither simply never fires the
   trigger — a silent gap, so check for the seam when adding one.
 
 

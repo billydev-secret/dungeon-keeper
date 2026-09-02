@@ -273,6 +273,9 @@ def _calls(node: ast.AST) -> set[str]:
         # Risky Rolls opened by hand — it has its own command and does not
         # share the party games' finish_launch_response.
         ("bot_modules/cogs/risky_roll_cog.py", "_start_game"),
+        # "Run Again" on a recap goes straight to launch(), missing the seam.
+        ("bot_modules/cogs/games_price_cog.py", "run_again"),
+        ("bot_modules/cogs/games_rushmore_cog.py", "run_again"),
     ],
 )
 def test_the_human_launch_paths_sign_the_chore_off(module, function):
@@ -293,7 +296,31 @@ def test_the_scheduler_never_signs_the_chore_off():
     assert "auto_complete_chores" not in source
 
 
-def test_the_qotd_registration_signs_its_chore_off():
+def test_every_qotd_registration_signs_its_chore_off():
+    """Both ways a question gets registered, held together.
+
+    The marker path in events_cog and `/qotd post` in economy_cog are separate
+    create_qotd call sites, and wiring only the first left the chore marked
+    missed for the command a mod is most likely to use — the one that renders
+    the card and drains the sponsored queue. A third call site would be just as
+    easy to add and just as silent, so the rule is enforced here rather than
+    remembered.
+    """
+    registrars = [
+        path
+        for path in SRC.rglob("*.py")
+        if "create_qotd(" in path.read_text(encoding="utf-8")
+        and path.name != "economy_service.py"  # where create_qotd is defined
+    ]
+    assert len(registrars) >= 2, "expected the marker path and /qotd post"
+    for path in registrars:
+        source = path.read_text(encoding="utf-8")
+        assert "auto_complete_chores" in source, (
+            f"{path.name} registers a QOTD but never signs the chore off"
+        )
+
+
+def test_the_marker_registration_signs_its_chore_off():
     """Inside the create_qotd branch, so it inherits its once-per-message gate."""
     handler = _module("bot_modules/cogs/events_cog.py")
     calls = _calls(handler)

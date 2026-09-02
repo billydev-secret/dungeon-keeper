@@ -29,6 +29,7 @@ from discord import app_commands
 from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, PHASE_RECAP
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    sign_off_game_chore,
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
@@ -455,6 +456,14 @@ class PriceRecapView(discord.ui.View):
             pass
         self.stop()
         await interaction.response.defer()
+        # Run Again goes straight to launch(), so it misses the shared
+        # finish_launch_response seam that signs the "run a game" chore off.
+        # A mod restarting a round from the recap has demonstrably run a game
+        # by hand, so it carries the call itself. After the defer, per the
+        # interaction-window rule.
+        await sign_off_game_chore(
+            self.cog.bot, interaction.guild_id, interaction.user.id
+        )
         await self.cog.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,

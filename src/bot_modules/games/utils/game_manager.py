@@ -113,11 +113,22 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
     game that was played but never formally ended — or one that flopped with
     nobody joining — left the board claiming the chore was skipped.
 
-    The DB work goes through ``asyncio.to_thread`` like every other
-    ``open_db`` on these paths. It is only a couple of indexed reads, but it
-    sits in front of ``interaction.response.edit_message`` on the duel paths,
-    and ``open_db`` will wait up to its 30s busy timeout if another writer
-    holds the lock — long enough to stall the heartbeat and drop the gateway.
+    All DB work goes through ``asyncio.to_thread`` — **including the mod
+    check**, which reads the guild config and so hits the database on a cold
+    cache (the first hand-started game after a restart). It is only a couple of
+    indexed reads, but it sits in front of
+    ``interaction.response.edit_message`` on the duel paths, and a connection
+    will wait up to its 30s busy timeout if another writer holds the lock —
+    long enough to stall the heartbeat and drop the gateway. Resolving the
+    member itself is a cache lookup and stays on the loop, since Discord
+    objects do not cross into the DB thread.
+
+    The tick opens with ``BEGIN IMMEDIATE``: it reads the wired definitions and
+    then writes the completion, and on a plain deferred transaction that
+    sequence can fail with ``SQLITE_BUSY_SNAPSHOT`` when another writer commits
+    in between — which ``busy_timeout`` does not retry. The per-definition
+    guard inside ``auto_complete_chores`` would swallow it and the chore would
+    quietly stay open, which is the failure this whole feature exists to stop.
     """
     try:
         if not guild_id or not user_id:
@@ -131,11 +142,15 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
 
         guild = bot.get_guild(int(guild_id))
         member = guild.get_member(int(user_id)) if guild is not None else None
-        if member is None or not ctx.member_is_mod(member):
+        if member is None:
             return
 
+        from bot_modules.core.db_utils import open_db_immediate  # noqa: PLC0415
+
         def _work() -> list[int]:
-            with ctx.open_db() as conn:
+            if not ctx.member_is_mod(member):
+                return []
+            with open_db_immediate(ctx.db_path) as conn:
                 return auto_complete_chores(
                     conn, int(guild_id), "game",
                     completed_by=int(user_id), now_ts=time.time(),

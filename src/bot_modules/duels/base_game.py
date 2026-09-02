@@ -1054,71 +1054,76 @@ class BaseGame(commands.Cog):
         #: Set once the game really starts, so the chore sign-off can happen
         #: after the interaction is answered and outside the per-game lock.
         started: tuple[int, int] | None = None
-        async with self._get_lock(game_id):
-            game = await self._db_get_game(game_id)
-            if not game or game.state != "LOBBY":
-                await interaction.response.send_message(
-                    "This lobby is no longer open.", ephemeral=True
-                )
-                return
-            if interaction.user.id != game.host_id:
-                await interaction.response.send_message(
-                    "Only the host can start the game.", ephemeral=True
-                )
-                return
-            min_players, _max_players = await self.get_lobby_params(game.guild_id)
-            if len(game.roster) < min_players:
-                await interaction.response.send_message(
-                    f"You need at least **{min_players}** players to start "
-                    f"(currently {len(game.roster)}).",
-                    ephemeral=True,
-                )
-                return
-
-            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-            nick_notice: str | None = None
-            if game_is_nick_stake(game):
-                members = [m for m in (guild.get_member(u) for u in game.roster) if m]
-                err = await self._check_bot_can_nick(guild) or \
-                    await self._check_no_active_nick(guild, members)
-                if err:
-                    await interaction.response.send_message(err, ephemeral=True)
+        try:
+            async with self._get_lock(game_id):
+                game = await self._db_get_game(game_id)
+                if not game or game.state != "LOBBY":
+                    await interaction.response.send_message(
+                        "This lobby is no longer open.", ephemeral=True
+                    )
                     return
-                # Players outranking the bot don't block the start — warn, and
-                # skip their rename if one of them loses.
-                nick_notice = self._rename_warning(guild, members)
+                if interaction.user.id != game.host_id:
+                    await interaction.response.send_message(
+                        "Only the host can start the game.", ephemeral=True
+                    )
+                    return
+                min_players, _max_players = await self.get_lobby_params(game.guild_id)
+                if len(game.roster) < min_players:
+                    await interaction.response.send_message(
+                        f"You need at least **{min_players}** players to start "
+                        f"(currently {len(game.roster)}).",
+                        ephemeral=True,
+                    )
+                    return
 
-            await self._db_set_state(
-                game_id, "ACTIVE",
-                alive=json.dumps(list(game.roster)),
-                last_action_at=time.time(),
-            )
-            game = await self._db_get_game(game_id)
-            if not game:
-                return
-            # A lobby game only counts as "run" once it actually starts — the
-            # roster is real by here, where at lobby-open time it was one
-            # person and an invitation. Credited to the host who opened it,
-            # not whoever pressed Start.
-            started = (game.guild_id, game.host_id)
-            await self.on_game_start(game)
-            game = await self._db_get_game(game_id)
-            if not game:
-                return
-            view = self.build_game_view(game.id)
-            embed = self.render_game_state(game, guild)
-            self.bot.add_view(view, message_id=game.message_id)
-            await interaction.response.edit_message(embed=embed, view=view)
-            if nick_notice:
-                await interaction.followup.send(nick_notice, ephemeral=True)
+                guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+                nick_notice: str | None = None
+                if game_is_nick_stake(game):
+                    members = [m for m in (guild.get_member(u) for u in game.roster) if m]
+                    err = await self._check_bot_can_nick(guild) or \
+                        await self._check_no_active_nick(guild, members)
+                    if err:
+                        await interaction.response.send_message(err, ephemeral=True)
+                        return
+                    # Players outranking the bot don't block the start — warn, and
+                    # skip their rename if one of them loses.
+                    nick_notice = self._rename_warning(guild, members)
 
-        # Outside the lock and after the interaction is answered. Signing the
-        # chore off can repaint the todo board, and a repaint is a REST edit
-        # that discord.py sleeps through under per-channel rate limiting — long
-        # enough to burn the three-second window (the hazard todo_cog.add_todo
-        # documents) and, in here, to hold the per-game lock while it does.
-        if started is not None:
-            await sign_off_game_chore(self.bot, *started)
+                await self._db_set_state(
+                    game_id, "ACTIVE",
+                    alive=json.dumps(list(game.roster)),
+                    last_action_at=time.time(),
+                )
+                game = await self._db_get_game(game_id)
+                if not game:
+                    return
+                # A lobby game only counts as "run" once it actually starts — the
+                # roster is real by here, where at lobby-open time it was one
+                # person and an invitation. Credited to the host who opened it,
+                # not whoever pressed Start.
+                started = (game.guild_id, game.host_id)
+                await self.on_game_start(game)
+                game = await self._db_get_game(game_id)
+                if not game:
+                    return
+                view = self.build_game_view(game.id)
+                embed = self.render_game_state(game, guild)
+                self.bot.add_view(view, message_id=game.message_id)
+                await interaction.response.edit_message(embed=embed, view=view)
+                if nick_notice:
+                    await interaction.followup.send(nick_notice, ephemeral=True)
+
+        finally:
+            # In a finally, and outside the lock: by the time `started` is
+            # set the game is ACTIVE, so the chore is owed even if the row
+            # vanishes before the view is built and that guard returns out.
+            # Signing off can repaint the todo board, and a repaint is a
+            # REST edit discord.py sleeps through under per-channel rate
+            # limiting — long enough to burn the three-second interaction
+            # window (the hazard todo_cog.add_todo documents) and, in here,
+            # to hold the per-game lock while it does.
+            if started is not None:
+                await sign_off_game_chore(self.bot, *started)
 
     # ── Group resolution (timer-driven, posts to channel like duel _explode) ──
 
