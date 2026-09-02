@@ -33,7 +33,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     load_econ_settings,
 )
-from bot_modules.games.utils.game_manager import check_game_enabled
+from bot_modules.games.utils.game_manager import check_game_enabled, sign_off_game_chore
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
 from . import db as duels_db
@@ -1093,6 +1093,11 @@ class BaseGame(commands.Cog):
             game = await self._db_get_game(game_id)
             if not game:
                 return
+            # A lobby game only counts as "run" once it actually starts — the
+            # roster is real by here, where at lobby-open time it was one
+            # person and an invitation. Credited to the host who opened it,
+            # not whoever pressed Start.
+            await sign_off_game_chore(self.bot, game.guild_id, game.host_id)
             await self.on_game_start(game)
             game = await self._db_get_game(game_id)
             if not game:

@@ -80,6 +80,7 @@ from bot_modules.services.login_card_service import (
     record_card,
 )
 from bot_modules.services.sentiment_service import score_text
+from bot_modules.services.todo_recurring_service import auto_complete_chores
 from bot_modules.services.welcome_service import (
     build_leave_embed,
     build_welcome_embed,
@@ -1240,6 +1241,24 @@ class EventsCog(commands.Cog):
                         conn, guild_id, channel_id, message_id, question,
                         user_id, today,
                     )
+                    # The chore board's "Do a QOTD" signs itself off here.
+                    # This branch is already the once-per-message registration
+                    # gate, so the tick inherits its exactly-once property, and
+                    # a second QOTD later in the day finds no open instance and
+                    # does nothing. Credited to the poster, not the bot —
+                    # ``completed_by`` is a real member everywhere else on the
+                    # board, and a mod reading it wants to know who did it.
+                    #
+                    # The board repaints on its own minute loop rather than
+                    # here: this is the message handler, and a chore sign-off
+                    # is not worth a Discord edit on the hot path.
+                    try:
+                        auto_complete_chores(
+                            conn, guild_id, "qotd",
+                            completed_by=user_id, now_ts=time.time(),
+                        )
+                    except Exception:
+                        log.exception("QOTD chore auto sign-off failed")
                 # Reward: a real reply to a registered question, and only while
                 # that question is still today's — old QOTD messages stay in
                 # the table forever and would otherwise be a coin farm.

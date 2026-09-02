@@ -1,0 +1,36 @@
+-- Migration 201: a recurring chore can sign itself off (2026-09-02).
+--
+-- REVERSES A DOCUMENTED DECISION. docs/plans/todo-board-and-recurring.md said
+-- recurring entries are "reminders only — the bot never posts QOTD or the photo
+-- prompt on their behalf", and that is still true of the *doing*: nothing here
+-- posts a question or launches a game. What changes is the *ticking*. In prod,
+-- of 28 instances spawned since 08-19 exactly two were ever ticked and 24 aged
+-- into missed_at — not because the chores went undone, but because the bot
+-- already knew they had been done and made a human confirm it anyway. A
+-- scoreboard that records a miss on a day the thing demonstrably happened is
+-- worse than no scoreboard.
+--
+-- WHY A COLUMN AND NOT A TEXT MATCH. The obvious implementation is to look for
+-- a definition whose task reads "Do a QOTD". That would be matched against free
+-- text a mod typed into a dashboard field: a rename, a typo, or a second guild
+-- phrasing it differently silently stops the automation, with no error anywhere
+-- and no way to tell "wired up but quiet" from "not wired up". An explicit
+-- trigger is configuration, so it lives on the web (CLAUDE.md) and is visible
+-- in the editor that owns it.
+--
+--   NULL     — a mod ticks this chore by hand. The behavior every existing row
+--              has today, and the default for every new one.
+--   'qotd'   — tick when a QOTD is registered in this guild.
+--   'game'   — tick when a member starts a multiplayer/hosted game by hand.
+--
+-- NULL rather than 'none' as the off value: the column is then honestly empty
+-- for the rows that have no trigger, and a future reader can't mistake a
+-- string for a configured state. Backfilling every existing row to 'none'
+-- would also write to prod rows to say nothing had changed about them.
+--
+-- NO DATA IS BACKFILLED, deliberately. The two live definitions in guild
+-- 1469491362444480666 ("Do a QOTD", "Run any game somewhere") are the reason
+-- this exists, but wiring them here would mean hardcoding prod row ids in a
+-- migration — which is untestable, breaks the moment a row is recreated, and
+-- does nothing for the second guild. They are two clicks on the Todo panel.
+ALTER TABLE todo_recurring ADD COLUMN auto_complete TEXT;

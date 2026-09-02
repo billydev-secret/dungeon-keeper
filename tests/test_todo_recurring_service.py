@@ -14,6 +14,7 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.todo_recurring_service import (
     RecurringValidationError,
+    auto_complete_chores,
     create_recurring,
     delete_recurring,
     describe_cadence,
@@ -22,7 +23,9 @@ from bot_modules.services.todo_recurring_service import (
     chore_streaks,
     has_open_instance,
     list_recurring,
+    normalize_auto_complete,
     normalize_days,
+    open_instance_id,
     run_now,
     set_status,
     spawn_due,
@@ -1039,3 +1042,253 @@ def test_streak_read_is_bounded_per_definition_not_just_the_walk(db):
         assert chore_streaks(conn, GUILD, lookback=2) == {
             r["recurring_id"]: 2 for r in chore_board_rows(conn, GUILD)
         }
+
+
+# ── automatic sign-off ────────────────────────────────────────────────
+#
+# A chore can name an event the bot already watches for ("a QOTD was posted"),
+# and tick its own open instance off when that event happens. The bot still
+# never *does* the chore — see migration 200.
+
+AUTO_NOW = _epoch(2026, 9, 2, 9, 30)
+POSTER = 4242
+
+
+def _todo_row(conn, todo_id):
+    return conn.execute(
+        "SELECT completed_at, completed_by, missed_at FROM todos WHERE id = ?",
+        (todo_id,),
+    ).fetchone()
+
+
+def _wired_chore(conn, *, trigger="qotd", guild=GUILD, now=AUTO_NOW):
+    """An active daily chore with today's instance already spawned and open."""
+    return create_recurring(
+        conn, guild, task="Do a QOTD", recurrence="daily", time_of_day=540,
+        auto_complete=trigger, created_by=USER, now_ts=now,
+    )
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("qotd", "qotd"),
+        ("game", "game"),
+        ("  GAME  ", "game"),  # a hand-written request, not the picker
+        (None, None),
+        ("", None),            # the picker's own empty <option>
+        ("none", None),
+    ],
+)
+def test_normalize_auto_complete(raw, expected):
+    assert normalize_auto_complete(raw) == expected
+
+
+def test_normalize_auto_complete_rejects_an_unknown_trigger():
+    """A trigger nothing fires would be a chore that never signs itself off."""
+    with pytest.raises(RecurringValidationError) as err:
+        normalize_auto_complete("photo")
+    assert "QOTD" in str(err.value)
+
+
+def test_create_and_update_round_trip_the_trigger(db):
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        assert get_recurring(conn, rid, GUILD).auto_complete == "qotd"
+
+        update_recurring(
+            conn, rid, GUILD, task="Do a QOTD", recurrence="daily",
+            time_of_day=540, auto_complete="game", now_ts=AUTO_NOW,
+        )
+        assert get_recurring(conn, rid, GUILD).auto_complete == "game"
+
+        # Back to hand-ticked — the off value has to survive the round trip too,
+        # or a chore could never be un-wired once wired.
+        update_recurring(
+            conn, rid, GUILD, task="Do a QOTD", recurrence="daily",
+            time_of_day=540, auto_complete="", now_ts=AUTO_NOW,
+        )
+        assert get_recurring(conn, rid, GUILD).auto_complete is None
+
+
+def test_a_chore_defaults_to_hand_ticked(db):
+    """Every definition that predates migration 200 is one of these."""
+    with open_db(db) as conn:
+        rid = create_recurring(
+            conn, GUILD, task="Run any game somewhere", recurrence="daily",
+            time_of_day=540, now_ts=AUTO_NOW,
+        )
+        assert get_recurring(conn, rid, GUILD).auto_complete is None
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        ) == []
+
+
+def test_trigger_ticks_the_open_instance_and_credits_the_poster(db):
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        todo_id = open_instance_id(conn, rid)
+
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        ) == [todo_id]
+
+        row = _todo_row(conn, todo_id)
+        assert row["completed_at"] == AUTO_NOW
+        # completed_by is a real member everywhere else on the board, and a mod
+        # reading it wants to know who actually posted the question.
+        assert row["completed_by"] == POSTER
+        assert not has_open_instance(conn, rid)
+
+
+def test_a_second_qotd_the_same_day_changes_nothing(db):
+    """The trigger fires per registered question, so it must be idempotent."""
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        todo_id = open_instance_id(conn, rid)
+        auto_complete_chores(conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW)
+
+        later = AUTO_NOW + 3600
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=999, now_ts=later
+        ) == []
+        row = _todo_row(conn, todo_id)
+        assert row["completed_at"] == AUTO_NOW  # first poster keeps the credit
+        assert row["completed_by"] == POSTER
+
+
+def test_a_chore_a_mod_already_ticked_is_left_alone(db):
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        todo_id = open_instance_id(conn, rid)
+        complete_todo(conn, todo_id, GUILD, USER, now_ts=AUTO_NOW - 60)
+
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        ) == []
+        assert _todo_row(conn, todo_id)["completed_by"] == USER
+
+
+def test_yesterdays_written_off_chore_is_not_resurrected(db):
+    """A missed row is finished business — crediting it would fake a streak."""
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        todo_id = open_instance_id(conn, rid)
+        mark_missed(conn, todo_id, now_ts=AUTO_NOW - 60)
+
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        ) == []
+        assert _todo_row(conn, todo_id)["completed_at"] is None
+
+
+def test_a_paused_chore_does_not_sign_itself_off(db):
+    """Pausing is a mod saying "stop tracking this" — it must stay visible."""
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        todo_id = open_instance_id(conn, rid)
+        set_status(conn, rid, GUILD, "paused", now_ts=AUTO_NOW)
+
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        ) == []
+        assert _todo_row(conn, todo_id)["completed_at"] is None
+
+
+def test_a_chore_whose_slot_has_not_come_round_is_not_credited_early(db):
+    """No instance yet — the trigger must not invent one."""
+    early = _epoch(2026, 9, 2, 8, 0)  # before the 09:00 slot
+    with open_db(db) as conn:
+        rid = create_recurring(
+            conn, GUILD, task="Do a QOTD", recurrence="daily", time_of_day=540,
+            auto_complete="qotd", now_ts=early,
+        )
+        assert not has_open_instance(conn, rid)
+        assert auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=early
+        ) == []
+        assert pending_todos(conn, GUILD) == []
+
+
+def test_the_other_trigger_is_not_fired(db):
+    """Posting a QOTD is not running a game."""
+    with open_db(db) as conn:
+        qotd = _wired_chore(conn, trigger="qotd")
+        game = create_recurring(
+            conn, GUILD, task="Run any game somewhere", recurrence="daily",
+            time_of_day=540, auto_complete="game", now_ts=AUTO_NOW,
+        )
+        auto_complete_chores(conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW)
+
+        assert not has_open_instance(conn, qotd)
+        assert has_open_instance(conn, game)
+
+
+def test_a_trigger_is_scoped_to_the_guild_it_fired_in(db):
+    """The second guild runs its own chores off the same table."""
+    other = GUILD + 1
+    with open_db(db) as conn:
+        mine = _wired_chore(conn, guild=GUILD)
+        theirs = _wired_chore(conn, guild=other)
+        auto_complete_chores(conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW)
+
+        assert not has_open_instance(conn, mine)
+        assert has_open_instance(conn, theirs)
+
+
+def test_every_wired_chore_of_that_trigger_fires(db):
+    """Two definitions can legitimately watch the same event."""
+    with open_db(db) as conn:
+        first = _wired_chore(conn)
+        second = create_recurring(
+            conn, GUILD, task="Log the QOTD", recurrence="daily", time_of_day=540,
+            auto_complete="qotd", now_ts=AUTO_NOW,
+        )
+        done = auto_complete_chores(
+            conn, GUILD, "qotd", completed_by=POSTER, now_ts=AUTO_NOW
+        )
+
+        assert len(done) == 2
+        assert not has_open_instance(conn, first)
+        assert not has_open_instance(conn, second)
+
+
+@pytest.mark.parametrize("trigger", ["", "none", "photo", None])
+def test_an_unknown_or_empty_trigger_fires_nothing(db, trigger):
+    """Guards the call sites: a typo'd trigger must not tick every chore."""
+    with open_db(db) as conn:
+        rid = _wired_chore(conn)
+        assert auto_complete_chores(
+            conn, GUILD, trigger, completed_by=POSTER, now_ts=AUTO_NOW
+        ) == []
+        assert has_open_instance(conn, rid)
+
+
+def test_the_streak_counts_an_automatic_sign_off(db):
+    """The whole point: a chore the bot ticks builds the same streak.
+
+    Prod's "Do a QOTD" spawned 28 instances and recorded 2 completions, because
+    the tick was manual and the QOTD wasn't. An automatic sign-off has to feed
+    the scoreboard, not sit beside it.
+    """
+    with open_db(db) as conn:
+        rid = create_recurring(
+            conn, GUILD, task="Do a QOTD", recurrence="daily", time_of_day=540,
+            auto_complete="qotd", now_ts=_epoch(2026, 8, 30, 9, 30),
+        )
+        # Three days running: post, then let the next morning's reset spawn
+        # the replacement. The month boundary is deliberate — the reset walks
+        # real dates, not day numbers.
+        days = [(2026, 8, 30), (2026, 8, 31), (2026, 9, 1)]
+        for i, (y, mo, d) in enumerate(days):
+            auto_complete_chores(
+                conn, GUILD, "qotd", completed_by=POSTER, now_ts=_epoch(y, mo, d, 9, 30)
+            )
+            if i + 1 < len(days):
+                ny, nmo, nd = days[i + 1]
+                spawn_due(
+                    conn, now_ts=_epoch(ny, nmo, nd, 9, 0),
+                    offset_hours_for=_zero_offset,
+                )
+
+        assert chore_streaks(conn, GUILD)[rid] == 3

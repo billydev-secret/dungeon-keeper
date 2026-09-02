@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 import logging
 from collections import defaultdict
@@ -82,6 +83,45 @@ DEFAULT_LAUNCH_PERMS_HINT = (
 )
 
 
+async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) -> None:
+    """Tick off a "run a game" chore on the todo board. Never raises.
+
+    **This is the seam that makes the chore mean what it says.** Every party
+    game reaches its board through two doors: a member's ``/games play``, and
+    the scheduler calling the same ``launch()`` on a timer. Only the
+    interactive door passes through here, so "a scheduled game doesn't count as
+    you running one" is a property of *where* this is called from rather than a
+    flag someone has to remember to set — there is nothing for the scheduler to
+    opt out of.
+
+    It fires when the game **starts**, not when it ends, which is a deliberate
+    reading of a chore whose text is "run a game": the mod's part is done the
+    moment the room has a game in it. Waiting for the archive would also mean a
+    game that was played but never formally ended — or one that flopped with
+    nobody joining — left the board claiming the chore was skipped.
+
+    Synchronous DB work on the launch path is a handful of indexed reads
+    against definitions with a trigger set, which in practice is one row.
+    """
+    try:
+        if not guild_id or not user_id:
+            return
+        ctx = getattr(bot, "ctx", None)
+        if ctx is None:
+            return
+        from bot_modules.services.todo_recurring_service import (  # noqa: PLC0415
+            auto_complete_chores,
+        )
+
+        with ctx.open_db() as conn:
+            auto_complete_chores(
+                conn, int(guild_id), "game",
+                completed_by=int(user_id), now_ts=time.time(),
+            )
+    except Exception:
+        log.exception("game chore auto sign-off failed")
+
+
 async def finish_launch_response(
     interaction: discord.Interaction,
     game_id: str | None,
@@ -104,6 +144,10 @@ async def finish_launch_response(
             await interaction.followup.send(perms_hint, ephemeral=True)
         except discord.HTTPException:
             pass
+        return
+    await sign_off_game_chore(
+        interaction.client, interaction.guild_id, getattr(interaction.user, "id", None)
+    )
 
 
 async def check_allowed_channel(

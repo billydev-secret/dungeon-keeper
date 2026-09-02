@@ -128,6 +128,23 @@ const FILTERS = {
   all:       () => true,
 };
 
+/**
+ * Automatic sign-off triggers, mirroring VALID_AUTO_COMPLETE in
+ * todo_recurring_service.py. "" is the off value — the service maps it (and a
+ * missing field) onto no trigger, so an unpicked dropdown means hand-ticked.
+ */
+const AUTO_COMPLETE_OPTIONS = [
+  ["", "Nothing — a mod ticks it off"],
+  ["qotd", "A QOTD is posted"],
+  ["game", "A game is run"],
+];
+
+/** Short label for the list row; "" for a chore nobody signs off automatically. */
+function autoCompleteLabel(value) {
+  const found = AUTO_COMPLETE_OPTIONS.find((o) => o[0] === (value || ""));
+  return value ? (found ? found[1] : value) : "";
+}
+
 /** One row of the recurring-task list. */
 function recurringRow(item) {
   const paused = item.status === "paused";
@@ -140,10 +157,13 @@ function recurringRow(item) {
   const skipped = item.last_status === "skipped_pending"
     ? ' <span class="t-chip" title="Run now found a copy already on the list, so nothing was added. Scheduled runs reset instead.">run now skipped</span>'
     : "";
+  const auto = item.auto_complete
+    ? ` <span class="t-chip" title="The bot ticks this off by itself when ${esc(autoCompleteLabel(item.auto_complete).toLowerCase())}.">auto ✓</span>`
+    : "";
   return `
     <tr data-recurring-id="${esc(item.id)}"${paused ? ' style="opacity:.6"' : ""}>
       <td>
-        <div style="font-weight:600;word-break:break-word">${esc(item.task)}</div>
+        <div style="font-weight:600;word-break:break-word">${esc(item.task)}${auto}</div>
         ${item.description
           ? `<div style="font-size:12px;color:var(--ink-dim);word-break:break-word">${esc(item.description)}</div>`
           : ""}
@@ -205,6 +225,20 @@ function recurringEditor(editing) {
           <input id="rec-time" type="time" data-rec="time"
                  value="${esc(minutesToTime(editing?.time_of_day ?? 540))}" />
           <div class="field-hint">Server local time.</div>
+        </div>
+      </div>
+      <div class="field">
+        <label for="rec-auto">Tick off automatically when</label>
+        <select id="rec-auto" data-rec="auto_complete">
+          ${AUTO_COMPLETE_OPTIONS.map(([value, label]) => `
+            <option value="${esc(value)}"${(editing?.auto_complete || "") === value ? " selected" : ""}>${esc(label)}</option>
+          `).join("")}
+        </select>
+        <div class="field-hint">
+          The bot never does the chore for you — it just notices when you have.
+          “A game is run” means a game someone starts by hand; a scheduled game
+          firing on its own doesn't count. A chore left on “Nothing” behaves
+          exactly as it always has.
         </div>
       </div>
       <div class="field" data-rec-days style="${weekly ? "" : "display:none"}">
@@ -495,6 +529,7 @@ export function mount(container, initialParams = {}) {
       task: form.querySelector('[data-rec="task"]').value.trim(),
       description: form.querySelector('[data-rec="description"]').value.trim() || null,
       recurrence,
+      auto_complete: form.querySelector('[data-rec="auto_complete"]').value || null,
       time_of_day: timeToMinutes(form.querySelector('[data-rec="time"]').value),
       recur_days: recurrence === "weekly"
         ? [...form.querySelectorAll("[data-rec-day]")]

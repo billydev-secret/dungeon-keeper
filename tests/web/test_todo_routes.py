@@ -329,6 +329,28 @@ def test_recurring_honours_guild_timezone(authed_client, fake_ctx):
     assert authed_client.get("/api/todos/recurring").json()["tz_offset_hours"] == -5.0
 
 
+def test_auto_complete_round_trips(authed_client):
+    """The trigger the picker sends comes back on the row it configures."""
+    assert _make(authed_client, auto_complete="qotd").status_code == 200
+    item = authed_client.get("/api/todos/recurring").json()["items"][0]
+    assert item["auto_complete"] == "qotd"
+
+    body = {
+        "task": "Post QOTD", "recurrence": "daily", "time_of_day": 540,
+        "auto_complete": "",  # the picker's own "Nothing" option
+    }
+    resp = authed_client.put(f"/api/todos/recurring/{item['id']}", json=body)
+    assert resp.status_code == 200
+    updated = authed_client.get("/api/todos/recurring").json()["items"][0]
+    assert updated["auto_complete"] is None
+
+
+def test_a_chore_is_hand_ticked_unless_asked_otherwise(authed_client):
+    """Every definition that predates the picker sends no field at all."""
+    _make(authed_client)
+    assert authed_client.get("/api/todos/recurring").json()["items"][0]["auto_complete"] is None
+
+
 @pytest.mark.parametrize(
     ("over", "message"),
     [
@@ -336,6 +358,9 @@ def test_recurring_honours_guild_timezone(authed_client, fake_ctx):
         ({"recurrence": "hourly"}, "daily or weekly"),
         ({"time_of_day": 5000}, "00:00"),
         ({"recurrence": "weekly", "recur_days": []}, "day of the week"),
+        # A trigger nothing fires would be a chore that silently never signs
+        # itself off, so it is rejected rather than stored.
+        ({"auto_complete": "photo"}, "QOTD"),
     ],
 )
 def test_create_recurring_validation(authed_client, over, message):

@@ -312,9 +312,11 @@ prod this never arises. Pinned in
 Definitions live on the dashboard and materialise a normal todo row when due.
 
 - **Reminders, not automation.** The bot adds "Post QOTD" to the list; a mod
-  posts the QOTD and ticks it off. The bot never performs the chore. (Photo
-  Challenge has real automation of its own — see `photo_challenge_spec.md`;
-  this is the checklist, not a second copy of it.)
+  posts the QOTD. The bot never performs the chore. (Photo Challenge has real
+  automation of its own — see `photo_challenge_spec.md`; this is the checklist,
+  not a second copy of it.) Since migration 201 the bot may, however, *notice*
+  that the chore was done and tick it off — see **Automatic sign-off** below.
+  The doing is still a human's; only the confirming is automated.
 - **Cadence.** `daily` or `weekly` only, at a `time_of_day` in minutes since
   guild-local midnight; weekly carries a JSON weekday set (Mon=0). A one-shot
   task is just a task. Column names mirror `games_scheduled` and the time math
@@ -368,6 +370,60 @@ Definitions live on the dashboard and materialise a normal todo row when due.
 - **Delete** stops the repeat but leaves any already-spawned row on the list —
   that's real outstanding work, and silently removing a task a mod is part-way
   through would be worse than orphaning it.
+
+#### Automatic sign-off (migration 201, 2026-09-02)
+
+A definition may carry an `auto_complete` trigger naming an event the bot
+already watches for. When that event happens in that guild, the definition's
+open instance is ticked off by `auto_complete_chores`.
+
+This reversed the original "reminders only" decision, on the evidence: of the 28
+instances prod's two chores spawned between 2026-08-19 and 09-01, exactly **two**
+were ever ticked and 24 aged into `missed_at` — not because the chores went
+undone, but because the bot already knew they had been done and made a human
+confirm it anyway. A scoreboard that records a miss on a day the thing
+demonstrably happened is worse than no scoreboard.
+
+- **Triggers are an explicit column, never a text match.** `'qotd'` and
+  `'game'`; `NULL` (the default, and every pre-201 row) means a mod ticks it by
+  hand. Matching a chore by its task text — "Do a QOTD" — would key automation
+  off free text a mod typed into a dashboard field, where a rename, a typo or a
+  second guild's phrasing silently stops it with no error anywhere. An
+  unrecognised trigger is **rejected at write time** rather than stored, since a
+  chore that claims to sign itself off and never does is the worst outcome.
+- **Where it fires.** `qotd` rides the existing QOTD registration in
+  `events_cog` (already gated to once per message). `game` rides
+  `sign_off_game_chore`, called from the three paths where a human starts a
+  multiplayer game: `finish_launch_response` (a party game from `/games play`),
+  `BaseDuel._handle_accept` (a challenge accepted) and
+  `BaseGame._handle_lobby_start` (an N-player lobby reaching its start).
+- **A scheduled game does not count**, and this is enforced by *where* the call
+  sits rather than by a flag. Party games reach the board through two doors —
+  `/games play` and the scheduler calling the same `launch()` — and only the
+  interactive door passes through `finish_launch_response`, so there is nothing
+  for the scheduler to opt out of and nothing it can forget. A tripwire in
+  `tests/test_todo_auto_signoff_wiring.py` fails if the helper ever appears in
+  the scheduler. Without this the chore would tick itself green every morning
+  off the two daily schedules already running, and stop meaning anything.
+- **The game trigger fires at the start, not the finish.** The mod's part in
+  "run a game" is done once the room has a game in it; waiting for the archive
+  would leave the board claiming a skip for a game that was played but never
+  formally ended, or one that flopped with nobody joining.
+- **Credit goes to the human**, not the bot: the QOTD's poster, the game's host,
+  a duel's challenger (not the acceptor — they answered an invitation rather
+  than issuing one). `completed_by` is a real member id everywhere else on the
+  board and a mod reading it wants to know who did it.
+- **Safety is inherited, not rewritten.** The tick goes through the existing
+  `open_instance_id` + `complete_todo` pair, so it cannot resurrect a written-off
+  row, cannot double-credit a chore a mod already ticked, cannot fire twice for
+  a second QOTD the same day, and cannot race the board's own Complete button —
+  the loser's guarded `UPDATE` returns rowcount 0. Only `active` definitions
+  fire: a chore paused for the holidays is one a mod said to stop tracking, and
+  ticking it while paused would make the pause invisible and the streak wrong on
+  resume. A failure never propagates — a chore that can't sign itself off must
+  not take down the QOTD registration or the game launch it hangs off.
+- **The board repaints on its own minute loop**, not from the trigger: a chore
+  sign-off is not worth a Discord edit on the message-handling hot path.
 
 ### Web list
 
@@ -470,7 +526,8 @@ Three tables, all per-guild:
   widened the key to `(guild_id, kind)` for the second board; **migration 180
   narrowed it back** when the boards merged.
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
-  `last_run_at`/`last_status`.
+  `last_run_at`/`last_status`, and `auto_complete` (migration 201) naming the
+  event that signs it off, or NULL for a hand-ticked chore. No per-user data.
 
 The sign-off and paid-request sections add **no table and no migration**: they
 read `econ_quest_claims` and the three `econ_*_submissions` tables, which the

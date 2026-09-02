@@ -60,6 +60,10 @@ class RecurringBody(BaseModel):
     recurrence: str = "daily"
     time_of_day: int = 0
     recur_days: list[int] = []
+    #: Trigger the bot signs this chore off on: "qotd", "game", or nothing.
+    #: Validated in the service, not here, so the picker and any other caller
+    #: get the identical sentence back.
+    auto_complete: str | None = None
 
 
 def _board_dict(board) -> dict:
@@ -86,6 +90,7 @@ def _recurring_dict(task) -> dict:
         "created_by": str(task.created_by),
         "created_at": task.created_at,
         "cadence": describe_cadence(task),
+        "auto_complete": task.auto_complete,
     }
 
 
@@ -328,6 +333,7 @@ async def create_recurring_endpoint(
                 recurrence=body.recurrence,
                 time_of_day=body.time_of_day,
                 recur_days=body.recur_days,
+                auto_complete=body.auto_complete,
                 created_by=user.user_id,
                 offset_hours=tz,
                 now_ts=time.time(),
@@ -363,6 +369,7 @@ async def update_recurring_endpoint(
                 recurrence=body.recurrence,
                 time_of_day=body.time_of_day,
                 recur_days=body.recur_days,
+                auto_complete=body.auto_complete,
                 offset_hours=tz,
                 now_ts=time.time(),
             )

@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
@@ -318,6 +319,11 @@ class BaseDuel(BaseGame):
                 return
 
         await self._db_set_state(game_id, "ACTIVE")
+        # An accepted challenge is two humans playing, which is the clearest
+        # "a multiplayer game ran" the bot ever sees. Credited to the
+        # challenger: they are the one who ran a game, and the acceptor is
+        # answering an invitation rather than issuing one.
+        await sign_off_game_chore(self.bot, game.guild_id, game.challenger_id)
         await self.on_game_start(game)
 
         # Re-fetch after on_game_start (subclass may have set additional fields)

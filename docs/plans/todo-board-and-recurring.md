@@ -11,9 +11,25 @@ Extends the existing Todo feature (`docs/todo_spec.md`) with three things:
 
 Recurring entries are **reminders only** — the bot never posts QOTD or the photo
 prompt on their behalf. A due entry spawns a normal todo row; a mod does the
-thing in Discord and ticks it off. (Photo Challenge already has real automation
-of its own at `/api/photo-challenge`; this is the checklist, not a second copy
-of that.)
+thing in Discord. (Photo Challenge already has real automation of its own at
+`/api/photo-challenge`; this is the checklist, not a second copy of that.)
+
+> **Amended 2026-09-02 — the bot now ticks some of them off.** The sentence
+> above originally ended "…and ticks it off", and that half of it is no longer
+> true. It never *was* a claim about who does the work — it was a claim about
+> who confirms it, and the confirming turned out to be the part that failed. Of
+> the 28 instances prod's two chores spawned from 2026-08-19, exactly two were
+> ever ticked; the other 24 aged into `missed_at` on days the QOTD had in fact
+> been posted, because the bot watched it happen and asked a human to say so
+> anyway.
+>
+> A definition can now name a trigger (`auto_complete`: a QOTD registered, a
+> hosted game started by hand) and sign its own instance off when the bot
+> observes it. Nothing here posts a question or launches a game — the doing is
+> still a human's, and stage 6's "reminder, not automation" framing survives
+> intact for everything else. See **Automatic sign-off** in `docs/todo_spec.md`
+> for the trigger vocabulary, the call sites, and why a scheduled game
+> deliberately does not count.
 
 ## Stage 1 — schema
 
