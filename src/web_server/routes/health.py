@@ -630,6 +630,10 @@ def _deep_key(metric: str, *, include_bots: bool = False, **params: object) -> s
 async def health_dau_mau(
     request: Request,
     include_bots: bool = Query(False),
+    # Sizes only the trend chart (see compute_dau_mau) — the DAU/WAU/MAU
+    # tiles keep their fixed definitions. Same bound as mod-engagement's
+    # range control below.
+    days: int = Query(30, ge=1, le=365),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -637,7 +641,8 @@ async def health_dau_mau(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     extras = _guild_extras(ctx, guild)
-    key = _deep_key("dau_mau", include_bots=include_bots)
+    # ``days`` changes the trend payload, so it must be part of the key.
+    key = _deep_key("dau_mau", include_bots=include_bots, days=days)
 
     def _q():
         with ctx.open_db() as conn:
@@ -649,6 +654,7 @@ async def health_dau_mau(
                     member_count=extras["member_count"],
                     voice_active_count=extras["voice_active"],
                     include_bots=include_bots,
+                    days=days,
                 )
                 set_cached(conn, guild_id, key, data)
             return data
@@ -969,11 +975,14 @@ async def health_mod_coverage(
     request: Request,
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
-    """Is a moderator around when the server is busy?
+    """Is a moderator around when the server is busy, and who covers what?
 
     Uses ``msg_mod_ids`` — everyone who can delete a message — rather than the
     narrower ``mod_ids`` the workload report counts. Presence is the question,
-    and someone who can only delete a message is still present.
+    and someone who can only delete a message is still present. The
+    per-moderator breakdown in ``data["mods"]`` answers the same presence
+    question one person at a time; see ``compute_mod_coverage`` and
+    ``ModCoverageRow`` for why it is never ranked.
     """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
@@ -1000,6 +1009,16 @@ async def health_mod_coverage(
                     conn, guild_id, key, data, degraded=extras["degraded"]
                 )
             data["degraded"] = extras["degraded"]
+            # Names resolved fresh every request, same as mod-workload and
+            # mod-engagement above — never written into the 15-minute cache.
+            # Sorted by name, not by any of the row's own numbers: this is a
+            # presence table, and an order taken from a count would read as a
+            # ranking whatever the panel copy says.
+            user_ids = {int(m["user_id"]) for m in data["mods"]}
+            names = _resolve_user_names(conn, guild, guild_id, user_ids)
+            for m in data["mods"]:
+                m["user_name"] = names.get(int(m["user_id"]), "")
+            data["mods"].sort(key=lambda m: m["user_name"].lower())
             return data
 
     return await run_query(_q)

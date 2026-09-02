@@ -36,6 +36,9 @@ from bot_modules.core.db_utils import (
 from bot_modules.services.birthday_service import (
     ANNOUNCE_HOUR_KEY,
     announce_hour as _announce_hour,
+    delete_channel as _birthday_delete_channel,
+    list_channels as _birthday_list_channels,
+    upsert_channel as _birthday_upsert_channel,
 )
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
@@ -190,7 +193,6 @@ _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
 _RISKY_MIN_GAME_KEY = "risky_min_game_seconds"
 _RISKY_MAX_GAMES_KEY = "risky_max_games_per_channel"
-_BIRTHDAY_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
 _POLICY_VOTE_TIMEOUT_KEY = "policy_vote_timeout_hours"
 _POLICY_VOTE_TIMEOUT_DEFAULT = 72
 
@@ -452,17 +454,12 @@ def _starboard_section(conn, guild_id: int) -> dict:
 
 
 def _birthday_section(conn, guild_id: int) -> dict:
+    channels = _birthday_list_channels(conn, guild_id)
     return {
-        "birthday_channel_id": _id_str(conn, "birthday_channel_id", guild_id),
-        "birthday_message": _str_val(
-            conn, "birthday_message", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
-        ),
-        "birthday_pin": _bool_val(conn, "birthday_pin", guild_id=guild_id),
-        "birthday_channel_id_2": _id_str(conn, "birthday_channel_id_2", guild_id),
-        "birthday_message_2": _str_val(
-            conn, "birthday_message_2", _BIRTHDAY_DEFAULT_MESSAGE, guild_id=guild_id
-        ),
-        "birthday_pin_2": _bool_val(conn, "birthday_pin_2", guild_id=guild_id),
+        "channels": [
+            {"channel_id": str(c.channel_id), "message": c.message, "pin": c.pin}
+            for c in channels
+        ],
         # Guild-local hour the announcement goes out (0–23).
         "birthday_announce_hour": _announce_hour(conn, guild_id),
     }
@@ -4110,30 +4107,21 @@ async def update_bulk_cleanup(
 
 
 # ── Birthday config ──────────────────────────────────────────────────
+#
+# Any number of announcement channels (migration 200), same shape as Auto-
+# Thread's needle_channels: a settings endpoint for the one guild-wide dial
+# (the announce hour) plus upsert/delete on a per-channel id, rather than the
+# old fixed main+second PUT.
 
 
-class BirthdayConfigUpdate(BaseModel):
-    birthday_channel_id: str | None = None
-    birthday_message: str | None = None
-    birthday_pin: bool | None = None
-    birthday_channel_id_2: str | None = None
-    birthday_message_2: str | None = None
-    birthday_pin_2: bool | None = None
+class BirthdaySettingsUpdate(BaseModel):
     birthday_announce_hour: int | None = None
 
 
-_BIRTHDAY_FIELDS = {
-    "birthday_channel_id": ("birthday_channel_id", _raw),
-    "birthday_pin": ("birthday_pin", _flag),
-    "birthday_channel_id_2": ("birthday_channel_id_2", _raw),
-    "birthday_pin_2": ("birthday_pin_2", _flag),
-}
-
-
-@router.put("/config/birthday")
-async def update_birthday(
+@router.put("/config/birthday/settings")
+async def update_birthday_settings(
     request: Request,
-    body: BirthdayConfigUpdate,
+    body: BirthdaySettingsUpdate,
     _: AuthenticatedUser = Depends(require_perms({"admin"})),
 ):
     ctx = get_ctx(request)
@@ -4141,24 +4129,63 @@ async def update_birthday(
 
     def _q():
         with ctx.open_db() as conn:
-            _apply_config_fields(conn, guild_id, body, _BIRTHDAY_FIELDS)
-            if body.birthday_message is not None:
-                msg = body.birthday_message.strip()
-                if not msg:
-                    raise HTTPException(400, "Message cannot be empty")
-                set_config_value(conn, "birthday_message", msg, guild_id)
-            if body.birthday_message_2 is not None:
-                msg2 = body.birthday_message_2.strip()
-                if not msg2:
-                    raise HTTPException(400, "Message cannot be empty")
-                set_config_value(conn, "birthday_message_2", msg2, guild_id)
             if body.birthday_announce_hour is not None:
                 hour = int(body.birthday_announce_hour)
                 if not 0 <= hour <= 23:
                     raise HTTPException(400, "Announce hour must be between 0 and 23")
-                set_config_value(
-                    conn, ANNOUNCE_HOUR_KEY, str(hour), guild_id
-                )
+                set_config_value(conn, ANNOUNCE_HOUR_KEY, str(hour), guild_id)
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+class BirthdayChannelUpdate(BaseModel):
+    message: str
+    pin: bool = False
+
+
+@router.put("/config/birthday/{channel_id}")
+async def upsert_birthday_channel(
+    channel_id: str,
+    request: Request,
+    body: BirthdayChannelUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    msg = body.message.strip()
+    if not msg:
+        raise HTTPException(400, "Message cannot be empty")
+
+    def _q():
+        with ctx.open_db() as conn:
+            _birthday_upsert_channel(
+                conn,
+                guild_id=guild_id,
+                channel_id=int(channel_id),
+                message=msg,
+                pin=body.pin,
+            )
+        return {"ok": True}
+
+    return await run_query(_q)
+
+
+@router.delete("/config/birthday/{channel_id}")
+async def remove_birthday_channel(
+    channel_id: str,
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            removed = _birthday_delete_channel(conn, guild_id, int(channel_id))
+        if not removed:
+            raise HTTPException(404, "Channel not configured for birthday announcements")
         return {"ok": True}
 
     return await run_query(_q)

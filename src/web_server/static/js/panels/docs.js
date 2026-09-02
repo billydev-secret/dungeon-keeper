@@ -1,25 +1,20 @@
 import { api, apiPost, apiPut, apiDelete, request, esc, fmtTs } from "../api.js";
 import { loadChannels, channelName, mountChannelPicker, showStatus } from "../config-helpers.js";
 import { mdToHtml } from "../md-preview.js";
-import { renderLoading, renderEmpty } from "../states.js";
+import { renderLoading } from "../states.js";
 import { confirmDialog, promptDialog, toast } from "../ui.js";
 
-function renderList(docs, activeKey) {
-  if (!docs.length) return renderEmpty("No docs yet. Create one to get started.");
-  return docs.map((d) => {
-    const cls = d.doc_key === activeKey ? " active" : "";
+function renderDocOptions(docs, activeKey) {
+  if (!docs.length) return '<option value="">No docs yet. Create one to get started.</option>';
+  const opts = docs.map((d) => {
     const posted = d.placements.length
       ? `${d.placements.length} channel${d.placements.length === 1 ? "" : "s"}`
       : "not posted";
-    return `
-      <div class="ticket-item med${cls}" data-doc-key="${esc(d.doc_key)}" tabindex="0" role="button">
-        <div class="pri"></div>
-        <div class="body">
-          <div class="subj">${esc(d.title || d.doc_key)}</div>
-          <div class="row"><span>${esc(d.doc_key)}</span><span>${esc(posted)}</span></div>
-        </div>
-      </div>`;
+    return `<option value="${esc(d.doc_key)}"${d.doc_key === activeKey ? " selected" : ""}>${esc(d.title || d.doc_key)} — ${esc(posted)}</option>`;
   }).join("");
+  // No doc picked yet: lead with a disabled placeholder so the dropdown
+  // doesn't look like it has silently selected the first document.
+  return activeKey ? opts : `<option value="" disabled selected>Select a document…</option>${opts}`;
 }
 
 function renderPreview(embeds, accent) {
@@ -54,21 +49,27 @@ export function mount(container) {
         <h2>Docs</h2>
         <div class="subtitle">Write rules, FAQs, staff bios once in markdown; post &amp; keep them synced across channels via <code>/docs</code>.</div>
       </header>
-      <section class="mod-split">
-        <div class="ticket-list-wrap">
-          <div class="ticket-list-head">
-            <h3>Documents</h3>
-            <button class="act-btn" data-new-btn>New</button>
-          </div>
-          <div class="ticket-list" data-list>${renderLoading("Loading…")}</div>
-        </div>
-        <div class="ticket-detail" data-editor>
-          <div class="empty" style="padding:24px">Select a document, or create one.</div>
-        </div>
+      <div class="doc-toolbar">
+        <label class="doc-toolbar-lbl" for="doc-select-input">Document</label>
+        <select class="doc-select" id="doc-select-input" data-doc-select><option>Loading…</option></select>
+        <button class="act-btn" data-new-btn>New</button>
+      </div>
+      <section class="doc-editor-card" data-editor>
+        <div class="empty" style="padding:24px">Select a document, or create one.</div>
       </section>
+      <style>
+        /* The list-vs-editor split used to halve the editor's width with a
+           fixed sidebar; a dropdown gives the markdown/preview columns the
+           full panel width to breathe in instead (they stay side by side —
+           see .doc-ed-grid — since that's what stays useful while writing). */
+        .doc-toolbar { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-4); }
+        .doc-toolbar-lbl { font-size: var(--t-2); font-weight: 600; color: var(--ink-dim); }
+        .doc-select { flex: 1 1 320px; min-width: 220px; padding: var(--s-2) var(--s-3); font-size: var(--t-3); }
+        .doc-editor-card { background: var(--bg-card); border-radius: var(--r); }
+      </style>
     </div>`;
 
-  const listEl = container.querySelector("[data-list]");
+  const selectEl = container.querySelector("[data-doc-select]");
   const editorEl = container.querySelector("[data-editor]");
   const newBtn = container.querySelector("[data-new-btn]");
 
@@ -76,23 +77,24 @@ export function mount(container) {
 
   loadChannels().then((chs) => { state.channels = chs || []; });
 
-  function renderDocList() {
-    listEl.innerHTML = renderList(state.docs, state.activeKey);
+  function renderDocSelect() {
+    selectEl.innerHTML = renderDocOptions(state.docs, state.activeKey);
+    selectEl.value = state.activeKey || "";
   }
 
   async function refreshList() {
     try {
       const data = await api("/api/docs");
       state.docs = data.docs || [];
-      renderDocList();
+      renderDocSelect();
     } catch (err) {
-      listEl.innerHTML = `<div class="error" style="padding:20px">${esc(err.message)}</div>`;
+      selectEl.innerHTML = `<option value="">Error: ${esc(err.message)}</option>`;
     }
   }
 
   async function selectDoc(key) {
     state.activeKey = key;
-    renderDocList();
+    renderDocSelect();
     editorEl.innerHTML = renderLoading("Loading…");
     try {
       state.doc = await api(`/api/docs/${encodeURIComponent(key)}`);
@@ -220,21 +222,12 @@ export function mount(container) {
     }
   }
 
-  // ── list + new-doc interactions ────────────────────────────────────
+  // ── document picker + new-doc interactions ─────────────────────────
 
-  listEl.addEventListener("click", (e) => {
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
-    selectDoc(row.dataset.docKey);
-  });
-
-  // Rows are role="button" tabindex="0" — activate with Enter/Space too.
-  listEl.addEventListener("keydown", (e) => {
-    if (e.key !== "Enter" && e.key !== " ") return;
-    const row = e.target.closest(".ticket-item");
-    if (!row) return;
-    e.preventDefault();
-    selectDoc(row.dataset.docKey);
+  selectEl.addEventListener("change", (e) => {
+    const key = e.target.value;
+    if (!key) return;
+    selectDoc(key);
   });
 
   newBtn.addEventListener("click", async () => {

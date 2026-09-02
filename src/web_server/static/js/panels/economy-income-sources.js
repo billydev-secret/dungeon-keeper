@@ -1,7 +1,7 @@
 // Income Sources — everything that pays coins, on one page: per-guild enable
-// switches for the custom-coded quest trigger hooks, the built-in faucet
+// switches for the custom-coded quest trigger hooks, and the built-in faucet
 // rates (editable in place for admins, read-only for manager-role holders —
-// the save endpoint is admin-gated), and the roadmap of suggested sources.
+// the save endpoint is admin-gated).
 // Gated by the economy manager role (or admin).
 import { api, apiPut, esc } from "../api.js";
 import { showStatus, guardForm } from "../config-helpers.js";
@@ -37,15 +37,6 @@ const FAUCET_FIELDS = [
   ["conversion_daily_cap", "Most one member's XP can earn per day (0 = no limit)", 1000000],
 ];
 const FLOAT_FAUCETS = new Set(["xp_per_coin"]);
-
-// Not built yet — shown so managers can see what's on the table. Keep in
-// sync with the parking lot in docs/economy_spec.md.
-const SUGGESTIONS = [
-  ["🔔 Server bump", "Reward whoever runs /bump. Needs attribution from the detector-bot message (message.interaction_metadata) before it can ship."],
-  ["📊 Survey completion", "The survey spec is aspirational — there is no survey feature in the code yet to hook."],
-  ["🤝 Invite retention", "Pay the invite source only after the invitee survives the prune window (the current invite source pays on join)."],
-  ["🔥 Streak milestones", "A trigger kind firing on login-streak milestone days, so streaks can be quest-ified beyond the flat milestone payouts."],
-];
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading income sources…</div></div>`;
@@ -141,12 +132,6 @@ function render(container, data, isAdmin, economyOff) {
       </td>
     </tr>`).join("");
 
-  const suggestions = SUGGESTIONS.map(([label, note]) => `
-    <div style="margin:8px 0;">
-      <strong>${esc(label)}</strong>
-      <div class="field-hint">${esc(note)}</div>
-    </div>`).join("");
-
   container.innerHTML = `
     <div class="panel">
       <header>
@@ -187,13 +172,6 @@ function render(container, data, isAdmin, economyOff) {
           button keeps it. A pouch nobody claims expires and pays nothing. The channel,
           the amounts, how often drops happen, and how long they last are all set on
           <a href="#/economy-config">Economy Settings</a>, which needs admin access.</div>
-      </section>
-
-      <section class="card">
-        <div class="section-label">Ideas Not Built Yet</div>
-        <div class="field-hint" style="margin-bottom:8px;">Nothing here works yet — it is
-          listed so you can see what is being considered.</div>
-        ${suggestions}
       </section>
     </div>`;
 

@@ -335,7 +335,6 @@ _FIELD_TABLES = [
     ("_RULES_WATCH_FIELDS", "RulesWatchConfigUpdate"),
     ("_INACTIVE_FIELDS", "InactiveConfigUpdate"),
     ("_NSFW_FIELDS", "NsfwClassifierUpdate"),
-    ("_BIRTHDAY_FIELDS", "BirthdayConfigUpdate"),
     ("_NEEDLE_FIELDS", "NeedleGlobalUpdate"),
 ]
 

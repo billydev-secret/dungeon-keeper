@@ -249,6 +249,118 @@ def test_busy_quartile_ignores_dead_hours(conn):
     assert data["busy_hours"] == 1
 
 
+# ── Per-moderator breakdown ───────────────────────────────────────────
+#
+# Presence, not a leaderboard: each row is one moderator's own numbers, never
+# compared against another's. The tests below check the arithmetic is scoped
+# per person and per busy hour, and that nothing in the service itself orders
+# the list by how active a moderator was — that would let the shape of the
+# data recreate the ranking the panel copy promises not to show.
+
+
+def test_mods_report_each_moderators_own_presence(conn):
+    mid = _local_midnight()
+    now = mid + 12 * 3600
+    # Hour 9 is the server's one busy hour: five days of member traffic, and
+    # MOD_A covers every one of them.
+    plan = [(d, 9, MEMBER) for d in range(1, 6)]
+    plan += [(d, 9, MOD_A) for d in range(1, 6)]
+    # MOD_B shows up, but only once in the busy hour and once elsewhere —
+    # present, but nowhere near covering it.
+    plan += [(1, 9, MOD_B), (3, 20, MOD_B)]
+    _seed(conn, mid, plan)
+
+    data = mcs.compute_mod_coverage(
+        conn, GUILD, mod_ids=[MOD_B, MOD_A], gap_days=10, now=now
+    )
+    mods = {m["user_id"]: m for m in data["mods"]}
+    assert set(mods) == {str(MOD_A), str(MOD_B)}
+
+    a = mods[str(MOD_A)]
+    assert a["days_active"] == 5
+    assert a["busy_hours_covered"] == data["busy_hours"] == 1
+    assert a["peak_coverage_pct"] == 100.0
+
+    b = mods[str(MOD_B)]
+    assert b["days_active"] == 2  # one distinct day per message, not per row
+    assert b["busy_hours_covered"] == 0  # 1 of 5 days is under the 50% bar
+    assert b["peak_coverage_pct"] == 20.0
+
+
+def test_mod_days_active_counts_days_not_messages(conn):
+    """Forty messages in one day is one day of presence, not forty."""
+    mid = _local_midnight()
+    now = mid + 12 * 3600
+    plan = [(2, 9, MEMBER)] + [(2, 9, MOD_A)] * 40
+    _seed(conn, mid, plan)
+
+    data = mcs.compute_mod_coverage(conn, GUILD, mod_ids=[MOD_A], gap_days=10, now=now)
+
+    assert data["mods"][0]["days_active"] == 1
+
+
+def test_mods_empty_when_no_mod_ids(conn):
+    mid = _local_midnight()
+    now = mid + 12 * 3600
+    _seed(conn, mid, [(1, 9, MEMBER)])
+
+    data = mcs.compute_mod_coverage(conn, GUILD, mod_ids=[], gap_days=10, now=now)
+
+    assert data["mods"] == []
+
+
+def test_mods_list_order_is_not_activity_ranked(conn):
+    """The service orders by id, never by whoever covered more.
+
+    Ordering by name for display is the dashboard route's job (see
+    ``health.py``); a service that reordered toward the more active
+    moderator would make that promise false one layer down.
+    """
+    mid = _local_midnight()
+    now = mid + 12 * 3600
+    # MOD_B (the higher id) covers every day; MOD_A (the lower id) barely
+    # shows up. If the list were activity-ranked, MOD_B would sort first.
+    plan = [(d, 9, MEMBER) for d in range(1, 6)]
+    plan += [(d, 9, MOD_B) for d in range(1, 6)]
+    plan += [(1, 9, MOD_A)]
+    _seed(conn, mid, plan)
+
+    data = mcs.compute_mod_coverage(
+        conn, GUILD, mod_ids=[MOD_B, MOD_A], gap_days=10, now=now
+    )
+
+    assert [m["user_id"] for m in data["mods"]] == [str(MOD_A), str(MOD_B)]
+
+
+def test_mod_rows_scores_only_busy_hours():
+    """A quiet hour a moderator missed must not drag down their busy-hour score.
+
+    Hour 1 here is a full gap (0% covered) but not busy; if it leaked into the
+    average, a moderator who owns the one busy hour outright would read as
+    less than fully covering it.
+    """
+    rows = [
+        {
+            "hour": 0, "label": "", "server_messages": 10, "days_observed": 4,
+            "days_with_mod": 4, "coverage_pct": 100.0, "busy": True, "gap": False,
+        },
+        {
+            "hour": 1, "label": "", "server_messages": 10, "days_observed": 4,
+            "days_with_mod": 0, "coverage_pct": 0.0, "busy": False, "gap": True,
+        },
+    ]
+    got = mcs._mod_rows(rows, [MOD_A], {MOD_A: {0: 4, 1: 0}}, {MOD_A: 4})
+
+    assert got == [
+        {
+            "user_id": str(MOD_A),
+            "days_active": 4,
+            "busy_hours_covered": 1,
+            "peak_coverage_pct": 100.0,
+        }
+    ]
+
+
 # ── The new include_user_ids filter on the shared overlay query ──────
 
 

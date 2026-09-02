@@ -2,21 +2,27 @@ import {
   loadConfig,
   loadChannels,
   apiPut,
+  apiDelete,
   showStatus,
   field,
   mountChannelPicker,
+  channelName,
   guardForm,
   lockUnlessAdmin,
   renderMetaWarning,
   mountAsync,
+  trackCard,
+  clearCardDirty,
+  hasDirtySibling,
 } from "../config-helpers.js";
+import { toast, confirmDialog } from "../ui.js";
 
 const DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}";
 const SAMPLE_REQUEST = "Ping me with cake reactions!";
 
-function buildTextarea(name, value) {
+function buildTextarea(value) {
   const ta = document.createElement("textarea");
-  ta.name = name;
+  ta.name = "message";
   ta.rows = 3;
   ta.required = true;
   ta.value = value;
@@ -24,12 +30,12 @@ function buildTextarea(name, value) {
   return ta;
 }
 
-function buildCheckbox(name, checked) {
+function buildPinCheckbox(checked) {
   const wrap = document.createElement("label");
   wrap.style.cssText = "display:flex; align-items:center; gap:8px; cursor:pointer;";
   const box = document.createElement("input");
   box.type = "checkbox";
-  box.name = name;
+  box.name = "pin";
   box.checked = !!checked;
   const txt = document.createElement("span");
   txt.textContent = "Pin the Announcement in This Channel";
@@ -64,27 +70,10 @@ function renderPreview(previewEl, template, username) {
     .trim();
 }
 
-// Build one channel card (picker + message + pin + live preview) and return the
-// handles so the caller can read them on submit.
-function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }, channels, cfg, sampleName) {
-  const card = document.createElement("div");
-  card.className = "card";
-  form.appendChild(card);
-
-  const heading = document.createElement("div");
-  heading.className = "section-label";
-  heading.textContent = title;
-  card.appendChild(heading);
-
-  const chanSlot = document.createElement("span");
-  card.appendChild(field("Announcement Channel", chanSlot, chanHint));
-  // Snowflakes stay strings; "0" is the saved value meaning "don't post here".
-  const chanPicker = mountChannelPicker(
-    chanSlot, channels, String(cfg.channelId || "0"),
-    { emptyValue: "0", emptyLabel: "(disabled)", label: `${title} — announcement channel` },
-  );
-
-  const ta = buildTextarea(msgName, cfg.message || DEFAULT_MESSAGE);
+// Message textarea + live preview + pin checkbox, shared by every channel
+// card (existing or the add-a-channel form) so the three stay identical.
+function buildMessageAndPinFields(card, { message, pin, sampleName }) {
+  const ta = buildTextarea(message);
   card.appendChild(
     field(
       "Message",
@@ -115,7 +104,7 @@ function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }
   card.appendChild(previewWrap);
   ta.addEventListener("input", () => renderPreview(preview, ta.value, sampleName));
 
-  const { wrap: pinWrap, box: pinBox } = buildCheckbox(pinName, cfg.pin);
+  const { wrap: pinWrap, box: pinBox } = buildPinCheckbox(pin);
   const pinField = document.createElement("div");
   pinField.className = "field";
   pinField.appendChild(pinWrap);
@@ -126,7 +115,49 @@ function buildChannelBlock(form, { title, chanName, msgName, pinName, chanHint }
   pinField.appendChild(pinHint);
   card.appendChild(pinField);
 
-  return { chanPicker, ta, pinBox, title };
+  return { ta, pinBox };
+}
+
+// One already-configured channel: name + message + preview + pin + Save/Remove.
+// Each card is its own <form>, saved and removed independently — the pattern
+// config-needle.js (Auto-Thread) uses for the same "any number of channels"
+// idiom.
+function buildChannelCard(list, ch, channels, sampleName) {
+  const card = document.createElement("form");
+  card.className = "form card";
+  // The cards live inside a plain wrapper div, not directly in .panel, so the
+  // adjacent-sibling CSS rule that spaces top-level cards apart doesn't reach
+  // them — same reason config-needle.js's channelCard() sets this inline.
+  card.style.marginBottom = "16px";
+  card.dataset.birthdayChannel = ch.channel_id;
+  list.appendChild(card);
+
+  const heading = document.createElement("div");
+  heading.className = "section-label";
+  heading.textContent = channelName(channels, ch.channel_id);
+  card.appendChild(heading);
+
+  const { ta, pinBox } = buildMessageAndPinFields(card, {
+    message: ch.message, pin: ch.pin, sampleName,
+  });
+
+  const row = document.createElement("div");
+  row.style.cssText = "display:flex; gap:8px; align-items:center; margin-top:8px; flex-wrap:wrap;";
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "submit";
+  saveBtn.className = "btn btn-primary";
+  saveBtn.textContent = "Save";
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "btn btn-danger";
+  removeBtn.textContent = "Remove Channel";
+  const status = document.createElement("span");
+  row.appendChild(saveBtn);
+  row.appendChild(removeBtn);
+  row.appendChild(status);
+  card.appendChild(row);
+
+  return { card, ta, pinBox, status, removeBtn, channelId: ch.channel_id };
 }
 
 /**
@@ -154,142 +185,250 @@ export function mountSettings(container) {
 
   return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
-    const b = config.birthday || {};
-    const me = window.__dk_user || {};
-    const sampleName = me.username || "user";
+    render(container, config.birthday || {}, channels);
+  }, { errorMsg: "Couldn’t load the birthday settings." });
+}
 
-    clearChildren(container);
-    const panel = document.createElement("div");
-    container.appendChild(panel);
+function render(container, birthday, channels) {
+  clearChildren(container);
+  const panel = document.createElement("div");
+  container.appendChild(panel);
 
-    const header = document.createElement("div");
-    header.className = "section-label";
-    header.textContent = "Settings";
-    panel.appendChild(header);
+  const header = document.createElement("div");
+  header.className = "section-label";
+  header.textContent = "Settings";
+  panel.appendChild(header);
 
-    const sub = document.createElement("div");
-    sub.className = "field-hint";
-    sub.style.marginBottom = "12px";
-    sub.textContent = "Daily birthday announcements — members add their own date with /birthday set";
-    panel.appendChild(sub);
+  const sub = document.createElement("div");
+  sub.className = "field-hint";
+  sub.style.marginBottom = "12px";
+  sub.textContent = "Daily birthday announcements — members add their own date with /birthday set";
+  panel.appendChild(sub);
 
-    const warning = renderMetaWarning();
-    if (warning) {
-      const w = document.createElement("div");
-      w.innerHTML = warning;
-      panel.appendChild(w.firstElementChild);
+  const warning = renderMetaWarning();
+  if (warning) {
+    const w = document.createElement("div");
+    w.innerHTML = warning;
+    panel.appendChild(w.firstElementChild);
+  }
+
+  const note = document.createElement("p");
+  note.style.cssText = "color:var(--ink-dim); margin-bottom:1rem; font-size:13px;";
+  note.textContent =
+    "Birthdays are announced once a day, at the hour you pick below in the server's own "
+    + "time zone. Announce in any number of channels, each with its own wording — handy "
+    + "when one is for the whole server and another is for a smaller room. See who has a "
+    + "birthday coming up on the Birthday Calendar page.";
+  panel.appendChild(note);
+
+  // ── Timing ──────────────────────────────────────────────────────────
+  const timingForm = document.createElement("form");
+  timingForm.className = "form card";
+  panel.appendChild(timingForm);
+  const timingHeading = document.createElement("div");
+  timingHeading.className = "section-label";
+  timingHeading.textContent = "Timing";
+  timingForm.appendChild(timingHeading);
+
+  const hourSelect = document.createElement("select");
+  hourSelect.name = "birthday_announce_hour";
+  const savedHour = Number.isInteger(birthday.birthday_announce_hour)
+    ? birthday.birthday_announce_hour : 9;
+  for (let h = 0; h < 24; h += 1) {
+    const opt = document.createElement("option");
+    opt.value = String(h);
+    opt.textContent = String(h).padStart(2, "0") + ":00";
+    if (h === savedHour) opt.selected = true;
+    hourSelect.appendChild(opt);
+  }
+  timingForm.appendChild(
+    field(
+      "Announcement Time",
+      hourSelect,
+      "The hour announcements go out, in the server's own time zone (the offset set "
+      + "on the Global page). Defaults to 09:00.",
+    ),
+  );
+
+  const timingRow = document.createElement("div");
+  timingRow.style.cssText = "display:flex; gap:8px; align-items:center; margin-top:8px;";
+  const timingSaveBtn = document.createElement("button");
+  timingSaveBtn.type = "submit";
+  timingSaveBtn.className = "btn btn-primary";
+  timingSaveBtn.textContent = "Save";
+  const timingStatus = document.createElement("span");
+  timingRow.appendChild(timingSaveBtn);
+  timingRow.appendChild(timingStatus);
+  timingForm.appendChild(timingRow);
+
+  // ── Existing channels ───────────────────────────────────────────────
+  const channelsHeading = document.createElement("div");
+  channelsHeading.className = "section-label";
+  channelsHeading.style.marginTop = "24px";
+  channelsHeading.textContent = "Announcement Channels";
+  panel.appendChild(channelsHeading);
+
+  const list = document.createElement("div");
+  panel.appendChild(list);
+
+  const me = window.__dk_user || {};
+  const sampleName = me.username || "user";
+
+  const cfgs = birthday.channels || [];
+  const cards = cfgs.map((ch) => buildChannelCard(list, ch, channels, sampleName));
+  if (!cfgs.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "No channels are set up yet. Add your first one below.";
+    list.appendChild(empty);
+  }
+
+  // ── Add a channel ───────────────────────────────────────────────────
+  const addHeading = document.createElement("div");
+  addHeading.className = "section-label";
+  addHeading.style.marginTop = "16px";
+  addHeading.textContent = "Add a Channel";
+  panel.appendChild(addHeading);
+
+  const addForm = document.createElement("form");
+  addForm.className = "form card";
+  panel.appendChild(addForm);
+
+  const chanSlot = document.createElement("span");
+  addForm.appendChild(
+    field("Channel", chanSlot, "Birthdays are announced here too, alongside every channel already listed above."),
+  );
+  const picker = mountChannelPicker(
+    chanSlot, channels, "0",
+    { emptyValue: "0", emptyLabel: "(pick a channel)", label: "Channel" },
+  );
+
+  const { ta: addTa, pinBox: addPinBox } = buildMessageAndPinFields(addForm, {
+    message: DEFAULT_MESSAGE, pin: false, sampleName,
+  });
+
+  const addRow = document.createElement("div");
+  addRow.style.cssText = "display:flex; gap:8px; align-items:center; margin-top:8px;";
+  const addBtn = document.createElement("button");
+  addBtn.type = "submit";
+  addBtn.className = "btn btn-primary";
+  addBtn.textContent = "Add Channel";
+  const addStatus = document.createElement("span");
+  addRow.appendChild(addBtn);
+  addRow.appendChild(addStatus);
+  addForm.appendChild(addRow);
+
+  // Lock after every card and picker mounts — each builds its own inputs, so
+  // locking earlier would leave those live.
+  if (lockUnlessAdmin(container)) return;
+
+  wireTiming(timingForm, timingStatus, hourSelect);
+  wireExistingCards(cards);
+  wireRemove(cards, list, container, channels);
+  wireAdd(addForm, addStatus, picker, addTa, addPinBox, list, container, channels);
+}
+
+// ── Wire: timing form ────────────────────────────────────────────────
+
+function wireTiming(form, status, hourSelect) {
+  guardForm(form);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await apiPut("/api/config/birthday/settings", {
+        birthday_announce_hour: Number(hourSelect.value),
+      });
+      showStatus(status, true);
+    } catch (err) {
+      showStatus(status, false, err.message);
     }
+  });
+}
 
-    const note = document.createElement("p");
-    note.style.cssText = "color:var(--ink-dim); margin-bottom:1rem; font-size:13px;";
-    note.textContent =
-      "Birthdays are announced once a day, at the hour you pick below in the server's own "
-      + "time zone. You can post to two channels, each with its own wording — handy when one "
-      + "is for the whole server and one is for a smaller room. See who has a birthday coming "
-      + "up on the Birthday Calendar page.";
-    panel.appendChild(note);
+// ── Wire: save existing channel cards ────────────────────────────────
 
-    const form = document.createElement("form");
-    form.className = "form form-cards";
-    panel.appendChild(form);
-
-    const timingCard = document.createElement("div");
-    timingCard.className = "card";
-    form.appendChild(timingCard);
-    const timingHeading = document.createElement("div");
-    timingHeading.className = "section-label";
-    timingHeading.textContent = "Timing";
-    timingCard.appendChild(timingHeading);
-
-    const hourSelect = document.createElement("select");
-    hourSelect.name = "birthday_announce_hour";
-    const savedHour = Number.isInteger(b.birthday_announce_hour) ? b.birthday_announce_hour : 9;
-    for (let h = 0; h < 24; h += 1) {
-      const opt = document.createElement("option");
-      opt.value = String(h);
-      opt.textContent = String(h).padStart(2, "0") + ":00";
-      if (h === savedHour) opt.selected = true;
-      hourSelect.appendChild(opt);
-    }
-    timingCard.appendChild(
-      field(
-        "Announcement Time",
-        hourSelect,
-        "The hour announcements go out, in the server's own time zone (the offset set "
-        + "on the Global page). Defaults to 09:00.",
-      ),
-    );
-
-    const primary = buildChannelBlock(
-      form,
-      {
-        title: "Main Channel",
-        chanName: "birthday_channel_id",
-        msgName: "birthday_message",
-        pinName: "birthday_pin",
-        chanHint: "Where birthday announcements are posted. Choose \"(disabled)\" to post nothing here.",
-      },
-      channels,
-      { channelId: b.birthday_channel_id || "0", message: b.birthday_message, pin: b.birthday_pin },
-      sampleName,
-    );
-
-    const secondary = buildChannelBlock(
-      form,
-      {
-        title: "Second Channel (Optional)",
-        chanName: "birthday_channel_id_2",
-        msgName: "birthday_message_2",
-        pinName: "birthday_pin_2",
-        chanHint: "An optional second channel that gets its own announcement. Choose \"(disabled)\" to post in one channel only.",
-      },
-      channels,
-      { channelId: b.birthday_channel_id_2 || "0", message: b.birthday_message_2, pin: b.birthday_pin_2 },
-      sampleName,
-    );
-
-    const saveRow = document.createElement("div");
-    saveRow.style.cssText = "display:flex; gap:8px; align-items:center; margin-top:1rem;";
-    const saveBtn = document.createElement("button");
-    saveBtn.type = "submit";
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save";
-    const saveStatus = document.createElement("span");
-    saveRow.appendChild(saveBtn);
-    saveRow.appendChild(saveStatus);
-    form.appendChild(saveRow);
-
-    // Lock after the channel pickers mount — each builds its own inputs, so
-    // locking earlier would leave those live.
-    if (lockUnlessAdmin(container)) return;
-
-    guardForm(form);
-
-    form.addEventListener("submit", async (e) => {
+function wireExistingCards(cards) {
+  for (const c of cards) {
+    guardForm(c.card);
+    trackCard(c.card);
+    c.card.addEventListener("submit", async (e) => {
       e.preventDefault();
-      const message = primary.ta.value.trim();
-      const message2 = secondary.ta.value.trim();
-      for (const [text, block] of [[message, primary], [message2, secondary]]) {
-        if (!text) {
-          showStatus(saveStatus, false, `The ${block.title} message cannot be empty.`);
-          block.ta.focus();
-          return;
-        }
+      const message = c.ta.value.trim();
+      if (!message) {
+        showStatus(c.status, false, "Message cannot be empty.");
+        c.ta.focus();
+        return;
       }
       try {
-        await apiPut("/api/config/birthday", {
-          birthday_channel_id: primary.chanPicker.getValue() || "0",
-          birthday_message: message,
-          birthday_pin: primary.pinBox.checked,
-          birthday_channel_id_2: secondary.chanPicker.getValue() || "0",
-          birthday_message_2: message2,
-          birthday_pin_2: secondary.pinBox.checked,
-          birthday_announce_hour: Number(hourSelect.value),
+        await apiPut(`/api/config/birthday/${c.channelId}`, {
+          message, pin: c.pinBox.checked,
         });
-        showStatus(saveStatus, true);
+        showStatus(c.status, true);
+        clearCardDirty(c.card);
       } catch (err) {
-        showStatus(saveStatus, false, err.message);
+        showStatus(c.status, false, err.message);
       }
     });
-  }, { errorMsg: "Couldn’t load the birthday settings." });
+  }
+}
+
+// ── Wire: remove buttons ─────────────────────────────────────────────
+
+function wireRemove(cards, list, container, channels) {
+  for (const c of cards) {
+    c.removeBtn.addEventListener("click", async () => {
+      const name = channelName(channels, String(c.channelId));
+      const ok = await confirmDialog(
+        `Stop announcing birthdays in ${name}?`,
+        { title: "Remove Channel", danger: true, confirmLabel: "Remove Channel" },
+      );
+      if (!ok) return;
+      try {
+        await apiDelete(`/api/config/birthday/${c.channelId}`);
+        const fresh = await loadConfig();
+        // The removed card must go, so this rebuild can't be held back — but
+        // say so when it takes unsaved edits with it (matches config-needle.js).
+        if (hasDirtySibling(list, c.card)) {
+          toast("Channel removed. Unsaved edits in the other channels were discarded.", "info");
+        }
+        render(container, fresh.birthday || {}, channels);
+      } catch (err) {
+        toast(err.message, "error");
+      }
+    });
+  }
+}
+
+// ── Wire: add form ───────────────────────────────────────────────────
+
+function wireAdd(form, status, picker, ta, pinBox, list, container, channels) {
+  guardForm(form);
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const channelId = picker.getValue() || "0";
+    if (channelId === "0") {
+      showStatus(status, false, "Pick a channel first.");
+      return;
+    }
+    const message = ta.value.trim();
+    if (!message) {
+      showStatus(status, false, "Message cannot be empty.");
+      ta.focus();
+      return;
+    }
+    try {
+      await apiPut(`/api/config/birthday/${channelId}`, { message, pin: pinBox.checked });
+      const fresh = await loadConfig();
+      // Adding a channel used to rebuild every card and silently drop whatever
+      // was typed into an existing one — hold the rebuild while any sibling is
+      // dirty and point at the reload instead (matches config-needle.js).
+      if (hasDirtySibling(list, null)) {
+        showStatus(status, true, "Added — reload to see it listed above.");
+      } else {
+        render(container, fresh.birthday || {}, channels);
+      }
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  });
 }

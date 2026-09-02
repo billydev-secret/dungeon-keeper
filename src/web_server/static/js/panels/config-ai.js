@@ -2,6 +2,14 @@ import { apiPut, showStatus, guardForm, mountAsync } from "../config-helpers.js"
 import { api, esc, apiPost, apiDelete } from "../api.js";
 import { confirmDialog } from "../ui.js";
 
+// The Rules Watch guard prompt moved onto the Rules Watch settings page
+// (config-rules-watch) — it's the instructions for that one feature, not
+// model plumbing. It's still fetched, saved and reset through this same
+// /api/config/ai payload/routes (no data migration, just a different panel
+// reading and writing it), so it's filtered out of the list rendered here
+// and replaced with a pointer to where it now lives.
+const RULES_WATCH_PROMPT_KEY = "ai_prompt_rules_watch";
+
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading AI config…</div></div>`;
 
@@ -19,6 +27,7 @@ export function mount(container) {
 
     let promptCards = "";
     for (const p of data.prompts) {
+      if (p.key === RULES_WATCH_PROMPT_KEY) continue;
       const badge = p.is_override
         ? `<span class="chip chip-warning">Edited</span>`
         : `<span class="chip chip-neutral">Original</span>`;
@@ -75,6 +84,10 @@ export function mount(container) {
           <strong>Where the Model Comes From</strong> above — and every job below uses it.
           What you can change per job is the instructions it is given. These
           instructions apply to every server this bot is in.
+        </div>
+        <div class="field-hint" style="margin-bottom:8px;">
+          Looking for the Rules Watch guard's instructions? They moved to
+          <a href="#/config-rules-watch">Rules Watch settings&nbsp;→</a>
         </div>
         <div class="ai-prompts-list">
           ${promptCards}

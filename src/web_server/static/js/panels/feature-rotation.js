@@ -197,32 +197,38 @@ function renderSettings(container, data) {
   const cfg = data.config;
   const host = container.querySelector("[data-settings]");
   host.innerHTML = `
-    <div class="form-grid" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px;">
-      <label>Rotation
-        <select data-f="enabled">
+    <div class="field-row">
+      <div class="field">
+        <label for="fr-enabled">Rotation</label>
+        <select data-f="enabled" id="fr-enabled">
           <option value="1" ${cfg.enabled ? "selected" : ""}>On</option>
           <option value="0" ${cfg.enabled ? "" : "selected"}>Off</option>
         </select>
-        <span class="field-hint">When off nothing is hidden and no announcement posts. Turn it off and press “Apply now” to reopen every room.</span>
-      </label>
-      <label>Announce In
-        <select data-f="announce_channel_id">${chanOptions(cfg.announce_channel_id, "(don’t announce)")}</select>
-        <span class="field-hint">This channel is never hidden, even if it’s in the pool.</span>
-      </label>
-      <label>Announce At (Hour, 0-23)
-        <input data-f="announce_hour" type="number" min="0" max="23" value="${cfg.announce_hour}">
-        <span class="field-hint">Rooms always change at midnight so the quest board matches; only the announcement waits for this hour. Times are ${esc(tzLabel(cfg.tz_offset_hours))}, set under Server Settings.</span>
-      </label>
-      <label>Rooms Open Per Day
-        <input data-f="rooms_per_day" type="number" min="1" max="10" value="${cfg.rooms_per_day}">
-        <span class="field-hint">With a bigger pool, raise this or each room only comes round rarely.</span>
-      </label>
+        <div class="field-hint">When off nothing is hidden and no announcement posts. Turn it off and press “Apply now” to reopen every room.</div>
+      </div>
+      <div class="field">
+        <label for="fr-announce-channel">Announce In</label>
+        <select data-f="announce_channel_id" id="fr-announce-channel">${chanOptions(cfg.announce_channel_id, "(don’t announce)")}</select>
+        <div class="field-hint">This channel is never hidden, even if it’s in the pool.</div>
+      </div>
     </div>
-    <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+    <div class="field-row">
+      <div class="field">
+        <label for="fr-announce-hour">Announce At (Hour, 0-23)</label>
+        <input data-f="announce_hour" id="fr-announce-hour" type="number" min="0" max="23" value="${cfg.announce_hour}" style="max-width:120px;">
+        <div class="field-hint">Rooms always change at midnight so the quest board matches; only the announcement waits for this hour. Times are ${esc(tzLabel(cfg.tz_offset_hours))}, set under Server Settings.</div>
+      </div>
+      <div class="field">
+        <label for="fr-rooms-per-day">Rooms Open Per Day</label>
+        <input data-f="rooms_per_day" id="fr-rooms-per-day" type="number" min="1" max="10" value="${cfg.rooms_per_day}" style="max-width:120px;">
+        <div class="field-hint">With a bigger pool, raise this or each room only comes round rarely.</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap;">
       <button class="btn btn-primary" data-save-settings>Save Settings</button>
       <button class="btn" data-apply-now>Apply Now</button>
     </div>
-    <div class="field-hint" style="margin-top:6px;">
+    <div class="field-hint">
       “Apply now” brings Discord into line with today’s plan straight away instead of waiting for midnight.
     </div>`;
 

@@ -72,3 +72,39 @@ def test_mod_coverage_counts_a_wider_circle_than_mod_workload(live_guild, open_c
     ])
 
     assert open_client.get("/api/health/mod-coverage").json()["mod_count"] == 2
+
+
+def test_dau_mau_days_param_sizes_the_trend(open_client):
+    """The trend chart's window is a caller-selectable range (the dashboard's
+    range control), not a fixed 30 days — confirms the route actually threads
+    ``days`` through to the payload rather than accepting and ignoring it."""
+    data = open_client.get("/api/health/dau-mau?days=14").json()
+    assert data["trend_days_requested"] == 14
+    assert len(data["sparkline"]) == data["trend_days"] <= 14
+
+
+def test_dau_mau_days_out_of_range_is_rejected(open_client):
+    assert open_client.get("/api/health/dau-mau?days=0").status_code == 422
+    assert open_client.get("/api/health/dau-mau?days=366").status_code == 422
+
+
+def test_mod_coverage_mods_are_named_and_sorted_not_ranked(live_guild, open_client):
+    """The per-moderator table resolves names and orders by them.
+
+    Names, not raw ids, per CLAUDE.md's embed/panel convention — and sorted
+    alphabetically rather than by any of the row's own numbers, so the order
+    itself can't read as a leaderboard.
+    """
+    from tests.web.conftest import StubMember
+
+    live_guild([
+        StubMember(1, manage_messages=True, display_name="Zeta"),
+        StubMember(2, manage_messages=True, display_name="Amy"),
+    ])
+
+    mods = open_client.get("/api/health/mod-coverage").json()["mods"]
+
+    assert {m["user_id"] for m in mods} == {"1", "2"}
+    assert [m["user_name"] for m in mods] == ["Amy", "Zeta"]
+    for m in mods:
+        assert "user_id" in m and isinstance(m["user_id"], str)

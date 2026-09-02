@@ -6,6 +6,7 @@ import calendar
 import re
 import sqlite3
 import time
+from dataclasses import dataclass
 
 from bot_modules.core.db_utils import get_config_value
 
@@ -63,6 +64,69 @@ def announce_hour(conn: sqlite3.Connection, guild_id: int) -> int:
     if not 0 <= hour <= 23:
         return DEFAULT_ANNOUNCE_HOUR
     return hour
+
+
+# ── Announcement channels (migration 200) ────────────────────────────
+#
+# Was a fixed main + second channel (birthday_channel_id[_2] /
+# birthday_message[_2] / birthday_pin[_2] config keys); now any number of
+# rows here, one per announced channel, in the order they were added — same
+# shape needle_channels uses for the same "add any number of channels" idiom.
+
+
+@dataclass
+class BirthdayChannelConfig:
+    channel_id: int
+    message: str
+    pin: bool
+
+
+def list_channels(
+    conn: sqlite3.Connection, guild_id: int
+) -> list[BirthdayChannelConfig]:
+    """Every channel this guild announces birthdays to, oldest-added first."""
+    rows = conn.execute(
+        "SELECT channel_id, message, pin FROM birthday_channels "
+        "WHERE guild_id = ? ORDER BY id",
+        (guild_id,),
+    ).fetchall()
+    return [
+        BirthdayChannelConfig(
+            channel_id=row["channel_id"], message=row["message"], pin=bool(row["pin"])
+        )
+        for row in rows
+    ]
+
+
+def upsert_channel(
+    conn: sqlite3.Connection,
+    *,
+    guild_id: int,
+    channel_id: int,
+    message: str,
+    pin: bool,
+) -> None:
+    """Add a channel, or update it in place if it's already configured."""
+    conn.execute(
+        """
+        INSERT INTO birthday_channels (guild_id, channel_id, message, pin)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT (guild_id, channel_id) DO UPDATE SET
+            message = excluded.message,
+            pin     = excluded.pin
+        """,
+        (guild_id, channel_id, message, int(pin)),
+    )
+
+
+def delete_channel(conn: sqlite3.Connection, guild_id: int, channel_id: int) -> bool:
+    """Stop announcing in this channel. True if a row was actually removed."""
+    cur = conn.execute(
+        "DELETE FROM birthday_channels WHERE guild_id = ? AND channel_id = ?",
+        (guild_id, channel_id),
+    )
+    return (cur.rowcount or 0) > 0
+
 
 # Matched anywhere in a message for the `birthday_wish` quest detector — the
 # is_greeting pattern: a heuristic vocabulary, not a classifier; widen as real

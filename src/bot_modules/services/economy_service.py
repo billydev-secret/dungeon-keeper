@@ -54,6 +54,20 @@ SHOP_TOGGLE_PERKS: tuple[str, ...] = (
 class EconSettings:
     enabled: bool = False
     bank_channel_id: int = 0
+    # Suggested channel for the per-feature pickers scattered down the
+    # Settings page (Coin Drops, Pin of the Day, Themed Days, Community
+    # Bounty). This field carries no resolution logic of its own — it is a
+    # plain stored value like any other. The dashboard is what makes it a
+    # default: when one of those four fields is unset (0), the panel pre-fills
+    # its picker with this channel instead of leaving it blank, and the admin
+    # still saves explicitly. An already-configured per-feature channel is
+    # never touched — it keeps posting exactly where it posts today, and a
+    # guild that never sets this sees no behavior change at all.
+    # Deliberately NOT wired to bank_channel_id (an announcements/warnings
+    # channel, not a panel's home — see the field above) or register_channel_id
+    # (its own toggle for a public transaction feed that should stay an opt-in,
+    # not something a shared default quietly turns on).
+    default_channel_id: int = 0
     manager_role_id: int = 0
     # Opt-in economy-notifications role, toggled by the guide panel's 🔔
     # button. It is a **DM preference only** — it gates no channel, no payout

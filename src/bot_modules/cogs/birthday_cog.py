@@ -14,16 +14,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.db_utils import (
-    get_config_value,
     get_tz_offset_hours,
     open_db,
-    parse_bool,
 )
 from bot_modules.services.birthday_service import (
     announce_hour as _announce_hour,
     clear_pin as _clear_pin,
     delete_birthday as _delete_birthday,
     get_birthday_preference as _get_birthday_preference,
+    list_channels as _list_channels,
     mark_announced as _mark_announced,
     month_choices as _month_choices,
     parse_birthday_day as _parse_birthday_day,
@@ -38,20 +37,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("dungeonkeeper.birthday")
 
-_DEFAULT_MESSAGE = "Happy birthday, {mention}! 🎂\n{request}"
-
 # Announce in each guild's local time (per its ``tz_offset_hours``), at the
 # hour that guild set on the Birthdays panel (``birthday_announce_hour``,
 # default 09:00). The loop ticks hourly and fires once the local clock has
 # reached that hour; the persisted announcement row keeps it to one send per
 # local day.
-
-# Per-channel config keys: (channel_id, message, pin?). The first entry reuses
-# the original single-channel keys for backward compatibility.
-_CHANNEL_KEYS = (
-    ("birthday_channel_id", "birthday_message", "birthday_pin"),
-    ("birthday_channel_id_2", "birthday_message_2", "birthday_pin_2"),
-)
 
 
 def _render(template: str, *, mention: str, name: str, request: str) -> str:
@@ -73,21 +63,6 @@ def _render(template: str, *, mention: str, name: str, request: str) -> str:
 # ---------------------------------------------------------------------------
 # Background loop
 # ---------------------------------------------------------------------------
-
-
-def _load_channel_configs(conn, guild_id: int) -> list[tuple[int, str, bool]]:
-    """Return (channel_id, message_template, pin?) for each enabled channel."""
-    configs: list[tuple[int, str, bool]] = []
-    seen: set[int] = set()
-    for chan_key, msg_key, pin_key in _CHANNEL_KEYS:
-        channel_id = int(get_config_value(conn, chan_key, "0", guild_id))
-        if not channel_id or channel_id in seen:
-            continue  # skip disabled, and don't announce twice in one channel
-        seen.add(channel_id)
-        template = get_config_value(conn, msg_key, _DEFAULT_MESSAGE, guild_id)
-        pin = parse_bool(get_config_value(conn, pin_key, "0", guild_id))
-        configs.append((channel_id, template, pin))
-    return configs
 
 
 async def _unpin_due_for_guild(
@@ -134,7 +109,7 @@ async def _announce_for_guild(
     day = int(today_iso[8:10])
 
     with open_db(db_path) as conn:
-        configs = _load_channel_configs(conn, guild.id)
+        configs = _list_channels(conn, guild.id)
         if not configs:
             return
         unannounced = _todays_unannounced(conn, guild.id, month, day, today_iso)
@@ -150,11 +125,12 @@ async def _announce_for_guild(
         with open_db(db_path) as conn:
             request = _get_birthday_preference(conn, guild.id, user_id) or ""
 
-        for channel_id, template, pin in configs:
+        for cfg in configs:
+            channel_id, pin = cfg.channel_id, cfg.pin
             channel = guild.get_channel(channel_id)
             if channel is None or not isinstance(channel, discord.TextChannel):
                 continue
-            text = _render(template, mention=mention, name=name, request=request)
+            text = _render(cfg.message, mention=mention, name=name, request=request)
             if not text:
                 continue  # degenerate template (e.g. just {request} with none set)
             try:
