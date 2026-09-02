@@ -622,7 +622,16 @@ Stage 2.
   reason. A press from inside a private surface **replaces it in place**
   (`_show_step`), so a wager still costs no extra message; a press on the
   public hub opens one. On the five private-round tables the step covers the
-  board, so it carries **Back**, and a timeout restores the board too.
+  board, so it carries **Back**, and a timeout restores the board too — but
+  only if that step still owns the board (`_window_steps`): discord.py starts
+  a fresh timeout per view and cancels none of the ones it replaces, so an
+  abandoned step would otherwise wake minutes later and repaint over whatever
+  the player is in the middle of. A **refused** bet repaints too, since the
+  step is standing where the board was and the old modal left it intact.
+  Coinflip and Mines choose a side/risk first, so their ladder carries Back
+  as well, re-rendering that picker. The number step spends rows 0 and 1 on
+  its two selects, so its Back sits on row 2 — a select fills a whole row,
+  and a Back hardcoded to row 1 made the view refuse to build at all.
 - **Informed bets:** the label on the Custom… modal carries live limits and cap
   headroom ("Your bet (5–100 · 340 left today)") and pre-fills the
   member's last stake per game (in-memory) — the same numbers that shape the

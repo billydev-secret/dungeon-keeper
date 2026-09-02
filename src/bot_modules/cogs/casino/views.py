@@ -273,11 +273,17 @@ class _CustomAmountButton(discord.ui.Button):
 
 
 class _BackButton(discord.ui.Button):
-    """Puts a private round's board back after a step that replaced it."""
+    """Puts the surface a step replaced back on screen.
 
-    def __init__(self, on_cancel: CancelFn) -> None:
+    ``row`` is a parameter rather than a constant because the two steps have
+    different shapes: the ladder's rungs leave row 1 free, while the number
+    step spends rows 0 and 1 on selects — a select occupies a whole row, so
+    a hardcoded row 1 made the view refuse to build at all.
+    """
+
+    def __init__(self, on_cancel: CancelFn, *, row: int = 1) -> None:
         super().__init__(
-            label="Back", emoji="↩️", style=discord.ButtonStyle.secondary, row=1
+            label="Back", emoji="↩️", style=discord.ButtonStyle.secondary, row=row
         )
         self._on_cancel = on_cancel
 
@@ -366,7 +372,7 @@ class RouletteNumberView(discord.ui.View):
         self.add_item(_RouletteNumberSelect(round_id, 0, 18, row=0))
         self.add_item(_RouletteNumberSelect(round_id, 19, 36, row=1))
         if on_cancel is not None:
-            self.add_item(_BackButton(on_cancel))
+            self.add_item(_BackButton(on_cancel, row=2))
 
     async def on_timeout(self) -> None:
         if self._on_expiry is not None:

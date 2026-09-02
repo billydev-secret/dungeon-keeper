@@ -39,6 +39,7 @@ from bot_modules.cogs.casino.pools_panel import PoolsMixin
 from bot_modules.cogs.casino.views import (
     AmountPickerView,
     BaccaratBetButton,
+    CoinflipSideView,
     BaccaratBetModal,
     BaccaratNextView,
     BetModal,
@@ -532,6 +533,13 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         # (guild, user, game) → last successful stake, pre-filled into the
         # bet modal. In-memory on purpose — resets with the process.
         self._last_bets: dict[tuple[int, int, str], int] = {}
+        # (game key, round id) → which bet step currently owns that round's
+        # board. A step replaces the board, and discord.py starts a fresh
+        # timeout per view without cancelling the one it replaced, so a
+        # superseded step would otherwise wake up minutes later and repaint
+        # the board over whatever the player is looking at by then.
+        self._window_steps: dict[tuple[str, int], int] = {}
+        self._step_seq = 0
         self._boot_task: asyncio.Task | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────
@@ -1020,16 +1028,50 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         Callable[[], Awaitable[None]],
     ]:
         """Put a private round's board back after a step that replaced it —
-        on the player's Back press, and on the step timing out under them."""
+        on the player's Back press, and on the step timing out under them.
+
+        Claims the board for this step. Only the claimant repaints on expiry:
+        a player who backs out and opens another step leaves the first one's
+        600s timer still running, and repainting from it would wipe the step
+        they are in the middle of.
+        """
+        key = (ui.key, round_id)
+        self._step_seq += 1
+        token = self._step_seq
+        self._window_steps[key] = token
+
+        def _release() -> bool:
+            if self._window_steps.get(key) != token:
+                return False  # a later step owns the board now
+            del self._window_steps[key]
+            return True
 
         async def _cancel(interaction: discord.Interaction) -> None:
+            _release()
             await interaction.response.defer()
             await self._repaint_window(ui, guild, round_id)
 
         async def _expiry() -> None:
-            await self._repaint_window(ui, guild, round_id)
+            if _release():
+                await self._repaint_window(ui, guild, round_id)
 
         return _cancel, _expiry
+
+    @staticmethod
+    def _back_to(content: str, view_factory: Callable[[], discord.ui.View]):
+        """Back for a hub game whose ladder replaced a picker of its own.
+
+        The private-round tables restore a board through the webhook; these
+        two only have to re-render the step they came from, which the press
+        itself can do.
+        """
+
+        async def _cancel(interaction: discord.Interaction) -> None:
+            await interaction.response.edit_message(
+                content=content, embed=None, view=view_factory()
+            )
+
+        return _cancel
 
     async def _open_amount_picker(
         self,
@@ -1069,8 +1111,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             guild.id, interaction.user.id, game
         )
         title = self._MODAL_TITLES.get(game, "Casino")
+        on_cancel = None
         if side is not None:
             title = f"Coinflip — {side}"
+            # Coinflip picked a side first, so there is a step to go back to.
+            on_cancel = self._back_to("Heads or tails?", CoinflipSideView)
         await self._open_amount_picker(
             interaction,
             partial(
@@ -1079,6 +1124,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             ),
             options,
             prompt=f"**{title}** — how much?",
+            on_cancel=on_cancel,
         )
 
     async def open_roulette_bet_step(
@@ -2022,6 +2068,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             ),
             options,
             prompt=f"**{logic.mines_risk_label(bombs)}** — how much?",
+            # The ladder replaced the risk picker; Back re-opens it, so a
+            # refused stake doesn't strand the player away from the choice
+            # they made first.
+            on_cancel=self._back_to(
+                "How dangerous do you want it?", build_mines_risk_view
+            ),
         )
 
     def _mines_render(
@@ -2385,6 +2437,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         """
         if err is not None:
             await safe_ephemeral(interaction, f"❌ {err}")
+            # The refusal arrived from the amount step, which is standing
+            # where the board was — so put the board back. When this step
+            # was a modal the board underneath survived a refusal on its
+            # own; now it has to be restored explicitly.
+            await self._repaint_window(ui, guild, round_id)
             return
         self._last_bets[(guild.id, interaction.user.id, ui.key)] = amount
         await safe_ephemeral(interaction, f"✅ {verb}: {desc} for {amount:,}.")

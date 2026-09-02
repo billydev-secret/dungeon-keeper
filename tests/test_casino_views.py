@@ -240,8 +240,13 @@ async def test_a_timed_out_step_puts_the_board_back():
 
 
 def test_roulette_number_view_covers_the_whole_wheel_in_two_selects():
-    """37 numbers overflow one select's 25-option cap, so the wheel splits."""
-    view = RouletteNumberView(7)
+    """37 numbers overflow one select's 25-option cap, so the wheel splits.
+
+    Built with on_cancel, the way the cog always builds it: a select fills a
+    whole row, so the two of them leave only row 2 for Back. Constructing it
+    without one is what hid a ValueError that made 🎯 Number unusable.
+    """
+    view = RouletteNumberView(7, on_cancel=AsyncMock())
     selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
     assert len(selects) == 2
     values = [int(o.value) for s in selects for o in s.options]
@@ -339,3 +344,93 @@ async def test_no_legal_stake_falls_back_to_the_typed_box():
 
     assert interaction.response.send_modal.await_args.args[0] is modal
     interaction.response.send_message.assert_not_awaited()
+
+
+def test_the_number_step_still_fits_once_back_is_on_it():
+    """discord.py refuses a row over 5 wide at construction, so this is the
+    whole bug: the view raised before it could ever render."""
+    view = RouletteNumberView(7, on_cancel=AsyncMock())
+    back = next(
+        c for c in view.children if getattr(c, "label", None) == "Back"
+    )
+    assert back.row == 2
+    selects = [c for c in view.children if isinstance(c, discord.ui.Select)]
+    assert [s.row for s in selects] == [0, 1]
+
+
+async def test_a_superseded_step_leaves_the_board_to_whatever_replaced_it():
+    """Each view runs its own 600s timer and discord.py cancels none of them
+    when one view replaces another, so an abandoned step would wake up later
+    and repaint over the step the player is actually in."""
+    cog = _cog()
+    repaint = AsyncMock()
+    cog._repaint_window = repaint  # type: ignore[method-assign]
+    guild = SimpleNamespace(id=1)
+    ui = SimpleNamespace(key="roulette")
+
+    _, expiry_first = cog._window_step_handlers(guild, ui, 7)  # type: ignore[arg-type]
+    _, expiry_second = cog._window_step_handlers(guild, ui, 7)  # type: ignore[arg-type]
+
+    await expiry_first()
+    repaint.assert_not_awaited()
+
+    await expiry_second()
+    repaint.assert_awaited_once()
+
+
+async def test_backing_out_hands_the_claim_back():
+    """Back restores the board itself, so the same step's later timeout must
+    not repaint a second time over whatever is there by then."""
+    cog = _cog()
+    repaint = AsyncMock()
+    cog._repaint_window = repaint  # type: ignore[method-assign]
+    guild = SimpleNamespace(id=1)
+    ui = SimpleNamespace(key="derby")
+    cancel, expiry = cog._window_step_handlers(guild, ui, 3)  # type: ignore[arg-type]
+
+    interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()))
+    await cancel(interaction)
+    assert repaint.await_count == 1
+
+    await expiry()
+    assert repaint.await_count == 1
+
+
+async def test_a_refused_bet_puts_the_board_back(monkeypatch):
+    """The step is standing where the board was, so a refusal that just
+    apologised would leave the player looking at a ladder and no round."""
+    import bot_modules.cogs.casino.cog as casino_cog
+
+    monkeypatch.setattr(casino_cog, "safe_ephemeral", AsyncMock())
+    cog = _cog()
+    repaint = AsyncMock()
+    cog._repaint_window = repaint  # type: ignore[method-assign]
+    interaction = SimpleNamespace(user=SimpleNamespace(id=5))
+
+    await cog._finish_window_bet(
+        interaction,  # type: ignore[arg-type]
+        SimpleNamespace(key="roulette"),  # type: ignore[arg-type]
+        SimpleNamespace(id=1),  # type: ignore[arg-type]
+        7, 25, "You can't cover that.", "Red",
+    )
+
+    repaint.assert_awaited_once()
+
+
+async def test_back_re_renders_the_picker_a_hub_ladder_replaced():
+    """Mines and coinflip choose something before the stake, so their ladder
+    covers a picker rather than a board — Back has to re-render it, or a
+    refused stake strands the player away from the choice they just made."""
+    from bot_modules.cogs.casino.views import build_mines_risk_view
+
+    cancel = CasinoCog._back_to(
+        "How dangerous do you want it?", build_mines_risk_view
+    )
+    interaction = SimpleNamespace(response=SimpleNamespace(edit_message=AsyncMock()))
+
+    await cancel(interaction)
+
+    kwargs = interaction.response.edit_message.await_args.kwargs
+    assert kwargs["content"] == "How dangerous do you want it?"
+    assert kwargs["embed"] is None
+    assert len(kwargs["view"].children) == len(logic.MINES_BOMB_CHOICES)
