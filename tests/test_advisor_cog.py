@@ -17,7 +17,10 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
+import pytest
+
 from bot_modules.cogs import advisor_cog
+from bot_modules.services import advisor_chat_logic
 from bot_modules.cogs.advisor_cog import _proposal_fields
 from bot_modules.services.advisor_actions import ConfigProposal
 from bot_modules.services.advisor_service import AdvisorResult
@@ -379,3 +382,70 @@ async def test_apply_click_dispatches_the_feature_config_change(
         bot.dispatch.assert_called_once_with("whisper_config_change", 123)
     else:
         bot.dispatch.assert_not_called()
+
+# ── Ask panel: the chat window's glue ────────────────────────────────
+#
+# The transcript logic itself is covered in tests/test_advisor_chat_logic.py.
+# What can only break *here* is the seam: the logic renders (name, value)
+# pairs, but what a Reply click actually reads back is a real
+# ``discord.Embed``'s fields. If those two ever stop lining up, the model
+# silently receives a different conversation from the one on screen.
+
+
+def test_the_chat_embed_reads_back_as_the_conversation_it_drew():
+    history = [
+        {"role": "user", "content": "how do I earn coins?"},
+        {"role": "assistant", "content": "Chatting earns XP, paid out daily."},
+        {"role": "user", "content": "and the casino?"},
+        {"role": "assistant", "content": "`/casino` has three games."},
+    ]
+
+    embed = advisor_cog._chat_embed(history, "Billy-bot", None)
+    read_back = advisor_chat_logic.history_from_fields(
+        [(f.name, f.value) for f in embed.fields]
+    )
+
+    assert read_back == history
+
+
+def test_the_chat_footer_never_loses_the_grounding_caveat():
+    """It is the only place the member is told the answer can be wrong."""
+    embed = advisor_cog._chat_embed(
+        [{"role": "user", "content": "hi"}], "Billy-bot", None
+    )
+
+    assert "not always perfect" in (embed.footer.text or "")
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_reply_is_disabled_exactly_when_the_chat_is_spent(full):
+    view = advisor_cog._ChatView(7, full=full)
+
+    reply = view.children[0]
+    assert reply.custom_id == "advisor_chat:reply:7"
+    assert reply.item.disabled is full  # DynamicItem wraps the button
+
+
+async def test_the_panel_posts_a_button_that_survives_a_restart(monkeypatch):
+    """A stateless custom_id is what lets an already-posted panel keep working
+    after a restart — nothing about the panel is stored anywhere."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    guild = MagicMock(spec=discord.Guild, id=123)
+    cog = advisor_cog.AdvisorCog.__new__(advisor_cog.AdvisorCog)
+    cog.bot = SimpleNamespace(ctx=MagicMock(db_path=":memory:"))
+    monkeypatch.setattr(
+        advisor_cog, "safe_resolve_accent", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        advisor_cog, "open_db", lambda p: contextlib.nullcontext(object())
+    )
+    monkeypatch.setattr(
+        advisor_cog, "resolve_assistant_name_conn", lambda *a, **k: "Billy-bot"
+    )
+
+    await cog.post_ask_panel(guild, channel)
+
+    view = channel.send.await_args.kwargs["view"]
+    assert [c.custom_id for c in view.children] == ["advisor_panel:ask"]
+    assert "Billy-bot" in channel.send.await_args.kwargs["embed"].title

@@ -1,9 +1,16 @@
-"""`/ask` — member self-service help, answered by the AI advisor.
+"""`/ask` and the Ask panel — member self-service help, answered by the AI advisor.
 
 Thin glue over ``bot_modules.services.advisor_service``; the same brain powers
 the dashboard Help panel's ask box. Answers are grounded in the user
 manual, so the advisor can't invent commands. Ephemeral + per-user cooldown so one
 member can't spend the shared Anthropic budget.
+
+Two Discord surfaces sit on that brain. ``/ask`` is the one-shot, full-power
+one: it carries the config tools and their Apply buttons. The **Ask panel** is a
+button in a channel that opens a private, multi-turn chat window — the same
+grounding, a shorter register, no config tools. Its transcript lives in the
+ephemeral message rather than in any table (see ``advisor_chat_logic``), so the
+chat stores nothing about anybody.
 
 ``public: True`` (mods only) turns the ask into a short tutorial written for the
 whole room. It is answered ephemerally first and only reaches the channel when
@@ -20,7 +27,8 @@ click, re-permission-checked and re-validated (``advisor_actions``).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, cast
 
 import discord
 from discord import app_commands
@@ -47,8 +55,18 @@ from bot_modules.services.advisor_context import (
     is_server_admin,
     is_staff,
 )
+from bot_modules.services.advisor_chat_logic import (
+    MAX_EXCHANGES,
+    ReplyCooldown,
+    exchange_count,
+    footer_tail,
+    history_from_fields,
+    is_full,
+    transcript_fields,
+)
 from bot_modules.services.advisor_gaps import fetch_setup_gaps
 from bot_modules.services.advisor_service import (
+    MAX_QUESTION_CHARS,
     MODEL,
     AdvisorTools,
     answer_advisor,
@@ -391,10 +409,407 @@ class _PublicPostView(discord.ui.View):
         )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ASK PANEL — a private, multi-turn chat window opened from a channel panel
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# The panel is a public message with one button; the chat it opens is
+# ephemeral, so only the member who pressed it ever sees their conversation.
+# The transcript lives in that message's embed fields and nowhere else — see
+# ``advisor_chat_logic`` for why, and for the round-trip that reads it back.
+#
+# Unlike ``/ask``, this surface deliberately gets **no config tools and no
+# Apply buttons**. A proposal only exists in the memory of the view that
+# rendered it, which would either strand the chat's own buttons on a restart or
+# leave Apply buttons that silently do nothing; and a public help panel is the
+# wrong doorway for changing server settings anyway. Admins keep ``/ask``,
+# where that machinery lives and is tested.
+
+
+# Per-member Reply rate limit, shared by every live chat in the process. Module
+# level rather than on the cog because a DynamicItem is rebuilt from its
+# custom_id on click and holds no reference to the cog that registered it.
+_REPLY_COOLDOWN = ReplyCooldown()
+
+_CHAT_NOT_YOURS = "That isn't your chat — press **Ask a question** on the panel to start your own."
+
+
+def _ask_panel_embed(assistant_name: str, color: int | discord.Colour | None):
+    """The public panel members press to open a chat."""
+    return discord.Embed(
+        title=f"🤖 Ask {assistant_name}",
+        description=(
+            f"Stuck on something? Ask {assistant_name} — how a game works, what "
+            "a command does, where to find a setting, or how something here is "
+            "set up.\n\n"
+            "**Only you see the answer**, and you can keep replying to dig "
+            f"further. {assistant_name} answers from the server guide, so it "
+            "won't invent commands — if it doesn't know, it'll say so."
+        ),
+        color=color,
+    )
+
+
+def _chat_embed(
+    history: list[dict], assistant_name: str, color: int | discord.Colour | None
+) -> discord.Embed:
+    """Render the whole conversation as one card.
+
+    Every turn is a field, which is what makes the transcript readable *and*
+    machine-readable: :func:`history_from_fields` reads these same fields back
+    on the next Reply, so what the member sees is exactly what the model is
+    given.
+    """
+    embed = discord.Embed(title=f"🤖 Ask {assistant_name}", color=color)
+    for name, value in transcript_fields(history, assistant_name):
+        embed.add_field(name=name, value=value, inline=False)
+    embed.set_footer(
+        text=(
+            f"{assistant_name} • grounded in the server guide, not always "
+            f"perfect • {footer_tail(history)}"
+        )
+    )
+    return embed
+
+
+async def _run_chat(
+    bot: Bot,
+    guild: discord.Guild | None,
+    member: discord.Member | None,
+    question: str,
+    history: list[dict],
+) -> tuple[str, bool, str]:
+    """Answer one chat turn. Returns ``(answer, ok, assistant_name)``.
+
+    Mirrors the private ``/ask`` path — same per-guild model tiering, same
+    per-asker server context — minus the config tools, and with
+    ``include_config=False`` to match: with no tools to act on them, a settings
+    dump would only be raw config text sitting in a member-facing help chat.
+    """
+    model = MODEL
+    assistant_name = DEFAULT_ASSISTANT_NAME
+    guild_context: str | None = None
+    if guild is not None:
+        db_path = bot.ctx.db_path
+        with open_db(db_path) as conn:
+            model = resolve_advisor_model(conn, guild.id, staff=is_staff(member))
+            assistant_name = resolve_assistant_name_conn(conn, guild.id)
+            context_on = get_advisor_context_enabled(conn, guild.id)
+        if context_on:
+            guild_context = build_asker_context(
+                guild, member, db_path, include_config=False
+            )
+    result = await answer_advisor(
+        question,
+        history,
+        model=model,
+        guild_context=guild_context,
+        assistant_name=assistant_name,
+        chat=True,
+    )
+    return result.answer, result.ok, assistant_name
+
+
+async def _show_chat(
+    interaction: discord.Interaction,
+    *,
+    history: list[dict],
+    assistant_name: str,
+    color: int | discord.Colour | None,
+    user_id: int,
+    notice: str | None = None,
+    edit: bool,
+) -> None:
+    """Draw the chat window, updating it in place where there is one to update.
+
+    ``edit`` is False only for the first turn, which has no window yet. The
+    fallback matters: if the in-place edit is ever refused (an expired token, a
+    dismissed message), the member still gets their answer in a fresh window
+    rather than losing the round-trip they just waited for.
+    """
+    embed = _chat_embed(history, assistant_name, color)
+    view = _ChatView(user_id, full=is_full(history))
+    if edit:
+        try:
+            await interaction.edit_original_response(
+                content=notice, embed=embed, view=view
+            )
+            return
+        except discord.HTTPException:
+            log.exception("advisor chat: in-place edit failed, opening a new window")
+    await interaction.followup.send(
+        content=notice or discord.utils.MISSING,
+        embed=embed,
+        view=view,
+        ephemeral=True,
+    )
+
+
+class AskPanelButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"advisor_panel:ask",
+):
+    """Persistent '💬 Ask a question' button on the public Ask panel."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Ask a question",
+                emoji="💬",
+                style=discord.ButtonStyle.primary,
+                custom_id="advisor_panel:ask",
+            )
+        )
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls()
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(_AskModal(history=None))
+
+
+class AskChatReplyButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"advisor_chat:reply:(?P<uid>\d+)",
+):
+    """'💬 Reply' on a live chat window.
+
+    The asker's id rides in the custom_id for two reasons: the button is
+    rebuilt from that id after a restart, so a conversation survives one; and
+    the ownership check below then doesn't have to rest on the message being
+    ephemeral, the same belt-and-braces ``_PublicPostView`` uses.
+    """
+
+    def __init__(self, user_id: int, *, disabled: bool = False) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Reply",
+                emoji="💬",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"advisor_chat:reply:{user_id}",
+                disabled=disabled,
+            )
+        )
+        self.user_id = user_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["uid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(_CHAT_NOT_YOURS, ephemeral=True)
+            return
+        # interaction.message is the chat window itself here; a modal's own
+        # submit has message = None, so the transcript is read now and handed
+        # to the modal — the same pattern the ticket close flow uses.
+        message = interaction.message
+        history = history_from_fields(
+            [(f.name, f.value) for f in message.embeds[0].fields]
+            if message and message.embeds
+            else []
+        )
+        if is_full(history):
+            await interaction.response.send_message(
+                f"That chat has used all {MAX_EXCHANGES} of its questions — press "
+                "**Ask a question** on the panel to start a fresh one.",
+                ephemeral=True,
+            )
+            return
+        wait = _REPLY_COOLDOWN.remaining(self.user_id, time.monotonic())
+        if wait > 0:
+            await interaction.response.send_message(
+                f"❌ Give me a sec — try again in {wait:.0f}s.", ephemeral=True
+            )
+            return
+        _REPLY_COOLDOWN.mark(self.user_id, time.monotonic())
+        await interaction.response.send_modal(_AskModal(history=history))
+
+
+class AskChatEndButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"advisor_chat:end:(?P<uid>\d+)",
+):
+    """'✖ End chat' — clears the window so the transcript stops being on screen."""
+
+    def __init__(self, user_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="End chat",
+                emoji="✖️",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"advisor_chat:end:{user_id}",
+            )
+        )
+        self.user_id = user_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["uid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(_CHAT_NOT_YOURS, ephemeral=True)
+            return
+        # Wiping the embed is the whole point: the transcript only ever existed
+        # in this message, so clearing it is what "end the chat" means here.
+        await interaction.response.edit_message(
+            content="Chat closed. Press **Ask a question** on the panel any time.",
+            embed=None,
+            view=None,
+        )
+
+
+class _ChatView(discord.ui.View):
+    """The two buttons under a chat window.
+
+    ``timeout=None`` with dynamic items: the buttons route by custom_id alone,
+    with no message id to register, so a chat keeps working across a restart —
+    the transcript is in the message, and the asker's id is in the button.
+    """
+
+    def __init__(self, user_id: int, *, full: bool) -> None:
+        super().__init__(timeout=None)
+        self.add_item(AskChatReplyButton(user_id, disabled=full))
+        self.add_item(AskChatEndButton(user_id))
+
+
+class _AskModal(discord.ui.Modal):
+    """The question box, for both the first ask and every reply after it."""
+
+    def __init__(self, *, history: list[dict] | None) -> None:
+        first = history is None
+        super().__init__(title="Ask a question" if first else "Reply")
+        #: None on the first turn — there is no window to update yet.
+        self._history = history
+        self.question: discord.ui.TextInput = discord.ui.TextInput(
+            label="What would you like to know?" if first else "Your reply",
+            style=discord.TextStyle.paragraph,
+            max_length=MAX_QUESTION_CHARS,
+            required=True,
+            placeholder=(
+                "e.g. how do I earn coins?" if first else "Ask a follow-up…"
+            ),
+        )
+        self.add_item(self.question)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        question = str(self.question.value or "").strip()
+        history = self._history
+        first = history is None
+        if first:
+            # No window yet: this creates one.
+            await interaction.response.defer(thinking=True, ephemeral=True)
+        else:
+            # Launched from a component, so a plain defer is a deferred
+            # *message update* — edit_original_response then rewrites the chat
+            # window in place instead of stacking a second one beneath it.
+            await interaction.response.defer()
+
+        bot = cast("Bot", interaction.client)
+        guild = interaction.guild
+        member = (
+            interaction.user if isinstance(interaction.user, discord.Member) else None
+        )
+        answer, ok, assistant_name = await _run_chat(
+            bot, guild, member, question, history or []
+        )
+        color = (
+            await safe_resolve_accent(bot.ctx, guild, log_label="advisor")
+            if guild is not None
+            else None
+        )
+
+        if not ok:
+            if first:
+                await interaction.followup.send(answer, ephemeral=True)
+                return
+            # Leave the conversation exactly as it was. A model that couldn't
+            # be reached shouldn't cost them one of their questions, and the
+            # transcript they already have shouldn't vanish with it.
+            await _show_chat(
+                interaction,
+                history=history or [],
+                assistant_name=assistant_name,
+                color=color,
+                user_id=interaction.user.id,
+                notice=f"⚠️ {answer}",
+                edit=True,
+            )
+            return
+
+        new_history = [
+            *(history or []),
+            {"role": "user", "content": question},
+            {"role": "assistant", "content": answer},
+        ]
+        log.info(
+            "%s asked the Ask panel (turn %d): %.80s",
+            interaction.user.display_name,
+            exchange_count(new_history),
+            question,
+        )
+        await _show_chat(
+            interaction,
+            history=new_history,
+            assistant_name=assistant_name,
+            color=color,
+            user_id=interaction.user.id,
+            edit=not first,
+        )
+
+    async def on_error(
+        self, interaction: discord.Interaction, error: Exception
+    ) -> None:
+        log.exception("Ask panel chat failed", exc_info=error)
+        msg = "❌ Something went wrong there — press Ask on the panel to try again."
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except discord.HTTPException:
+            pass
+
+
 class AdvisorCog(commands.Cog):
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
         super().__init__()
+
+    async def cog_load(self) -> None:
+        # Re-register the persistent buttons so clicks on an already-posted
+        # panel — and on a chat window someone left open — still route after a
+        # restart. All the state they need is in the custom_id and, for a
+        # chat, in the message itself.
+        self.bot.add_dynamic_items(
+            AskPanelButton, AskChatReplyButton, AskChatEndButton
+        )
+
+    async def post_ask_panel(self, guild, channel):
+        """Post the Ask panel into ``channel``.
+
+        Entry point for the dashboard's panel poster (``panel_registry``).
+        Like the ticket panel this posts a fresh message each time rather than
+        editing a sticky one: the button carries no state, so an older panel
+        keeps working, and silently killing one members may have bookmarked
+        would be worse than leaving two live.
+
+        Returns the new message, or None if Discord refused the post.
+        """
+        accent = await safe_resolve_accent(self.bot.ctx, guild, log_label="advisor")
+        with open_db(self.bot.ctx.db_path) as conn:
+            assistant_name = resolve_assistant_name_conn(conn, guild.id)
+        view = discord.ui.View(timeout=None)
+        view.add_item(AskPanelButton())
+        try:
+            return await channel.send(
+                embed=_ask_panel_embed(assistant_name, accent), view=view
+            )
+        except discord.HTTPException:
+            log.exception("advisor: couldn't post the Ask panel in guild %s", guild.id)
+            return None
 
     @app_commands.command(
         name="ask",

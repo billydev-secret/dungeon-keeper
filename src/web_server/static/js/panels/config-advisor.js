@@ -1,5 +1,6 @@
 import { api, apiPost, apiDelete, esc } from "../api.js";
 import { apiPut, showStatus, guardForm, mountAsync } from "../config-helpers.js";
+import { mountPanelPoster } from "../panel-post.js";
 
 // Cheapest win first — mirrors advisor_gaps.STATUS_ORDER and the Home tile.
 const SUGG_STATUS = {
@@ -35,7 +36,7 @@ export function mount(container) {
       <div class="panel">
         <header>
           <h2>${name}</h2>
-          <div class="subtitle">The AI helper behind <code>/ask</code> and the ask box in the Help panel. Rename it under <strong>Branding</strong>.</div>
+          <div class="subtitle">The AI helper behind <code>/ask</code>, the Ask panel in Discord, and the ask box in the Help panel. Rename it under <strong>Branding</strong>.</div>
         </header>
         <form class="form form-cards" data-form>
           <div class="card">
@@ -90,6 +91,8 @@ export function mount(container) {
           </div>
         </form>
 
+        <div class="card" data-poster="ask-panel"></div>
+
         <div class="card" data-sec="suggestions">
           <div class="section-label">Suggested Setup</div>
           <div class="field-hint" style="margin-bottom:8px;">
@@ -101,6 +104,13 @@ export function mount(container) {
         </div>
       </div>
     `;
+
+    // Where members meet the assistant in Discord. Admin-only, like every
+    // other panel poster, so it renders locked for a non-admin who lands here.
+    mountPanelPoster(container.querySelector('[data-poster="ask-panel"]'), "ask-panel", {
+      heading: `Post the Ask ${name} Panel`,
+      buttonLabel: "Post Panel",
+    });
 
     const form = container.querySelector("[data-form]");
     const status = container.querySelector("[data-status]");

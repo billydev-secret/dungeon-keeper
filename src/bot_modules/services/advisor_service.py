@@ -3,9 +3,10 @@
 The assistant's guild-facing name is per-guild branding (``branding_service``,
 default "Billy-bot"); every string that shows it takes the resolved name.
 
-This is the shared brain behind two thin surfaces:
+This is the shared brain behind three thin surfaces:
   - the dashboard Help panel's ask box (``web_server/routes/advisor.py``)
   - the Discord ``/ask`` command (``bot_modules/cogs/advisor_cog.py``)
+  - the Discord Ask panel's chat window (same cog; ``chat=True`` below)
 
 Answers are grounded **only** in the user manual (``web_server/static/manual.html`` —
 the canonical user-facing guide, the same source the Help panel renders), so the
@@ -137,6 +138,13 @@ def set_advisor_tools_enabled(
 
 MAX_QUESTION_CHARS = 500
 MAX_TOKENS = 800
+# The Ask panel's chat window renders each turn as an embed field, and Discord
+# caps a field value at 1024 characters — a full 800-token answer overflows it
+# and would be clipped out of both the member's view and the history fed back
+# on their next reply. Shorter answers are also simply right for a chat: a
+# follow-up is one button away, so there is no need to pre-empt it. The budget
+# and CHAT_INSTRUCTIONS enforce the same thing from two directions.
+MAX_CHAT_TOKENS = 400
 # History is untrusted client input on the web surface — cap turns and size.
 MAX_HISTORY_TURNS = 8
 MAX_HISTORY_CHARS = 2000
@@ -283,6 +291,26 @@ PUBLIC_TUTORIAL_INSTRUCTIONS = (
 )
 
 
+# Appended after the cached prefix, like PUBLIC_TUTORIAL_INSTRUCTIONS and for
+# the same reason: a chat ask reuses the one cached corpus instead of forking
+# the prompt cache into a second entry. This only changes register and length —
+# the grounding rules and the trust boundary above still bind.
+CHAT_INSTRUCTIONS = (
+    "=== CHAT WINDOW MODE ===\n\n"
+    "This is a back-and-forth chat window, not a one-shot answer. The whole "
+    "conversation stays on screen in front of the person, and a Reply button "
+    "sits under it, so:\n"
+    "- Keep each reply SHORT: a few sentences, or at most four brief numbered "
+    "steps. Answer what was actually asked and stop there.\n"
+    "- Don't repeat what you already said earlier in this conversation — they "
+    "can still see it.\n"
+    "- If a question is broad, give the single best next step and offer to go "
+    "further, instead of covering everything at once.\n"
+    "- No sign-off, no \"hope that helps\", no \"let me know if you need "
+    "anything else\". The Reply button says that for you."
+)
+
+
 # ---------------------------------------------------------------------------
 # Manual → grounding text
 # ---------------------------------------------------------------------------
@@ -401,6 +429,7 @@ def build_system(
     *,
     assistant_name: str = DEFAULT_ASSISTANT_NAME,
     public_tutorial: bool = False,
+    chat: bool = False,
 ) -> list[dict]:
     """Assemble the system prompt.
 
@@ -411,7 +440,10 @@ def build_system(
     ``public_tutorial`` appends the public-channel register
     (:data:`PUBLIC_TUTORIAL_INSTRUCTIONS`) last — also after the breakpoint, so
     a public ask reuses the same cached prefix as every other ask instead of
-    forking the cache into a second entry.
+    forking the cache into a second entry. ``chat`` does the same with
+    :data:`CHAT_INSTRUCTIONS` for the Ask panel's chat window. They are
+    mutually exclusive in practice — a chat is never published to a channel —
+    but nothing here depends on that.
     """
     corpus = load_manual_text()
     guide = corpus if corpus else "(guide unavailable)"
@@ -439,6 +471,8 @@ def build_system(
         })
     if public_tutorial:
         blocks.append({"type": "text", "text": PUBLIC_TUTORIAL_INSTRUCTIONS})
+    if chat:
+        blocks.append({"type": "text", "text": CHAT_INSTRUCTIONS})
     return blocks
 
 
@@ -676,6 +710,7 @@ async def answer_advisor(
     tools: AdvisorTools | None = None,
     assistant_name: str = DEFAULT_ASSISTANT_NAME,
     public_tutorial: bool = False,
+    chat: bool = False,
 ) -> AdvisorResult:
     """Answer one grounded question. Never raises — errors become a friendly reply.
 
@@ -690,6 +725,11 @@ async def answer_advisor(
     into a public channel (see :data:`PUBLIC_TUTORIAL_INSTRUCTIONS`). It does
     not itself restrict what the model can see: the caller is responsible for
     passing a context the whole channel may read and for withholding ``tools``.
+
+    ``chat`` switches the register for the Ask panel's multi-turn chat window
+    (see :data:`CHAT_INSTRUCTIONS`) and trims the answer budget to
+    :data:`MAX_CHAT_TOKENS`, which keeps a turn inside the embed field it will
+    be rendered into.
     """
     q = (question or "").strip()
     if not q:
@@ -717,10 +757,11 @@ async def answer_advisor(
                         guild_context,
                         assistant_name=assistant_name,
                         public_tutorial=public_tutorial,
+                        chat=chat,
                     ),
                 ),
                 messages=cast("list[MessageParam]", messages),
-                max_tokens=MAX_TOKENS,
+                max_tokens=MAX_CHAT_TOKENS if chat else MAX_TOKENS,
                 thinking={"type": "disabled"},
                 **extra,
             )

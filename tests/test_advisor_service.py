@@ -6,6 +6,8 @@ import asyncio
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from anthropic.types import TextBlock, ToolUseBlock
 
 from bot_modules.services import advisor_service as adv
@@ -208,6 +210,70 @@ async def test_answer_advisor_is_private_register_by_default(monkeypatch):
     await adv.answer_advisor("how do I play?")
     system = client.messages.create.call_args.kwargs["system"]
     assert all(adv.PUBLIC_TUTORIAL_INSTRUCTIONS not in b["text"] for b in system)
+
+
+# ── chat window register ────────────────────────────────────────────────────
+
+
+def test_build_system_appends_the_chat_register_last(monkeypatch):
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    system = adv.build_system("SERVER CTX", chat=True)
+    assert len(system) == 4
+    assert system[-1]["text"] == adv.CHAT_INSTRUCTIONS
+    assert "cache_control" not in system[-1]
+
+
+def test_chat_register_does_not_fork_the_prompt_cache(monkeypatch):
+    """Same reasoning as the public register: after the breakpoint, so the Ask
+    panel reuses the one cached corpus instead of paying for a second entry."""
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    plain = adv.build_system("SERVER CTX")
+    chat = adv.build_system("SERVER CTX", chat=True)
+    assert chat[:2] == plain[:2]
+
+
+def test_no_chat_register_by_default(monkeypatch):
+    """`/ask` and the Help panel keep the full-length register."""
+    monkeypatch.setattr(adv, "load_manual_text", lambda *a, **k: "GUIDE")
+    for system in (adv.build_system(), adv.build_system("SERVER CTX")):
+        assert all(adv.CHAT_INSTRUCTIONS not in b["text"] for b in system)
+
+
+def test_chat_register_asks_for_short_replies():
+    text = adv.CHAT_INSTRUCTIONS
+    assert "CHAT WINDOW" in text
+    assert "SHORT" in text
+    # A follow-up is one button away, so pre-empting it is wasted length —
+    # and length is what overflows the embed field a turn is rendered into.
+    assert "Reply button" in text
+
+
+async def test_answer_advisor_passes_the_chat_register_through(monkeypatch):
+    client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="ok")])
+    await adv.answer_advisor("how do I play?", chat=True)
+    system = client.messages.create.call_args.kwargs["system"]
+    assert system[-1]["text"] == adv.CHAT_INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
+    ("chat", "expected"),
+    [(True, adv.MAX_CHAT_TOKENS), (False, adv.MAX_TOKENS)],
+)
+async def test_a_chat_turn_gets_the_smaller_answer_budget(monkeypatch, chat, expected):
+    """A full-length answer overflows the 1024-character embed field the turn
+    is drawn into, clipping it out of both the member's view and the history
+    fed back on their next reply."""
+    client = _mock_client(monkeypatch, content=[TextBlock(type="text", text="ok")])
+    await adv.answer_advisor("how do I play?", chat=chat)
+    assert client.messages.create.call_args.kwargs["max_tokens"] == expected
+
+
+def test_the_chat_budget_fits_inside_one_embed_field():
+    """Four characters per token is the rough floor for English prose; the cap
+    has to leave a normal answer inside Discord's field limit."""
+    from bot_modules.services.advisor_chat_logic import FIELD_VALUE_LIMIT
+
+    assert adv.MAX_CHAT_TOKENS * 4 <= FIELD_VALUE_LIMIT * 2
 
 
 # ── config: model + server-context toggle ───────────────────────────────────
