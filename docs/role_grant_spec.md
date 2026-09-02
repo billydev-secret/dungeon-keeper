@@ -158,7 +158,7 @@ Each grant role has:
 
 Plus an allowlist of `(entity_type, entity_id)` entries — individual users and/or roles — per grant.
 
-**Legacy migration** — on startup, a guild with no `grant_roles` rows gets a one-time migration from old flat config keys (`{name}_role_id`, `{name}_log_channel_id`, `{name}_announce_channel_id`, `{name}_grant_message`) for the five historical grants: `denizen`, `nsfw`, `veteran`, `kink`, `goldengirl`. A legacy `greeter_role_id` becomes a role-allowlist entry on all five. (The README's description of `greeter_role_id`/`denizen_role_id` as live config keys is this legacy shape.)
+**Legacy migration** — on startup, a guild with no `grant_roles` rows gets a one-time migration from old flat config keys (`{name}_role_id`, `{name}_log_channel_id`, `{name}_announce_channel_id`, `{name}_grant_message`) for the five historical grants: `denizen`, `nsfw`, `veteran`, `kink`, `goldengirl`. A legacy `greeter_role_id` becomes a role-allowlist entry on all five.
 
 ## Stored data
 
