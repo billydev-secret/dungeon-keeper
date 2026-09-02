@@ -101,8 +101,9 @@ class FakeAttachment:
 
 
 class _FakeNsfwChannel:
-    def __init__(self, nsfw: bool) -> None:
+    def __init__(self, nsfw: bool, category: object = None) -> None:
         self._nsfw = nsfw
+        self.category = category
 
     def is_nsfw(self) -> bool:
         return self._nsfw
@@ -111,6 +112,17 @@ class _FakeNsfwChannel:
 class _RaisingChannel:
     def is_nsfw(self) -> bool:
         raise RuntimeError("partial channel object")
+
+
+class _ChannelWithRaisingCategory:
+    """A thread whose parent isn't cached — ``Thread.category`` raises."""
+
+    def is_nsfw(self) -> bool:
+        return False
+
+    @property
+    def category(self):
+        raise RuntimeError("Parent channel not found")
 
 
 @pytest.fixture(autouse=True)
@@ -706,12 +718,55 @@ async def test_unknown_results_are_not_cached(patched_score):
         pytest.param(_FakeNsfwChannel(False), False, id="not-age-gated"),
         pytest.param(object(), False, id="no-is_nsfw-attribute"),
         pytest.param(_RaisingChannel(), False, id="partial-object-raises"),
+        # Discord does not cascade an age-restricted category onto the
+        # channels already inside it, so the category's own flag has to be
+        # read here or a channel nobody ticked individually reads as SFW —
+        # which is what deleted an upload in themes-and-challenges.
+        pytest.param(
+            _FakeNsfwChannel(False, category=_FakeNsfwChannel(True)),
+            True,
+            id="ungated-channel-in-gated-category",
+        ),
+        pytest.param(
+            _FakeNsfwChannel(False, category=_FakeNsfwChannel(False)),
+            False,
+            id="ungated-channel-in-ungated-category",
+        ),
+        pytest.param(
+            _FakeNsfwChannel(True, category=_FakeNsfwChannel(False)),
+            True,
+            id="gated-channel-in-ungated-category",
+        ),
+        pytest.param(
+            _FakeNsfwChannel(False, category=object()),
+            False,
+            id="category-without-is_nsfw",
+        ),
+        pytest.param(
+            _ChannelWithRaisingCategory(), False, id="thread-parent-not-cached"
+        ),
     ],
 )
 def test_is_age_gated_channel(channel, expected):
     # Defaults to False on anything unexpected: no dataset recorded and no tip
     # offered when the age gate can't be established.
     assert is_age_gated_channel(channel) is expected
+
+
+@pytest.mark.parametrize(
+    "channel",
+    [
+        pytest.param(object(), id="no-is_nsfw-attribute"),
+        pytest.param(_RaisingChannel(), id="partial-object-raises"),
+        pytest.param(_ChannelWithRaisingCategory(), id="thread-parent-not-cached"),
+    ],
+)
+def test_unresolvable_gate_honours_the_callers_default(channel):
+    # A caller excluding NSFW channels from something (advisor_context.can_view
+    # keeping them out of /ask) needs the opposite fallback from the gates in
+    # this module, which permit content rather than withhold it.
+    assert is_age_gated_channel(channel, default=True) is True
+    assert is_age_gated_channel(channel) is False
 
 
 def _classification(**overrides) -> Classification:

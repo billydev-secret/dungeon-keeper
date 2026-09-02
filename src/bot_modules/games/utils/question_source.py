@@ -4,6 +4,8 @@ import re
 import logging
 from typing import Any
 
+from bot_modules.services.nsfw_classifier_service import is_age_gated_channel
+
 log = logging.getLogger(__name__)
 
 
@@ -16,20 +18,16 @@ log = logging.getLogger(__name__)
 
 
 def channel_allows_nsfw(channel) -> bool:
-    """NSFW prompts are gated on Discord's channel age-restriction flag.
+    """NSFW prompts are gated on Discord's own age restriction.
 
-    Threads inherit their parent channel's flag. Any channel we can't resolve
-    is treated as SFW (fail safe).
+    One line of glue over :func:`nsfw_classifier_service.is_age_gated_channel`,
+    which is the single source of that verdict — this used to be a second
+    implementation of it, and the two could disagree about a channel sitting
+    in an age-restricted category. Threads inherit their parent channel's
+    flag, a category's flag counts for the channels inside it, and any channel
+    we can't resolve is treated as SFW (fail safe).
     """
-    try:
-        if hasattr(channel, "is_nsfw"):
-            return bool(channel.is_nsfw())
-        parent = getattr(channel, "parent", None)
-        if parent is not None and hasattr(parent, "is_nsfw"):
-            return bool(parent.is_nsfw())
-    except Exception:
-        log.exception("channel_allows_nsfw check")
-    return False
+    return is_age_gated_channel(channel)
 
 
 # "Would you rather" / "would you rather:" — the prose lead-in a dashboard

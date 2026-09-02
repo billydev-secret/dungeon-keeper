@@ -531,21 +531,53 @@ def top_detection(
     return best.label, best.score
 
 
-def is_age_gated_channel(channel: object) -> bool:
+def is_age_gated_channel(channel: object, *, default: bool = False) -> bool:
     """Whether Discord itself age-gates this channel.
 
+    **A category's flag counts.** ``TextChannel.is_nsfw()`` reports only the
+    channel's own flag, and Discord does not cascade an age-restricted
+    category onto the channels already inside it — so a channel sitting in a
+    category full of age-gated siblings reads as SFW here unless someone
+    ticked it individually. That gap deleted a member's upload in
+    ``themes-and-challenges`` on 2026-09-01: the channel was the one in its
+    category without the flag, and SFW prevention was enforcing. Reading the
+    category too closes it, and reads **Discord's own age gate at both
+    levels** — there is no bot-side "treat this as NSFW" anywhere, which is
+    the rule in CLAUDE.md.
+
     Threads delegate to their parent, and channel types without the concept
-    (DMs, group DMs) are False. Defaults to False on anything unexpected,
-    which is the safe direction for both callers: no dataset is recorded and
-    no tip is offered when we can't establish the age gate.
+    (DMs, group DMs) are False.
+
+    *default* is what to return when the age gate can't be established at all
+    — a partial object, a thread whose parent isn't cached. ``False`` is the
+    safe direction for the gates in this module (no dataset recorded, no tip
+    offered on a channel we can't read); a caller excluding NSFW channels from
+    something rather than permitting content in them wants ``True``, and
+    :func:`advisor_context.can_view` passes it.
     """
     checker = getattr(channel, "is_nsfw", None)
     if not callable(checker):
+        return default
+    try:
+        if bool(checker()):
+            return True
+    except Exception:  # noqa: BLE001 - a partial channel object must not raise here
+        return default
+    try:
+        # Thread.category raises ClientException when the parent isn't cached,
+        # so this walk stays inside a try rather than beside one.
+        category = getattr(channel, "category", None)
+    except Exception:  # noqa: BLE001
+        return default
+    if category is None:
+        return False
+    parent_checker = getattr(category, "is_nsfw", None)
+    if not callable(parent_checker):
         return False
     try:
-        return bool(checker())
-    except Exception:  # noqa: BLE001 - a partial channel object must not raise here
-        return False
+        return bool(parent_checker())
+    except Exception:  # noqa: BLE001
+        return default
 
 
 def record_classification(
