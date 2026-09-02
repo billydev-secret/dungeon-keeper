@@ -13,7 +13,13 @@ import pytest
 
 from bot_modules.confessions.logic import (
     HELP_TEXT,
+    QUEUED_ACK,
+    REJECTION_REASON_MAX,
     ButtonAction,
+    build_expiry_dm_text,
+    build_rejection_dm_text,
+    format_waiting_for,
+    pending_option_text,
     ThreadRootInfo,
     audit_channel_id,
     build_dm_notification_text,
@@ -413,3 +419,101 @@ def test_audit_channel_id_picks_the_addressable_location(is_forum, expected):
     assert audit_channel_id(
         dest_channel_id=111, thread_id=555, is_forum=is_forum
     ) == expected
+
+
+# ── mod-approve mode ──────────────────────────────────────────────────
+
+
+def test_the_queued_ack_says_it_has_not_posted_yet():
+    """A confession that silently fails to appear is what makes people send it
+    again, so the ack must not read like a normal successful submission."""
+    assert "review" in QUEUED_ACK.lower()
+
+
+def test_a_rejection_dm_names_no_moderator():
+    """Anonymity cuts both ways: pointing a member at the individual who turned
+    their confession down is not the mod team answering as a team."""
+    text = build_rejection_dm_text(guild_name="The Meadow", reason="Not here, sorry")
+    assert "The Meadow" in text
+    assert "Not here, sorry" in text
+    assert "moderator" not in text.replace("the mods", "")
+
+
+def test_a_rejection_dm_without_a_reason_says_nothing_extra():
+    text = build_rejection_dm_text(guild_name="The Meadow")
+    assert ">" not in text
+
+
+@pytest.mark.parametrize("reason", ["", "   ", None])
+def test_a_blank_reason_is_treated_as_no_reason(reason):
+    assert ">" not in build_rejection_dm_text(guild_name="G", reason=reason)
+
+
+def test_a_long_reason_is_cut_to_the_modal_limit():
+    text = build_rejection_dm_text(guild_name="G", reason="x" * 900)
+    assert "x" * REJECTION_REASON_MAX in text
+    assert "x" * (REJECTION_REASON_MAX + 1) not in text
+
+
+def test_a_multiline_reason_is_flattened_into_the_quote():
+    text = build_rejection_dm_text(guild_name="G", reason="one\ntwo")
+    assert "> one two" in text
+
+
+def test_an_expiry_dm_is_not_worded_as_a_rejection():
+    """Nobody judged it — saying the mods didn't approve it would be a verdict
+    they never reached."""
+    text = build_expiry_dm_text(guild_name="The Meadow")
+    assert "didn't approve" not in text
+    assert "week" in text
+
+
+@pytest.mark.parametrize(
+    ("seconds", "expected"),
+    [
+        (-500, "just now"),   # a clock that stepped backwards, not a future time
+        (0, "just now"),
+        (59, "just now"),
+        (60, "1m"),
+        (3599, "59m"),
+        (3600, "1h"),
+        (86_399, "23h"),
+        (86_400, "1d"),
+        (8 * 86_400, "8d"),
+    ],
+)
+def test_waiting_time_reads_coarsely(seconds, expected):
+    assert format_waiting_for(seconds) == expected
+
+
+def test_a_picker_option_shows_the_body_and_the_wait():
+    label, desc = pending_option_text(
+        {"content": "I ate the last biscuit", "created_at": 1000}, now=1000 + 7200
+    )
+    assert label == "I ate the last biscuit"
+    assert "2h" in desc
+
+
+def test_a_picker_option_fits_discords_limits():
+    label, desc = pending_option_text(
+        {"content": "x" * 500, "created_at": 0}, now=10**9
+    )
+    assert len(label) <= 100
+    assert len(desc) <= 100
+
+
+def test_a_picker_option_flattens_a_multiline_confession():
+    label, _ = pending_option_text({"content": "a\nb\nc", "created_at": 0}, now=0)
+    assert label == "a b c"
+
+
+def test_an_empty_confession_still_gets_a_pickable_label():
+    label, _ = pending_option_text({"content": "   ", "created_at": 0}, now=0)
+    assert label.strip()
+
+
+def test_a_picker_option_cannot_print_an_author():
+    label, desc = pending_option_text(
+        {"content": "hello", "created_at": 0, "author_id": 424242}, now=0
+    )
+    assert "424242" not in label + desc

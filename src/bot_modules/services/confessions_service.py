@@ -13,7 +13,7 @@ from typing import Optional
 
 import discord
 
-from bot_modules.core.db_utils import open_db
+from bot_modules.core.db_utils import open_db, open_db_immediate
 # Re-exported under the local name this module has always used; the canonical
 # definition moved to core.utils when Event Echo became the fourth copy.
 from bot_modules.core.utils import jump_url as jump_link
@@ -21,6 +21,12 @@ from bot_modules.core.utils import jump_url as jump_link
 DEFAULT_COOLDOWN_SECONDS = 120
 DEFAULT_MAX_CHARS = 2000
 THREAD_METADATA_TTL_SECONDS = 7 * 24 * 60 * 60
+#: How long a confession may sit unreviewed in the approval queue before it
+#: is swept. The same seven days, and not by coincidence: manual.html promises
+#: members that the link between a confession and its author self-destructs
+#: after a week, and a pending row *is* that link — text and author id in one
+#: place. A queue nobody works must not quietly become the exception.
+PENDING_TTL_SECONDS = 7 * 24 * 60 * 60
 MIN_REPLY_COOLDOWN_SECONDS = 30
 CONFESSION_HEADER_LENGTH = 2
 MAX_DISCORD_MESSAGE_LENGTH = 2000
@@ -218,6 +224,11 @@ class GuildConfig:
     launcher_channel_id: int = 0
     launcher_message_id: int = 0
     blocked_user_ids: Optional[list[int]] = None
+    #: Hold every new confession for a moderator instead of posting it.
+    #: All-or-nothing by design: no age, role or word-list exemption, so
+    #: there is no rule that can silently fail open on the one submission
+    #: that needed catching.
+    require_approval: bool = False
 
     def blocked_set(self) -> set[int]:
         return set(self.blocked_user_ids or [])
@@ -245,7 +256,8 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             per_day_limit INTEGER NOT NULL DEFAULT 0,
             launcher_channel_id INTEGER NOT NULL DEFAULT 0,
             launcher_message_id INTEGER NOT NULL DEFAULT 0,
-            blocked_user_ids TEXT NOT NULL DEFAULT '[]'
+            blocked_user_ids TEXT NOT NULL DEFAULT '[]',
+            require_approval INTEGER NOT NULL DEFAULT 0
         )
     """)
     conn.execute("""
@@ -296,6 +308,24 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             PRIMARY KEY (guild_id, root_message_id, pool_type)
         )
     """)
+    # The approval queue. Unlike every other table here this one holds the
+    # confession *body* next to the real author id, so it is written only while
+    # a submission is waiting and deleted the instant it is resolved — see
+    # ``resolve_pending_confession`` and ``purge_expired_pending``.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS confession_pending (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id INTEGER NOT NULL,
+            author_id INTEGER NOT NULL,
+            content TEXT NOT NULL,
+            notify_original_author INTEGER NOT NULL DEFAULT -1,
+            created_at INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_confession_pending_queue "
+        "ON confession_pending(guild_id, created_at)"
+    )
 
 
 def _row_to_guild_config(row) -> GuildConfig:
@@ -312,6 +342,11 @@ def _row_to_guild_config(row) -> GuildConfig:
         launcher_channel_id=row["launcher_channel_id"],
         launcher_message_id=row["launcher_message_id"],
         blocked_user_ids=json.loads(row["blocked_user_ids"] or "[]"),
+        # Tolerated by key rather than assumed: a config row read from a DB
+        # that predates migration 200 simply has approval off.
+        require_approval=bool(row["require_approval"])
+        if "require_approval" in row.keys()
+        else False,
     )
 
 
@@ -337,8 +372,9 @@ def upsert_config(db_path: Path, cfg: GuildConfig) -> None:
             INSERT INTO confession_config (
                 guild_id, dest_channel_id, log_channel_id, cooldown_seconds,
                 max_chars, panic, replies_enabled, notify_op_on_reply,
-                per_day_limit, launcher_channel_id, launcher_message_id, blocked_user_ids
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                per_day_limit, launcher_channel_id, launcher_message_id, blocked_user_ids,
+                require_approval
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(guild_id) DO UPDATE SET
                 dest_channel_id=excluded.dest_channel_id,
                 log_channel_id=excluded.log_channel_id,
@@ -350,13 +386,14 @@ def upsert_config(db_path: Path, cfg: GuildConfig) -> None:
                 per_day_limit=excluded.per_day_limit,
                 launcher_channel_id=excluded.launcher_channel_id,
                 launcher_message_id=excluded.launcher_message_id,
-                blocked_user_ids=excluded.blocked_user_ids
+                blocked_user_ids=excluded.blocked_user_ids,
+                require_approval=excluded.require_approval
         """, (
             cfg.guild_id, cfg.dest_channel_id, cfg.log_channel_id,
             cfg.cooldown_seconds, cfg.max_chars,
             int(cfg.panic), int(cfg.replies_enabled), int(cfg.notify_op_on_reply),
             cfg.per_day_limit, cfg.launcher_channel_id, cfg.launcher_message_id,
-            json.dumps(cfg.blocked_user_ids or []),
+            json.dumps(cfg.blocked_user_ids or []), int(cfg.require_approval),
         ))
 
 
@@ -471,6 +508,154 @@ def purge_old_thread_posts(db_path: Path, max_age_seconds: int = THREAD_METADATA
     with open_db(db_path) as conn:
         cur = conn.execute("DELETE FROM confession_threads WHERE created_at < ?", (cutoff,))
         return max(cur.rowcount, 0)
+
+
+# ---------------------------------------------------------------------------
+# The approval queue
+# ---------------------------------------------------------------------------
+#
+# With ``require_approval`` on, a submission lands here instead of in the
+# destination channel and waits for a moderator to approve it from the sticky
+# todo board. Two rules shape everything below.
+#
+# **The row is transient.** It is the only place the bot holds confession text
+# next to the real author id — ``anon_audit_log`` stores no content at all and
+# ``confession_threads`` keeps routing metadata — so it is deleted on approve,
+# deleted on reject, and swept at ``PENDING_TTL_SECONDS`` if nobody ever gets
+# to it. Nothing accumulates and there is no rejected-confession archive.
+#
+# **The row is claimed, not read-then-acted-on.** ``resolve_pending_confession``
+# deletes and returns in one immediate transaction, so two moderators pressing
+# Approve at the same moment cannot post the same confession twice; the second
+# gets ``None`` and is told it has already been handled.
+#
+# Readers take a connection (the board reads all its sections under one) and
+# writers take a path, matching the rest of this module.
+
+
+def enqueue_confession(
+    db_path: Path,
+    *,
+    guild_id: int,
+    author_id: int,
+    content: str,
+    notify_original_author: int,
+) -> int:
+    """Park a submission for review. Returns its queue id."""
+    with open_db(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO confession_pending (
+                guild_id, author_id, content, notify_original_author, created_at
+            ) VALUES (?, ?, ?, ?, ?)
+            """,
+            (guild_id, author_id, content, notify_original_author, now_ts()),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def pending_confessions(conn, guild_id: int, *, limit: int = 25) -> list[dict]:
+    """The queue for one guild, oldest first — the order a mod should work it.
+
+    No author id comes back. The board section and the picker are moderator
+    surfaces, and moderator is a wider circle than the admin-only Confessions
+    Audit Log, which is admin-gated *precisely* because it names the author.
+    Approving a confession must not become a second way to de-anonymise one, so
+    nothing on this path can print a name even by accident.
+    """
+    rows = conn.execute(
+        """
+        SELECT id, content, created_at
+        FROM confession_pending
+        WHERE guild_id = ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+        """,
+        (guild_id, int(limit)),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def pending_confession_count(conn, guild_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM confession_pending WHERE guild_id = ?",
+        (guild_id,),
+    ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def get_pending_confession(conn, guild_id: int, pending_id: int) -> Optional[dict]:
+    """One queued confession, for the review card. Still no author id."""
+    row = conn.execute(
+        """
+        SELECT id, content, created_at
+        FROM confession_pending
+        WHERE guild_id = ? AND id = ?
+        """,
+        (guild_id, int(pending_id)),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def resolve_pending_confession(
+    db_path: Path, guild_id: int, pending_id: int
+) -> Optional[dict]:
+    """Claim a queued confession: delete it and hand back what it held.
+
+    Returns ``None`` when the row is already gone — someone else resolved it, or
+    the seven-day sweep took it. The delete and the read share one
+    ``BEGIN IMMEDIATE`` so the claim is exactly-once; a caller that gets a row
+    back is the only caller that will, and may safely post or DM on it.
+
+    This is the *only* function that returns ``author_id``, because approving
+    has to write the thread row and rejecting has to DM somebody. It is not a
+    listing call and nothing renders its result.
+    """
+    with open_db_immediate(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT id, author_id, content, notify_original_author, created_at
+            FROM confession_pending
+            WHERE guild_id = ? AND id = ?
+            """,
+            (guild_id, int(pending_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        conn.execute(
+            "DELETE FROM confession_pending WHERE guild_id = ? AND id = ?",
+            (guild_id, int(pending_id)),
+        )
+        return dict(row)
+
+
+def purge_expired_pending(
+    db_path: Path, max_age_seconds: int = PENDING_TTL_SECONDS
+) -> list[dict]:
+    """Sweep confessions nobody reviewed in time, returning what was dropped.
+
+    The rows come back so the caller can tell each author their confession
+    expired — the same courtesy a rejection gets, since from the member's side
+    the outcome is identical: it never appeared and they were never told why.
+    """
+    cutoff = now_ts() - max_age_seconds
+    with open_db_immediate(db_path) as conn:
+        rows = [
+            dict(r)
+            for r in conn.execute(
+                """
+                SELECT id, guild_id, author_id, created_at
+                FROM confession_pending
+                WHERE created_at < ?
+                """,
+                (cutoff,),
+            ).fetchall()
+        ]
+        if rows:
+            conn.execute(
+                "DELETE FROM confession_pending WHERE created_at < ?", (cutoff,)
+            )
+    return rows
 
 
 # ---------------------------------------------------------------------------

@@ -177,6 +177,15 @@ export function mount(container) {
       "How many one member may post in a day. Enter 0 for no daily limit.",
     ));
 
+    const approvalCard = card(form, "Moderator Approval");
+    const approvalToggle = toggleField(
+      "require_approval",
+      "Hold New Confessions for a Moderator",
+      c.require_approval,
+      "Every confession waits until a moderator approves it, instead of posting straight away. They review it from the \u{1F575}\uFE0F Confessions button on the server todo board \u2014 the card shows what was written and nothing about who wrote it. Turned down, the member gets a DM; nobody else is told.",
+    );
+    approvalCard.appendChild(approvalToggle.wrap);
+
     const behaviorCard = card(form, "Replies & Safety");
     const repliesToggle = toggleField(
       "replies_enabled",
@@ -244,6 +253,7 @@ export function mount(container) {
           dest_channel_id: destPicker.getValue() || "0",
           log_channel_id: logPicker.getValue() || "0",
           ...nums,
+          require_approval: approvalToggle.box.checked,
           replies_enabled: repliesToggle.box.checked,
           notify_op_on_reply: notifyToggle.box.checked,
           panic: panicToggle.box.checked,

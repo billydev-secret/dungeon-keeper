@@ -173,6 +173,99 @@ def build_dm_notification_text(
 
 
 # ---------------------------------------------------------------------------
+# Mod-approve mode
+# ---------------------------------------------------------------------------
+#
+# With ``require_approval`` on, a submission waits for a moderator instead of
+# posting. The member is told so at submit time — a confession that silently
+# fails to appear is what makes people submit it again — and told again if it
+# is turned down. Approval is not announced: the confession simply appears,
+# which the member can already see.
+
+QUEUED_ACK = (
+    "✅ Sent to the mods for review. It'll appear in the confessions channel "
+    "once someone approves it — still anonymous, and they can't see who sent it."
+)
+
+#: Discord's short-style modal input maxes at 4000; this is a *reason*, not an
+#: essay, and it is quoted back to a member who is already disappointed.
+REJECTION_REASON_MAX = 300
+
+
+def build_rejection_dm_text(*, guild_name: str, reason: str = "") -> str:
+    """The DM a member gets when a moderator turns their confession down.
+
+    Says nothing about who decided. The mod team is answerable as a team, and
+    naming the individual who rejected an anonymous confession points a member
+    at one person over something they were never meant to be identified for —
+    the anonymity is supposed to cut both ways here.
+
+    ``reason`` is the moderator's optional note, blockquoted so it reads as
+    theirs rather than as the bot's judgement. Empty is the normal case.
+    """
+    text = (
+        f"Your anonymous confession in **{guild_name}** wasn't posted — "
+        "the mods didn't approve it."
+    )
+    reason = " ".join(str(reason or "").split())
+    if reason:
+        text += f"\n\n> {reason[:REJECTION_REASON_MAX]}"
+    return text
+
+
+def build_expiry_dm_text(*, guild_name: str) -> str:
+    """The DM for a confession that sat in the queue until it aged out.
+
+    Deliberately distinct from a rejection: nobody judged this one, and telling
+    a member they were turned down when in truth the queue was never worked
+    would be a lie the mods didn't tell.
+    """
+    return (
+        f"Your anonymous confession in **{guild_name}** wasn't posted — "
+        "it waited a week without a moderator reviewing it, so it's been "
+        "discarded. Nothing was wrong with it; feel free to send it again."
+    )
+
+
+def format_waiting_for(seconds: int) -> str:
+    """``3h`` — how long something has been waiting, coarsely.
+
+    Coarse on purpose. A select option has 100 characters and a mod is
+    triaging, not auditing; "3h" and "3 hours, 12 minutes" lead to the same
+    decision. Sub-minute reads as "just now" rather than a jittering second
+    count, and anything negative (a clock that stepped backwards) is treated
+    as brand new rather than rendered as a time in the future.
+    """
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "just now"
+    if seconds < 60 * 60:
+        return f"{seconds // 60}m"
+    if seconds < 24 * 60 * 60:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def pending_option_text(row, *, now: int, clip: int = 100) -> tuple[str, str]:
+    """``(label, description)`` for one queued confession in the mod's picker.
+
+    The label is the *body*, because it is the only thing that tells two queued
+    confessions apart — there is no member name on this path on purpose, and a
+    list of five options all reading "Confession" would be unusable. The
+    description carries the age, which is the other half of triage.
+
+    Both are clipped to Discord's 100-character option limit, and the body is
+    flattened first so a multi-line confession can't smuggle newlines into a
+    select option.
+    """
+    body = " ".join(str(row.get("content") or "").split())
+    label = body[: clip - 1] + "…" if len(body) > clip else body
+    waited = format_waiting_for(now - int(row.get("created_at") or 0))
+    desc = "Waiting — submitted just now" if waited == "just now" else f"Waiting {waited}"
+    return (label or "(empty confession)", desc[:clip])
+
+
+# ---------------------------------------------------------------------------
 # Button custom-id parsing
 # ---------------------------------------------------------------------------
 

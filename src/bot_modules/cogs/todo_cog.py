@@ -12,8 +12,13 @@ from discord.ext import commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.confessions.approval_views import open_confessions_picker
 from bot_modules.economy.approval_views import open_approvals_picker
 from bot_modules.economy.quest_views import open_signoff_picker
+from bot_modules.services.confessions_service import (
+    pending_confession_count,
+    pending_confessions,
+)
 from bot_modules.services.economy_approvals_service import (
     pending_approval_count,
     pending_approvals,
@@ -42,6 +47,7 @@ from bot_modules.services.todo_service import (
 from bot_modules.todo.board_logic import (
     MAX_APPROVAL_ROWS,
     MAX_BOARD_ROWS,
+    MAX_CONFESSION_ROWS,
     MAX_SIGNOFF_ROWS,
     board_content_signature,
     complete_option_label,
@@ -281,6 +287,31 @@ class TodoBoardView(discord.ui.View):
             return
         await open_approvals_picker(interaction)
 
+    @discord.ui.button(
+        label="Confessions",
+        emoji="🕵️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="todo_board_confessions",
+    )
+    async def _confessions(
+        self, interaction: discord.Interaction, _button: discord.ui.Button
+    ) -> None:
+        """Review the confessions mod-approve mode is holding.
+
+        The fifth and last button the board can carry — Discord allows five per
+        action row, and this fills the row exactly.
+
+        Unlike Sign-Offs and Approvals this one *is* the board's own moderator
+        tier, applied inside the picker: no currency moves behind it, so there
+        is no narrower economy gate to defer to. The picker gates itself rather
+        than relying on this button, because the ephemeral card it opens
+        outlives the click.
+        """
+        if _resolve_cog(interaction) is None:
+            await _unavailable(interaction)
+            return
+        await open_confessions_picker(interaction)
+
 
 def _resolve_cog(interaction: discord.Interaction) -> "TodoCog | None":
     """Resolve the cog at click time — the board outlives cog reloads."""
@@ -436,6 +467,15 @@ class TodoCog(commands.Cog):
             approval_total = (
                 pending_approval_count(conn, guild_id) if approvals else 0
             )
+            # Confessions held by mod-approve mode, read the same way again.
+            # A guild with the mode off never has a row here, so the section
+            # and its two queries cost nothing until somebody turns it on.
+            confessions = pending_confessions(
+                conn, guild_id, limit=MAX_CONFESSION_ROWS + 1
+            )
+            confession_total = (
+                pending_confession_count(conn, guild_id) if confessions else 0
+            )
             currency_emoji = (
                 load_econ_settings(conn, guild_id).currency_emoji
                 if (signoffs or approvals)
@@ -460,6 +500,8 @@ class TodoCog(commands.Cog):
             "signoff_total": signoff_total,
             "approvals": approvals,
             "approval_total": approval_total,
+            "confessions": confessions,
+            "confession_total": confession_total,
             "currency_emoji": currency_emoji,
             "chores": chores,
             "rows": rows,
@@ -472,6 +514,8 @@ class TodoCog(commands.Cog):
         signoffs, total = data["signoffs"], data["total"]
         signoff_total = data["signoff_total"]
         approvals, approval_total = data["approvals"], data["approval_total"]
+        confessions = data["confessions"]
+        confession_total = data["confession_total"]
         for chore in chores:
             chore["completed_by_name"] = self._display_name(
                 guild, chore.get("completed_by")
@@ -494,13 +538,20 @@ class TodoCog(commands.Cog):
                 signoff_total=signoff_total,
                 approval_rows=approvals,
                 approval_total=approval_total,
+                # No name-resolution pass above for these, unlike every other
+                # section: pending_confessions returns no author id at all, on
+                # purpose. See confessions/approval_views.py.
+                confession_rows=confessions,
+                confession_total=confession_total,
                 currency_emoji=data["currency_emoji"],
                 task_total=total,
             ),
             color=accent,
         )
         embed.set_footer(
-            text=render_board_footer(chores, total, signoff_total, approval_total)
+            text=render_board_footer(
+                chores, total, signoff_total, approval_total, confession_total
+            )
         )
         return PanelContent(
             embed=embed,
@@ -513,6 +564,8 @@ class TodoCog(commands.Cog):
                 signoff_total=signoff_total,
                 approval_rows=approvals,
                 approval_total=approval_total,
+                confession_rows=confessions,
+                confession_total=confession_total,
             ),
         )
 

@@ -307,6 +307,19 @@ def test_purges_user_with_more_messages_than_sqlite_variable_cap(db):
             "guild_id = ? AND user_id = ?",
             id="pen_pals_optouts",
         ),
+        # A confession held by mod-approve mode. Deleted outright rather than
+        # left to the seven-day sweep its sibling confession_threads relies on:
+        # the row is queued *to be published*, and erasing a member then posting
+        # what they wrote — because a mod reached the queue first — is not a
+        # defensible outcome.
+        pytest.param(
+            "confession_pending",
+            "INSERT INTO confession_pending (guild_id, author_id, content, created_at) "
+            "VALUES (?, ?, 'a secret', 0)",
+            (GUILD, USER),
+            "guild_id = ? AND author_id = ?",
+            id="confession_pending",
+        ),
     ],
 )
 def test_purges_review_added_simple_tables(db, table, insert_sql, params, where):

@@ -544,6 +544,97 @@ def approval_signature(
     return (shown, len(shown) if total is None else total)
 
 
+# ── confessions awaiting approval ───────────────────────────────────────────
+#
+# A guild can put confessions behind moderator approval
+# (``confession_config.require_approval``). While it is on, a submission waits
+# in ``confession_pending`` instead of posting, and this is where the mods see
+# that somebody is waiting on them — the third such section, and it sits with
+# the other two for the same reason.
+#
+# **No author, ever.** The other two sections name the member, because a paid
+# request and a quest claim are things a member did openly. A confession is
+# not. The board is a moderator surface and moderator is a *wider* circle than
+# the admin-only Confessions Audit Log, which is admin-gated precisely because
+# it puts a real name to an anonymous post. Approving must not quietly become a
+# second, wider way to do that, so nothing on this path is handed an author id
+# to print in the first place (see
+# ``confessions_service.pending_confessions``).
+#
+# The body *is* shown, clipped. Everyone who can read this board is someone who
+# may approve what is on it, so the excerpt costs no privacy the decision
+# itself doesn't; and without it a mod would have to open five ephemeral cards
+# to find out which confession has been sitting for two days.
+
+#: Same bounded slice as the sign-offs and the paid requests.
+MAX_CONFESSION_ROWS = 5
+
+EMPTY_CONFESSIONS = "No confessions waiting. ✨"
+
+
+def render_confession_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = MAX_CONFESSION_ROWS,
+    total: int | None = None,
+) -> str:
+    """The confessions section: what is waiting, and how long it has waited.
+
+    ``rows`` are pending submissions oldest-first (see
+    ``confessions_service.pending_confessions``), carrying a body and a
+    ``created_at`` and nothing else.
+
+    No id, same rule as the other two sections: the ``#14`` on this board
+    belongs to a todo, and a queue id printed beside it invites the wrong row
+    being ticked. A mod acts on these through the Confessions button, which
+    carries the id in its own select.
+
+    The overflow line says "waiting", not "on the dashboard": there is
+    deliberately no dashboard queue for this, so pointing a mod at one would
+    send them somewhere that doesn't exist.
+    """
+    if not rows:
+        return EMPTY_CONFESSIONS
+
+    total = len(rows) if total is None else total
+    shown = rows[:limit]
+    if not shown:  # limit <= 0
+        return EMPTY_CONFESSIONS
+
+    lines: list[str] = []
+    for row in shown:
+        body = _clip(_flatten(str(row.get("content") or "")), TASK_CLIP)
+        when = rel_ts(float(row.get("created_at") or 0))
+        lines.append(f"🕵️ {body or '*(empty)*'} · {when}")
+
+    hidden = total - len(shown)
+    if hidden > 0:
+        lines.append(f"\n…and **{hidden}** more waiting.")
+    return "\n".join(lines)
+
+
+def confession_signature(
+    rows: Iterable[Mapping[str, Any]],
+    total: int | None = None,
+    *,
+    limit: int = MAX_CONFESSION_ROWS,
+) -> tuple:
+    """A fingerprint of what the confessions section *shows*.
+
+    ``created_at`` is deliberately absent even though the section renders it:
+    ``rel_ts`` re-renders in the client, so "2h" becoming "3h" costs no API
+    call and must not spend one. The id is enough to notice a row leaving or
+    arriving, and the body catches nothing else — a queued confession is never
+    edited.
+    """
+    rows = list(rows)
+    shown = tuple(
+        (row["id"], _flatten(str(row.get("content") or "")))
+        for row in rows[:limit]
+    )
+    return (shown, len(shown) if total is None else total)
+
+
 # ── The combined board ──────────────────────────────────────────────────────
 #
 # Migration 180 merged the two boards back into one. The renderers above stay
@@ -554,6 +645,7 @@ def approval_signature(
 
 SIGNOFF_HEADING = "✍️ **Quest sign-offs**"
 APPROVAL_HEADING = "🧾 **Paid requests**"
+CONFESSION_HEADING = "🕵️ **Confessions to approve**"
 CHORE_HEADING = "🔁 **Today's chores**"
 TASK_HEADING = "📋 **Tasks**"
 
@@ -574,12 +666,14 @@ def task_row_budget(
     *,
     signoffs_shown: int = 0,
     approvals_shown: int = 0,
+    confessions_shown: int = 0,
     limit: int = MAX_BOARD_ROWS,
 ) -> int:
     """How many task rows fit under the sections above, never fewer than
     MIN_TASK_ROWS."""
     return max(
-        MIN_TASK_ROWS, limit - chores_shown - signoffs_shown - approvals_shown
+        MIN_TASK_ROWS,
+        limit - chores_shown - signoffs_shown - approvals_shown - confessions_shown,
     )
 
 
@@ -591,23 +685,26 @@ def render_board(
     signoff_total: int | None = None,
     approval_rows: Sequence[Mapping[str, Any]] = (),
     approval_total: int | None = None,
+    confession_rows: Sequence[Mapping[str, Any]] = (),
+    confession_total: int | None = None,
     currency_emoji: str = DEFAULT_CURRENCY_EMOJI,
     task_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> str:
-    """The whole board: sign-offs, paid requests, the chores, then the tasks.
+    """The whole board: sign-offs, paid requests, confessions, chores, tasks.
 
     Each section is omitted when it has nothing in it, rather than rendering a
     heading over an empty-state sentence — two "nothing here" lines stacked on
     one board reads as broken. When *all* are empty the board says so once.
 
-    Sign-offs lead, and the paid requests come straight after them, because
-    those two are the sections where a *member* is waiting on the mods: a
-    pending claim is somebody's payout held up and a pending request is
-    somebody's coins already spent, where a chore or a task is only the
-    server's own work. They take their slices off the top of the row budget
-    for that reason, and — both being normally 0-2 deep — cost the sections
-    below almost nothing to sit above them.
+    Sign-offs lead, then the paid requests, then the confessions awaiting
+    approval, because those three are the sections where a *member* is waiting
+    on the mods: a pending claim is somebody's payout held up, a pending
+    request is somebody's coins already spent, and a pending confession is
+    something somebody wrote and cannot see. A chore or a task is only the
+    server's own work. They take their slices off the top of the row budget for
+    that reason, and — each being normally 0-2 deep — cost the sections below
+    almost nothing to sit above them.
 
     ``task_rows`` must already exclude chore-spawned rows (see
     ``todo_service.pending_todos(exclude_chores=True)``): the chore section
@@ -616,6 +713,7 @@ def render_board(
     sections: list[str] = []
     signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
     approvals_shown = min(len(approval_rows), MAX_APPROVAL_ROWS)
+    confessions_shown = min(len(confession_rows), MAX_CONFESSION_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
     if signoff_rows:
         sections.append(
@@ -639,6 +737,16 @@ def render_board(
                 total=approval_total,
             )
         )
+    if confession_rows:
+        sections.append(
+            CONFESSION_HEADING
+            + "\n"
+            + render_confession_rows(
+                confession_rows,
+                limit=MAX_CONFESSION_ROWS,
+                total=confession_total,
+            )
+        )
     if chore_rows:
         sections.append(
             CHORE_HEADING + "\n" + render_chore_rows(chore_rows, limit=MAX_CHORE_ROWS)
@@ -654,6 +762,7 @@ def render_board(
                     chores_shown,
                     signoffs_shown=signoffs_shown,
                     approvals_shown=approvals_shown,
+                    confessions_shown=confessions_shown,
                     limit=limit,
                 ),
             )
@@ -668,6 +777,7 @@ def render_board_footer(
     task_total: int,
     signoff_total: int = 0,
     approval_total: int = 0,
+    confession_total: int = 0,
 ) -> str:
     """``1 sign-off waiting · 2 paid requests waiting · 2 of 3 chores done ·
     25 tasks · updates automatically``.
@@ -684,6 +794,9 @@ def render_board_footer(
     if approval_total:
         noun = "paid request" if approval_total == 1 else "paid requests"
         parts.append(f"{approval_total} {noun} waiting")
+    if confession_total:
+        noun = "confession" if confession_total == 1 else "confessions"
+        parts.append(f"{confession_total} {noun} to approve")
     if chore_rows:
         done = sum(1 for row in chore_rows if chore_state(row) == "done")
         parts.append(f"{done} of {len(chore_rows)} chores done")
@@ -702,6 +815,8 @@ def board_content_signature(
     signoff_total: int | None = None,
     approval_rows: Sequence[Mapping[str, Any]] = (),
     approval_total: int | None = None,
+    confession_rows: Sequence[Mapping[str, Any]] = (),
+    confession_total: int | None = None,
     limit: int = MAX_BOARD_ROWS,
 ) -> tuple:
     """A fingerprint of the whole board, for the refresh loop's skip check.
@@ -712,10 +827,14 @@ def board_content_signature(
     """
     signoffs_shown = min(len(signoff_rows), MAX_SIGNOFF_ROWS)
     approvals_shown = min(len(approval_rows), MAX_APPROVAL_ROWS)
+    confessions_shown = min(len(confession_rows), MAX_CONFESSION_ROWS)
     chores_shown = min(len(chore_rows), MAX_CHORE_ROWS)
     return (
         signoff_signature(signoff_rows, signoff_total, limit=MAX_SIGNOFF_ROWS),
         approval_signature(approval_rows, approval_total, limit=MAX_APPROVAL_ROWS),
+        confession_signature(
+            confession_rows, confession_total, limit=MAX_CONFESSION_ROWS
+        ),
         chore_signature(chore_rows, limit=MAX_CHORE_ROWS),
         board_signature(
             task_rows,
@@ -724,6 +843,7 @@ def board_content_signature(
                 chores_shown,
                 signoffs_shown=signoffs_shown,
                 approvals_shown=approvals_shown,
+                confessions_shown=confessions_shown,
                 limit=limit,
             ),
         ),

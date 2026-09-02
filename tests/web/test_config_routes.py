@@ -1389,6 +1389,46 @@ def test_update_confessions_creates_config_when_missing(authed_client, fake_ctx)
     assert cfg.replies_enabled is True
 
 
+def test_confessions_approval_defaults_off(authed_client, fake_ctx):
+    """The dial ships dark: a guild that never touches it keeps posting
+    straight through."""
+    authed_client.put(
+        "/api/config/confessions",
+        json={"dest_channel_id": "3000", "log_channel_id": "0"},
+    )
+
+    from bot_modules.services.confessions_service import get_config
+    cfg = get_config(fake_ctx.db_path, fake_ctx.guild_id)
+    assert cfg is not None and cfg.require_approval is False
+
+
+def test_update_confessions_toggles_mod_approval(authed_client, fake_ctx):
+    from bot_modules.services.confessions_service import get_config
+
+    authed_client.put(
+        "/api/config/confessions",
+        json={"dest_channel_id": "3000", "log_channel_id": "0",
+              "require_approval": True},
+    )
+    assert get_config(fake_ctx.db_path, fake_ctx.guild_id).require_approval is True
+
+    authed_client.put(
+        "/api/config/confessions", json={"require_approval": False}
+    )
+    assert get_config(fake_ctx.db_path, fake_ctx.guild_id).require_approval is False
+
+
+def test_confessions_snapshot_reports_the_approval_dial(authed_client):
+    authed_client.put(
+        "/api/config/confessions",
+        json={"dest_channel_id": "3000", "log_channel_id": "0",
+              "require_approval": True},
+    )
+    resp = authed_client.get("/api/config")
+    assert resp.status_code == 200
+    assert resp.json()["confessions"]["require_approval"] is True
+
+
 def test_confessions_block_user_requires_existing_config(authed_client):
     """Block call must 404 if confessions isn't configured yet."""
     resp = authed_client.put("/api/config/confessions/block/42")

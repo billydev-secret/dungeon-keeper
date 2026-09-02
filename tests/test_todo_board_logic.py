@@ -11,16 +11,19 @@ from bot_modules.todo.board_logic import (
     EMPTY_BODY,
     EMPTY_CHORES,
     EMPTY_APPROVALS,
+    EMPTY_CONFESSIONS,
     EMPTY_SIGNOFFS,
     MAX_APPROVAL_ROWS,
     MAX_BOARD_ROWS,
     MAX_CHORE_ROWS,
+    MAX_CONFESSION_ROWS,
     MAX_SIGNOFF_ROWS,
     ORDER_MARKER,
     RECURRING_MARKER,
     STREAK_MARKER,
     APPROVAL_HEADING,
     CHORE_HEADING,
+    CONFESSION_HEADING,
     EMPTY_BOARD,
     MIN_TASK_ROWS,
     SIGNOFF_HEADING,
@@ -30,6 +33,7 @@ from bot_modules.todo.board_logic import (
     board_signature,
     chore_signature,
     completable_options,
+    confession_signature,
     chore_state,
     complete_option_label,
     nothing_to_tick_message,
@@ -40,6 +44,7 @@ from bot_modules.todo.board_logic import (
     render_footer,
     render_rows,
     render_approval_rows,
+    render_confession_rows,
     render_signoff_rows,
     signoff_signature,
     task_row_budget,
@@ -1047,4 +1052,161 @@ def test_a_resolved_paid_request_repaints_the_board():
 def test_a_renamed_requester_repaints_the_board():
     assert approval_signature([_approval(1, who="Alex")]) != approval_signature(
         [_approval(1, who="Alexandra")]
+    )
+
+
+# ── confessions awaiting approval ─────────────────────────────────────
+#
+# The third "somebody is waiting on the mods" section. Everything below that
+# looks like a repeat of the paid-request tests is testing the one thing that
+# is genuinely different: this section is handed no author id at all, because
+# the board's audience is the moderator tier and naming a confession's author
+# is admin-only.
+
+
+def _pending(pending_id, content="I ate the last biscuit", *, created_at=NOW):
+    return {"id": pending_id, "content": content, "created_at": created_at}
+
+
+def test_a_confession_row_shows_the_body_and_how_long_it_waited():
+    body = render_confession_rows([_pending(1)])
+    assert "I ate the last biscuit" in body
+    assert f"<t:{int(NOW)}:R>" in body
+
+
+def test_a_confession_row_carries_no_id():
+    assert "#" not in render_confession_rows([_pending(14)])
+
+
+def test_a_confession_row_cannot_print_an_author():
+    """The row builder is given no author id, so there is nothing to leak.
+
+    This is the guard for the whole privacy seam: if someone ever adds
+    ``author_id`` to ``pending_confessions``, the fix has to be deliberate
+    rather than something a renderer quietly picks up.
+    """
+    row = _pending(1)
+    row["author_id"] = 424242
+    assert "424242" not in render_confession_rows([row])
+
+
+def test_a_long_confession_is_clipped():
+    body = render_confession_rows([_pending(1, "x" * 400)])
+    assert "…" in body
+    assert len(body) < 140
+
+
+def test_a_multiline_confession_cannot_break_the_grid():
+    body = render_confession_rows([_pending(1, "one\ntwo\nthree")])
+    assert body.count("\n") == 0
+
+
+def test_an_empty_confession_still_renders_a_row():
+    assert render_confession_rows([_pending(1, "")]).strip() != ""
+
+
+def test_confessions_keep_their_given_order():
+    body = render_confession_rows([_pending(1, "First"), _pending(2, "Second")])
+    assert body.index("First") < body.index("Second")
+
+
+def test_confession_overflow_does_not_point_at_a_dashboard():
+    """There is deliberately no dashboard queue for these, so the overflow line
+    must not send a mod looking for one."""
+    rows = [_pending(n, f"Confession {n}") for n in range(MAX_CONFESSION_ROWS + 3)]
+    body = render_confession_rows(rows, total=len(rows))
+    assert "**3** more" in body
+    assert "dashboard" not in body
+
+
+def test_no_confessions_reads_as_clear():
+    assert render_confession_rows([]) == EMPTY_CONFESSIONS
+    assert render_confession_rows([_pending(1)], limit=0) == EMPTY_CONFESSIONS
+
+
+# ── the confessions section on the combined board ─────────────────────
+
+
+def test_confessions_sit_under_the_paid_requests_and_above_the_chores():
+    body = render_board(
+        [_chore(1, "QOTD")],
+        [_row(1, "fix the bot")],
+        signoff_rows=[_claim(1)],
+        approval_rows=[_approval(1)],
+        confession_rows=[_pending(1)],
+    )
+    assert body.index(APPROVAL_HEADING) < body.index(CONFESSION_HEADING)
+    assert body.index(CONFESSION_HEADING) < body.index(CHORE_HEADING)
+
+
+def test_the_confession_section_is_omitted_when_empty():
+    """A guild with approval off never has a row, and must never see a heading."""
+    body = render_board([], [_row(1, "fix the bot")])
+    assert CONFESSION_HEADING not in body
+
+
+def test_confessions_alone_still_render_a_board():
+    body = render_board([], [], confession_rows=[_pending(1)])
+    assert CONFESSION_HEADING in body
+    assert body != EMPTY_BOARD
+
+
+def test_the_confession_section_takes_a_bounded_slice():
+    rows = [_pending(n, f"Confession {n}") for n in range(MAX_CONFESSION_ROWS + 4)]
+    body = render_board([], [], confession_rows=rows, confession_total=len(rows))
+    assert f"Confession {MAX_CONFESSION_ROWS}" not in body
+    assert "**4** more" in body
+
+
+def test_confessions_never_starve_the_task_list():
+    body = render_board(
+        [_chore(n, f"Chore {n}", todo_id=n) for n in range(MAX_CHORE_ROWS)],
+        [_row(n, f"Task {n}") for n in range(MAX_BOARD_ROWS)],
+        signoff_rows=[_claim(n) for n in range(MAX_SIGNOFF_ROWS + 5)],
+        approval_rows=[_approval(n) for n in range(MAX_APPROVAL_ROWS + 5)],
+        confession_rows=[_pending(n) for n in range(MAX_CONFESSION_ROWS + 5)],
+    )
+    for n in range(MIN_TASK_ROWS):
+        assert f"Task {n}" in body
+
+
+def test_the_confession_budget_comes_off_the_task_list():
+    assert task_row_budget(0, confessions_shown=4) == MAX_BOARD_ROWS - 4
+
+
+def test_the_footer_counts_confessions_to_approve():
+    assert "1 confession to approve" in render_board_footer([], 3, 0, 0, 1)
+    assert "2 confessions to approve" in render_board_footer([], 3, 0, 0, 2)
+
+
+def test_the_footer_drops_the_confession_half_when_none_wait():
+    assert "to approve" not in render_board_footer([], 3, 1, 1, 0)
+
+
+# ── the confessions signature ─────────────────────────────────────────
+
+
+def test_a_new_confession_repaints_the_board():
+    before = board_content_signature([], [], 0, confession_rows=[], confession_total=0)
+    after = board_content_signature(
+        [], [], 0, confession_rows=[_pending(1)], confession_total=1
+    )
+    assert before != after
+
+
+def test_a_resolved_confession_repaints_the_board():
+    before = board_content_signature(
+        [], [], 0, confession_rows=[_pending(1), _pending(2)], confession_total=2
+    )
+    after = board_content_signature(
+        [], [], 0, confession_rows=[_pending(1)], confession_total=1
+    )
+    assert before != after
+
+
+def test_a_confession_ageing_does_not_repaint_the_board():
+    """``rel_ts`` re-renders in the client, so "2h" becoming "3h" must not
+    spend an API call."""
+    assert confession_signature([_pending(1, created_at=NOW)]) == confession_signature(
+        [_pending(1, created_at=NOW - 90_000)]
     )

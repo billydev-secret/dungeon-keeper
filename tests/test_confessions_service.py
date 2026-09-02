@@ -21,6 +21,8 @@ from bot_modules.services.anon_audit_service import (
 )
 from bot_modules.services.confessions_service import (
     MAX_DISCORD_MESSAGE_LENGTH,
+    PENDING_TTL_SECONDS,
+    GuildConfig,
     _ANON_ADJECTIVES,
     _ANON_ANIMALS,
     _ANON_CIRCLES,
@@ -32,8 +34,16 @@ from bot_modules.services.confessions_service import (
     build_anon_reply,
     get_ephemeral_anon_identity,
     get_or_assign_anon_identity,
+    enqueue_confession,
+    get_config,
+    get_pending_confession,
+    pending_confession_count,
+    pending_confessions,
     pop_pool_index,
+    purge_expired_pending,
     purge_old_thread_posts,
+    resolve_pending_confession,
+    upsert_config,
 )
 
 
@@ -342,3 +352,157 @@ def test_config_round_trips_without_an_attachment_dial(sync_db_path: Path):
     assert loaded.replies_enabled is False
     assert loaded.blocked_set() == {5}
     assert not hasattr(loaded, "max_attachments")
+
+
+# ── mod-approve mode: the approval queue ──────────────────────────────
+#
+# `confession_pending` is the only table in the feature that holds a
+# confession's text beside its author's real id, so the tests below are as
+# much about what it *stops* holding as what it stores.
+
+GUILD = 4242
+
+
+def _queue(db_path: Path, content="I ate the last biscuit", *, author_id=99, notify=1):
+    return enqueue_confession(
+        db_path,
+        guild_id=GUILD,
+        author_id=author_id,
+        content=content,
+        notify_original_author=notify,
+    )
+
+
+def test_require_approval_round_trips_through_the_config(sync_db_path: Path):
+    upsert_config(
+        sync_db_path,
+        GuildConfig(guild_id=GUILD, dest_channel_id=1, log_channel_id=0,
+                    require_approval=True),
+    )
+    cfg = get_config(sync_db_path, GUILD)
+    assert cfg is not None and cfg.require_approval is True
+
+
+def test_approval_is_off_for_a_guild_that_never_set_it(sync_db_path: Path):
+    """The dial ships dark: an existing guild keeps posting straight through."""
+    upsert_config(
+        sync_db_path,
+        GuildConfig(guild_id=GUILD, dest_channel_id=1, log_channel_id=0),
+    )
+    cfg = get_config(sync_db_path, GUILD)
+    assert cfg is not None and cfg.require_approval is False
+
+
+def test_a_queued_confession_is_listed_for_its_guild(sync_db_path: Path):
+    pending_id = _queue(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        rows = pending_confessions(conn, GUILD)
+        assert [r["id"] for r in rows] == [pending_id]
+        assert rows[0]["content"] == "I ate the last biscuit"
+        assert pending_confession_count(conn, GUILD) == 1
+
+
+def test_the_queue_never_hands_back_an_author_id(sync_db_path: Path):
+    """The privacy seam, at the layer that decides it.
+
+    The board and the picker are moderator surfaces; naming a confession's
+    author is admin-only, on the audit panel. Nothing on the approval path is
+    given an id it could print, so no renderer downstream can leak one by
+    accident.
+    """
+    pending_id = _queue(sync_db_path, author_id=1234567890)
+    with open_db(sync_db_path) as conn:
+        listed = pending_confessions(conn, GUILD)
+        one = get_pending_confession(conn, GUILD, pending_id)
+    assert "author_id" not in listed[0]
+    assert one is not None and "author_id" not in one
+
+
+def test_the_queue_is_scoped_to_one_guild(sync_db_path: Path):
+    _queue(sync_db_path)
+    enqueue_confession(
+        sync_db_path, guild_id=GUILD + 1, author_id=7, content="elsewhere",
+        notify_original_author=0,
+    )
+    with open_db(sync_db_path) as conn:
+        assert pending_confession_count(conn, GUILD) == 1
+        assert [r["content"] for r in pending_confessions(conn, GUILD)] == [
+            "I ate the last biscuit"
+        ]
+
+
+def test_the_queue_is_worked_oldest_first(sync_db_path: Path):
+    first = _queue(sync_db_path, "first")
+    second = _queue(sync_db_path, "second")
+    with open_db(sync_db_path) as conn:
+        assert [r["id"] for r in pending_confessions(conn, GUILD)] == [first, second]
+
+
+def test_a_confession_from_another_guild_cannot_be_opened(sync_db_path: Path):
+    pending_id = _queue(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert get_pending_confession(conn, GUILD + 1, pending_id) is None
+
+
+def test_resolving_returns_the_author_and_the_body(sync_db_path: Path):
+    """The one call that *does* return an author id — it goes straight to the
+    poster or the rejection DM and is never rendered."""
+    pending_id = _queue(sync_db_path, author_id=555, notify=1)
+    row = resolve_pending_confession(sync_db_path, GUILD, pending_id)
+    assert row is not None
+    assert row["author_id"] == 555
+    assert row["content"] == "I ate the last biscuit"
+    assert row["notify_original_author"] == 1
+
+
+def test_resolving_deletes_the_row(sync_db_path: Path):
+    pending_id = _queue(sync_db_path)
+    resolve_pending_confession(sync_db_path, GUILD, pending_id)
+    with open_db(sync_db_path) as conn:
+        assert pending_confession_count(conn, GUILD) == 0
+
+
+def test_a_confession_can_only_be_resolved_once(sync_db_path: Path):
+    """Two mods pressing Approve together must not post the same confession
+    twice. The claim is the delete, so the loser gets nothing to act on."""
+    pending_id = _queue(sync_db_path)
+    assert resolve_pending_confession(sync_db_path, GUILD, pending_id) is not None
+    assert resolve_pending_confession(sync_db_path, GUILD, pending_id) is None
+
+
+def test_resolving_is_guild_scoped(sync_db_path: Path):
+    pending_id = _queue(sync_db_path)
+    assert resolve_pending_confession(sync_db_path, GUILD + 1, pending_id) is None
+    with open_db(sync_db_path) as conn:
+        assert pending_confession_count(conn, GUILD) == 1
+
+
+def test_an_unreviewed_confession_is_swept_after_a_week(sync_db_path: Path):
+    """Not housekeeping: the privacy notice promises the confession-to-author
+    link self-destructs in seven days, and a queue nobody works must not
+    become the exception."""
+    pending_id = _queue(sync_db_path, author_id=555)
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "UPDATE confession_pending SET created_at = ? WHERE id = ?",
+            (int(time.time()) - PENDING_TTL_SECONDS - 60, pending_id),
+        )
+
+    dropped = purge_expired_pending(sync_db_path)
+
+    assert [(r["id"], r["author_id"], r["guild_id"]) for r in dropped] == [
+        (pending_id, 555, GUILD)
+    ]
+    with open_db(sync_db_path) as conn:
+        assert pending_confession_count(conn, GUILD) == 0
+
+
+def test_the_sweep_leaves_a_confession_inside_the_window(sync_db_path: Path):
+    _queue(sync_db_path)
+    assert purge_expired_pending(sync_db_path) == []
+    with open_db(sync_db_path) as conn:
+        assert pending_confession_count(conn, GUILD) == 1
+
+
+def test_the_sweep_reports_nothing_when_the_queue_is_empty(sync_db_path: Path):
+    assert purge_expired_pending(sync_db_path) == []

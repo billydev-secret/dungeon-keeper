@@ -1,6 +1,6 @@
 # Confessions — Feature Spec
 
-Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + color per thread, or a fresh "someone new" identity on demand. Every confession and reply is recorded, with its real author, in the admin-gated **Confessions Audit Log** panel on the dashboard. A Discord mod-log channel can additionally mirror them, but it is optional and off by default — anyone who can read that channel can de-anonymise every confession in it, whereas the panel is admin-only.
+Anonymous confession box with a persistent **Confess** launcher button at the bottom of a configured channel. Submitters open a modal; the bot reposts the text into a destination channel (or a forum thread) and seeds it with an anonymous-reply button bar. Replies are themselves anonymous — each replier gets a stable name + color per thread, or a fresh "someone new" identity on demand. A guild can optionally put submissions behind **moderator approval**, in which case a confession waits on the mods' todo board until one of them approves it. Every confession and reply is recorded, with its real author, in the admin-gated **Confessions Audit Log** panel on the dashboard. A Discord mod-log channel can additionally mirror them, but it is optional and off by default — anyone who can read that channel can de-anonymise every confession in it, whereas the panel is admin-only.
 
 ## Commands
 
@@ -11,7 +11,8 @@ Anonymous confession box with a persistent **Confess** launcher button at the bo
 | **🎭 Reply Anonymously** | Persistent button | Everyone | Open the reply modal with the user's **stable** identity for this thread |
 | **🎲 Reply as Someone New** | Persistent button | Everyone | Open the reply modal with a fresh **ephemeral** identity (not stored) |
 | **❓ What's this?** | Persistent button | Everyone | Ephemeral help text comparing the two reply modes |
-| Confessions config | Web | Admin reads; Game host writes | Edit destination channel, optional mod-log channel, cooldown, character cap, panic / replies flags, per-day limit |
+| Confessions config | Web | Admin reads; Game host writes | Edit destination channel, optional mod-log channel, cooldown, character cap, panic / replies / approval flags, per-day limit |
+| **🕵️ Confessions** (todo-board button) | Persistent button | Moderator | Open the approval queue: an ephemeral pick-one select, then an Approve / Reject card |
 | Confessions block list | Web | Admin | Add / remove per-guild blocklist entries |
 | Launcher placement | Web | Game host | Post / move the launcher button to a specified channel |
 | Confessions audit log | Web | Admin | Every confession and anonymous reply with its real author, joined with archived bodies for moderator review |
@@ -32,7 +33,50 @@ The modal accepts the body plus a notify-pref textbox (yes / no / unset). On sub
 - the submitter is still inside the cooldown,
 - or the submitter has reached the per-day limit.
 
-On success the bot posts the body to the destination channel. For a forum destination it creates a new thread (using the first available tag if the forum requires one); for a text channel it sends the message then creates a thread on it for the reply bar. The reply button bar (the three buttons above) is posted into the thread. An audit row is written to `anon_audit_log`, and if a mod log channel is configured it also receives a mirror embed. The launcher button is re-pinned to the bottom of the launcher channel.
+When **mod approval** is on (below), a successful submission is instead written to `confession_pending` and the member is told it is waiting for review; nothing is posted, no audit row is written and no quest fires until a moderator approves it. Otherwise, and in the approval path once a mod says yes, the bot posts the body to the destination channel. For a forum destination it creates a new thread (using the first available tag if the forum requires one); for a text channel it sends the message then creates a thread on it for the reply bar. The reply button bar (the three buttons above) is posted into the thread. An audit row is written to `anon_audit_log`, and if a mod log channel is configured it also receives a mirror embed. The launcher button is re-pinned to the bottom of the launcher channel.
+
+### Moderator approval
+
+Off by default. With **require approval** on, every confession is held — there is
+no exemption by account age, role or content, so there is no rule that can fail
+open on the one submission that needed catching. The queue is worked from the
+mods' sticky todo board, which gains a **🕵️ Confessions to approve** section and a
+fifth button; the section shows each waiting confession's body, clipped, and how
+long it has waited.
+
+**The approver is never shown the author.** `pending_confessions` does not select
+an author id, so no listing, board row, select option or review card can print
+one even by accident. Putting a real name to an anonymous post stays one act, in
+one place: the admin-gated Confessions Audit Log. That matters because the board's
+gate is the *moderator* tier, which is a wider circle than admin — approving must
+not become a second, wider way to de-anonymise. The rejection DM likewise names no
+moderator; the mod team answers as a team.
+
+Approve claims the row and deletes it in a single immediate transaction, so two
+moderators pressing Approve together cannot post the same confession twice; the
+second is told it has already been handled. The confession then publishes exactly
+as an unqueued one would — same embed, thread, audit row, mod-log mirror, launcher
+re-pin — and the quest trigger fires **here**, on approval, so a confession that
+never posts never pays. If the post fails (a permission gone since submission) the
+claimed row is put back rather than lost.
+
+Reject opens a modal with an optional reason and DMs the author a branded embed
+saying their confession wasn't posted, quoting the reason if one was given.
+Approval is not announced: the confession simply appears, which the member can
+already see. A rejection does **not** refund the member's daily slot or reset
+their cooldown — refunding would invite resubmit-until-approved.
+
+A pending row is swept after **seven days** and its author DMed a distinct
+"nobody reviewed it in time" message — worded as its own outcome, because nobody
+judged it. Seven is not a tuning choice: the row holds a confession's text beside
+its author's real id, and the privacy notice promises members that link
+self-destructs after a week, so a queue the mods stop working must not become the
+exception to it. An erasure request deletes any pending rows immediately.
+
+There is deliberately **no dashboard queue** for this. Approving is a mod action
+and mod actions live in Discord; a second approval surface would be a duplicated
+control, and the board section's overflow line says "more waiting" rather than
+pointing at a dashboard that doesn't have them.
 
 ### Reply identity model
 
@@ -72,6 +116,7 @@ Pure help text. Posts an ephemeral comparison of the two reply modes. No databas
 | Body exceeds the character cap | Ephemeral with the computed cap (per-guild) |
 | Inside cooldown | "Slow down — you can post/reply again in **{remaining}s**." |
 | Per-day limit reached (confessions only) | "You've hit today's limit (**{N}**). Try again tomorrow." |
+| Approval mode on, submission accepted | "Sent to the mods for review…" — not an error, but the one case where a successful submission does not appear |
 | Submitter on the per-guild block list (confession path) | "You can't submit confessions on this server." |
 | Submitter on the per-guild block list (reply path) | "You can't submit anonymous replies on this server." |
 | Replies disabled by config | Ephemeral: replies-disabled message |
@@ -91,6 +136,9 @@ Stale-interaction races (Discord internal-defer collisions) silently no-op — t
 - **No separate identities for replies-to-replies.** Replying to a reply inherits the root thread's identity pool, so the same person keeps the same name and color throughout.
 - **No backfill for deleted spawned threads.** If the thread was deleted manually, the reply button still works but posts as a direct Discord reply in the destination channel.
 - **No web-side authoring.** The dashboard configures the feature; submission is Discord-only.
+- **No dashboard approval queue.** Approving is a mod action, and it happens on the todo board only.
+- **No rejected-confession archive.** A rejected body is deleted, not kept for later review.
+- **No partial approval.** No trusted-member bypass, account-age threshold or word-filter trigger; it is on for everyone or off.
 - **No per-channel destination override.** One destination channel per guild.
 - **No attachment support today.** Text bodies only.
 
@@ -106,6 +154,8 @@ Per-guild settings, editable from the dashboard:
 - **Post cooldown** — seconds between confessions per user (default 120).
 - **Reply cooldown** — derived as half the post cooldown, floor 30 s; not directly configurable.
 - **Character cap** — per-body cap (default 2000, clamped to Discord's actual limit).
+- **Require approval** — hold every new confession for a moderator instead of
+  posting it. Off by default. All-or-nothing; there is no partial mode.
 - **Panic mode** — kill switch; every modal short-circuits when on.
 - **Replies enabled** — disables the three reply buttons globally when off.
 - **Notify-OP-on-reply default** — default value of the notify-pref textbox in the confession modal.
@@ -116,6 +166,13 @@ Per-guild settings, editable from the dashboard:
 ## Stored data
 
 Per-guild: a config row (settings + block list), the per-user rate-limit row (last-confess and last-reply timestamps plus the UTC-day key and counter), thread metadata for every bot-posted message (root or reply, with the real author id kept internal and the spawned Discord thread id), persistent identity assignments keyed by (guild, root message, user), and the shuffled identity pools (name and color) keyed by (guild, root message). Thread metadata is auto-purged after seven days. No DM data is ever stored.
+
+With approval on, a waiting submission additionally stores its **body** and the
+author's real id in `confession_pending` — the only place the bot holds a
+confession's text itself, since `anon_audit_log` stores no content and recovers
+it by joining the general `messages` table. The row is deleted on approve, on
+reject, on erasure, and by the seven-day sweep; nothing about a rejected
+confession is retained anywhere.
 
 The moderator-facing audit trail is kept **separately**, as `anon_audit_log`
 rows under the `confessions` feature slug (one per confession and per reply,
