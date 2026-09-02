@@ -2211,7 +2211,7 @@ def render_mod_stats_panel(
     reader can scroll — so rows are given room instead of being compressed.
     """
     rows: list[str] = ["overlay"]
-    heights: list[float] = [3.0]
+    heights: list[float] = [3.9]
     for _ in stacks:
         rows.append("stack")
         heights.append(2.5)
@@ -2345,12 +2345,19 @@ def render_mod_stats_panel(
     )
     ax.set_xlabel("Hour of day", color=_TEXT, fontsize=10)
     if overlay.band_mid or (presence is not None and presence.has_data):
+        # Below the axes, not floating inside them. Sitting in the upper left it
+        # covered the band across the quiet morning hours — and on a phone, at a
+        # third of this figure's width, a box that overlaps the data is a box
+        # that hides a fifth of it. Two columns: four entries in one row will not
+        # fit 6 inches at a legible size.
         ax.legend(
             facecolor=_BG,
             edgecolor=_GRID,
             labelcolor=_TEXT,
             fontsize=9,
-            loc="upper left",
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.22),
+            ncol=2,
             framealpha=0.85,
         )
     elif overlay.empty_note:
