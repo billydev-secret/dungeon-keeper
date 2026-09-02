@@ -482,8 +482,16 @@ FEATURES: tuple[Feature, ...] = (
     ),
     Feature(
         slug="billy_bot",
-        label="Billy-bot",
-        panel="Config → Billy-bot",
+        # Neutral label and panel path, for the same reason the nav entry is
+        # neutral (see app.js): the assistant's name is per-guild branding, so
+        # a hardcoded "Billy-bot" here made the Suggested Setup tile name the
+        # default on every server however it had been branded. The panel line
+        # also still pointed at "Config → Billy-bot", a page relabelled "AI
+        # Assistant" when the nav was regrouped — an admin following it landed
+        # on a heading that no longer existed. The slug stays: it is the
+        # dismissal key and the model's handle for this feature.
+        label="AI Assistant",
+        panel="Config → AI Assistant",
         blurb="The AI helper behind /ask — it can use this server's own context.",
         settings=(
             _flag("advisor_server_context", "Use live server context"),

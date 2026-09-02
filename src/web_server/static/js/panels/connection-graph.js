@@ -7,6 +7,9 @@ import {
   GRAPH_CLUSTERS, GRAPH_EDGE, SERIES_OVERFLOW,
   CHART_SURFACE, CHART_TEXT, CHART_GRID, CHART_ACCENT,
 } from "../charts.js";
+import {
+  tick as physicsTick, settle as physicsSettle, SETTLED_SPEED,
+} from "./connection-graph-physics.js";
 
 // Force-directed network graph rendered on a <canvas>. Restored 2026-08-26
 // after being removed in 5b4cd71d ("same endpoint as Interactions") — true of
@@ -502,86 +505,33 @@ export function mount(container, initialParams) {
   }
 
   // ── Physics ───────────────────────────────────────────────────────────
-  const BASE_REPULSION = 8000;
-  const SPRING_K  = 0.005;
-  const BASE_SPRING_LEN = 120;
-  const DAMPING   = 0.85;
-  const GRAVITY   = 0.02;
+  // The force model itself lives in connection-graph-physics.js so it can be
+  // tested without a mounted canvas; this only hands it the panel's state.
 
-  const COMM_GRAVITY = 0.08;  // pull toward community center
+  /** Everything ``physicsTick`` needs from the panel's closure. */
+  function physicsOpts() {
+    return {
+      isCommunity: currentLayout === "community",
+      communityOf,
+      commCenters,
+      spreadMult,
+      width: canvas.width / devicePixelRatio,
+      height: canvas.height / devicePixelRatio,
+      dragged,
+    };
+  }
+
+  /** True when the current layout is one the simulation actually moves. */
+  function layoutIsDynamic() {
+    return currentLayout === "force" || currentLayout === "community";
+  }
 
   /** Advance the simulation one step. Returns the fastest node speed so the
    *  animation loop can stop once the layout has settled (W-D10). Static
    *  layouts never move, so they report 0 and the loop ends after one draw. */
   function tick() {
-    if (currentLayout !== "force" && currentLayout !== "community") return 0;
-    const isCommunity = currentLayout === "community";
-    const W = canvas.width / devicePixelRatio;
-    const H = canvas.height / devicePixelRatio;
-    const cxC = W / 2, cyC = H / 2;
-    const REPULSION = BASE_REPULSION * spreadMult * spreadMult;
-    const SPRING_LEN = BASE_SPRING_LEN * spreadMult;
-
-    for (let i = 0; i < nodes.length; i++) {
-      const ni = nodes[i];
-      if (ni === dragged) continue;
-      let fx = 0, fy = 0;
-
-      // Repulsion — in community mode, only repel within same community
-      for (let j = 0; j < nodes.length; j++) {
-        if (i === j) continue;
-        if (isCommunity && communityOf[i] !== communityOf[j]) continue;
-        const nj = nodes[j];
-        const dx = ni.x - nj.x, dy = ni.y - nj.y;
-        const dist2 = dx * dx + dy * dy + 1;
-        const dist = Math.sqrt(dist2);
-        const force = REPULSION / dist2;
-        fx += (dx / dist) * force;
-        fy += (dy / dist) * force;
-      }
-
-      // Spring attraction along edges
-      for (const e of edges) {
-        let other = -1;
-        if (e.source === i) other = e.target;
-        else if (e.target === i) other = e.source;
-        if (other < 0) continue;
-        const nj = nodes[other];
-        const dx = nj.x - ni.x, dy = nj.y - ni.y;
-        const dist = Math.sqrt(dx * dx + dy * dy) + 1;
-        const displacement = dist - SPRING_LEN;
-        // Weaker cross-community springs so clusters don't merge
-        const crossScale = (isCommunity && communityOf[i] !== communityOf[other]) ? 0.15 : 1;
-        const force = SPRING_K * displacement * (1 + e.weight * 0.01) * crossScale;
-        fx += (dx / dist) * force;
-        fy += (dy / dist) * force;
-      }
-
-      // Gravity: global center for force, community center for community
-      if (isCommunity) {
-        const cc = commCenters[communityOf[i]];
-        if (cc) {
-          fx += (cc.x - ni.x) * COMM_GRAVITY;
-          fy += (cc.y - ni.y) * COMM_GRAVITY;
-        }
-      } else {
-        fx += (cxC - ni.x) * GRAVITY;
-        fy += (cyC - ni.y) * GRAVITY;
-      }
-
-      ni.vx = (ni.vx + fx) * DAMPING;
-      ni.vy = (ni.vy + fy) * DAMPING;
-    }
-
-    let fastest = 0;
-    for (const n of nodes) {
-      if (n === dragged) continue;
-      n.x += n.vx;
-      n.y += n.vy;
-      const speed = Math.abs(n.vx) + Math.abs(n.vy);
-      if (speed > fastest) fastest = speed;
-    }
-    return fastest;
+    if (!layoutIsDynamic()) return 0;
+    return physicsTick(nodes, edges, physicsOpts());
   }
 
   function draw() {
@@ -716,7 +666,6 @@ export function mount(container, initialParams) {
   // Repaint strategy (W-D10): the simulation loop runs only while the layout
   // is actually moving. Static layouts (radial/circular/hierarchical) and a
   // cooled force layout draw on demand instead of burning a frame every 16ms.
-  const SETTLED_SPEED = 0.05;
   let drawQueued = false;
 
   /** One repaint on the next frame, unless the sim loop is already running. */
@@ -738,7 +687,7 @@ export function mount(container, initialParams) {
 
   /** Restart the physics loop (dynamic layouts) or schedule a single repaint. */
   function startSim() {
-    if (currentLayout !== "force" && currentLayout !== "community") {
+    if (!layoutIsDynamic()) {
       requestDraw();
       return;
     }
@@ -959,7 +908,7 @@ export function mount(container, initialParams) {
     return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
-  function applyReplayStep(step) {
+  function applyReplayStep(step, { settle = true } = {}) {
     const d = replay.data;
     replay.step = step;
     rpScrub.value = String(step);
@@ -1076,17 +1025,43 @@ export function mount(container, initialParams) {
         .slice(0, LABELLED_NODES)
         .map(([, i]) => i)
     );
+
+    // Settle the frame BEFORE it is drawn. A step lasts REPLAY_STEP_MS / speed
+    // — 700ms, about 42 animation frames, at the default — and the layout
+    // needs hundreds of ticks to converge, so animating the convergence meant
+    // every week was shown mid-flight and the next week arrived before it
+    // landed: the "never settles, just jumps around" of todo #171. What is
+    // left for the animation loop afterwards is the short glide into the new
+    // equilibrium, which is the movement worth watching.
+    //
+    // The cost tracks the week's churn, not the graph size — a week nobody
+    // joined settles in one tick, a week with 8 arrivals takes ~1,300 and can
+    // reach the burst's wall-clock guard. That is affordable once per step and
+    // NOT affordable once per scrub event, which is why `settle` is optional:
+    // see the scrubber's handlers.
+    if (settle && layoutIsDynamic()) physicsSettle(nodes, edges, physicsOpts());
     startSim();
   }
 
-  function _rpSchedule() {
+  // Minimum time a composed week stays on screen, however long it took to
+  // settle — below this the replay stops reading as weeks and starts reading
+  // as a flicker.
+  const REPLAY_MIN_HOLD_MS = 120;
+
+  function _rpSchedule(spentMs = 0) {
     const speed = parseInt(rpSpeed.value) || 2;
+    // Charge the settle burst against the step it belongs to. Arming the next
+    // timeout for a flat REPLAY_STEP_MS *after* the burst made a busy week
+    // take its own settle time longer than a quiet one, so the replay ran
+    // slower than the speed picker claimed exactly when most was happening.
+    const delay = Math.max(REPLAY_MIN_HOLD_MS, REPLAY_STEP_MS / speed - spentMs);
     replay.timer = setTimeout(() => {
       if (!replay || !replay.playing) return;
       if (replay.step >= replay.data.weeks - 1) { setReplayPlaying(false); return; }
+      const t0 = performance.now();
       applyReplayStep(replay.step + 1);
-      _rpSchedule();
-    }, REPLAY_STEP_MS / speed);
+      _rpSchedule(performance.now() - t0);
+    }, delay);
   }
 
   function setReplayPlaying(playing) {
@@ -1251,9 +1226,20 @@ export function mount(container, initialParams) {
   replayBtn.addEventListener("click", enterReplay);
   rpClose.addEventListener("click", () => exitReplay());
   rpToggle.addEventListener("click", () => setReplayPlaying(!replay?.playing));
+  // Dragging the scrubber emits an `input` per week crossed — around 26 of
+  // them across a 30-week history. Settling each one would run a burst per
+  // event and freeze the tab for seconds with the thumb stuck under the
+  // pointer, so a drag only recomposes (cheap: window sum + node rebuild) and
+  // lets the animation loop show it moving. `change` fires when the drag is
+  // released, and that frame — the one the user actually chose — is settled.
+  // A keyboard arrow fires both for a single step, so it settles immediately.
   rpScrub.addEventListener("input", () => {
     if (!replay) return;
     setReplayPlaying(false);
+    applyReplayStep(parseInt(rpScrub.value) || 0, { settle: false });
+  });
+  rpScrub.addEventListener("change", () => {
+    if (!replay) return;
     applyReplayStep(parseInt(rpScrub.value) || 0);
   });
   rpSpeed.addEventListener("change", () => {
