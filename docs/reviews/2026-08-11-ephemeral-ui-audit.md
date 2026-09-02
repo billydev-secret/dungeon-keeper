@@ -149,6 +149,11 @@ only the entry box, category already decided. One tap replaces a typed word,
 disappears with them. **Cost: S.** One cog, one logic function deleted, its
 tests fold into the button test.
 
+**Shipped 2026-09-01**, one better than proposed: rather than a picker step
+before the modal, the round's submit message carries *Submit a Fantasy* and
+*Submit a Dealbreaker* directly, so the fix costs **no** extra tap.
+`normalize_category` is deleted.
+
 <a name="m2"></a>
 ## M2 — Every casino bet costs a modal round-trip
 

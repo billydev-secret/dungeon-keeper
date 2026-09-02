@@ -1,7 +1,7 @@
 """Tests for the extracted Fantasies & Dealbreakers pure-logic modules.
 
-Covers ``bot_modules/games_fantasies/logic.py`` (normalize_category,
-add_entry, apply_vote, tally_entry_votes, build_result_entry,
+Covers ``bot_modules/games_fantasies/logic.py`` (add_entry,
+apply_vote, tally_entry_votes, build_result_entry,
 compute_recap_summary, get_round_entries) and
 ``bot_modules/games_fantasies/embeds.py`` (lobby, round-submit, vote,
 recap embed builders). Mirrors the pressure_cooker / games_hottakes
@@ -27,37 +27,16 @@ from bot_modules.games_fantasies.logic import (
     build_result_entry,
     compute_recap_summary,
     get_round_entries,
-    normalize_category,
     tally_entry_votes,
 )
 
 
-# ── normalize_category ───────────────────────────────────────────────
+# ── the two categories ───────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    "raw",
-    ["Fantasy", "fantasy", "FANTASY", "f", "Fan", "  fantasy  ", "Floral dream"],
-)
-def test_normalize_category_fantasy_variants(raw):
-    assert normalize_category(raw) == CATEGORY_FANTASY
-
-
-@pytest.mark.parametrize(
-    "raw",
-    ["Dealbreaker", "dealbreaker", "D", "deal", "  DEAL  ", "Disgusting"],
-)
-def test_normalize_category_dealbreaker_variants(raw):
-    assert normalize_category(raw) == CATEGORY_DEALBREAKER
-
-
-@pytest.mark.parametrize("raw", ["", "   ", "neither", "xyz", "123", "?"])
-def test_normalize_category_unknown_returns_none(raw):
-    assert normalize_category(raw) is None
-
-
-def test_normalize_category_canonical_values():
-    # Pin the canonical strings — the cog uses these in audit-log labels.
+def test_category_canonical_values():
+    # Pin the canonical strings — the cog uses these as button labels, as
+    # the modal title, and in audit-log labels.
     assert CATEGORY_FANTASY == "Fantasy"
     assert CATEGORY_DEALBREAKER == "Dealbreaker"
 
@@ -565,3 +544,73 @@ def test_build_recap_embed_picks_lowest_pct_for_biggest_outlier():
     outlier = by_name["🏔️ Biggest Outlier"]
     assert outlier is not None
     assert "low" in outlier
+
+
+# ── the category is a button, not a typed word (ephemeral-UI audit M1) ──
+
+from types import SimpleNamespace  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402
+
+import bot_modules.cogs.games_fantasies_cog as fan_cog  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("press", "expected"),
+    [
+        ("submit_fantasy", CATEGORY_FANTASY),
+        ("submit_dealbreaker", CATEGORY_DEALBREAKER),
+    ],
+)
+async def test_submit_buttons_carry_their_own_category(press, expected):
+    """Each button opens the entry modal with the category already decided."""
+    view = fan_cog.SubmitRoundView("g1", 1, 2, db=None, bot=None)
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(display_name="Alice"),
+        channel=None,
+        response=SimpleNamespace(send_modal=AsyncMock()),
+    )
+
+    await getattr(view, press).callback(interaction)  # type: ignore[arg-type]
+
+    modal = interaction.response.send_modal.await_args.args[0]
+    assert isinstance(modal, fan_cog.SubmitEntryModal)
+    assert modal.category == expected
+    assert modal.round_num == 2
+    assert getattr(view, press).label == f"Submit a {expected}"
+    # The category box is gone: the entry is the only thing left to type.
+    assert [c.label for c in modal.children] == ["Your Entry"]
+
+
+async def test_entry_survives_a_submission_that_used_to_be_rejected(monkeypatch):
+    """A 500-character entry can no longer be lost to an unparseable category.
+
+    The old modal asked members to type "Fantasy" or "Dealbreaker" beside
+    their entry; a word normalize_category didn't recognise closed the modal
+    with an error and discarded everything they had written. There is no
+    parse step left to fail.
+    """
+    captured: dict = {}
+
+    async def _fake_modify(db, game_id, fn):
+        payload: dict = {}
+        fn(payload)
+        captured["payload"] = payload
+
+    monkeypatch.setattr(fan_cog, "modify_payload", _fake_modify)
+    monkeypatch.setattr(fan_cog, "audit_anonymous", AsyncMock())
+
+    modal = fan_cog.SubmitEntryModal("g1", None, 1, CATEGORY_DEALBREAKER)
+    modal.entry._value = "x" * 500
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(display_name="Alice", id=7),
+        channel=None,
+        guild=None,
+        client=None,
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+    await modal.on_submit(interaction)  # type: ignore[arg-type]
+
+    entry = captured["payload"]["rounds"]["1"]["entries"][0]
+    assert entry == {"user_id": 7, "text": "x" * 500, "category": CATEGORY_DEALBREAKER}
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
