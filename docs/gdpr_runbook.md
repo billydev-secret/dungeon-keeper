@@ -216,3 +216,47 @@ realistic shapes are:
 [data_register.md](data_register.md) — every table holding personal data, its
 class, retention, purge coverage, and the processor it reaches. Keep it current:
 a new user-data table needs a row there in the same commit.
+
+### Checking that the catalogue is still true
+
+Two tiers, because neither sees what the other does.
+
+`tests/test_privacy_register_coverage.py` runs in the ordinary gate. It walks a
+freshly-migrated schema and fails when a table with a column named in
+`SUBJECT_ID_COLUMNS` has no register row. That catches the common case — a new
+feature's table landing without its row — at commit time.
+
+`scripts/privacy_coverage.py` is the periodic check, and the stronger one. Point
+it at production, read-only:
+
+```bash
+.venv/bin/python scripts/privacy_coverage.py \
+    --db 'file:/home/ben/discord-bots/dungeon-keeper/dungeonkeeper.db?mode=ro'
+```
+
+It learns the real member ids from the roster tables and then reports every
+column whose **values** are member ids, whatever the column is called. That is
+the only way to find a table the naming convention missed — the test above is
+blind to exactly the columns `export_user_data` is blind to, which is the gap
+that matters. It also sees tables created by application code rather than by a
+migration (`foolsday_exclusions`), which never appear in a migrated schema.
+
+Run it after a batch of features lands, and before answering a contested access
+request. The 2026-09-02 review's first run found eleven columns holding member
+ids that no access export could see, and 26 tables with no register row.
+
+### The failure mode this all exists to catch
+
+Both `purge_user_data` and `econ_purge_user` tolerate schema drift: a statement
+that fails logs a warning and the sweep continues, so one table missing on an
+older deployment cannot abort an erasure midway. The price is that a statement
+naming a column its table does not have fails **identically** — quietly, on
+every erasure, forever. Eight tables were in that state until 2026-09-02, five
+of them holding 108,687 production rows that an erasure reported as cleared and
+never touched.
+
+`tests/test_privacy_service.py::test_purge_runs_clean_against_the_migrated_schema`
+now runs the whole erasure against a migrated schema and fails on any swallowed
+schema error. If you ever run an erasure by hand, **read the log** — a warning
+line there means a table was not cleared, and the operator's confirmation to the
+subject should not go out until you know which.

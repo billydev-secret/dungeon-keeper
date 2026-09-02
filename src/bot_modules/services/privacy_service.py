@@ -176,6 +176,35 @@ def purge_user_data(
         # row above) — accepted: an erasure is an out-of-band operator act,
         # and one Leave press puts the flag back.
         "pen_pals_optouts",
+        # ── Added by the 2026-09-02 GDPR review ──────────────────────────
+        # Found by `scripts/privacy_coverage.py`, which reads a live database
+        # and reports every table whose column *values* are real member ids.
+        # Each of these named a member and had neither a purge statement nor a
+        # register row explaining a preserve, which is the combination the
+        # register exists to make impossible. Register rows land with them.
+        #
+        # Who starred a message and who was starred. The starboard post itself
+        # is an ordinary Discord message the purge cannot reach, the same
+        # documented limit as a published Flash Theme announcement.
+        "starboard_reactors",
+        # Members held back from, or exempted from, an inactivity sweep. Bare
+        # preferences with no Art 17(3) ground; note the pen_pals_optouts
+        # consequence applies here too — erasing the exemption exposes the
+        # member to the next sweep, and re-adding it is one mod action.
+        "inactivity_prune_exceptions",
+        "inactive_sweep_exemptions",
+        # Which roles the member picked from a role menu, and the grant log.
+        "role_menu_grants",
+        # The level-5 congratulation card. Part of the XP family, which is
+        # purged in full.
+        "xp_level_5_cards",
+        # Queued "this member is ready for promotion" posts.
+        "pending_promotion_posts",
+        # That the member's birthday was announced on a given date — the
+        # dedup marker behind `member_birthdays`, which is already purged.
+        "birthday_announcements",
+        # Which member bumped the server on a listing site.
+        "bump_tracker_log",
     ):
         _delete(
             conn,
@@ -457,6 +486,13 @@ def purge_user_data(
         ("watched_users", "watched_user_id", "watcher_user_id"),
         ("voice_master_trusted", "owner_id", "target_id"),
         ("invite_edges", "inviter_id", "invitee_id"),
+        # 2026-09-02 GDPR review. A duel row names exactly two members and
+        # means nothing with one of them removed, so it goes whole from either
+        # side — the same call the Risky Rolls rounds made.
+        ("duel_cooldowns", "player_a", "player_b"),
+        ("duel_nicks", "loser_id", "winner_id"),
+        # Who tipped whom. The coins live on in the preserved `econ_ledger`.
+        ("reaction_tip_awards", "user_id", "author_id"),
     ):
         for col in (col_a, col_b):
             _delete(
@@ -486,13 +522,118 @@ def purge_user_data(
         table="confession_pending",
     )
 
+    # ── 2026-09-02 GDPR review: tables whose member column is not `user_id`,
+    # or which are not guild-scoped and must reach their guild through a
+    # parent. Same schema-drift tolerance as every step above.
+    for table, column in (
+        # Who was starred. The starboard message in Discord is an ordinary
+        # message the purge cannot reach.
+        ("starboard_posts", "author_id"),
+        ("duel_group_cooldowns", "player_id"),
+        # A live temporary voice room owned by the member. Live state, not
+        # history — the room itself is torn down by the voice cog.
+        ("voice_master_channels", "owner_id"),
+        # LegitLibs: a template and a revision are the member's own writing.
+        ("legitlibs_templates", "author_id"),
+        # Auto-react bookkeeping naming whose message was reacted to.
+        ("auto_react_placements", "author_id"),
+    ):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE guild_id = ? AND {column} = ?",
+            (guild_id, user_id),
+            table=f"{table}.{column}",
+        )
+
+    # `foolsday_exclusions` is created by application code at first use
+    # (`foolsday_service`, a CREATE TABLE IF NOT EXISTS) rather than by a
+    # migration, so it does not exist in a freshly-migrated schema and the
+    # migration-based register gate cannot see it. It holds members who opted
+    # out of the April Fools nickname prank — a bare preference with no
+    # Art 17(3) ground. Erasing it re-exposes the member to next year's prank,
+    # the accepted `pen_pals_optouts` consequence; one opt-out press restores
+    # it. The `_delete` drift tolerance covers the table's absence.
+    _delete(
+        conn,
+        "DELETE FROM foolsday_exclusions WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+        table="foolsday_exclusions",
+    )
+
+    # Not guild-scoped: each reaches its guild through a parent row, the same
+    # shape `survivor_*` uses. Scoping matters — a bare `user_id` match would
+    # delete the member's rows in every guild the bot serves, not just this one.
+    for table, column, parent, parent_key, child_key in (
+        ("role_menu_bindings", "user_id", "role_menus", "id", "menu_id"),
+        ("policy_votes", "user_id", "policy_tickets", "id", "policy_id"),
+        ("legitlibs_revisions", "editor_id", "legitlibs_templates",
+         "template_id", "template_id"),
+    ):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE {column} = ? AND {child_key} IN "
+            f"(SELECT {parent_key} FROM {parent} WHERE guild_id = ?)",
+            (user_id, guild_id),
+            table=f"{table}.{column}",
+        )
+
+    # `legitlibs_reports` keys on `game_id`, which belongs to an in-memory
+    # game rather than a table, so there is no parent to scope through. The
+    # report names its reporter and nothing else about the guild; it is
+    # deleted across guilds rather than left standing, since a report is a
+    # small row whose only personal datum is the id being erased.
+    _delete(
+        conn,
+        "DELETE FROM legitlibs_reports WHERE reporter_id = ?",
+        (user_id,),
+        table="legitlibs_reports.reporter_id",
+    )
+
+    # A group Hot Potato row names its host, holder, winner and loser in
+    # columns and its whole roster in JSON lists (`roster`, `alive`,
+    # `elimination_order`, `pass_log`) — a list-valued blind spot. The row goes
+    # whole from any named seat: a party game with a hole in it is incoherent
+    # state the cog would try to re-attach a view to on the next boot, and the
+    # alternative is retaining the id inside the JSON.
+    _delete(
+        conn,
+        "DELETE FROM hp_group_games WHERE guild_id = ? AND ("
+        "host_id = ? OR holder_id = ? OR winner_id = ? OR loser_id = ? "
+        "OR (',' || COALESCE(roster, '') || ',') LIKE ? "
+        "OR (',' || COALESCE(alive, '') || ',') LIKE ?)",
+        (guild_id, user_id, user_id, user_id, user_id,
+         *([f"%,{user_id},%"] * 2)),
+        table="hp_group_games",
+    )
+
+    # Wellness counter children, deleted BEFORE their parents — they key on
+    # `cap_id`/`blackout_id` and have no `guild_id` or `user_id` of their own,
+    # so once the parent row is gone there is nothing left to find them by.
+    #
+    # All three were listed in the plain `guild_id`+`user_id` sweep below from
+    # the day they shipped, where every erasure failed on them with "no such
+    # column: guild_id", logged a warning and moved on — the register recorded
+    # the wellness family as fully purged throughout (2026-09-02 GDPR review).
+    # Production holds no rows in any of the three, so nothing was retained in
+    # error; the defect was that the erasure could not have cleared them.
+    for table, child_key, parent, parent_key in (
+        ("wellness_cap_counters", "cap_id", "wellness_caps", "id"),
+        ("wellness_cap_overages", "cap_id", "wellness_caps", "id"),
+        ("wellness_blackout_overages", "blackout_id", "wellness_blackouts", "id"),
+    ):
+        _delete(
+            conn,
+            f"DELETE FROM {table} WHERE {child_key} IN "
+            f"(SELECT {parent_key} FROM {parent} "
+            f"WHERE guild_id = ? AND user_id = ?)",
+            (guild_id, user_id),
+            table=table,
+        )
+
     for table in (
         "wellness_users",
         "wellness_caps",
-        "wellness_cap_counters",
-        "wellness_cap_overages",
         "wellness_blackouts",
-        "wellness_blackout_overages",
         "wellness_blackout_active",
         "wellness_slow_mode",
         "wellness_streaks",
@@ -533,11 +674,27 @@ def purge_user_data(
 # table list: the curated list is what goes stale, and a stale access export is
 # an incomplete answer to a statutory request. A new feature's table is covered
 # the day it lands, provided it names its member column conventionally.
+#
+# The convention is only as good as the sweep that checks it, which is what
+# ``scripts/privacy_coverage.py`` does: it reads a live database and reports
+# every column whose values are real member ids but whose name is not in here.
+# The 2026-09-02 GDPR review ran it against production and added seven such
+# names — ``hidden_by``, ``labeled_by``, ``player_a``/``player_b``,
+# ``posted_by``, ``updated_by`` and ``verified_by`` — each of which named a
+# member in every table carrying it while being invisible to an access request.
+# A second pass added four more the same way: ``active_player``,
+# ``answer_id`` (the member a Guess round is *about*), ``closed_by`` and
+# ``resolved_by``. The last three matter even where the table was already
+# exported through some other column: a member who only ever *closed* a
+# ticket or *resolved* an intake card matched nothing, so their rows were
+# silently absent from an answer that looked complete.
 SUBJECT_ID_COLUMNS = frozenset(
     {
-        "actor_id", "added_by", "approved_by", "asker_id", "author_id",
+        "active_player", "actor_id", "added_by", "answer_id", "approved_by",
+        "asker_id", "author_id",
         "beneficiary_id", "blocked_user_id", "challenger_id", "claimed_by",
-        "claimer_id", "completed_by", "created_by", "creator_id", "done_by",
+        "claimer_id", "closed_by", "completed_by", "created_by", "creator_id",
+        "done_by",
         "editor_id",
         # grant_role_permissions (and its dead prod-only predecessor
         # give_role_permissions) name a member as "entity_id" alongside an
@@ -546,19 +703,24 @@ SUBJECT_ID_COLUMNS = frozenset(
         # keeper allow-lists reach an access export at all.
         "entity_id",
         "extra_questioner_id", "from_user_id", "guessed_id", "guessed_user_id",
-        "guesser_id", "high_bidder_id", "highest_user", "holder_id", "host_id",
-        "invitee_id", "inviter_id", "last_winner_id", "loser_id", "lowest_user",
+        "guesser_id", "hidden_by", "high_bidder_id", "highest_user",
+        "holder_id", "host_id",
+        "invitee_id", "inviter_id", "labeled_by", "last_winner_id", "loser_id",
+        "lowest_user",
         "member_id", "mod_id", "moderator_id", "opener_id", "original_author_id",
-        "owner_id", "partner_id", "player_id", "poster_id", "protected_user_id",
+        "owner_id", "partner_id", "player_a", "player_b", "player_id",
+        "posted_by", "poster_id", "protected_user_id",
         "quoted_id", "quoted_user_id", "quoter_id", "reactor_id", "recipient_id",
-        "replier_id", "reporter_id", "requester_id", "resolver_id",
+        "replier_id", "reporter_id", "requester_id", "resolved_by",
+        "resolver_id",
         "reviewed_by",
         "second_highest_user", "second_lowest_user", "sender_id", "set_by",
         "solver_id", "sponsor_user_id", "subject_id", "submitter_id",
-        "target_author_id", "target_id", "to_user_id", "updated_by_user_id",
+        "target_author_id", "target_id", "to_user_id", "updated_by",
+        "updated_by_user_id",
         "user1_id", "user2_id", "user_a", "user_a_id", "user_b", "user_b_id",
-        "user_high", "user_id", "user_low", "voter_id", "watched_user_id",
-        "watcher_user_id", "winner_id",
+        "user_high", "user_id", "user_low", "verified_by", "voter_id",
+        "watched_user_id", "watcher_user_id", "winner_id",
     }
 )
 
@@ -572,6 +734,14 @@ SUBJECT_ID_COLUMNS = frozenset(
 # runbook tells the operator to grep them by hand.
 LIST_VALUED_MEMBER_COLUMNS = (
     ("confession_config", "blocked_user_ids"),
+    # A group Hot Potato row keeps its whole roster in JSON/CSV lists. The
+    # purge matches `roster` and `alive` by exact membership and takes the row
+    # whole; the export cannot match inside a list, so the gap is disclosed
+    # here (2026-09-02 GDPR review).
+    ("hp_group_games", "alive"),
+    ("hp_group_games", "elimination_order"),
+    ("hp_group_games", "pass_log"),
+    ("hp_group_games", "roster"),
     # from_user chip values live in the conditions JSON (purge strips them;
     # export can only disclose the gap).
     ("mention_award_rules", "conditions"),

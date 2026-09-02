@@ -57,6 +57,11 @@ SQLite-backed. Tests in `tests/`.
   names in `privacy_service.SUBJECT_ID_COLUMNS`, add it there too or the export
   can't see the table. Member-facing data collection also needs a line in the
   privacy notice (`manual.html` §Your Data & Privacy).
+  `tests/test_privacy_register_coverage.py` **hard-fails** when a table with a
+  subject-id column has no register row, so this is a gate, not an honour
+  system. It cannot see a table whose member column is named unconventionally —
+  run `scripts/privacy_coverage.py` against prod (read-only) for that; it finds
+  member ids by value, not by column name.
 - README.md is **not** part of that per-commit contract. It is a landing page
   for someone evaluating the bot, and its command table is a hand-picked
   highlights list, not a reference — `/help` and manual.html are the reference.
