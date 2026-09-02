@@ -177,10 +177,13 @@ async (spec) => {
       { x: 450, y: 280, vx: 0, vy: 0, r: 28 },
       { x: 450.5, y: 280.5, vx: 0, vy: 0, r: 28 },
     ];
+    const gap = () => Math.hypot(nodes[0].x - nodes[1].x, nodes[0].y - nodes[1].y);
+    const before = gap();
     let peak = 0;
     for (let i = 0; i < spec.ticks; i++) {
       P.tick(nodes, [], opts);
       peak = Math.max(peak, fastestStep(nodes));
+      if (i === 0) out.firstTickGain = gap() - before;
     }
     out.peak = peak;
     out.separation = Math.hypot(nodes[0].x - nodes[1].x, nodes[0].y - nodes[1].y);
@@ -285,6 +288,15 @@ def test_overlapping_pair_is_not_launched(page):
     )
     # They still separate — the floor must not turn repulsion off.
     assert r["separation"] > 40, r["separation"]
+    # And it separates them promptly. Flooring the direction vector as well as
+    # the magnitude (the first cut) made the push scale with how close they
+    # already were, so a nearly-coincident pair crawled apart instead of being
+    # pushed: 0.5px apart moved 0.04px in the first tick, against 1.9px once
+    # the direction is a proper unit vector.
+    assert r["firstTickGain"] > 1.0, (
+        f"an overlapping pair only gained {r['firstTickGain']:.2f}px in the first tick — "
+        "the repulsion direction is being scaled by the floor, not normalised"
+    )
     # And neither one is flung off the canvas on the way.
     assert r["maxOffset"] < 500, f"a node reached {r['maxOffset']:.0f}px from centre"
 
@@ -356,6 +368,14 @@ def test_settle_stops_at_its_budget(page):
     # One tick of progress minimum, and it stops at the budget rather than
     # running to maxTicks (100,000 here).
     assert 1 <= r["ticks"] <= 25, r["ticks"]
+    # The clock advances 1ms per reading, so the burst breaks after the 24th
+    # tick. The count it reports has to be the ticks actually RUN: the
+    # budget-break path used to return the loop index (23), undercounting by
+    # the tick that had already executed when the budget was noticed.
+    assert r["ticks"] == 24, (
+        f"24ms of budget at 1ms/tick is 24 executed ticks, got {r['ticks']} — "
+        "settle() is reporting the loop index rather than the work done"
+    )
 
 
 def test_a_held_node_is_not_moved_by_physics(page):
@@ -370,8 +390,31 @@ def test_a_held_node_is_not_moved_by_physics(page):
 def test_replay_step_calls_the_settle_burst():
     """The physics fix is worthless if the replay path doesn't use it."""
     src = _PANEL.read_text(encoding="utf-8")
-    step = src[src.index("function applyReplayStep(") : src.index("function _rpSchedule(")]
+    step = src[src.index("function applyReplayStep(") : src.index("REPLAY_MIN_HOLD_MS")]
     assert "physicsSettle(" in step, (
         "applyReplayStep no longer settles the frame before drawing it — "
         "the replay is back to animating its convergence (todo #171)"
+    )
+
+
+def test_dragging_the_scrubber_does_not_settle_every_week_it_crosses():
+    """A burst per scrub event freezes the tab for seconds.
+
+    The range emits one ``input`` per week the thumb crosses — ~26 across a
+    30-week history — and each settle burst can run to its wall-clock guard.
+    A drag has to recompose only; the frame the drag is *released* on is the
+    one worth settling, and that is what ``change`` is for.
+    """
+    src = _PANEL.read_text(encoding="utf-8")
+    start = src.index('rpScrub.addEventListener("input"')
+    end = src.index("rpSpeed.addEventListener")
+    handlers = src[start:end]
+
+    on_input = handlers[: handlers.index('rpScrub.addEventListener("change"')]
+    assert "settle: false" in on_input, (
+        "the scrubber's input handler settles every week it crosses — a drag "
+        "across the history runs a burst per event and locks the main thread"
+    )
+    assert 'rpScrub.addEventListener("change"' in handlers, (
+        "nothing settles the frame the drag lands on"
     )

@@ -908,7 +908,7 @@ export function mount(container, initialParams) {
     return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   }
 
-  function applyReplayStep(step) {
+  function applyReplayStep(step, { settle = true } = {}) {
     const d = replay.data;
     replay.step = step;
     rpScrub.value = String(step);
@@ -1028,25 +1028,40 @@ export function mount(container, initialParams) {
 
     // Settle the frame BEFORE it is drawn. A step lasts REPLAY_STEP_MS / speed
     // — 700ms, about 42 animation frames, at the default — and the layout
-    // needs hundreds of ticks to converge from cold, so animating the
-    // convergence meant every week was shown mid-flight and the next week
-    // arrived before it landed: the "never settles, just jumps around" of
-    // todo #171. Each step starts from the previous week's settled positions,
-    // so this is normally a handful of ticks; the budget only bites on the
-    // first frame. What is left for the animation loop is the short glide
-    // into the new equilibrium, which is the movement worth watching.
-    if (layoutIsDynamic()) physicsSettle(nodes, edges, physicsOpts());
+    // needs hundreds of ticks to converge, so animating the convergence meant
+    // every week was shown mid-flight and the next week arrived before it
+    // landed: the "never settles, just jumps around" of todo #171. What is
+    // left for the animation loop afterwards is the short glide into the new
+    // equilibrium, which is the movement worth watching.
+    //
+    // The cost tracks the week's churn, not the graph size — a week nobody
+    // joined settles in one tick, a week with 8 arrivals takes ~1,300 and can
+    // reach the burst's wall-clock guard. That is affordable once per step and
+    // NOT affordable once per scrub event, which is why `settle` is optional:
+    // see the scrubber's handlers.
+    if (settle && layoutIsDynamic()) physicsSettle(nodes, edges, physicsOpts());
     startSim();
   }
 
-  function _rpSchedule() {
+  // Minimum time a composed week stays on screen, however long it took to
+  // settle — below this the replay stops reading as weeks and starts reading
+  // as a flicker.
+  const REPLAY_MIN_HOLD_MS = 120;
+
+  function _rpSchedule(spentMs = 0) {
     const speed = parseInt(rpSpeed.value) || 2;
+    // Charge the settle burst against the step it belongs to. Arming the next
+    // timeout for a flat REPLAY_STEP_MS *after* the burst made a busy week
+    // take its own settle time longer than a quiet one, so the replay ran
+    // slower than the speed picker claimed exactly when most was happening.
+    const delay = Math.max(REPLAY_MIN_HOLD_MS, REPLAY_STEP_MS / speed - spentMs);
     replay.timer = setTimeout(() => {
       if (!replay || !replay.playing) return;
       if (replay.step >= replay.data.weeks - 1) { setReplayPlaying(false); return; }
+      const t0 = performance.now();
       applyReplayStep(replay.step + 1);
-      _rpSchedule();
-    }, REPLAY_STEP_MS / speed);
+      _rpSchedule(performance.now() - t0);
+    }, delay);
   }
 
   function setReplayPlaying(playing) {
@@ -1211,9 +1226,20 @@ export function mount(container, initialParams) {
   replayBtn.addEventListener("click", enterReplay);
   rpClose.addEventListener("click", () => exitReplay());
   rpToggle.addEventListener("click", () => setReplayPlaying(!replay?.playing));
+  // Dragging the scrubber emits an `input` per week crossed — around 26 of
+  // them across a 30-week history. Settling each one would run a burst per
+  // event and freeze the tab for seconds with the thumb stuck under the
+  // pointer, so a drag only recomposes (cheap: window sum + node rebuild) and
+  // lets the animation loop show it moving. `change` fires when the drag is
+  // released, and that frame — the one the user actually chose — is settled.
+  // A keyboard arrow fires both for a single step, so it settles immediately.
   rpScrub.addEventListener("input", () => {
     if (!replay) return;
     setReplayPlaying(false);
+    applyReplayStep(parseInt(rpScrub.value) || 0, { settle: false });
+  });
+  rpScrub.addEventListener("change", () => {
+    if (!replay) return;
     applyReplayStep(parseInt(rpScrub.value) || 0);
   });
   rpSpeed.addEventListener("change", () => {

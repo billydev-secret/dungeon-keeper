@@ -85,18 +85,20 @@ export function tick(nodes, edges, opts = {}) {
       if (isCommunity && communityOf[i] !== communityOf[j]) continue;
       const nj = nodes[j];
       const dx = ni.x - nj.x, dy = ni.y - nj.y;
-      let dist2 = dx * dx + dy * dy + 1;
-      let dist = Math.sqrt(dist2);
+      const dist2 = dx * dx + dy * dy + 1;
+      const dist = Math.sqrt(dist2);
       // Floor the separation at the distance where the two dots touch. Inside
       // that they are drawn overlapping anyway, so there is nothing to gain
       // from a force that keeps climbing — and everything to lose, since it
       // is the climb that launches them.
+      //
+      // Only the MAGNITUDE is floored. The direction still divides by the real
+      // distance, so it stays a unit vector: flooring both (the first cut of
+      // this fix) left the push scaling with how far apart the pair already
+      // was, which decays to nothing as they converge — the opposite of
+      // "push apart firmly". They did still separate, just limply.
       const touching = (ni.r || FALLBACK_RADIUS) + (nj.r || FALLBACK_RADIUS);
-      if (dist < touching) {
-        dist = touching;
-        dist2 = touching * touching;
-      }
-      const force = REPULSION / dist2;
+      const force = REPULSION / Math.max(dist2, touching * touching);
       fx += (dx / dist) * force;
       fy += (dy / dist) * force;
     }
@@ -192,10 +194,14 @@ export function settle(nodes, edges, opts = {}) {
   const now = opts.now ?? (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
   const started = now();
   let speed = 0;
+  // Counts ticks actually executed, so both exits report the same thing — the
+  // loop index alone undercounts the budget-break path by the tick that had
+  // already run when the budget was noticed.
   let ticks = 0;
-  for (; ticks < maxTicks; ticks++) {
+  while (ticks < maxTicks) {
     speed = tick(nodes, edges, opts);
-    if (speed <= SETTLED_SPEED) return { ticks: ticks + 1, settled: true, speed };
+    ticks++;
+    if (speed <= SETTLED_SPEED) return { ticks, settled: true, speed };
     // Checked after the tick so the burst always makes at least one step of
     // progress, however tight the budget.
     if (now() - started >= budgetMs) break;
