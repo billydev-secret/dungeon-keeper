@@ -369,13 +369,6 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
 
     app.include_router(gender_routes.router, prefix="/api/gender", tags=["gender"])
 
-    # ── Admin backfill jobs ─────────────────────────────────────────
-    from web_server.routes import admin_backfill as admin_backfill_routes
-
-    app.include_router(
-        admin_backfill_routes.router, prefix="/api/admin", tags=["admin-backfill"]
-    )
-
     # ── Voice Control admin ──────────────────────────────────────────
     from web_server.routes import voice_master as voice_master_routes
 

@@ -91,7 +91,9 @@ write-then-stamp because the launcher and the ingest path race — whichever
 arrives first, the row ends with `game_start` and the id. Losing that race
 would cost the report its only column that says whether anyone *played*.
 
-**Backfill** (`backfill_ping_events`, wired to a button on Admin Backfill):
+**Backfill** (`backfill_ping_events`, run from `scripts/backfill_ping_events.py`;
+it was a button on the Admin Backfill panel until that panel was retired
+2026-09-03):
 parses `<@&id>` / `@everyone` out of `messages.content`. Idempotent. It sees
 strictly less than live capture — only channels where content was retained, and
 it cannot tell a real `@everyone` from someone typing the words. Both the panel

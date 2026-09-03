@@ -134,7 +134,7 @@ export function mount(container, initialParams) {
 
       if (!data.top_pairs.length) {
         if (chart) { chart.destroy(); chart = null; }
-        wrap.innerHTML = `<div class="empty">No replies or mentions recorded in this window. Widen the range, or run Config › Admin Backfill › Interaction Graph to fill in history from before Dungeon Keeper started tracking.</div>`;
+        wrap.innerHTML = `<div class="empty">No replies or mentions recorded in this window. Try widening the range — replies and mentions are recorded as they happen, so nothing is shown for the period before tracking started.</div>`;
         captionEl.textContent = "";
         tableEl.replaceChildren();
         pairsWrap.innerHTML = "";

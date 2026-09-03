@@ -985,19 +985,6 @@ class OkResponse(BaseModel):
     message: str = ""
 
 
-# ── Admin backfill jobs ────────────────────────────────────────────────
-
-
-class BackfillRequest(BaseModel):
-    days: int = 0  # 0 = all available history
-
-
-class BackfillStartedResponse(BaseModel):
-    ok: bool = True
-    job: str
-    message: str = ""
-
-
 # ── Quote audit log ────────────────────────────────────────────────────
 
 

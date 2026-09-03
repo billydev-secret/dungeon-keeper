@@ -129,7 +129,6 @@ _HEAVY_PREFIXES = (
     "/api/ai",
     "/api/logs",
     "/api/messages",
-    "/api/admin",
     "/api/rules-watch",
     "/api/config/voice-transcription",
 )
