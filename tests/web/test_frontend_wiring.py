@@ -625,3 +625,102 @@ def test_every_home_widget_navigates_to_a_panel_that_exists():
         "home widgets point at panels that no longer exist: "
         + ", ".join(f"{w} -> {t}" for w, t in dangling)
     )
+
+
+# ── Games: one flat list, banks behind a tab (2026-09-02, todo #165) ────────
+
+
+def _games_section_src() -> str:
+    """The Games section's SECTIONS entry, from `id: "games"` to the next one."""
+    src = (_JS / "app.js").read_text(encoding="utf-8")
+    start = src.index('id: "games", label: "Games"')
+    end = src.index('id: "social"', start)
+    return src[start:end]
+
+
+# The twenty-two game pages, as one alphabetical list. Before 2026-09-02 these
+# sat in two subgroups (Live Games / Question Banks); the split divided them by
+# a property of the page rather than by anything you know while looking one up,
+# and the bank half is now a tab on each game's own page instead.
+_GAME_PAGE_IDS = {
+    "games-ama", "config-games-chicken", "games-clapback", "fantasies",
+    "games-ffa", "config-games-hotpotato", "config-games-hotpotatogroup",
+    "hottakes", "games-legitlibs", "mahjong", "games-mlt",
+    "config-games-musicalchairs", "games-nhie", "photo-challenge",
+    "config-games-pressure", "games-price", "config-games-quickdraw",
+    "config-risky-rolls", "games-rushmore", "survivor", "games-traditional",
+    "games-wyr",
+}
+_OPERATIONS_IDS = {
+    "games-logs", "games-scheduling", "games-config", "games-external",
+    "config-event-echo",
+}
+# The eight whose page leads with a question bank.
+_BANK_PAGE_IDS = {
+    "games-wyr", "games-nhie", "games-mlt", "games-rushmore", "games-price",
+    "games-clapback", "games-ffa", "games-traditional",
+}
+
+
+def test_games_section_is_one_flat_list():
+    """The twenty-two games are section-level items; only Operations keeps a heading.
+
+    Un-headed ``items`` render *above* ``groups`` (app.js's renderNav), which is
+    what puts Operations at the bottom and avoids a "Games" heading inside the
+    Games section.
+    """
+    block = _games_section_src()
+    items_block = block[block.index("items: ["):block.index("groups: [")]
+    flat = set(re.findall(r'\{ id: "([A-Za-z0-9_-]+)"', items_block))
+    assert flat == _GAME_PAGE_IDS, (
+        "the Games section's flat list drifted — missing "
+        f"{sorted(_GAME_PAGE_IDS - flat)}, unexpected {sorted(flat - _GAME_PAGE_IDS)}"
+    )
+
+    headings = re.findall(r'heading: "([^"]+)"', block)
+    assert headings == ["Operations"], (
+        f"Games should keep exactly one heading, Operations — found {headings}"
+    )
+
+    groups_block = block[block.index("groups: ["):]
+    ops = set(re.findall(r'\{ id: "([A-Za-z0-9_-]+)"', groups_block))
+    assert ops == _OPERATIONS_IDS, f"Operations drifted: {sorted(ops)}"
+
+
+def test_bank_games_keep_a_question_bank_search_term():
+    """The nav filter matches heading text, so dropping "Question Banks" would
+    have stopped "question bank" from finding the eight bank pages. Each one
+    carries the term as a keyword instead."""
+    block = _games_section_src()
+    missing = [
+        pid for pid in sorted(_BANK_PAGE_IDS)
+        if not re.search(
+            r'\{ id: "' + re.escape(pid) + r'".*?keywords: "[^"]*question bank', block
+        )
+    ]
+    assert not missing, (
+        "bank pages a sidebar search for 'question bank' can no longer find: "
+        f"{missing}"
+    )
+
+
+def test_game_panel_tabs_are_scoped_to_full_page_bank_panels():
+    """`mountGamePanel` must only tab the eight full-page bank panels.
+
+    The seven ``config-games-*`` live games, LegitLibs, Pen Pals and Photo
+    Challenge mount this shared module into a slot of a page that already has
+    its own shell and headings — a tab strip there would nest one panel's
+    chrome inside another's. AMA, Hot Takes and Fantasies & Dealbreakers
+    have no bank to lead with. The `!bare` and
+    `hasBank && hasStatus` terms are what keeps them out.
+    """
+    src = (_PANELS / "games-panel-shared.js").read_text(encoding="utf-8")
+    assert re.search(r"const tabbed = hasBank && hasStatus && !bare;", src), (
+        "the tabbed-layout gate changed — it must stay `hasBank && hasStatus "
+        "&& !bare` so embedded callers never render a tab strip"
+    )
+    # Questions leads: it is the default pane, so the bank still loads on arrival.
+    keys = re.findall(r'\{ key: "(\w+)",\s*label: "([^"]+)"', src)
+    assert keys[:2] == [("questions", "Questions"), ("settings", "Settings")], (
+        f"the bank panel's tab order changed: {keys[:2]}"
+    )

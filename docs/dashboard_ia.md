@@ -50,7 +50,7 @@ subsection of `manual.html` §29 Configuration Reference (help page
 | Config | moderator (most pages admin-only, shown locked) | Server / Roles / New Members / Members / Moderation & Safety / Channels & Messages / Voice / AI & Maintenance |
 | Economy | admin **or** the economy-manager role | Operations / Earning / Spending / Wagering |
 | Wellness | opted-in members, plus manage-server/admin | Member-facing wellness surface |
-| Games | admin **or** the game-host role | Operations / Live Games / Question Banks |
+| Games | admin **or** the game-host role | One alphabetical list of the 22 game pages, then Operations |
 | Social | moderator | Guess Who, Whisper, Pen Pals, Confessions (admin-only) |
 | Help | everyone | Generated from `help-sections.js` |
 | Dev | admin | Live log, system stats, QA tracker (+ guide page), command & panel usage, owner tools |
@@ -134,21 +134,39 @@ splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
 | `config-ai` | AI Models |
 | `usage-telemetry` | Command & Panel Usage |
 
-**Games** was a 23-item flat list until 2026-08; it now has three subgroups:
+**Games** was a 23-item flat list until 2026-08, when IA1 split it into
+Operations / Live Games / Question Banks. **It went flat again 2026-09-02**
+(todo #165) — deliberately, not by drift:
 
-* **Operations** — Play Statistics, Scheduling, Global Config, External Tracking.
-* **Live Games** — one page of dials per game that runs live in a channel
-  (Anonymous AMA, LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot
-  Potato, Hot Potato (Group), Chicken, Musical Chairs, Photo Challenge — which
-  had been a top-level section with a single item under the same gate — plus
-  Survivor and Meadow Mahjong, added after the IA1 write-up, and Hot Takes and
-  Fantasies & Dealbreakers, added 2026-09-04 with one pacing dial each under
-  the bare ids `hottakes` / `fantasies`). AMA moved here
-  from Question Banks once its bank came off: every AMA question is typed by
-  a member mid-game, so there was never a bank to fill; its route id stays
-  `games-ama`, only the grouping moved.
-* **Question Banks** — the eight prompt banks (WYR, NHIE, Most Likely To,
-  Rushmore, Price, Clapback, FFA, Traditional ToD).
+* **the 22 game pages**, one alphabetical list of section-level `items`, no
+  heading. The IA1 split divided them by a property of the *page* — a bank is
+  a prompt library you edit, a live game is dials for something that runs in a
+  channel — which is a real distinction but not one you hold in mind while
+  looking a game up. You know the game's name; the split made you decide which
+  of two lists it was in first, and check both when you guessed wrong.
+  Hot Takes and Fantasies & Dealbreakers joined the list 2026-09-04 under
+  the bare ids `hottakes` / `fantasies`; like AMA they are member-written,
+  so they carry one pacing dial and no bank.
+* **Operations** — Play Statistics, Scheduling, Global Config, External
+  Tracking, Event Echo. Kept its heading: those five are server plumbing, not
+  a game. It stays a `group` so it renders *below* the games (bare `items`
+  always render above `groups` in `renderNav`), which also avoids a "Games"
+  heading inside the Games section — the Dashboard/Dashboard collision IA2
+  fixed.
+
+What made the flattening safe is that "has a question bank" stopped being a
+nav-level fact. The eight bank games' pages now open on a **Questions** tab
+with a **Settings** tab beside it (`games-panel-shared.js`), so the
+distinction the Question Banks heading carried is stated on the page itself,
+where it is actionable. Those eight carry `question bank` in their `keywords`:
+the nav filter matches heading text (`app.js`, the `dataset.search` line), so
+dropping the heading would otherwise have stopped a search for "question bank"
+from finding them.
+
+The IA1 rationale is not repudiated — 23 unsorted-looking entries *were* worse
+than three groups. What changed is that `byLabel` alphabetises at render, so
+22 rows read as a list rather than a pile, and the banks got a better home
+than a nav heading.
 
 **Economy** was the last flat list, twelve items deep; it gained four subgroups
 in 2026-08 (IA2):

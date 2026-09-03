@@ -1494,6 +1494,18 @@ _SECONDARY_TAB_PANELS = [
         "music-playlist", ["window", "queue", "history"],
         id="music-playlist",
     ),
+    pytest.param(
+        # Bank games gained Questions/Settings tabs 2026-09-02 (todo #165).
+        # Settings is the half that moved behind a click: its Enabled toggle
+        # and dials used to render on plain page load, so the generic sweep
+        # audited them for free and stopped doing so the moment they were
+        # tabbed — precisely the blind spot this section exists to close.
+        # One bank panel covers all eight: they are 6-line wrappers over the
+        # same mountGamePanel shell, and Clapback is the one with option
+        # fields (five of them), so it renders the widest Settings pane.
+        "games-clapback", ["settings"],
+        id="games-clapback",
+    ),
 ]
 
 

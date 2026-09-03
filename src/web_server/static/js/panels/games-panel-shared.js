@@ -3,6 +3,7 @@ import { apiPut, apiDelete, showStatus, loadRoles, roleSelect } from "../config-
 import { toast, confirmDialog } from "../ui.js";
 import { guardForm } from "../config-helpers.js";
 import { renderLoading, renderEmpty, renderError } from "../states.js";
+import { mountTabs } from "../tabs.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
@@ -95,10 +96,28 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
   // `intro` is authored copy (not user input), so it may carry markup.
   const introHtml = intro ? '<div class="field-hint" style="margin-bottom:12px;">' + intro + "</div>" : "";
 
-  container.innerHTML = bare
-    ? introHtml + statusHtml + bankHtml
-    : '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
-      introHtml + statusHtml + bankHtml + "</div>";
+  // Tabs, 2026-09-02: a bank game's page led with the Enabled toggle and its
+  // dials, and the prompt list — the thing a host actually opens the page to
+  // work on — sat below them. Questions now lead and the dials move behind a
+  // second tab. This is layout only: both tabs stay open to game hosts, and
+  // every /api/games endpoint is still require_game_host.
+  //
+  // Gated on `!bare` (and on having both halves to split) so it reaches
+  // exactly the eight full-page bank panels. The embedded callers must not
+  // get a tab strip: the seven config-games-* live games, LegitLibs, Pen Pals
+  // and Photo Challenge mount this into a slot of a page that has its own
+  // shell and headings, and AMA has no bank to lead with.
+  const tabbed = hasBank && hasStatus && !bare;
+
+  if (tabbed) {
+    container.innerHTML = '<div class="panel"><header><h2>' + esc(gameIcon) + " " +
+      esc(gameName) + "</h2></header>" + introHtml + '<div data-tabs></div></div>';
+  } else {
+    container.innerHTML = bare
+      ? introHtml + statusHtml + bankHtml
+      : '<div class="panel"><header><h2>' + esc(gameIcon) + " " + esc(gameName) + "</h2></header>" +
+        introHtml + statusHtml + bankHtml + "</div>";
+  }
 
   async function loadConfig() {
     try {
@@ -133,7 +152,11 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     }
   }
 
-  if (hasStatus) {
+  // Wire the settings section. Split out of the mount flow so the tabbed
+  // layout can run it when its pane first renders; the queries below are
+  // `container`-scoped and tabs.js builds every pane up front and only hides
+  // the inactive one, so they resolve the same either way.
+  function initStatus() {
     container.querySelector('[data-action="save-config"]').addEventListener("click", async () => {
       const st = container.querySelector('[data-status="config"]');
       const options = {};
@@ -171,6 +194,25 @@ export function mountGamePanel(container, { gameType, gameName, gameIcon, hasBan
     // typing in its search box must not count as an unsaved edit.
     guardForm(container.querySelector("[data-config-form]"));
   }
+
+  if (tabbed) {
+    // Questions first — it is the default pane, so the bank still loads on
+    // arrival exactly as it did before. Settings renders on first click, so a
+    // host who only edits prompts never pays for the config fetch.
+    //
+    // Neither render returns a promise: initBank and loadConfig each own their
+    // failure surface inside the pane (the bank swaps in renderError, and a
+    // failed config load disables Save so HTML defaults can't overwrite live
+    // settings). That behaviour is unchanged from the untabbed layout, which
+    // is the point — mountAsync's retry is not this panel's error path.
+    const tabs = mountTabs(container.querySelector("[data-tabs]"), [
+      { key: "questions", label: "Questions", render: (pane) => { pane.innerHTML = bankHtml; initBank(); } },
+      { key: "settings",  label: "Settings",  render: (pane) => { pane.innerHTML = statusHtml; initStatus(); } },
+    ], { ariaLabel: gameName + " sections" });
+    return { unmount() { tabs.unmount(); } };
+  }
+
+  if (hasStatus) initStatus();
   if (hasBank) initBank();
 
   return { unmount() {} };

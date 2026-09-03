@@ -304,10 +304,48 @@ const SECTIONS = [
     // explicit `perms` list so it survives a failed section gate: external
     // result tracking is a moderator job, and its backend is moderator-gated.
     //
-    // Three subgroups (IA1, 2026-08). The flat list had grown to 23 entries
-    // mixing ops pages, per-game dials and question banks; the four social
-    // features that were parked here moved to their own Social section below.
+    // Flattened 2026-09-02 (todo #165). The IA1 split into Live Games /
+    // Question Banks divided the pages by a property of the *page* — a bank
+    // is a prompt library you edit, a live game is dials for something that
+    // runs in a channel. But you look a game up by its name, and that split
+    // made you decide which of two lists it was in first. The banks no longer
+    // need to be a nav fact at all: each bank game's page now opens on its
+    // own Questions tab (games-panel-shared.js), so "has a bank" is visible
+    // where it matters, on the page. `byLabel` alphabetises at render, so the
+    // twenty-two read as one list. Operations keeps its heading — those five are
+    // server plumbing, not a game — and stays a group so it renders *below*
+    // the games (bare `items` always render above `groups`), which also
+    // avoids a "Games" heading inside the Games section (the Dashboard/
+    // Dashboard collision IA2 fixed).
+    //
+    // The eight bank pages carry "question bank" keywords: the nav filter
+    // matches heading text, so dropping the heading would otherwise stop
+    // "question bank" from finding them.
     id: "games", label: "Games", perms: ["admin"], gameHostRole: true, icon: "⚄",
+    items: [
+      { id: "games-ama",          label: "Anonymous AMA",     module: "./panels/games-ama.js" },
+      { id: "config-games-chicken", label: "Chicken",         module: "./panels/config-games-chicken.js", adminOnly: true },
+      { id: "games-clapback",     label: "Clapback",          module: "./panels/games-clapback.js", keywords: "question bank prompts" },
+      { id: "fantasies",          label: "Fantasies & Dealbreakers", module: "./panels/games-fantasies.js", keywords: "fantasies dealbreakers anonymous vote timer" },
+      { id: "games-ffa",          label: "FFA / Truth or Dare", module: "./panels/games-ffa.js", keywords: "question bank prompts" },
+      { id: "config-games-hotpotato", label: "Hot Potato",    module: "./panels/config-games-hotpotato.js", adminOnly: true },
+      { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
+      { id: "hottakes",           label: "Hot Takes",         module: "./panels/games-hottakes.js", keywords: "hot takes unpopular opinions anonymous vote timer" },
+      { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
+      { id: "mahjong",            label: "Meadow Mahjong",    module: "./panels/mahjong.js", adminOnly: true, help: "help-mahjong", keywords: "mahjong tiles card charleston duel stakes escrow" },
+      { id: "games-mlt",          label: "Most Likely To",    module: "./panels/games-mlt.js", keywords: "question bank prompts" },
+      { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
+      { id: "games-nhie",         label: "Never Have I Ever", module: "./panels/games-nhie.js", keywords: "question bank prompts" },
+      { id: "photo-challenge",    label: "Photo Challenge",   module: "./panels/photo-challenge.js", help: "help-photo", keywords: "setup schedule photo theme" },
+      { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
+      { id: "games-price",        label: "Price",             module: "./panels/games-price.js", keywords: "question bank prompts" },
+      { id: "config-games-quickdraw", label: "Quickdraw",     module: "./panels/config-games-quickdraw.js", adminOnly: true },
+      { id: "config-risky-rolls", label: "Risky Rolls",       module: "./panels/config-risky-rolls.js", adminOnly: true },
+      { id: "games-rushmore",     label: "Rushmore",          module: "./panels/games-rushmore.js", keywords: "question bank prompts" },
+      { id: "survivor",           label: "Survivor",          module: "./panels/survivor.js", adminOnly: true, help: "help-survivor", keywords: "nfl football pickem survival pool season reckoning" },
+      { id: "games-traditional",  label: "Traditional Truth or Dare", module: "./panels/games-traditional.js", keywords: "question bank prompts" },
+      { id: "games-wyr",          label: "Would You Rather",  module: "./panels/games-wyr.js", keywords: "question bank prompts" },
+    ],
     groups: [
       { heading: "Operations", items: [
         // Renamed 2026-08-31: "Play Statistics" says what's actually on the
@@ -321,42 +359,6 @@ const SECTIONS = [
         // Scheduling; adminOnly keeps its gate, the section move only costs
         // non-host moderators the locked-entry visibility.
         { id: "config-event-echo", label: "Event Echo",        module: "./panels/config-event-echo.js", adminOnly: true, keywords: "echo announce games main chat jump link", help: "help-event-echo" },
-      ]},
-      // One page per game: the dials for a game that runs live in a channel.
-      { heading: "Live Games", items: [
-        // AMA sat under Question Banks until its bank came off: every AMA
-        // question is typed by a member mid-game, so there was never one to
-        // fill. Its route id stays `games-ama`; only the grouping moved.
-        { id: "games-ama",          label: "Anonymous AMA",     module: "./panels/games-ama.js" },
-        // Two more member-written games (no bank), each with one pacing dial
-        // since 2026-09-04. New ids are the bare feature name.
-        { id: "hottakes",           label: "Hot Takes",         module: "./panels/games-hottakes.js", keywords: "hot takes unpopular opinions anonymous vote timer" },
-        { id: "fantasies",          label: "Fantasies & Dealbreakers", module: "./panels/games-fantasies.js", keywords: "fantasies dealbreakers anonymous vote timer" },
-        { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
-        { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
-        { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },
-        { id: "config-games-quickdraw", label: "Quickdraw", module: "./panels/config-games-quickdraw.js", adminOnly: true },
-        { id: "config-games-hotpotato", label: "Hot Potato", module: "./panels/config-games-hotpotato.js", adminOnly: true },
-        { id: "config-games-hotpotatogroup", label: "Hot Potato (Group)", module: "./panels/config-games-hotpotatogroup.js", adminOnly: true },
-        { id: "config-games-chicken", label: "Chicken", module: "./panels/config-games-chicken.js", adminOnly: true },
-        { id: "config-games-musicalchairs", label: "Musical Chairs", module: "./panels/config-games-musicalchairs.js", adminOnly: true },
-        // Was its own one-item top-level section; the gate is identical
-        // (admins or the game-host role), so it folds in here rather than
-        // keeping a heading to itself.
-        { id: "photo-challenge",    label: "Photo Challenge",   module: "./panels/photo-challenge.js", help: "help-photo", keywords: "setup schedule photo theme" },
-        { id: "survivor",           label: "Survivor",          module: "./panels/survivor.js", adminOnly: true, help: "help-survivor", keywords: "nfl football pickem survival pool season reckoning" },
-        { id: "mahjong",            label: "Meadow Mahjong",    module: "./panels/mahjong.js", adminOnly: true, help: "help-mahjong", keywords: "mahjong tiles card charleston duel stakes escrow" },
-      ]},
-      // Question-bank games: one page of prompts each, no live channel state.
-      { heading: "Question Banks", items: [
-        { id: "games-wyr",      label: "Would You Rather",  module: "./panels/games-wyr.js" },
-        { id: "games-nhie",     label: "Never Have I Ever", module: "./panels/games-nhie.js" },
-        { id: "games-mlt",      label: "Most Likely To",    module: "./panels/games-mlt.js" },
-        { id: "games-rushmore", label: "Rushmore",          module: "./panels/games-rushmore.js" },
-        { id: "games-price",    label: "Price",             module: "./panels/games-price.js" },
-        { id: "games-clapback", label: "Clapback",          module: "./panels/games-clapback.js" },
-        { id: "games-ffa", label: "FFA / Truth or Dare", module: "./panels/games-ffa.js" },
-        { id: "games-traditional", label: "Traditional Truth or Dare", module: "./panels/games-traditional.js" },
       ]},
     ],
   },
