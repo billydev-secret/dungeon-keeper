@@ -379,9 +379,11 @@ Same commit, not a follow-up.
 ## Gates
 
 - [ ] `python scripts/gate.py --scoped` — runs automatically in the pre-commit
-      hook (ruff, then the tests mapped to the staged diff — **not** pyright,
-      which is unscopable and so runs in the full gate, CI and nightly only;
-      `--pyright` forces it). In a
+      hook (ruff, then the tests mapped to the staged diff). Neither heavy
+      check runs there: **pyright and the browser panel sweep are CI's**, on
+      every push/PR, because neither can be scoped to a diff and parallel
+      sessions ran one copy each. `--quick` runs both locally before a push;
+      `--pyright` / `--browser` force one into any run. In a
       session worktree a shared-file edit no longer fans out to the whole suite;
       the gate names the paths whose full run it **deferred** to main.
 - [ ] `python scripts/gate.py` on **main**, once a batch of merges is complete —

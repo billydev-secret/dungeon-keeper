@@ -2,22 +2,28 @@
 """Canonical pre-commit gate — cross-platform (Linux + Windows).
 
 Usage:
-    python scripts/gate.py            # ruff + pyright + FULL pytest
-    python scripts/gate.py --scoped   # ruff + tests for changed files (no pyright)
-    python scripts/gate.py --quick    # ruff + scoped browser panel checks (no pytest, no pyright)
-    python scripts/gate.py --pyright  # force the type check on into a scoped/quick run
+    python scripts/gate.py            # ruff + FULL pytest
+    python scripts/gate.py --scoped   # ruff + tests for changed files
+    python scripts/gate.py --quick    # ruff + pyright + browser panel checks (no pytest)
+    python scripts/gate.py --pyright  # force the type check into any run
+    python scripts/gate.py --browser  # force the panel checks into any run
     python scripts/gate.py -k foo     # extra args forwarded to pytest
 
 The pre-commit hook runs ``--scoped`` (not ``--quick``).
 
-**Pyright does not run in the per-commit tiers.** It is a whole-repo type check
-that took 371 s and peaked at 1.5 GB on this machine, and it ran on *every*
-commit in *every* parallel session — several concurrent copies is enough memory
-pressure to wedge the box, which is what it was doing. It still runs in the full
-``gate.py``, in CI on every push/PR (``.github/workflows/test.yml``) and nightly,
-so a type error reaches main only if someone pushes without a full local gate,
-and CI catches it on that same push. Set ``GATE_PYRIGHT=1`` (or pass
-``--pyright``) to put it back in a scoped run.
+**The two heavy checks — pyright and the browser panel sweep — belong to CI.**
+Both are whole-repo checks with no diff-scoped mode, and both used to run
+automatically: pyright on every commit (371 s and 1.5 GB measured on this
+machine), the browser sweep on every commit touching dashboard assets (Chromium,
+minutes). With several sessions gating in parallel that is N concurrent copies
+on one developer box, which is enough memory and I/O pressure to wedge it.
+
+Both now run in CI on every push and PR (``.github/workflows/test.yml``) and
+again in nightly. Locally they are opt-in: ``--quick`` runs both deliberately
+before a push, and ``--pyright`` / ``--browser`` (or ``GATE_PYRIGHT=1`` /
+``GATE_BROWSER=1``) force one into any run. The exposure is a push away, not a
+night away — a regression in either reaches main only if someone pushes without
+running ``--quick``, and CI fails that same push.
 
 Runs everything with the repo venv's interpreter, located automatically,
 so it works no matter which python launched this script.
@@ -513,40 +519,47 @@ def run_pytest(py: str, *args: str) -> None:
         sys.exit(code)
 
 
-def wants_pyright(*, scoped: bool, quick: bool, forced: bool) -> bool:
-    """Whether this tier runs the whole-repo type check.
+def wants_heavy(*, quick: bool, forced: bool) -> bool:
+    """Whether this run performs a heavy check (pyright, browser sweep).
 
-    The full gate always does. The per-commit tiers (``--scoped``/``--quick``)
-    skip it unless explicitly asked, because pyright cannot be scoped to a diff
-    — it needs the whole graph — so it costs the same minutes and gigabyte on a
-    one-line change as on a refactor, once per parallel session.
+    Both are whole-repo checks that cannot be scoped to a diff, both cost
+    minutes and hundreds of megabytes, and both ran automatically — pyright on
+    every commit, the browser sweep on every commit touching dashboard assets.
+    With several sessions gating in parallel that is N simultaneous copies on
+    one developer machine, which is enough to wedge it.
+
+    They now belong to CI, which runs both on every push and PR. Locally they
+    are opt-in: ``--quick`` is the deliberate "check the heavy things before I
+    push" tier, and ``--pyright`` / ``--browser`` (or ``GATE_PYRIGHT=1`` /
+    ``GATE_BROWSER=1``) force an individual one into any run.
     """
-    return forced or not (scoped or quick)
+    return quick or forced
 
 
 def main() -> None:
     argv = sys.argv[1:]
     quick = "--quick" in argv
     scoped = "--scoped" in argv
-    type_check = wants_pyright(
-        scoped=scoped, quick=quick,
+    type_check = wants_heavy(
+        quick=quick,
         forced="--pyright" in argv or os.environ.get("GATE_PYRIGHT") == "1",
     )
+    browser_check = wants_heavy(
+        quick=quick,
+        forced="--browser" in argv or os.environ.get("GATE_BROWSER") == "1",
+    )
     pytest_args = [
-        a for a in argv if a not in ("--quick", "--scoped", "--pyright")
+        a for a in argv
+        if a not in ("--quick", "--scoped", "--pyright", "--browser")
     ]
 
     py = venv_python()
     run(py, "ruff", "-m", "ruff", "check", ".")
-    # Whole-repo type check: minutes of wall clock and ~1.5 GB, unscopable
-    # (pyright has no "just these files" mode that still sees the graph). The
-    # per-commit tiers skip it so N parallel sessions don't run N copies; the
-    # full gate, CI on every push, and nightly all still run it.
     if type_check:
         run(py, "pyright", "-m", "pyright")
     else:
-        print("── pyright: skipped in this tier (CI + nightly cover it; "
-              "--pyright forces it) " + "─" * 3)
+        print("── pyright: CI runs it on every push (--pyright forces it here) "
+              + "─" * 3)
 
     if quick:
         # Scoped mobile-layout check for any changed dashboard assets. Non-fatal
@@ -600,7 +613,13 @@ def main() -> None:
             run_pytest(py, *targets, *pytest_args)
         else:
             print("── scope: no code/test changes mapped → skipping pytest " + "─" * 6)
-        run_mobile(py, changed)
+        if browser_check:
+            run_mobile(py, changed)
+        elif mobile_scope(changed)[0]:
+            # Say it only when this diff would actually have triggered a sweep,
+            # so a commit that touches no dashboard asset stays quiet.
+            print("── browser: CI runs the panel checks on every push "
+                  "(--browser forces them here) " + "─" * 3)
         print("GATE OK (scoped)")
         return
 
