@@ -144,6 +144,31 @@ of them had a home on that page.)
 Stop with `Ctrl+C`. The SQLite database is written to `DB_PATH_PROD`
 (`dungeonkeeper.db` by default) in the working directory.
 
+### Bootstrap config keys
+
+Runtime configuration is stored in the database (`config` and `config_ids`
+tables), not in `.env`, and nearly all of it is set from the dashboard once the
+bot is running. The keys below are the bootstrap set — the handful worth knowing
+by name because they gate the first useful behavior:
+
+| Key | Description |
+|-----|-------------|
+| `debug` | `1` = guild-scoped command sync (dev), `0` = global sync (production) |
+| `guild_id` | Target guild ID (required in debug mode) |
+| `mod_channel_id` | Channel for moderation notifications |
+| `greeter_role_id` | Greeter role (also pinged by intake cards) |
+| `xp_level_5_role_id` | Role granted at XP level 5 |
+| `xp_level_5_log_channel_id` | Channel for level-5 milestone announcements |
+| `xp_level_up_log_channel_id` | Channel for all level-up announcements |
+
+`config_ids` holds the list-valued settings, in buckets:
+`spoiler_required_channels`, `bypass_role_ids` (exempt from the spoiler guard),
+`xp_grant_allowed_user_ids`, and `xp_excluded_channel_ids`.
+
+Role grants are **not** configured through flat keys — they live in `grant_roles`
+rows managed from the dashboard, and legacy keys are migrated on startup (see
+[role_grant_spec.md](role_grant_spec.md)).
+
 ---
 
 ## 7. Run as a service (systemd)
