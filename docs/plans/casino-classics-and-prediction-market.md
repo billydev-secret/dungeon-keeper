@@ -1,9 +1,13 @@
 # Casino classics + prediction market
 
-**Status:** Aspirational / in-progress. Research basis: the "Dungeon Keeper
-Casino & Prediction-Market Extension" report (game-design + systems-engineering
-survey of Discord casino bots, RTP tables, and prediction-market microstructure).
-This plan adapts that report to what the codebase *actually* has.
+**Status:** Stage 1 complete (Baccarat, Dice, War, Keno) 2026-07-25; Stage 2
+prediction market ("Pools") built 2026-07-28, ships disabled; metric rotation
+added 2026-08-03 — see [pools-metric-rotation.md](pools-metric-rotation.md)
+and [pools-own-config-page.md](pools-own-config-page.md) for what followed.
+Research basis: the "Dungeon Keeper Casino & Prediction-Market Extension"
+report (game-design + systems-engineering survey of Discord casino bots, RTP
+tables, and prediction-market microstructure). This plan adapts that report
+to what the codebase *actually* has.
 
 ## Goal
 

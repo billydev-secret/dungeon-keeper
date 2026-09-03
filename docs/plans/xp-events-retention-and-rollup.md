@@ -1,11 +1,16 @@
 # xp_events retention — the rollup the readers can union
 
-**Status: Stage 1 built 2026-08-06; Stages 2–4 designed, not built.**
-Closes the deferral on item 9 of
+**Status: Complete 2026-08-26 — all four stages built.** Ships with retention
+**off** (dial on XP settings → Event Retention); `scripts/verify_xp_retention.py`
+re-proved on a prod snapshot that pruning moves no reader's output before the
+dial is flipped — run 2026-08-27 it pruned 624,162 of 1,228,347 rows with all
+856 reader outputs identical, 198.0 MB → 121.1 MB net. A seventh broken reader
+(the XP hour-of-day histogram, unbounded) was found and windowed during the
+pass. Closes the deferral on item 9 of
 [../reviews/2026-08-06-review-synthesis.md](../reviews/2026-08-06-review-synthesis.md)
 (dbperf P1 in [../reviews/2026-08-06-sweep-reliability-dbperf.md](../reviews/2026-08-06-sweep-reliability-dbperf.md)).
-Stage 3 is the one that deletes rows and must not run until Stage 2 has
-been correct in prod for a while.
+Stage 3 is the one that deletes rows and ran only after Stage 2 had been
+correct in prod for a while.
 
 ## Why this was deferred rather than swept
 

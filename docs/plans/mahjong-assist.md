@@ -1,17 +1,14 @@
 # Meadow Mahjong — assistance modes (addon plan)
 
-**Status: complete 2026-08-22** — stages 1–4 landed (engine 43e7040b, prefs
-d431fe2b, surface 260b0b25, review fixes with the stage-4 commit; the review
-round's three confirmed findings are R1–R3 below). Addon to the shipped v1
-([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21). Still
-merge-gated on the base game passing live QA.
+**Status: complete 2026-08-22, merged to main.** Stages 1–4 landed (engine,
+prefs + dial, surface with My Settings, review fixes; the review round's
+three confirmed findings are R1–R3 below). Addon to the shipped v1
+([meadow-mahjong.md](meadow-mahjong.md), complete 2026-08-21) — merged
+in the same rolling `meadow-mahjong` branch history.
 
 **Spec:** [../meadow_mahjong_spec.md](../meadow_mahjong_spec.md) — v1 is silent
 on hints of any kind, so this breaks no existing decision. Stage 3 adds a §
 to that spec rather than leaving the behavior undocumented.
-**Branch:** continues on `meadow-mahjong`. **Do not merge before the base game
-has passed live QA** — assistance is unobservable until the dashboard panel
-loads, a card is active and a table can actually be seated.
 
 Whenever a player is choosing tiles, show them how close their rack sits to
 each line on the active card. Four levels, each player picks their own.
