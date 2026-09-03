@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from bot_modules.jail.embeds import (
     DEFAULT_MAX_ELIGIBLE_MENTIONS,
     DEFAULT_POLICIES_PAGE_SIZE,
@@ -26,6 +28,7 @@ from bot_modules.jail.embeds import (
     build_warning_audit_embed,
     build_warning_revoke_audit_embed,
     build_warning_threshold_embed,
+    warning_threshold_ping,
 )
 from bot_modules.services.embeds import (
     MOD_INFO,
@@ -425,19 +428,31 @@ def test_warning_audit_embed_context_menu_path_includes_notes_and_link():
     assert "Jump to source message" in embed.description
 
 
-def test_warning_threshold_embed_with_admin_pings():
-    embed = build_warning_threshold_embed(
-        target_mention="<@1>", active_count=5, admin_role_ids=[100, 200],
-    )
+def test_warning_threshold_embed_carries_no_ping():
+    """The ping must NOT be in the embed.
+
+    These two tests used to assert the opposite, which is how the alert came to
+    notify nobody for as long as it did: a mention inside an embed is resolved
+    by the reading client and fires no notification. The roles ride in the
+    message ``content=`` now. → embed_style_guide.md § Mentions, pings
+    """
+    embed = build_warning_threshold_embed(target_mention="<@1>", active_count=5)
     assert embed.title == "🚨 Warning Threshold Reached"
-    assert "<@&100>" in embed.description and "<@&200>" in embed.description
+    assert embed.description is not None
+    assert "<@&" not in embed.description
+    assert "**5**" in embed.description
 
 
-def test_warning_threshold_embed_without_admin_pings():
-    embed = build_warning_threshold_embed(
-        target_mention="<@1>", active_count=5, admin_role_ids=[],
-    )
-    assert "<@&" not in embed.description  # no ping line
+@pytest.mark.parametrize(
+    ("role_ids", "expected"),
+    [
+        ([100, 200], "<@&100> <@&200>"),
+        ([100], "<@&100>"),
+        ([], ""),
+    ],
+)
+def test_warning_threshold_ping_builds_the_content_line(role_ids, expected):
+    assert warning_threshold_ping(role_ids) == expected
 
 
 def test_warning_revoke_audit_embed():

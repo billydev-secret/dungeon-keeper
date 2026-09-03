@@ -25,6 +25,7 @@ from bot_modules.jail.embeds import (
     build_warning_audit_embed,
     build_warning_revoke_audit_embed,
     build_warning_threshold_embed,
+    warning_threshold_ping,
 )
 from bot_modules.jail.logic import sanitize_channel_name
 
@@ -1476,12 +1477,18 @@ class JailCog(commands.Cog):
         # the line — i.e. count was below threshold before, and is at or
         # above it now. Equality-only comparison would miss bulk additions.
         if count >= threshold and (count - 1) < threshold:
+            admin_ids = sorted(_get_admin_role_ids(ctx, guild.id))
             alert = build_warning_threshold_embed(
                 target_mention=user.mention,
                 active_count=count,
-                admin_role_ids=sorted(_get_admin_role_ids(ctx, guild.id)),
             )
-            await _post_audit(ctx, guild, alert)
+            await _post_audit(
+                ctx,
+                guild,
+                alert,
+                content=warning_threshold_ping(admin_ids) or None,
+                ping_role_ids=admin_ids,
+            )
 
     # ── /revokewarn ───────────────────────────────────────────────────────
 

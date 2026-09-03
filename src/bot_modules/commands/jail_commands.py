@@ -13,6 +13,7 @@ import logging
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 import discord
@@ -177,14 +178,37 @@ async def _dm_user(
 
 
 async def _post_audit(
-    ctx: AppContext, guild: discord.Guild, embed: discord.Embed
+    ctx: AppContext,
+    guild: discord.Guild,
+    embed: discord.Embed,
+    *,
+    content: str | None = None,
+    ping_role_ids: Sequence[int] = (),
 ) -> None:
+    """Post a record card to the guild's mod-log channel.
+
+    Every card through here is an audit trail entry, so it carries a timestamp
+    (``embed_style_guide.md`` § Timestamps) — stamped here rather than in each
+    of the ~20 builders, which is how 17 of them came to be missing one.
+
+    Pings are **opt-in**: pass ``ping_role_ids`` and the roles are allow-listed
+    on the send, with the mentions themselves in ``content``. A mention inside
+    an embed notifies nobody, so a card that wants to reach someone has to say
+    so here. Callers that pass neither keep the default ``AllowedMentions.none()``.
+    """
     log_ch_id = _get_config(ctx, "log_channel_id", guild_id=guild.id)
     if not log_ch_id:
         return
     ch = guild.get_channel(log_ch_id)
     if ch and isinstance(ch, discord.TextChannel):
-        await ch.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
+        if embed.timestamp is None:
+            embed.timestamp = datetime.now(timezone.utc)
+        mentions = (
+            discord.AllowedMentions(roles=[discord.Object(id=r) for r in ping_role_ids])
+            if ping_role_ids
+            else discord.AllowedMentions.none()
+        )
+        await ch.send(content=content, embed=embed, allowed_mentions=mentions)
 
 
 # ---------------------------------------------------------------------------
@@ -1059,10 +1083,14 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
 
         ticket_id = await asyncio.to_thread(_create_ticket)
 
+        # Member-typed text: escape for display only — the stored row and the
+        # audit entry above keep the original.
+        desc_md = discord.utils.escape_markdown(desc_text)
+
         # Post ticket embed
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
-            description=desc_text,
+            description=desc_md,
             color=accent,
             timestamp=datetime.now(timezone.utc),
         )
@@ -1108,7 +1136,7 @@ class _TicketOpenModal(discord.ui.Modal, title="Open a Ticket"):
                     guild=guild,
                         embed=discord.Embed(
                             title="📩 New Ticket",
-                            description=f"**{user}** opened a ticket → [Jump to ticket]({channel.jump_url})\n\n{desc_text}",
+                            description=f"**{user}** opened a ticket → [Jump to ticket]({channel.jump_url})\n\n{desc_md}",
                             color=accent,
                         ),
                     )
@@ -2175,7 +2203,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
 
         embed = discord.Embed(
             title=f"Ticket #{ticket_id}",
-            description=desc_text,
+            description=discord.utils.escape_markdown(desc_text),
             color=accent,
             timestamp=datetime.now(timezone.utc),
         )

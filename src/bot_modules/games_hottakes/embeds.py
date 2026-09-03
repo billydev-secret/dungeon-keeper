@@ -128,12 +128,12 @@ def build_recap_embed(
     coldest = summary["coldest"]
     embed.add_field(
         name="🔥 Hottest Take",
-        value=f'"{hottest["text"]}" (avg {hottest["avg"]:.1f}/5)',
+        value=f'"{discord.utils.escape_markdown(hottest["text"])}" (avg {hottest["avg"]:.1f}/5)',
         inline=False,
     )
     embed.add_field(
         name="🧊 Coldest Take",
-        value=f'"{coldest["text"]}" (avg {coldest["avg"]:.1f}/5)',
+        value=f'"{discord.utils.escape_markdown(coldest["text"])}" (avg {coldest["avg"]:.1f}/5)',
         inline=False,
     )
 

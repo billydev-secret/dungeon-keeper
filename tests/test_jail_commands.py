@@ -10,7 +10,13 @@ inherit the home guild's mod/admin role list.
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock
+
+import discord
+import pytest
+
+import bot_modules.commands.jail_commands as jc
 
 from bot_modules.commands.jail_commands import (
     _get_admin_role_ids,
@@ -281,3 +287,78 @@ async def test_policy_vote_sweep_honors_a_per_guild_deadline_of_zero(
     await jc.sweep_expired_policy_votes(bot, ctx)
 
     assert resolved == [10]
+
+
+# ── _post_audit: record cards, and pings that actually reach someone ──────
+
+
+def _audit_channel_ctx(tmp_path):
+    """A ctx with a mod-log channel, plus the guild/channel mocks it resolves."""
+    ctx = _make_ctx(str(tmp_path / "audit.db"))
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "log_channel_id", "555", guild_id=10)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    guild = MagicMock()
+    guild.id = 10
+    guild.get_channel.return_value = channel
+    return ctx, guild, channel
+
+
+@pytest.mark.asyncio
+async def test_post_audit_stamps_a_record_card(tmp_path):
+    """Audit cards are the mod-log's scrollback, so they carry a timestamp.
+
+    Stamped here rather than in each of the ~20 builders — which is how 17 of
+    them came to be missing one. → embed_style_guide.md § Timestamps
+    """
+    ctx, guild, channel = _audit_channel_ctx(tmp_path)
+    embed = discord.Embed(title="🔒 Member Jailed")
+    assert embed.timestamp is None
+
+    await jc._post_audit(ctx, guild, embed)
+
+    sent = channel.send.await_args.kwargs["embed"]
+    assert sent.timestamp is not None
+
+
+@pytest.mark.asyncio
+async def test_post_audit_keeps_a_timestamp_the_builder_already_set(tmp_path):
+    ctx, guild, channel = _audit_channel_ctx(tmp_path)
+    stamped = datetime(2026, 1, 2, 3, 4, tzinfo=timezone.utc)
+    embed = discord.Embed(title="📩 Ticket Opened", timestamp=stamped)
+
+    await jc._post_audit(ctx, guild, embed)
+
+    assert channel.send.await_args.kwargs["embed"].timestamp == stamped
+
+
+@pytest.mark.asyncio
+async def test_post_audit_defaults_to_pinging_nobody(tmp_path):
+    ctx, guild, channel = _audit_channel_ctx(tmp_path)
+
+    await jc._post_audit(ctx, guild, discord.Embed(title="🔓 Member Released"))
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] is None
+    assert kwargs["allowed_mentions"].roles is False
+
+
+@pytest.mark.asyncio
+async def test_post_audit_allow_lists_exactly_the_roles_it_pings(tmp_path):
+    """The warning-threshold alert used to put its pings in the embed, where a
+    mention notifies nobody. They ride in ``content=`` now, and the send has to
+    allow-list them or Discord suppresses them anyway."""
+    ctx, guild, channel = _audit_channel_ctx(tmp_path)
+
+    await jc._post_audit(
+        ctx,
+        guild,
+        discord.Embed(title="🚨 Warning Threshold Reached"),
+        content="<@&100> <@&200>",
+        ping_role_ids=[100, 200],
+    )
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] == "<@&100> <@&200>"
+    assert [r.id for r in kwargs["allowed_mentions"].roles] == [100, 200]

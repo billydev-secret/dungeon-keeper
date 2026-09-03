@@ -83,7 +83,11 @@ def build_bio_embed(payload: BioRenderPayload) -> discord.Embed:
         if snap.skipped or not snap.value:
             continue
         inline = snap.field_type in ("short", "choice")
-        embed.add_field(name=snap.label, value=snap.value, inline=inline)
+        embed.add_field(
+            name=snap.label,
+            value=discord.utils.escape_markdown(snap.value),
+            inline=inline,
+        )
 
     for snap in questions:
         if snap.skipped or not snap.answer:

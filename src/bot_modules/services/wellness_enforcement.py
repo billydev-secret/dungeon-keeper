@@ -607,7 +607,9 @@ async def _handle_away_mentions(ctx, message: discord.Message) -> None:
         return
 
     for mentioned, other in away_targets:
-        text = (other.away_message or AWAY_DEFAULT_TEXT).strip()
+        text = discord.utils.escape_markdown(
+            (other.away_message or AWAY_DEFAULT_TEXT).strip()
+        )
         embed = discord.Embed(
             title=f"💚 {mentioned.display_name} is away",
             description=text,

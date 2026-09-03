@@ -205,6 +205,19 @@ def test_stakes_ok():
     assert r.value == "Loser buys pizza"
 
 
+def test_stakes_are_markdown_escaped():
+    """The challenger's text shares ``stakes_text`` with bot-composed lines.
+
+    The lobby card renders that column raw, because the bot's own
+    "💰 **10** gems to join" must keep its bold — so the member half has to be
+    escaped here instead, or a challenger typing ``**`` reformats the card.
+    → docs/embed_style_guide.md § Mentions, pings & user-supplied text
+    """
+    r = validate_stakes("loser buys **pizza** and _wings_", max_length=200)
+    assert r.ok
+    assert r.value == "loser buys \\*\\*pizza\\*\\* and \\_wings\\_"
+
+
 def test_stakes_too_long():
     r = validate_stakes("x" * 201, max_length=200)
     assert not r.ok

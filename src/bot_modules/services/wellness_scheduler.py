@@ -245,7 +245,9 @@ def _build_active_embed(
     lines: list[str] = []
     for user_id, streak in entries[:_ACTIVE_MAX_ENTRIES]:
         member = guild.get_member(user_id)
-        name = member.display_name if member else f"User {user_id}"
+        name = discord.utils.escape_markdown(
+            member.display_name if member else f"User {user_id}"
+        )
         badge = streak.current_badge or "🌱"
         lines.append(
             f"{badge} **{name}** — {streak.current_days} day{'s' if streak.current_days != 1 else ''}"

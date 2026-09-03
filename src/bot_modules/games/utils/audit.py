@@ -100,7 +100,7 @@ async def send_audit_log(
     icon = GAME_ICONS.get(game_type, "")
     embed = discord.Embed(
         title=f"{icon} {label}",
-        description=f'"{content}"',
+        description=f'"{discord.utils.escape_markdown(content)}"',
         color=WARNING_COLOR,
     )
     embed.add_field(name="User", value=f"{user.mention} (`{user.id}`)", inline=True)

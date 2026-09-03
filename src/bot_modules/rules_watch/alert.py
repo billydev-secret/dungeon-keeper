@@ -61,7 +61,12 @@ def _build_embed(
     )
 
     # Context window excerpt (truncated)
-    content_preview = (message.content or "*[no text content]*")[:500]
+    # The bot's own placeholder keeps its italics; the member's text does not.
+    content_preview = (
+        discord.utils.escape_markdown(message.content)[:500]
+        if message.content
+        else "*[no text content]*"
+    )
     if guard.reason:
         content_preview += f"\n\n*Guard: {guard.reason}*"
     embed.add_field(name="Content", value=content_preview, inline=False)

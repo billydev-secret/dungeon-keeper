@@ -422,17 +422,25 @@ def build_warning_threshold_embed(
     *,
     target_mention: str,
     active_count: int,
-    admin_role_ids: Sequence[int],
 ) -> discord.Embed:
-    """Posted when a warning pushes a member to or past the threshold."""
-    pings = " ".join(f"<@&{rid}>" for rid in admin_role_ids) if admin_role_ids else ""
+    """Posted when a warning pushes a member to or past the threshold.
+
+    The admin ping is **not** in here. A mention inside an embed is resolved by
+    the reading client and notifies nobody, so the roles ride in the message
+    ``content=`` instead — see ``warning_threshold_ping`` and ``_post_audit``.
+    """
     return discord.Embed(
         title="🚨 Warning Threshold Reached",
         description=(
-            f"{target_mention} has reached **{active_count}** active warnings.\n{pings}"
+            f"{target_mention} has reached **{active_count}** active warnings."
         ),
         color=MOD_JAIL,
     )
+
+
+def warning_threshold_ping(admin_role_ids: Sequence[int]) -> str:
+    """The ``content=`` line that actually reaches the admins."""
+    return " ".join(f"<@&{rid}>" for rid in admin_role_ids)
 
 
 def build_warning_revoke_audit_embed(

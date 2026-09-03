@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
+
+import discord
 from dataclasses import dataclass
 
 _ZERO_WIDTH = re.compile(r"[​-‏‪-‮⁠-⁤﻿]")
@@ -121,7 +123,14 @@ def validate_stakes(
     max_length: int = 200,
     denylist: list[str] | None = None,
 ) -> FilterResult:
-    """Lighter filter for stakes text — strip, length, and denylist only."""
+    """Lighter filter for stakes text — strip, length, and denylist only.
+
+    The accepted value comes back **markdown-escaped**. ``stakes_text`` is a
+    mixed column: this member-typed text shares it with bot-composed lines like
+    "💰 **10** gems to join", so the card cannot escape at render without eating
+    the bot's own formatting. Escaping the member half here is the one place
+    that distinguishes them. → embed_style_guide.md § Mentions, pings
+    """
     cleaned = _clean(raw)
     if len(cleaned) > max_length:
         return FilterResult(
@@ -131,7 +140,9 @@ def validate_stakes(
         return FilterResult(
             ok=False, value=raw, reason="Stakes text contains disallowed content."
         )
-    return FilterResult(ok=True, value=cleaned, reason=None)
+    return FilterResult(
+        ok=True, value=discord.utils.escape_markdown(cleaned), reason=None
+    )
 
 
 # A coin wager with no custom stakes text and no rename is its own stake: the

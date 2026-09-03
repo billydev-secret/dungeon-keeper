@@ -138,7 +138,7 @@ def build_reveal_embed(
     )
     lie_stmt = statements[lie_index]
     lie_num = _NUM_EMOJI[lie_index]
-    embed.add_field(name=f"The lie was {lie_num}", value=f'"{lie_stmt}" ✅', inline=False)
+    embed.add_field(name=f"The lie was {lie_num}", value=f'"{discord.utils.escape_markdown(lie_stmt)}" ✅', inline=False)
 
     def _names(voters: Iterable[int]) -> str:
         parts = [name_resolver(str(uid)) for uid in voters]

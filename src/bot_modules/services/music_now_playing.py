@@ -71,10 +71,10 @@ def build_embed(
     artwork = getattr(track, "artwork", None) or getattr(track, "thumbnail", None)
     length_ms = int(getattr(track, "length", 0) or 0)
 
-    embed = discord.Embed(
-        title=title if not uri else f"[{title}]({uri})",
-        color=color,
-    )
+    # A masked link does not render in a title — the reader would see the
+    # literal "[Song](https://…)". embed.url is the slot that makes a title
+    # clickable. → embed_style_guide.md § Card anatomy
+    embed = discord.Embed(title=title, url=uri or None, color=color)
     embed.set_author(name=str(author))
     if artwork:
         embed.set_thumbnail(url=artwork)

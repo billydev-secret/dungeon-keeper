@@ -482,7 +482,8 @@ async def apply_jail(
             f"**Moderator:** {moderator}\n"
             f"**Duration:** {duration_text}\n"
             + (f"**Reason:** {reason}\n" if reason else "")
-            + "\nPlease check the jail channel — a moderator will review your situation."
+            + f"\nHead to {jail_channel.mention} — a moderator will review "
+            "your case there."
         ),
         color=_CLR_JAIL,
     )

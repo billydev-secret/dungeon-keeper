@@ -115,21 +115,21 @@ def build_recap_embed(results: list[dict[str, Any]], color: "discord.Color | Non
     most_shared = summary["most_shared"]
     embed.add_field(
         name="🌟 Most Universally Shared",
-        value=f'"{most_shared["text"]}" ({most_shared["same_pct"]:.0%} Same)',
+        value=f'"{discord.utils.escape_markdown(most_shared["text"])}" ({most_shared["same_pct"]:.0%} Same)',
         inline=False,
     )
 
     most_polar = summary["most_polar"]
     embed.add_field(
         name="⚡ Most Polarizing",
-        value=f'"{most_polar["text"]}"',
+        value=f'"{discord.utils.escape_markdown(most_polar["text"])}"',
         inline=False,
     )
 
     biggest_outlier = summary["biggest_outlier"]
     embed.add_field(
         name="🏔️ Biggest Outlier",
-        value=f'"{biggest_outlier["text"]}" ({biggest_outlier["same_pct"]:.0%} Same)',
+        value=f'"{discord.utils.escape_markdown(biggest_outlier["text"])}" ({biggest_outlier["same_pct"]:.0%} Same)',
         inline=False,
     )
 
