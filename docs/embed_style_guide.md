@@ -225,6 +225,10 @@ Which embed slot does which job:
   taller, which on a three-across row is dead height on every card. Because the
   helper handles that itself, **every** multi-field builder calls it; there is
   no "this card has triples so leave it alone" exemption to reason about.
+- A field already at Discord's **1024-char value cap is left alone**. Plenty of
+  builders fill a field right to that line (`fit_lines`, a raw `value[:1024]`
+  slice), and the two extra characters would make Discord reject the whole
+  embed — losing the card entirely to buy two pixels of air.
 
 ## Tables & column alignment
 

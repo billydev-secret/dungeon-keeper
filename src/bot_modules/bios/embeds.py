@@ -67,8 +67,33 @@ def build_bio_embed(payload: BioRenderPayload) -> discord.Embed:
                  (full-width, name = ``› {question}``)
         footer = timestamp only
     """
-    fields = cap_field_values_for_embed(list(payload.fields))
-    questions = cap_question_answers_for_embed(list(payload.questions))
+    # Escape *before* the caps, not after. Member-typed text is escaped so a
+    # bio can't reformat the card, but a backslash is a character like any
+    # other: escaping a value that has already been trimmed to 1024 can push it
+    # past Discord's field cap (and the whole-embed 6000 budget with it), which
+    # 400s the entire card. Escaping first lets both safety nets measure what
+    # actually gets sent.
+    fields = cap_field_values_for_embed(
+        [
+            FieldSnapshot(
+                label=s.label,
+                value=discord.utils.escape_markdown(s.value),
+                field_type=s.field_type,
+                skipped=s.skipped,
+            )
+            for s in payload.fields
+        ]
+    )
+    questions = cap_question_answers_for_embed(
+        [
+            QuestionSnapshot(
+                question_text=s.question_text,
+                answer=discord.utils.escape_markdown(s.answer),
+                skipped=s.skipped,
+            )
+            for s in payload.questions
+        ]
+    )
     fields, questions = shrink_to_embed_total(fields, questions)
 
     embed = discord.Embed(
@@ -83,11 +108,7 @@ def build_bio_embed(payload: BioRenderPayload) -> discord.Embed:
         if snap.skipped or not snap.value:
             continue
         inline = snap.field_type in ("short", "choice")
-        embed.add_field(
-            name=snap.label,
-            value=discord.utils.escape_markdown(snap.value),
-            inline=inline,
-        )
+        embed.add_field(name=snap.label, value=snap.value, inline=inline)
 
     for snap in questions:
         if snap.skipped or not snap.answer:

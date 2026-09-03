@@ -203,8 +203,16 @@ async def _post_audit(
     if ch and isinstance(ch, discord.TextChannel):
         if embed.timestamp is None:
             embed.timestamp = datetime.now(timezone.utc)
+        # ``everyone``/``users`` are spelled out: AllowedMentions' unset fields
+        # default to *permitted*, so naming only ``roles`` would quietly widen a
+        # helper every audit card goes through from "pings nobody" to "pings
+        # whoever the card's text happens to name".
         mentions = (
-            discord.AllowedMentions(roles=[discord.Object(id=r) for r in ping_role_ids])
+            discord.AllowedMentions(
+                everyone=False,
+                users=False,
+                roles=[discord.Object(id=r) for r in ping_role_ids],
+            )
             if ping_role_ids
             else discord.AllowedMentions.none()
         )
