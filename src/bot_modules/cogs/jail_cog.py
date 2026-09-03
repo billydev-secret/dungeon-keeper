@@ -54,6 +54,7 @@ from bot_modules.commands.jail_commands import (
     _add_ticket_panel,
     _get_config,
     _get_mod_role_ids,
+    guild_eligible_voters,
     _is_admin,
     _is_mod,
     _post_audit,
@@ -163,15 +164,7 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
         mod_role_ids = _get_mod_role_ids(ctx, guild.id)
         admin_role_ids = _get_admin_role_ids(ctx, guild.id)
         all_role_ids = mod_role_ids | admin_role_ids
-        eligible: set[int] = set()
-        for m in guild.members:
-            if m.bot:
-                continue
-            if m.guild_permissions.administrator:
-                eligible.add(m.id)
-                continue
-            if all_role_ids & {r.id for r in m.roles}:
-                eligible.add(m.id)
+        eligible = guild_eligible_voters(ctx, guild)
 
         embed = build_policy_vote_initial_embed(
             channel_name=interaction.channel.name,  # type: ignore[union-attr]

@@ -367,3 +367,159 @@ async def test_post_audit_allow_lists_exactly_the_roles_it_pings(tmp_path):
     # "pings whoever the text happens to name".
     assert kwargs["allowed_mentions"].everyone is False
     assert kwargs["allowed_mentions"].users is False
+
+
+# ── The finalizer acts on the policy's own channel, never the press's ─────
+#
+# ``finalize_policy_vote`` archives and then DELETES the channel it is handed.
+# The sweeper resolved it from ``policy["channel_id"]``; the button handler
+# passed ``interaction.channel``. Those were the same channel for as long as a
+# vote button could only exist inside the proposal channel — the moment one
+# lives anywhere else (a community ballot thread, a message a mod copied), the
+# button path deletes the wrong channel. Both paths resolve the recorded
+# channel now.
+
+
+def _voting_policy(ctx, *, guild_id: int, channel_id: int) -> int:
+    from bot_modules.services.moderation import create_policy_ticket, start_policy_vote
+
+    with open_db(ctx.db_path) as conn:
+        pid = create_policy_ticket(
+            conn, guild_id=guild_id, creator_id=1, channel_id=channel_id,
+            title="t", description="d",
+        )
+        start_policy_vote(conn, pid, vote_text="v")
+    return pid
+
+
+def _vote_interaction(ctx, *, guild_id: int, policy_channel_id: int, press_channel_id: int):
+    """A press arriving from a channel that is NOT the policy's own channel."""
+    voter = MagicMock(spec=discord.Member)
+    voter.id = 42
+    voter.bot = False
+    voter.roles = []
+    voter.guild_permissions = MagicMock(manage_guild=True, administrator=True)
+
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = guild_id
+    guild.members = [voter]
+    voter.guild = guild
+
+    policy_channel = MagicMock(spec=discord.TextChannel)
+    policy_channel.id = policy_channel_id
+    guild.get_channel.return_value = policy_channel
+
+    press_channel = MagicMock(spec=discord.TextChannel)
+    press_channel.id = press_channel_id
+
+    interaction = MagicMock(spec=discord.Interaction)
+    interaction.client = MagicMock()
+    interaction.client.ctx = ctx
+    interaction.user = voter
+    interaction.guild = guild
+    interaction.channel = press_channel
+    interaction.response = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    interaction.followup = MagicMock()
+    interaction.followup.send = AsyncMock()
+    return interaction, policy_channel, press_channel
+
+
+@pytest.mark.asyncio
+async def test_vote_button_finalizes_against_the_policys_own_channel(
+    tmp_path, monkeypatch
+):
+    ctx = _make_ctx(tmp_path / "jc18.db", guild_id=10)
+    policy_id = _voting_policy(ctx, guild_id=10, channel_id=777)
+    interaction, policy_channel, press_channel = _vote_interaction(
+        ctx, guild_id=10, policy_channel_id=777, press_channel_id=999
+    )
+
+    handed: list[object] = []
+
+    async def _fake_finalize(ctx_, guild, pid, outcome, *, channel, **kw):
+        handed.append(channel)
+        return True
+
+    monkeypatch.setattr(jc, "finalize_policy_vote", _fake_finalize)
+
+    await jc._handle_policy_vote(interaction, policy_id, "yes")
+
+    assert handed, "the sole eligible voter voting yes must finalize the vote"
+    assert handed[0] is policy_channel
+    assert handed[0] is not press_channel
+
+
+@pytest.mark.asyncio
+async def test_vote_button_hands_no_channel_when_the_policys_own_is_gone(
+    tmp_path, monkeypatch
+):
+    """A deleted proposal channel must finalize with ``channel=None`` — never
+    fall back to whichever channel the press came from."""
+    ctx = _make_ctx(tmp_path / "jc19.db", guild_id=10)
+    policy_id = _voting_policy(ctx, guild_id=10, channel_id=777)
+    interaction, _policy_channel, _press = _vote_interaction(
+        ctx, guild_id=10, policy_channel_id=777, press_channel_id=999
+    )
+    interaction.guild.get_channel.return_value = None
+
+    handed: list[object] = []
+
+    async def _fake_finalize(ctx_, guild, pid, outcome, *, channel, **kw):
+        handed.append(channel)
+        return True
+
+    monkeypatch.setattr(jc, "finalize_policy_vote", _fake_finalize)
+
+    await jc._handle_policy_vote(interaction, policy_id, "yes")
+
+    assert handed == [None]
+
+
+# ── One roster rule, one implementation ───────────────────────────────────
+
+
+def test_guild_eligible_voters_matches_the_shared_helper(tmp_path):
+    """The three sites that used to rebuild the roster inline now share
+    ``jail.logic.eligible_voters`` — bots out, administrators in, configured
+    mod/admin role holders in, everyone else out."""
+    from bot_modules.jail.logic import eligible_voters
+
+    ctx = _make_ctx(tmp_path / "jc20.db", guild_id=10)
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "mod_role_ids", "100", guild_id=10)
+        _db_set(conn, "admin_role_ids", "200", guild_id=10)
+
+    def _m(uid, *, roles=(), admin=False, bot=False):
+        m = MagicMock(spec=discord.Member)
+        m.id = uid
+        m.bot = bot
+        m.roles = [MagicMock(id=r) for r in roles]
+        m.guild_permissions = MagicMock(administrator=admin)
+        return m
+
+    members = [
+        _m(1, admin=True),             # administrator
+        _m(2, roles=[100]),            # mod role
+        _m(3, roles=[200]),            # admin role
+        _m(4, roles=[999]),            # unrelated role
+        _m(5, roles=[100], bot=True),  # a bot holding a mod role
+    ]
+    guild = MagicMock(spec=discord.Guild)
+    guild.id = 10
+    guild.members = members
+
+    assert jc.guild_eligible_voters(ctx, guild) == {1, 2, 3}
+    assert jc.guild_eligible_voters(ctx, guild) == eligible_voters(
+        [
+            {
+                "user_id": m.id,
+                "is_bot": m.bot,
+                "role_ids": [r.id for r in m.roles],
+                "is_administrator": m.guild_permissions.administrator,
+            }
+            for m in members
+        ],
+        {100},
+        {200},
+    )

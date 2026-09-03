@@ -66,6 +66,7 @@ from bot_modules.jail.embeds import (
 from bot_modules.jail.logic import (
     channel_needs_jail_deny,
     channels_needing_jail_deny,
+    eligible_voters,
     vote_outcome as _vote_outcome,
 )
 
@@ -100,6 +101,35 @@ def _is_admin(member: discord.Member, ctx: AppContext) -> bool:
     if member.guild_permissions.administrator:
         return True
     return ctx.guild_config(member.guild.id).member_is_admin(member)
+
+
+def guild_eligible_voters(ctx: AppContext, guild: discord.Guild) -> set[int]:
+    """Who may vote on a policy proposal in ``guild``: the mod/admin roster.
+
+    One rule, one implementation. It used to be rebuilt inline at three sites —
+    the initial vote embed, the running tally after every press, and the
+    timeout sweeper's absentee resolution — while ``jail.logic.eligible_voters``
+    implemented exactly the same thing and was imported by nothing but its own
+    test. Three copies of an electorate is a defect waiting to happen: change
+    who counts in one place and a vote's "Awaiting" list stops agreeing with
+    the tally that resolves it.
+
+    Discord objects are flattened to plain dicts here so the rule itself stays
+    in the pure-logic layer where it is tested without mocks.
+    """
+    return eligible_voters(
+        [
+            {
+                "user_id": m.id,
+                "is_bot": m.bot,
+                "role_ids": [r.id for r in m.roles],
+                "is_administrator": m.guild_permissions.administrator,
+            }
+            for m in guild.members
+        ],
+        _get_mod_role_ids(ctx, guild.id),
+        _get_admin_role_ids(ctx, guild.id),
+    )
 
 
 def _get_config(ctx: AppContext, key: str, default: str = "0", guild_id: int = 0) -> int:
@@ -857,19 +887,7 @@ async def _handle_policy_vote(
 
     votes = await asyncio.to_thread(_cast_vote)
 
-    # Build eligible voter set
-    mod_role_ids = _get_mod_role_ids(ctx, guild.id)
-    admin_role_ids = _get_admin_role_ids(ctx, guild.id)
-    all_role_ids = mod_role_ids | admin_role_ids
-    eligible: set[int] = set()
-    for m in guild.members:
-        if m.bot:
-            continue
-        if m.guild_permissions.administrator:
-            eligible.add(m.id)
-            continue
-        if all_role_ids & {r.id for r in m.roles}:
-            eligible.add(m.id)
+    eligible = guild_eligible_voters(ctx, guild)
 
     vote_map = {v["user_id"]: v["vote"] for v in votes}
     voted_ids = set(vote_map.keys()) & eligible
@@ -901,7 +919,17 @@ async def _handle_policy_vote(
         await interaction.followup.send(
             f"Your vote ({vote}) has been recorded.", ephemeral=True
         )
-        channel = interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+        # The finalizer archives and then DELETES the channel it is handed, so
+        # it must only ever be handed the policy's *own* recorded channel — the
+        # same resolution ``_resolve_expired_policy`` does. Passing
+        # ``interaction.channel`` was safe only while a vote button could not
+        # exist outside the proposal channel; the moment one lives elsewhere (a
+        # community ballot thread, a message someone moved), that press would
+        # delete the channel it was pressed in.
+        raw_channel = (
+            guild.get_channel(policy["channel_id"]) if policy["channel_id"] else None
+        )
+        channel = raw_channel if isinstance(raw_channel, discord.TextChannel) else None
         await finalize_policy_vote(
             ctx,
             guild,
@@ -2058,18 +2086,7 @@ async def _resolve_expired_policy(
     policy: PolicyTicketRow,
 ) -> None:
     policy_id = policy["id"]
-    mod_role_ids = _get_mod_role_ids(ctx, guild.id)
-    admin_role_ids = _get_admin_role_ids(ctx, guild.id)
-    all_role_ids = mod_role_ids | admin_role_ids
-    eligible: set[int] = set()
-    for m in guild.members:
-        if m.bot:
-            continue
-        if m.guild_permissions.administrator:
-            eligible.add(m.id)
-            continue
-        if all_role_ids & {r.id for r in m.roles}:
-            eligible.add(m.id)
+    eligible = guild_eligible_voters(ctx, guild)
 
     def _get_votes():
         with ctx.open_db() as conn:
