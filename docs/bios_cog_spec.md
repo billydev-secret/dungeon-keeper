@@ -75,12 +75,14 @@ Tracks each posted embed message.
 
 | Column | Type | Notes |
 |---|---|---|
-| `user_id` | INTEGER PK | one bio per user per guild |
+| `user_id` | INTEGER | |
 | `guild_id` | INTEGER | |
-| `message_id` | INTEGER | the posted embed |
+| `message_id` | INTEGER | the posted embed; 0/0 sentinel while archived |
 | `channel_id` | INTEGER | the bios channel at post time |
 | `created_at` | TEXT | |
 | `updated_at` | TEXT | |
+| `archived_at` | TEXT | NULL while live; stamped on member-leave archive, cleared on resurrection (§8) |
+| | | PK (`user_id`, `guild_id`) — one bio per user per guild |
 
 ### 3.5 `bio_field_values`
 A user's answers to template fields. Label snapshotted.
@@ -88,10 +90,11 @@ A user's answers to template fields. Label snapshotted.
 | Column | Type | Notes |
 |---|---|---|
 | `user_id` | INTEGER | |
+| `guild_id` | INTEGER | |
 | `field_id` | INTEGER | FK → bio_fields.id |
 | `field_label` | TEXT | snapshot at answer time |
 | `value` | TEXT | |
-| | | PK (`user_id`, `field_id`) |
+| | | PK (`user_id`, `guild_id`, `field_id`) |
 
 ### 3.6 `bio_answers`
 A user's answers to rotating questions. Keyed by stable **slot** index so a per-slot re-roll is a clean overwrite and embed order stays stable. Question text snapshotted.
@@ -99,26 +102,32 @@ A user's answers to rotating questions. Keyed by stable **slot** index so a per-
 | Column | Type | Notes |
 |---|---|---|
 | `user_id` | INTEGER | |
+| `guild_id` | INTEGER | |
 | `slot` | INTEGER | 0..N-1, stable display order |
 | `question_id` | INTEGER | FK → bio_questions.id |
 | `question_text` | TEXT | snapshot at answer time |
 | `answer` | TEXT | |
-| | | PK (`user_id`, `slot`) |
+| | | PK (`user_id`, `guild_id`, `slot`) |
 
 ---
 
 ## 4. Per-guild configuration
 
-Stored in the cog's config (reuse DK's existing per-guild config mechanism; these are the keys the cog reads):
+Stored in the cog's config (reuse DK's existing per-guild config mechanism; these are the keys the cog reads — all prefixed `bios_` in the shared config table, per `BiosConfig.load`):
 
 | Key | Purpose | Suggested default |
 |---|---|---|
 | `bios_channel_id` | where embeds are posted | — (required) |
-| `wizard_category_id` | category under which wizard channels are created | — (required) |
-| `questions_per_bio` | N questions drawn per bio | 3 |
-| `embed_color` | single ember accent, identical across all bios | `0xC8763E` |
-| `wizard_timeout` | idle minutes before auto-cancel | 15 |
-| `archive_grace` | seconds after completion before the wizard channel is deleted | 60 |
+| `bios_wizard_category_id` | category under which wizard channels are created | — (required) |
+| `bios_questions_per_bio` | N questions drawn per bio | 3 |
+| `bios_embed_color` | single ember accent, identical across all bios | `0xC8763E` |
+| `bios_wizard_timeout` | idle minutes before auto-cancel | 15 |
+| `bios_archive_grace` | seconds after completion before the wizard channel is deleted | 60 |
+
+The dashboard's Settings tab and the `GET`/`PUT /api/bios/config` payloads expose
+these unprefixed (`wizard_category_id`, `questions_per_bio`, `embed_color`,
+`wizard_timeout`, `archive_grace`) — the route maps to/from the prefixed
+config-table keys above.
 
 ---
 
@@ -129,7 +138,7 @@ Stored in the cog's config (reuse DK's existing per-guild config mechanism; thes
 - a persistent **"Create / Update Bio"** button posted in the bios channel. The button uses a fixed `custom_id` and its View is re-registered on cog load so it survives bot restarts.
 - The button's embed **title and body are admin-configurable** (config keys
   `bios_trigger_title` / `bios_trigger_body`, edited on the dashboard Bios →
-  Config tab), falling back to the built-in defaults when unset or blank.
+  Settings tab), falling back to the built-in defaults when unset or blank.
   Editing the copy updates future posts; re-post the button to refresh the
   live message.
 
@@ -305,7 +314,7 @@ Slots into the existing self-hosted DK dashboard (Discord OAuth, admin-gated). T
 - Editable per question: `prompt`, `weight`.
 
 ### 10.3 Config editor
-- `bios_channel_id`, `wizard_category_id`, `questions_per_bio`, `embed_color`, `wizard_timeout`, `archive_grace`.
+- `bios_channel_id`, `wizard_category_id`, `questions_per_bio`, `embed_color`, `wizard_timeout`, `archive_grace`, plus the trigger button's `trigger_title` / `trigger_body` (§5.1).
 
 ### 10.4 Channel health warnings
 `GET /api/bios/config` returns a `channel_issues` list alongside the settings,

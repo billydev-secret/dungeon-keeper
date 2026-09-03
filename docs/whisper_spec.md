@@ -15,7 +15,7 @@ An anonymous-message-with-guessing game. Members opt in to a per-guild role, the
 | **My Inbox** button | Persistent launcher | Everyone | Ephemeral inbox of received whispers |
 | **My Sent** button | Persistent launcher | Everyone | Ephemeral list of your sent whispers (active only) |
 | Whisper audit log | Web (dashboard) | Admin | Per-guild log of every whisper with report counts |
-| Whisper config | Web (dashboard) | Game host | Set the feed channel, opt-in role, and optional mod-log channel |
+| Whisper config | Web (dashboard) | Admin | Set the feed channel, opt-in role, and optional mod-log channel |
 
 There is no one-shot `/whisper <target> <message>` — send is always picker + compose modal so the bot can pre-validate role membership.
 
@@ -33,6 +33,9 @@ On submit:
 - Timed-out targets are refused.
 - The recipient is DM'd the content with Guess / Share / Reply / Delete buttons; if the DM fails (closed DMs), nothing is persisted. The DM is a **branded embed** (`send_branded_dm`): the origin server's accent, plus its name and icon in the footer. The body still names the server in its opening line.
 - A best-effort announcement is posted to the feed: "Someone sent {target name} an anonymous message." — name only, no content.
+
+### No-contact enforcement
+Whisper consults the [no-contact list](no_contact_spec.md) on every send, and on a reply to a whisper that predates the pair (the DM's Reply button never expires, so an existing thread stays a live contact path even if the pair was added to the list afterward). The check runs last, after every ordinary refusal above (missing role, cooldown, hourly cap, timed-out target, broken feed channel) — those still reach the sender exactly as normal, so the only case that diverges is the one that would otherwise have succeeded. A blocked send reports "Whisper delivered." with no error and no whisper arrives; no whisper row, DM, or feed post is created. This is deliberate: telling the sender "blocked" would confirm the target acted against them, which is the escalation the no-contact list exists to prevent. The quest/economy trigger for sending still fires so the silence isn't itself a tell.
 
 ### Naming people in embeds
 Every embed that names a participant renders a **resolved display name as plain
@@ -81,7 +84,7 @@ Whispers age-lock after **30 days** — no new guesses, no new replies. The row 
 Recipients can report a whisper; reply recipients can report a reply. The reason field is free-form and optional (defaults to "(no reason provided)"). One report per reporter per item — second-clicks see "You've already reported this whisper." Reports always persist regardless of whether a mod-log channel is configured; the dashboard's audit log is the canonical view.
 
 ### Mod audit
-The dashboard's audit log lists every whisper with its state, report count, sender, and target. Filters by state and reported-only. If a mod-log channel is set, every send, accept, reply, and report also fans out there as an embed; failures to post are logged and don't block the user action.
+The dashboard's audit log lists every whisper with its state, report count, sender, and target. Filters by state and reported-only. If a mod-log channel is set, every reply, report, and reply-report also fans out there as an embed (sending a whisper and solving it do not); failures to post are logged and don't block the user action.
 
 ### Opt-out and forget-me
 `/whisper optout` removes the role only — sent and received whispers stay intact. `/whisper forget-me` is a destructive nuke that requires a two-step confirm and deletes, **for the guild it is run in**, every whisper you sent or received (their guesses, replies, and reports cascade with them) plus any reply you wrote or received. Reports you filed on other people's whispers, and guess rows recording that someone guessed *you* on a third party's whisper, are rows about their whispers and survive. Stranded replies whose parent whisper is already gone are swept regardless of guild — with no parent left, they can't be attributed to one.
@@ -91,7 +94,7 @@ The dashboard's audit log lists every whisper with its state, report count, send
 - The bot needs **Send Messages** + **Embed Links** in the feed channel, **Manage Messages** to bump the launcher, **Manage Roles** for opt-in / opt-out (with the bot's role above the Whisper role), and the ability to DM each target (Discord-side; not bot-grantable — closed DMs roll back the send).
 - Slash commands have no Discord-side permission gate; they reject DMs and check role membership in-app.
 - The Guess, Share, Delete, Expose, and Report buttons are **target-only**. Reply is sender-or-target. Report Reply is reply-recipient-only.
-- Dashboard config requires the **game-host** role; the audit log requires **admin**.
+- Dashboard config and the audit log both require **admin** — the mod-log channel doxxes an anonymous sender, so this route was tightened off the games-editor (game-host) gate other game configs use; see the security fix that split it from `/config/guess`.
 
 ## User-visible errors
 
@@ -105,6 +108,7 @@ The dashboard's audit log lists every whisper with its state, report count, send
 | Hourly per-target cap reached | "You've sent 5 whispers to that user in the last hour. Try again later." |
 | Target is currently timed out | "Can't whisper a member who's currently timed out." |
 | Recipient has DMs closed | "I couldn't deliver — they have DMs disabled." |
+| Sender/target pair is on the no-contact list | "Whisper delivered." — looks identical to a real send; nothing is actually sent |
 | Guess race lost | "This whisper was solved by another tab." |
 | Wrong guess, with remaining | "Wrong! N guesses left." |
 | Duplicate report | "You've already reported this whisper." |
@@ -118,7 +122,7 @@ The dashboard's audit log lists every whisper with its state, report count, send
 - **No retraction.** Once sent, the sender can't un-send a single whisper — only `/whisper forget-me` to nuke their entire history.
 - **No attachments or embeds.** Whispers and replies are text only.
 - **No leaderboard or stats.** The audit log is forensic, not gamified.
-- **No server-side blocklist.** A target who doesn't want whispers must opt out.
+- **No per-sender blocklist of Whisper's own.** A member can block a specific person from whispering them via the cross-feature [no-contact list](no_contact_spec.md) (`/nocontact add`) without opting out of Whisper entirely; opting out (below) is still the only way to leave the game altogether.
 - **No one-shot slash form** that takes target + message directly.
 
 ## Configuration
@@ -127,7 +131,7 @@ Per-guild keys an admin sets via the dashboard:
 
 - **Whisper opt-in role** — the role gating both send and receive. Required.
 - **Feed channel** — where the launcher and announcements live. Required.
-- **Mod-log channel** — optional; when set, sends/replies/reports also fan out here as embeds. Reports persist to the audit log regardless.
+- **Mod-log channel** — optional; when set, replies and reports also fan out here as embeds (sending a whisper does not). Reports persist to the audit log regardless.
 - **Guesses per whisper** (`whisper_guesses_per_whisper`, default 3, 1-10) — the recipient's allowance, stamped on each whisper when it is sent.
 - **Rate limits** — `whisper_cooldown_seconds` (default 30) and `whisper_hourly_cap_per_target` (default 5).
 

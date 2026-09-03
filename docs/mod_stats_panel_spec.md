@@ -1,6 +1,6 @@
 # Moderator Stats Panel — Feature Spec
 
-**Status: Reference** (built 2026-09-01).
+**Status: Reference** (built 2026-09-01; reshaped to this weekday-band/presence/XP-stack form 2026-09-02).
 
 A sticky panel in a mod-only channel showing the server's day so far: today's
 message traffic hour by hour against a band over the last **8 matching
@@ -98,8 +98,8 @@ responses from whoever reads the panel.
 
 ### The XP stacks
 
-Row 3 is `query_xp_activity_with_breakdown(resolution="day")` — the dashboard's
-own call. Row 4 is `query_xp_all_time_with_breakdown`, added for this panel: the
+Row 2 is `query_xp_activity_with_breakdown(resolution="day")` — the dashboard's
+own call. Row 3 is `query_xp_all_time_with_breakdown`, added for this panel: the
 only graph in `activity_graphs` whose window does **not** roll, starting at the
 guild's first XP event and bucketing weekly to now, so the bar count grows with
 the server. Weeks rather than days because a year is 365 marks in a 400px-wide
@@ -108,7 +108,7 @@ disappears into a monthly average. It reads through `_xp_row_source`, so it
 stays correct once raw `xp_events` below the 90-day retention boundary have been
 pruned to `xp_daily`.
 
-**The dotted rules are what make row 4 honest.** XP sources did not all exist for
+**The dotted rules are what make row 3 honest.** XP sources did not all exist for
 the whole period — on the home guild `text` and `reply` run from 2026-02-07,
 `image_react` and `voice` from 2026-03-03, and `quest` and `reaction_given` only
 from mid-July 2026. Without a marker, the stack gaining two colours in one week
@@ -234,10 +234,10 @@ identities discarded inside the query.
 
 ## Non-goals
 
-- **Stats *about* moderators.** Row 2 says how many were *around*, which is a
-  coverage question. Who takes action, and how much, is
-  [mod_coverage](reporting_spec.md) and Mod Workload; this panel adds no third
-  definition of the work itself. It does add a second definition of *moderator*
+- **Stats *about* moderators.** Row 1 says how many were *around*, which is a
+  coverage question. Who takes action, and how much, is Mod Coverage and Mod
+  Workload; this panel adds no third definition of the work itself. It does
+  add a second definition of *moderator*
   (appointed roles, vs Mod Coverage's Manage Messages) — named on the chart and
   above, because two panels silently counting different circles is worse than
   two panels openly counting different circles.

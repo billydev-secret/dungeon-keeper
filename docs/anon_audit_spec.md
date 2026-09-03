@@ -114,7 +114,7 @@ embeds.
 `record_event` swallows and logs every DB error. An audit failure must never
 take down the member-facing flow it observes: a member should not lose the
 question they typed because the table was locked. Same contract as
-`guess_cog._write_audit`.
+`guess_cog._do_audit`.
 
 Call sites pass `message_id` **after** the message is posted — that is why the
 AMA audit call moved below `mark_question_approved`.
@@ -138,7 +138,7 @@ narrows past them.
 
 ## Dashboard
 
-**Moderation → Audit Logs → Anonymous Features** (`mod-anon-audit.js`,
+**Moderation → Audit Logs → Anonymity Audit** (`mod-anon-audit.js`,
 admin-only).
 
 - `GET /api/moderation/anon-audit` — `limit`, `offset`, `feature`, `actor_id`.

@@ -86,13 +86,17 @@ The `/bump` command group defaults to requiring **Manage Server**.
 
 ## Stored data
 
-SQLite, migrations `044_bump_tracker.sql`, `047_bump_tracker_detector.sql` and
-`137_bump_tracker_failure.sql`:
+SQLite, migrations `044_bump_tracker.sql`, `047_bump_tracker_detector.sql`,
+`081_bump_attribution.sql` and `137_bump_tracker_failure.sql`:
 
 - `bump_tracker_config` — per guild: `channel_id`, `role_id`, `widget_message_id`, `enabled`.
 - `bump_tracker_sites` — per (guild, site): `cooldown_seconds`, `detector_bot_id`, `detector_pattern`, `failure_pattern`.
 
-- `bump_tracker_log` — per (guild, site): last `bumped_at` (unix timestamp) and `notified` flag. Only the latest bump per site is kept — no history. Removing a site also deletes its log row.
+- `bump_tracker_log` — per (guild, site): last `bumped_at` (unix timestamp), `notified` flag, and `user_id` — the member credited with the bump (0 = unknown). `/bump log` credits its invoker; an auto-detected bump credits `message.interaction_metadata.user` when the listing bot's message carries one, else 0. Only the latest bump per site is kept — no history. Removing a site also deletes its log row.
+
+Migration 081 added `user_id` so the `bump` quest-trigger kind can credit the
+right member — see `docs/economy_spec.md` for how quests consume it; this spec
+covers only what Bump Tracker itself writes.
 
 Migration 137 also back-fills `failure_pattern` for every existing row whose
 `detector_bot_id` is Discadia, Discodus or DH Bump — all three announce refusals

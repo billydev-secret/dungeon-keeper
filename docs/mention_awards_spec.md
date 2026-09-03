@@ -96,7 +96,7 @@ message length and is the admin's own footgun, not member-reachable.
 
 ## Payout
 
-`economy/game_rewards.pay_mention_award` — the `pay_cat_catch` shape: coins
+`bot_modules/economy/game_rewards.pay_mention_award` — the `pay_cat_catch` shape: coins
 credited directly, plus the `mention_award` quest trigger on top. Inherits
 every faucet guarantee: no-op when the economy is off or the member is a
 bot/unresolvable, booster multiplier applied, failures logged not raised.
@@ -138,7 +138,7 @@ one payout per message.
 | `bot_modules/mention_awards/logic.py` | Pure chip matching — the whole safety surface |
 | `bot_modules/mention_awards/store.py` | Rule CRUD + validation + conditions JSON |
 | `bot_modules/cogs/mention_awards_cog.py` | Thin `on_message` listener |
-| `economy/game_rewards.py` | `pay_mention_award` |
+| `bot_modules/economy/game_rewards.py` | `pay_mention_award` |
 | `web_server/routes/mention_awards.py` | Admin-gated CRUD API |
 | `web_server/static/js/panels/config-mention-awards.js` | The chip-builder panel |
 | `scripts/backfill_mention_awards.py` | One-off shape-based replay |

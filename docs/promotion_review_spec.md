@@ -77,7 +77,7 @@ renders but never notifies) and allow-lists exactly those roles by id via
   role diff in `events_cog` re-renders just that field whenever the spicy-access
   role is added or removed — so the card tracks access granted by `/grant` or by
   a hand-added role, neither of which it could see before. **Which role that
-  is** (`xp_service.nsfw_grant_role_id`, 2026-08-29): the dashboard's
+  is** (`xp_service.nsfw_grant_role_id`, 2026-08-30): the dashboard's
   **Promotion Review Grant Role** (`promotion_review_grant_role_id`, XP &
   Leveling panel) when set — the role the button hands out is by definition the
   access being reviewed, so button and field now move together — falling back to

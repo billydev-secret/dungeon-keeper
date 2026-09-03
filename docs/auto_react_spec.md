@@ -12,7 +12,7 @@ The listener fires on every message and bails early unless all of the following 
 
 - Author is not a bot.
 - Message is in a guild (DMs ignored).
-- Message **contains an image**: an attachment whose `content_type` starts with `image/`, or an embed of type `image`, `gifv`, or `rich` that carries an image or thumbnail.
+- Message **contains an image**: an attachment whose `content_type` starts with `image/` (or, when Discord serves it without a `content_type`, whose filename ends in a known image extension) and whose size is within the classifier's 25 MB cap, or an embed of type `image`, `gifv`, or `rich` that carries an image or thumbnail. This is the same predicate the NSFW classifier uses to decide what it will fetch ([[nsfw-classifier-spec]]), so an oversized attachment doesn't trigger a plain rule either.
 - The channel has a rule row and that rule's `enabled` flag is set. Lookup is exact on `(guild_id, channel_id)` — threads and forum posts don't inherit their parent channel's rule.
 
 When a rule matches, all of its emojis are added concurrently (`asyncio.gather`). A failing emoji (deleted custom emoji, missing Add Reactions permission, invalid string) is logged as a warning and does **not** block the others — each reaction succeeds or fails independently.
@@ -39,8 +39,8 @@ Rules **without** `tips_enabled` are entirely unaffected by any of the above: sa
 
 Managed through the web dashboard's admin API (admin scope required); there is no in-Discord configuration.
 
-- Current rules are returned in the `auto_react` section of `GET /api/config` — one entry per channel with `channel_id`, `emojis` (list), `enabled`, and `tips_enabled`.
-- `PUT /api/config/auto-react/{channel_id}` with body `{"emojis": [...], "enabled": true, "tips_enabled": false}` creates or replaces the channel's rule (upsert; the emoji list is replaced wholesale, not merged). `tips_enabled` defaults to false — turning a channel into a tipping channel is always an explicit act.
+- Current rules are returned in the `auto_react` section of `GET /api/config` — one entry per channel with `channel_id`, `emojis` (list), `enabled`, `tips_enabled`, and `rungs` (a per-emoji price map; an emoji with no rung, or a rung of 0, is placed but free).
+- `PUT /api/config/auto-react/{channel_id}` with body `{"emojis": [...], "enabled": true, "tips_enabled": false, "rungs": {...}}` creates or replaces the channel's rule (upsert; the emoji list is replaced wholesale, not merged). `tips_enabled` defaults to false — turning a channel into a tipping channel is always an explicit act. `rungs` is optional; when sent, only emoji still in the rule's list keep a price.
 - `DELETE /api/config/auto-react/{channel_id}` removes the rule **and its tip prices** — the rungs go in the same transaction, so a price can't survive as an orphan with no dashboard surface and be inherited by a rule created later for the same channel.
 
 Emojis are free-form strings — Unicode emoji or full custom-emoji syntax (`<:name:id>`). No validation happens at write time; a bad entry simply fails (with a log warning) when a reaction is attempted.

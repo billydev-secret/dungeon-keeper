@@ -85,7 +85,7 @@ Master's permission build) consult the list through
 `no_contact_pairs` directly, so the table's shape stays owned by one module —
 adding an expiry or soft-delete column is a change in one place, not a grep.
 
-Only the first six surfaces record an **attempt** event. The last five are
+Only the first four surfaces record an **attempt** event. The last five are
 gated without one. For Pen Pals, Voice Master and DM requests that is because
 the gate extends an existing predicate running inside matching loops and
 permission syncs; there is no single moment there that means "he tried", and

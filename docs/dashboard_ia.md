@@ -37,7 +37,7 @@ theme (Server, Roles, New Members, Members, Moderation & Safety, Channels &
 Messages, Voice, AI & Maintenance).
 
 The user-facing statement of the same rule is the **Where a Setting Lives**
-subsection of `manual.html` §27 Configuration Reference (help page
+subsection of `manual.html` §29 Configuration Reference (help page
 `help-config`) — keep the two in step.
 
 ## Sections
@@ -128,12 +128,15 @@ splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
 
 * **Operations** — Play Statistics, Scheduling, Global Config, External Tracking.
 * **Live Games** — one page of dials per game that runs live in a channel
-  (LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
-  (Group), Chicken, Musical Chairs, Photo Challenge — which had been a
-  top-level section with a single item under the same gate — plus Survivor
-  and Meadow Mahjong, added after the IA1 write-up).
-* **Question Banks** — the nine prompt banks (WYR, NHIE, Most Likely To,
-  Rushmore, Price, Clapback, AMA, FFA, Traditional ToD).
+  (Anonymous AMA, LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot
+  Potato, Hot Potato (Group), Chicken, Musical Chairs, Photo Challenge — which
+  had been a top-level section with a single item under the same gate — plus
+  Survivor and Meadow Mahjong, added after the IA1 write-up). AMA moved here
+  from Question Banks once its bank came off: every AMA question is typed by
+  a member mid-game, so there was never a bank to fill; its route id stays
+  `games-ama`, only the grouping moved.
+* **Question Banks** — the eight prompt banks (WYR, NHIE, Most Likely To,
+  Rushmore, Price, Clapback, FFA, Traditional ToD).
 
 **Economy** was the last flat list, twelve items deep; it gained four subgroups
 in 2026-08 (IA2):
@@ -276,8 +279,10 @@ Every enumerated param is validated against its own value list on read, and id
 params are parsed as numbers that simply match no row when they're junk — a
 stale or hand-edited URL must fall back to the default view, never error.
 
-Adopted by the sixteen analytics panels and by all five mod workflow panels
-(tickets, jails, rules-watch, qa-tracker, todo). Tests:
+Adopted by seventeen analytics panels under Reports (Ping Response included),
+by Grant Audit under Moderation → Audit Logs, by Command & Panel Usage under
+Dev, and by all five mod workflow panels (tickets, jails, rules-watch,
+qa-tracker, todo). Tests:
 `tests/web/test_mod_queue_deeplinks.py` (round trip in a browser) and the
 `syncHash`-id sweep in `tests/web/test_frontend_wiring.py`.
 

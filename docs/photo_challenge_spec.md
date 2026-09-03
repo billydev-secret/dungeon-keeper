@@ -99,8 +99,9 @@ game-host role — every `/api/photo-challenge` route requires
     with the channel forced from config (400 until one is set), `announce=0`.
     Row actions: pause, resume (recomputes `next_run_at`), **run now** (sets
     `next_run_at=now`; fires on the next poll, reusing the busy/disabled
-    guards), edit, delete. Last-run status is shown per row (`launched`,
-    `skipped_active`, `skipped_disabled`, `skipped_giveup`, `error`).
+    guards), edit, delete. Last-run status is shown per row (`launching`,
+    `launched`, `skipped_active`, `skipped_disabled`, `skipped_giveup`,
+    `skipped_hidden`, `skipped_late`, `error`).
   - An inline **Prompt Bank** section (`mountGamePanel`, `game_type='photo'`).
 
 Photo Challenge is a single dashboard page. The separate **Prompts & AI**
@@ -110,7 +111,7 @@ above, and Photo Challenge was already bank-only at runtime.
 
 Economy knobs live on the economy pages, not here: the flat
 `reward_photo_post` rate on **Economy → Income Sources**
-(`economy-income-sources.js`, "Photo Challenge post (flat award)") alongside
+(`economy-income-sources.js`, "Entering the photo challenge") alongside
 the `photo_post` source on/off toggle; the stacking bonus is a `photo_post`
 quest in **Economy → Quests**.
 
