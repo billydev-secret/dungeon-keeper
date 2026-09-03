@@ -4974,15 +4974,19 @@ class EconomyCog(commands.Cog):
                     return []
 
         chores_ticked = await asyncio.to_thread(_record)
-        if chores_ticked:
-            from bot_modules.cogs.todo_cog import repaint_board
-
-            await repaint_board(self.bot, guild_id)
         await interaction.followup.send(
             f"Posted {sponsor_name}'s sponsored question." if sponsor_name
             else "Posted the question of the day.",
             ephemeral=True,
         )
+        # After the command has been answered, like every other seam: a repaint
+        # is a REST edit discord.py sleeps through under per-channel rate
+        # limiting, and the mod would otherwise watch the question appear in
+        # the channel while the command they ran sat on "thinking…".
+        if chores_ticked:
+            from bot_modules.cogs.todo_cog import repaint_board
+
+            await repaint_board(self.bot, guild_id)
 
     # ── how-to guide panel ───────────────────────────────────────────────
 

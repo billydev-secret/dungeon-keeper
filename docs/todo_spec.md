@@ -461,7 +461,10 @@ demonstrably happened is worse than no scoreboard.
   other `open_db` there — under `open_db_immediate`, since reading the wired
   definitions and then writing the completion is exactly the read-then-write a
   deferred transaction can fail with `SQLITE_BUSY_SNAPSHOT`, which
-  `busy_timeout` does not retry and the per-definition guard would swallow.
+  `busy_timeout` does not retry and the per-definition guard would swallow. The
+  write lock is only taken once a plain read confirms the guild *has* a
+  game-triggered chore, so a launch in a guild with none — every guild until
+  someone picks the trigger — never queues behind another writer.
 
   Every game seam signs off **after** its interaction has been answered, never
   before: a repaint is a REST edit that discord.py sleeps through under

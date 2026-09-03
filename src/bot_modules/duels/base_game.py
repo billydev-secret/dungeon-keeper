@@ -1097,12 +1097,17 @@ class BaseGame(commands.Cog):
                 game = await self._db_get_game(game_id)
                 if not game:
                     return
+                await self.on_game_start(game)
                 # A lobby game only counts as "run" once it actually starts — the
                 # roster is real by here, where at lobby-open time it was one
                 # person and an invitation. Credited to the host who opened it,
                 # not whoever pressed Start.
+                #
+                # Assigned only once on_game_start has returned: the row is
+                # ACTIVE either way, but a start that raised is not a game
+                # anyone ran, and crediting it would also put a REST board
+                # repaint in front of the error the player is waiting for.
                 started = (game.guild_id, game.host_id)
-                await self.on_game_start(game)
                 game = await self._db_get_game(game_id)
                 if not game:
                     return

@@ -129,6 +129,14 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
     in between — which ``busy_timeout`` does not retry. The per-definition
     guard inside ``auto_complete_chores`` would swallow it and the chore would
     quietly stay open, which is the failure this whole feature exists to stop.
+
+    That write lock is only taken when there is something to write. A guild
+    with no game-triggered chore — which is every guild until someone picks the
+    trigger, since the migration backfills nothing — answers on a plain read
+    instead, so the launch path of a busy evening never queues behind another
+    writer for a transaction whose only statement returns no rows. The
+    existence check being stale is harmless: the immediate transaction re-reads
+    under the lock, so it is a fast negative, never a decision.
     """
     try:
         if not guild_id or not user_id:
@@ -154,6 +162,15 @@ async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) ->
         from bot_modules.core.db_utils import open_db_immediate  # noqa: PLC0415
 
         def _work() -> list[int]:
+            with ctx.open_db() as conn:
+                wired = conn.execute(
+                    "SELECT 1 FROM todo_recurring"
+                    " WHERE guild_id = ? AND status = 'active'"
+                    "   AND auto_complete = 'game' LIMIT 1",
+                    (int(guild_id),),
+                ).fetchone()
+            if wired is None:
+                return []
             with open_db_immediate(ctx.db_path) as conn:
                 return auto_complete_chores(
                     conn, int(guild_id), "game",

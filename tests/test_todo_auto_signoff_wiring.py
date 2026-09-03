@@ -293,7 +293,12 @@ def test_the_human_launch_paths_sign_the_chore_off(module, function):
 #: Relaunching a game from its recap — the shape that keeps being missed.
 #: These call a launcher directly rather than going through the shared
 #: ``finish_launch_response``, so each one has to carry the sign-off itself.
-_RELAUNCHERS = ("self.cog.launch(", "self.cog._start_new_game(")
+#:
+#: Matched on the *method* rather than on ``self.cog.launch(``: a view that
+#: holds its cog as ``self._cog``, or reaches it through ``bot.get_cog``, is
+#: the same defect wearing different spelling, and the narrower pattern would
+#: let it through while the existing matches kept the scan looking healthy.
+_RELAUNCHERS = (".launch(", "._start_new_game(")
 
 
 def test_no_recap_relaunch_button_is_left_without_the_seam():
@@ -307,10 +312,17 @@ def test_no_recap_relaunch_button_is_left_without_the_seam():
     missing = []
     found = []
     for path in (SRC / "bot_modules/cogs").rglob("*.py"):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
         source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
         for node in ast.walk(tree):
             if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            # Button handlers only. A slash-command callback also calls its
+            # launcher, but reaches the seam through finish_launch_response.
+            decorators = " ".join(
+                ast.get_source_segment(source, d) or "" for d in node.decorator_list
+            )
+            if "ui.button" not in decorators:
                 continue
             body = ast.get_source_segment(source, node) or ""
             if not any(call in body for call in _RELAUNCHERS):
@@ -325,16 +337,24 @@ def test_no_recap_relaunch_button_is_left_without_the_seam():
     assert not missing, f"relaunch without a chore sign-off: {missing}"
 
 
-def test_the_scheduler_never_signs_the_chore_off():
+@pytest.mark.parametrize(
+    "module",
+    [
+        "bot_modules/services/scheduled_games_service.py",
+        # The second automatic launcher: feature rotation drives the same
+        # bot.game_launchers registry, so listing only the scheduler would let
+        # a refactor break the invariant with this tripwire still green.
+        "bot_modules/services/feature_rotation_service.py",
+    ],
+)
+def test_no_automatic_launcher_signs_the_chore_off(module):
     """The whole point of hooking the interactive seam.
 
-    Two daily schedules already run in this server; if the scheduler's launch
-    path ever reached the helper, the chore would tick itself green every
-    morning and stop meaning anything.
+    Two daily schedules already run in this server; if an automatic launch path
+    ever reached the helper, the chore would tick itself green every morning
+    and stop meaning anything.
     """
-    source = (SRC / "bot_modules/services/scheduled_games_service.py").read_text(
-        encoding="utf-8"
-    )
+    source = (SRC / module).read_text(encoding="utf-8")
     assert "sign_off_game_chore" not in source
     assert "auto_complete_chores" not in source
 

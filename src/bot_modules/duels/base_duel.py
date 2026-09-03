@@ -323,8 +323,12 @@ class BaseDuel(BaseGame):
                     return
 
             await self._db_set_state(game_id, "ACTIVE")
-            started = (game.guild_id, game.challenger_id)
             await self.on_game_start(game)
+            # Assigned only once on_game_start has returned: the row is
+            # ACTIVE either way, but a start that raised is not a game
+            # anyone ran, and crediting it would also put a REST board
+            # repaint in front of the error the player is waiting for.
+            started = (game.guild_id, game.challenger_id)
 
             # Re-fetch after on_game_start (subclass may have set additional fields)
             game = await self._db_get_game(game_id)
