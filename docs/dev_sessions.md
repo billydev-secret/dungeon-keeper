@@ -285,6 +285,13 @@ resume; the excess comes back as shells. Prod sorts first so it keeps window 1 �
 note that prod is restored on the same rule as everything else, so a dirty prod tree
 brings up an unattended auto-mode session in the production checkout.
 
+**Two sessions in one directory are two sessions.** They share a tree, so they share a
+dirty count and come back in the same mode; the first keeps the directory's own window
+name and the rest get `-2`, `-3` suffixes, because a tmux window name is the only
+address `select-window` has. Restore used to drop everything after the first, which is
+how the 2026-09-02 reboot rebuilt 12 windows from a 13-session manifest and lost a live
+session in the prod checkout — the manifest had it, the plan discarded it.
+
 **Resuming from a summary is not a flag.** Claude Code's "this session is old and
 large" dialog fires past 70 minutes / 100k tokens, which every post-reboot resume
 clears. Left alone it parks each restored session on a menu — the state `session_state()`

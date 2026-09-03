@@ -560,6 +560,22 @@ def in_scope(cwd: str, main_repo: str) -> bool:
     return cwd_p.parent == main_p.parent / SESSIONS_DIRNAME
 
 
+def unique_window(base: str, taken: set[str]) -> str:
+    """`base`, or the first `base-2`, `base-3`… that no window has claimed.
+
+    Window names are the only address `tmux select-window -t <name>` has, so
+    two windows must not share one. The suffix keeps the first session in a
+    directory on the bare name the teardown convention expects, and parks the
+    rest beside it rather than dropping them.
+    """
+    if base not in taken:
+        return base
+    n = 2
+    while f"{base}-{n}" in taken:
+        n += 1
+    return f"{base}-{n}"
+
+
 def restore_plan(sessions: list[dict[str, str]], main_repo: str,
                  exists, dirty_count, max_resume: int | None = None) -> list[dict]:
     """Decide, per recorded session, whether it comes back live or as a shell.
@@ -571,23 +587,31 @@ def restore_plan(sessions: list[dict[str, str]], main_repo: str,
 
     Sessions outside this repo (`foreign`) and worktrees torn down since the
     snapshot (`gone`) are reported rather than skipped, so a restore never
-    silently drops something it was asked about. Prod sorts first so it keeps
-    window 1.
+    silently drops something it was asked about. Two sessions open in one
+    directory are two sessions: the second is *not* a duplicate record, and
+    dropping it lost a live session in the 2026-09-02 restore. They share a
+    tree, so they share a dirty count and therefore a mode; they differ in the
+    window name, via `unique_window`. Prod sorts first so it keeps window 1.
     """
     plan: list[dict] = []
-    seen: set[str] = set()
+    taken: set[str] = set()
+    dirty_cache: dict[str, int] = {}
     for s in sessions:
         cwd = s.get("cwd", "")
-        if not cwd or cwd in seen:
+        if not cwd:
             continue
-        seen.add(cwd)
-        entry = dict(s, window=window_name(cwd, main_repo), dirty=0, capped=False)
+        window = unique_window(window_name(cwd, main_repo), taken)
+        taken.add(window)
+        entry = dict(s, window=window, dirty=0, capped=False)
         if not in_scope(cwd, main_repo):
             entry["mode"] = "foreign"
         elif not exists(cwd):
             entry["mode"] = "gone"
         else:
-            entry["dirty"] = dirty_count(cwd)
+            # One git call per tree, not per session sharing it.
+            if cwd not in dirty_cache:
+                dirty_cache[cwd] = dirty_count(cwd)
+            entry["dirty"] = dirty_cache[cwd]
             entry["mode"] = "resume" if entry["dirty"] else "shell"
         plan.append(entry)
 

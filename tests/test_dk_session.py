@@ -620,14 +620,56 @@ def test_prod_sorts_first_so_it_keeps_window_one():
     assert plan[0]["window"] == "main"
 
 
-def test_one_window_per_directory():
-    """Two sessions can share a cwd; two windows must not share a name."""
+def test_a_second_session_in_one_directory_keeps_its_own_window():
+    """Two sessions can share a cwd, and both must come back.
+
+    Dropping the second is what lost a live session in the 2026-09-02 restore:
+    the prod checkout held both `main` and a second session, and only `main`
+    was rebuilt. They share a tree, so they share a mode; they differ in the
+    window name.
+    """
     plan = _plan(
         [{"session_id": "a", "cwd": f"{SESSIONS}/feat"},
          {"session_id": "b", "cwd": f"{SESSIONS}/feat"}],
-        dirty={},
+        dirty={f"{SESSIONS}/feat": 4},
     )
-    assert [e["session_id"] for e in plan] == ["a"]
+    assert [e["session_id"] for e in plan] == ["a", "b"]
+    assert [e["window"] for e in plan] == ["feat", "feat-2"]
+    assert {e["mode"] for e in plan} == {"resume"}
+
+
+def test_a_second_prod_session_does_not_displace_window_one():
+    """The real 2026-09-02 shape: two sessions in the prod checkout."""
+    plan = _plan(
+        [{"session_id": "main-sess", "cwd": PROD},
+         {"session_id": "basecamp", "cwd": PROD}],
+        dirty={PROD: 4},
+    )
+    assert [e["window"] for e in plan] == ["main", "main-2"]
+    assert plan[0]["session_id"] == "main-sess"
+
+
+def test_a_shared_tree_is_only_asked_for_its_dirty_count_once():
+    """Two sessions in one worktree must not mean two `git status` calls."""
+    calls = []
+
+    def counting_dirty(path):
+        calls.append(path)
+        return 2
+
+    plan = dk_session.restore_plan(
+        [{"session_id": "a", "cwd": f"{SESSIONS}/feat"},
+         {"session_id": "b", "cwd": f"{SESSIONS}/feat"}],
+        PROD, exists=lambda p: True, dirty_count=counting_dirty,
+    )
+    assert calls == [f"{SESSIONS}/feat"]
+    assert [e["dirty"] for e in plan] == [2, 2]
+
+
+def test_unique_window_walks_past_every_taken_suffix():
+    assert dk_session.unique_window("feat", set()) == "feat"
+    assert dk_session.unique_window("feat", {"feat"}) == "feat-2"
+    assert dk_session.unique_window("feat", {"feat", "feat-2"}) == "feat-3"
 
 
 def test_max_resume_downgrades_the_excess_to_shells():
