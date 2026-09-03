@@ -1,9 +1,24 @@
 # Policy Tickets — opening the vote to members
 
-**Status:** PLAN — nothing built. Written 2026-09-03 against branch
-`website-voice-notes` at `55bf78d4`. Every claim about current behaviour below was
-verified by reading `src/`; where `docs/dungeon_keeper_jail_ticket_spec.md` and the
-code disagree, the code is cited.
+**Status:** **BUILT 2026-09-03** to the *Decisions* section at the foot of this
+file, which supersedes the body above wherever they disagree. Migration 202,
+`services/policy_ballot_service.py`, `/policy ballot`, and the read-only ballots
+section of the frozen `mod-policy-tickets` page. `docs/dungeon_keeper_jail_ticket_spec.md`
+§Community ballots is now the reference; read this file for the reasoning, not
+the behaviour.
+
+**What the body below describes and the build deliberately does NOT contain**
+(the decisions removed them): the five `policy_ballot_*` config dials and their
+role multi-picker (§4) — the channel's own permissions are the electorate; the
+tallies-only and secret-ballot constructions (§5) — the tally is fully public
+and names every voter; quorum and `pass_pct` (§7) — simple majority, ties fail,
+no minimum turnout; and any write path into `policies` — a passed ballot is
+recorded, not enacted. Stage 0 of §8 shipped as its own commit.
+
+Written 2026-09-03 against branch `website-voice-notes` at `55bf78d4`. Every
+claim about current behaviour below was verified by reading `src/`; where
+`docs/dungeon_keeper_jail_ticket_spec.md` and the code disagree, the code is
+cited.
 **Feature spec:** [dungeon_keeper_jail_ticket_spec.md](../dungeon_keeper_jail_ticket_spec.md)
 (Reference). **INDEX.md classification when this lands:** Design.
 **Billy's ask:** "I do want to make the policy tickets available to users" — e.g. a

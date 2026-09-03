@@ -329,6 +329,26 @@ def test_only_one_ballot_at_a_time_is_open_for_a_proposal(conn):
     assert svc.get_open_ballot_for_policy(conn, policy_id) is None
 
 
+def test_a_ballot_is_findable_by_its_thread_until_it_closes(conn):
+    """How `/policy close` reaches a ballot to cancel: the ballot's own policy
+    ticket wears status 'ballot', which the ordinary proposal lookup does not
+    match, so a thread lookup is the only route in."""
+    ballot_id = _ballot(conn)
+    svc.attach_ballot_message(conn, ballot_id, thread_id=600, message_id=601)
+
+    found = svc.get_open_ballot_for_thread(conn, 600)
+    assert found is not None and found["id"] == ballot_id
+
+    svc.close_ballot(conn, ballot_id, closed_by=1, now=1500.0)
+    assert svc.get_open_ballot_for_thread(conn, 600) is None
+
+
+@pytest.mark.parametrize("thread_id", [0, 999], ids=["no-thread", "unknown-thread"])
+def test_a_thread_with_no_ballot_finds_nothing(conn, thread_id):
+    _ballot(conn)
+    assert svc.get_open_ballot_for_thread(conn, thread_id) is None
+
+
 def test_list_ballots_is_guild_scoped_and_newest_first(conn):
     older = _ballot(conn, now=1000.0)
     newer = _ballot(conn, now=5000.0)

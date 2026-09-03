@@ -5,6 +5,10 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.commands.jail_commands import (
+    PolicyBallotAbstainButton,
+    PolicyBallotCloseButton,
+    PolicyBallotNoButton,
+    PolicyBallotYesButton,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
@@ -79,3 +83,80 @@ def test_jail_modal_has_duration_and_reason_inputs():
 def test_jail_modal_input_max_lengths():
     assert _JailModal.duration_input.max_length is None or _JailModal.duration_input.max_length <= 4000
     assert _JailModal.reason_input.max_length is None or _JailModal.reason_input.max_length <= 4000
+
+
+# ── Community ballot buttons ──────────────────────────────────────────
+#
+# A ballot runs for days in a public thread, so its buttons must survive every
+# restart in between — that is what DynamicItem plus the `add_dynamic_items`
+# registration in `JailCog.cog_load` buys. These pin the custom-id shape those
+# templates have to keep matching.
+
+_BALLOT_BUTTONS = [
+    PolicyBallotYesButton,
+    PolicyBallotNoButton,
+    PolicyBallotAbstainButton,
+    PolicyBallotCloseButton,
+]
+
+
+@pytest.mark.parametrize("cls", _BALLOT_BUTTONS, ids=lambda c: c.__name__)
+def test_ballot_button_template_matches_its_own_custom_id(cls):
+    btn = cls(42)
+    assert cls.__discord_ui_compiled_template__.fullmatch(btn.item.custom_id or "")
+
+
+@pytest.mark.parametrize("cls", _BALLOT_BUTTONS, ids=lambda c: c.__name__)
+def test_ballot_button_label_within_discord_limit(cls):
+    assert len(cls(1).item.label or "") <= 80
+
+
+def test_ballot_custom_ids_carry_the_ballot_id():
+    assert PolicyBallotYesButton(10).item.custom_id == "policy_ballot:yes:10"
+    assert PolicyBallotNoButton(10).item.custom_id == "policy_ballot:no:10"
+    assert PolicyBallotAbstainButton(10).item.custom_id == "policy_ballot:abstain:10"
+    assert PolicyBallotCloseButton(10).item.custom_id == "policy_ballot:close:10"
+
+
+@pytest.mark.parametrize("cls", _BALLOT_BUTTONS, ids=lambda c: c.__name__)
+def test_ballot_templates_never_match_a_policy_vote_id(cls):
+    """`policy_ballot:` and `policy_vote:` share a prefix up to the underscore.
+    A template that matched the other feature's ids would route a mod's vote
+    press into the ballot handler (and vice versa) after a restart."""
+    for vote_id in (
+        "policy_vote:yes:10", "policy_vote:no:10", "policy_vote:abstain:10",
+    ):
+        assert not cls.__discord_ui_compiled_template__.fullmatch(vote_id)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [PolicyVoteYesButton, PolicyVoteNoButton, PolicyVoteAbstainButton],
+    ids=lambda c: c.__name__,
+)
+def test_policy_vote_templates_never_match_a_ballot_id(cls):
+    for ballot_id in (
+        "policy_ballot:yes:10", "policy_ballot:no:10", "policy_ballot:abstain:10",
+        "policy_ballot:close:10",
+    ):
+        assert not cls.__discord_ui_compiled_template__.fullmatch(ballot_id)
+
+
+def test_ballot_view_carries_all_four_buttons_while_open():
+    from bot_modules.commands.jail_commands import _ballot_view
+
+    ids = [item.custom_id for item in _ballot_view(7).children]
+    assert ids == [
+        "policy_ballot:yes:7",
+        "policy_ballot:no:7",
+        "policy_ballot:abstain:7",
+        "policy_ballot:close:7",
+    ]
+
+
+def test_ballot_view_is_empty_once_closed():
+    """A closed ballot's card keeps its tally but loses its buttons, so a late
+    press cannot land on a frozen result."""
+    from bot_modules.commands.jail_commands import _ballot_view
+
+    assert list(_ballot_view(7, closed=True).children) == []

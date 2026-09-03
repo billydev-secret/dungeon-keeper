@@ -21,8 +21,9 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/ticket claim` | Slash | Mod | Subscribe to DM alerts on new activity in this ticket |
 | `/ticket escalate [reason]` | Slash | Mod | Bring admin roles into the ticket |
 | `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis) |
-| `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal) |
-| `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting |
+| `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal). Cannot reach a community ballot's ticket — those carry status `ballot`, which `get_policy_ticket_by_channel` deliberately does not match |
+| `/policy ballot` | Slash | Admin | Open a **community ballot**: a thread in the current channel with Yes/No/Abstain buttons, voted on by anyone who can see it. A modal takes the question. Admin-gated at **runtime** — the `default_permissions` decorator on a subcommand is inert (see Permissions) |
+| `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting. Run inside a ballot thread it **cancels that ballot** instead: the counts are frozen but no result is declared |
 | `/policy list` | Slash | Mod / Admin | List all passed policies. Kept in Discord deliberately: the dashboard's Policy Tickets panel covers the proposal workflow (`policy_tickets`), but adopted policies live in a separate `policies` table no web route reads |
 | `/pull <user>` | Slash | Mod | Add a user into the current jail or ticket channel |
 | `/remove <user>` | Slash | Mod | Remove a previously pulled user |
@@ -52,7 +53,8 @@ The dashboard mirrors the moderator surface.
 | `GET` | `/api/moderation/warnings` | List warnings |
 | `POST` | `/api/moderation/warnings/{id}/revoke` | Revoke a warning (mod) |
 | `DELETE` | `/api/moderation/warnings/{id}` | Erase a warning outright (**admin**) |
-| `GET` | `/api/moderation/policy-tickets` | List escalated tickets |
+| `GET` | `/api/moderation/policy-tickets` | List policy proposals (moderator) |
+| `GET` | `/api/moderation/policy-ballots` | List community ballots with their tallies and full roll call (moderator). Read-only; a ballot is opened, voted in and closed in Discord |
 | `GET` | `/api/moderation/transcript` | Fetch a transcript |
 | `GET` | `/api/moderation/audit` | List audit log entries |
 
@@ -136,6 +138,20 @@ Generated when a jail channel is closed via unjail or when a ticket is **deleted
 
 Transcripts are delivered as Markdown (`.md`) files. They're readable in any text editor without rendering, copy-paste cleanly, and survive archival in plain-text tools without losing structure.
 
+### Community ballots
+
+`/policy ballot` (admin) is the members' counterpart to the mod team's policy vote. It opens a **thread in the channel it was run in** and posts one card with Yes / No / Abstain buttons plus a moderator-only **Close Ballot**. A modal takes the question, and that question is the only string the ballot carries — no proposal description, no transcript, nothing from a private policy channel, which is what stops "widen the vote" from also meaning "widen the deliberation". The private mod channel is not involved in a community ballot at all.
+
+**Electorate:** anyone who can see the thread. There is no role dial and no eligibility snapshot — a veterans-only ballot is a ballot launched in a veterans-only channel, and a member's visibility is re-read from Discord on every press, so losing access stops them voting from that moment (a vote already cast stands) and gaining it lets them in.
+
+**Arithmetic:** a simple majority of the votes that took a side. Abstentions count toward neither. **Ties fail** (`yes > no`, strictly), so a 20–20 ballot and a ballot nobody voted in both fail rather than hanging. There is no minimum turnout, deliberately: a first ballot drawing nine votes and failing a quorum reads as a rejection of something the room never saw.
+
+**Public by decision.** The card names every Yes, No and Abstain voter — resolved display names, never `<@id>`, since an embed mention degrades to a bare number for any reader who has not seen that member. Nothing about a ballot is anonymous, and the copy must never say it is. The accepted cost, put to Billy explicitly: two members who have blocked each other appear in the same list. That holds because a ballot is a one-to-many broadcast with no pairing, no directed edge, no DM and no reply, and both members can already post in the channel. **A ballot must never send a DM, ping a member, or grow a per-pair surface** — any of those would create a contact edge and reopen the no-contact question for real.
+
+**Lifetime:** a ballot is recorded as a `policy_tickets` row carrying status `ballot` — outside the `('open','voting')` pair `get_policy_ticket_by_channel` matches, so `/policy vote` can never start the unanimity mod-vote on a ballot thread (that vote's finalizer archives and deletes the channel it runs in). It runs for the guild's `policy_vote_timeout_hours`, closes on the same 60-second sweep the mod vote uses, or early on the Close button; at 0 hours it has no deadline and waits for the button. `/policy close` inside the thread cancels it. Closing freezes the yes/no/abstain counts and the outcome onto the ballot row, strips the buttons, posts the result into the thread and the audit channel, and closes the ticket. **A passed ballot is recorded, not enacted** — nothing is written to `policies`; turning one into a policy is a later human act.
+
+Because the result is frozen at close, an erasure can safely delete a member's individual ballot vote: it cannot move a decision that was already announced. See `docs/data_register.md`.
+
 ### Warnings
 
 `/warn` records a warning, DMs the member with the reason and their current active warning count, and writes an audit embed. When a member's active warning count **reaches** the configured threshold (default 3) the bot posts a highlighted alert in the log channel that pings admin roles. **The threshold never auto-jails** — it escalates to humans, who decide what happens next. Reading a member's warning history — active and revoked, with dates, reasons, and the issuing mod — is the dashboard's Warnings page (`GET /api/moderation/warnings`); the `/warnings` command that duplicated it was removed 2026-07-28. `/revokewarn` stays in Discord as a deliberate manual soft-delete — no timed expiry — and takes the numeric ID shown on that page. That page also acts: each warning's detail carries a **Revoke** button (moderator, optional reason prompt, same soft-delete as `/revokewarn`) and, for admins only, a confirm-gated **Delete** that erases the row outright. Revoke is hidden on an already-revoked warning — the endpoint 409s on a second revoke.
@@ -156,9 +172,11 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 **Bot needs:** Manage Roles (to assign / strip / restore roles and create `@Jailed`), Manage Channels (jail and ticket channel creation, lock/unlock, permission overwrites), View Channels and Send Messages in the configured log channels, Read Message History and Embed Links for embeds, Attach Files for transcript delivery. The bot's top role must sit above `@Jailed` for role-strip to work.
 
+**A note on Discord-side gates:** every `@app_commands.default_permissions(...)` decorator on a `/policy` subcommand is **inert**. discord.py emits `default_member_permissions` only for top-level commands (`Command.to_dict` guards it behind `self.parent is None`) and the `/policy` group carries none, so every member already sees the whole group in the picker. The runtime `_is_admin` / `_is_mod` checks are the only gates that exist, and each has a test behind it. The same applies to the ballot's Close button, which sits on a card everyone in the thread can see.
+
 **User needs:**
 - Mod role (configured on the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
-- Admin role: `/policy open`, `/policy close`, dashboard config writes, and deleting a warning outright (`DELETE /api/moderation/warnings/{id}`). Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Admin role: `/policy open`, `/policy ballot`, `/policy close`, dashboard config writes, and deleting a warning outright (`DELETE /api/moderation/warnings/{id}`). Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors
@@ -180,6 +198,9 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 ## Non-goals
 
 - **No auto-jail.** Warning thresholds never trigger jail automatically — they ping admins.
+- **A community ballot never enacts anything.** A passed ballot writes no `policies` row and changes no setting; it is a recorded result a moderator may act on. There is therefore no binding/advisory distinction, no veto, and no cooling-off timer to build.
+- **No ballot notifications.** No DMs, no role pings, no member mentions, no reminders to people who haven't voted — see Community ballots for why that line is load-bearing rather than a convenience call.
+- **No eligibility dial for ballots.** The channel's own permissions are the electorate; a role picker would be a second, drifting answer to a question Discord already answers.
 - **No auto-revoke for warnings.** Warnings only clear when a mod manually revokes them.
 - **Deleting a warning is the exception, not the correction.** Revoking is what a mod
   reaches for when a warning shouldn't count any more — the row stays, marked revoked.
@@ -207,11 +228,13 @@ Setup wizard sets most keys; the rest live on the web dashboard.
 | `jailed_role_id` | The `@Jailed` role | auto-created |
 | `ticket_panels` table | Where the persistent ticket button lives | written when the panel is posted from Moderation → Tickets. The old `ticket_panel_channel_id` / `ticket_panel_message_id` config rows survive on live servers but nothing reads them — they are listed in `settings_registry.DEAD_KEYS` so no advisor pass proposes a write that would do nothing |
 | `ticket_notify_on_create` | DM all mods on every new ticket. Read against the guild the ticket was opened in, matching how the dashboard writes it | on |
-| `policy_vote_timeout_hours` | How long a policy vote runs before it resolves itself; `0` turns auto-resolution off. Per guild, and the sweep covers every guild the bot is in | 72 |
+| `policy_vote_timeout_hours` | How long a policy vote **or a community ballot** runs before it resolves itself; `0` turns auto-resolution off (a ballot then waits for its Close button). One dial for both, deliberately — a second deadline would be a second thing to keep in step. Per guild, and the sweep covers every guild the bot is in | 72 |
 | `warning_threshold` | Active-warning count that triggers an admin alert | 3 |
 | `api_port` / `api_secret` | Dashboard API port and shared secret | platform defaults |
 
 ## Stored data
+
+A community ballot keeps two rows of its own: the ballot (question, opener, window, and the yes/no/abstain counts + outcome frozen at close — naming no voter) and one row per member per ballot recording their choice. Both carry `guild_id` directly. The frozen counts are what make the individual votes safely erasable; see `docs/data_register.md`.
 
 The system keeps per-guild records of every jail, ticket, warning, audit action, and transcript. Jail records carry the snapshotted role list so an unjail can restore the member exactly as they were. Tickets track creator, opener source, current state, claim assignment, and (after escalation) the escalating mod and admin claimer. Warnings store the issuing mod, reason, and active/revoked status; revocation is soft so history stays intact for `/modinfo`. Transcripts are stored as JSON for the dashboard and also written as files in the transcript channel and the member's DMs.
 

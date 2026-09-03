@@ -34,6 +34,7 @@ from bot_modules.services.embeds import (
 from bot_modules.services.moderation import (
     add_policy,
     cast_policy_vote,
+    close_policy_ticket,
     close_ticket,
     compute_roles_to_restore,
     create_ticket,
@@ -59,8 +60,23 @@ from bot_modules.services.moderation import (
     PolicyTicketRow,
     TicketRow,
 )
+from bot_modules.services.name_resolver import build_name_fn
+from bot_modules.services.policy_ballot_service import (
+    BallotRow,
+    BallotTally,
+    OUTCOME_CANCELLED,
+    OUTCOME_PASSED,
+    can_cast,
+    cast_ballot_vote,
+    close_ballot,
+    find_expired_ballots,
+    frozen_counts,
+    get_ballot,
+    tally_ballot,
+)
 from bot_modules.jail.apply import create_jail_channel
 from bot_modules.jail.embeds import (
+    build_policy_ballot_embed,
     build_policy_vote_update_embed,
 )
 from bot_modules.jail.logic import (
@@ -1024,6 +1040,364 @@ class PolicyVoteAbstainButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _handle_policy_vote(interaction, self.policy_id, "abstain")
+
+
+# ---------------------------------------------------------------------------
+# Community ballots
+# ---------------------------------------------------------------------------
+#
+# A ballot runs in a thread in whatever channel an admin launched it in, and
+# everyone who can see that thread may vote. Two consequences shape everything
+# below:
+#
+#  * **Every gate is a runtime check.** ``/policy``'s
+#    ``@app_commands.default_permissions`` decorators are inert — discord.py
+#    only emits ``default_member_permissions`` for top-level commands
+#    (``Command.to_dict`` guards it behind ``self.parent is None``) and the
+#    group carries none — so every member already sees the whole group in the
+#    picker. Nothing here may lean on Discord hiding a command or a button.
+#  * **The buttons are public.** Yes/No/Abstain are for everyone in the thread;
+#    Close is not, so it checks ``_is_mod`` on press rather than relying on
+#    being invisible to members, because it isn't.
+
+
+BALLOT_THREAD_AUTO_ARCHIVE_MINUTES = 10080  # Discord's 7-day maximum
+
+
+async def _ballot_name_fn(
+    ctx: AppContext, guild: discord.Guild, user_ids: list[int]
+):
+    """Resolve voter ids to display names for the tally card.
+
+    A ballot card is read by ordinary members, so it must never render a
+    ``<@id>``: an embed mention is resolved by the *reading* client from its
+    own cache and degrades to a bare number for anyone who has not seen that
+    member. This also covers a voter who has since left the guild — the
+    resolver falls back to ``known_users``.
+    """
+    return await build_name_fn(
+        guild=guild, db_path=ctx.db_path, guild_id=guild.id, user_ids=user_ids
+    )
+
+
+def _ballot_view(ballot_id: int, *, closed: bool = False) -> discord.ui.View:
+    """The ballot card's buttons, or an empty view once it has closed."""
+    view = discord.ui.View(timeout=None)
+    if not closed:
+        view.add_item(PolicyBallotYesButton(ballot_id))
+        view.add_item(PolicyBallotNoButton(ballot_id))
+        view.add_item(PolicyBallotAbstainButton(ballot_id))
+        view.add_item(PolicyBallotCloseButton(ballot_id))
+    return view
+
+
+async def _render_ballot_embed(
+    ctx: AppContext,
+    guild: discord.Guild,
+    ballot: BallotRow,
+    tally: BallotTally,
+) -> discord.Embed:
+    name_fn = await _ballot_name_fn(
+        ctx, guild, [*tally["yes"], *tally["no"], *tally["abstain"]]
+    )
+    accent = await safe_resolve_accent(ctx, guild, log_label="jail")
+    return build_policy_ballot_embed(
+        question=ballot["question"],
+        yes_ids=tally["yes"],
+        no_ids=tally["no"],
+        abstain_ids=tally["abstain"],
+        name_fn=name_fn,
+        closes_at=ballot["closes_at"] or None,
+        outcome=ballot["outcome"],
+        color=accent,
+    )
+
+
+async def _handle_ballot_vote(
+    interaction: discord.Interaction, ballot_id: int, choice: str
+) -> None:
+    """Shared handler for the three ballot vote buttons."""
+    bot = interaction.client
+    ctx: AppContext = cast("Bot", bot).ctx
+    member = interaction.user
+    guild = interaction.guild
+    if not isinstance(member, discord.Member) or not guild:
+        await interaction.response.send_message("❌ Server-only.", ephemeral=True)
+        return
+
+    def _read():
+        with ctx.open_db() as conn:
+            return get_ballot(conn, ballot_id)
+
+    ballot = await asyncio.to_thread(_read)
+    if ballot is None:
+        await interaction.response.send_message(
+            "❌ That ballot no longer exists.", ephemeral=True
+        )
+        return
+
+    # Visibility *is* the electorate, so it is re-read from Discord on every
+    # press rather than snapshotted at open: a member who lost the role that
+    # let them into this channel stops being able to vote from that moment,
+    # and one who gained it starts. `interaction.channel` is the right thing to
+    # ask here (unlike the finalizer, which must use the recorded channel) —
+    # the question is "can this person see where they just pressed".
+    channel = interaction.channel
+    can_view = True
+    if channel is not None and not isinstance(channel, discord.DMChannel):
+        try:
+            can_view = channel.permissions_for(member).view_channel  # type: ignore[union-attr]
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            can_view = True
+    if not can_cast(ballot=ballot, is_bot=member.bot, can_view_thread=can_view):
+        await interaction.response.send_message(
+            "❌ You can't vote in this ballot — it may have closed, or you may "
+            "no longer have access to this channel.",
+            ephemeral=True,
+        )
+        return
+
+    member_id = member.id
+    guild_id = guild.id
+
+    def _cast():
+        with ctx.open_db() as conn:
+            if not cast_ballot_vote(
+                conn,
+                ballot_id=ballot_id,
+                guild_id=guild_id,
+                user_id=member_id,
+                choice=choice,
+            ):
+                return None
+            return get_ballot(conn, ballot_id), tally_ballot(conn, ballot_id)
+
+    result = await asyncio.to_thread(_cast)
+    if result is None:
+        await interaction.response.send_message(
+            "❌ This ballot has closed.", ephemeral=True
+        )
+        return
+    fresh, tally = result
+    assert fresh is not None
+
+    embed = await _render_ballot_embed(ctx, guild, fresh, tally)
+    await interaction.response.edit_message(embed=embed, view=_ballot_view(ballot_id))
+    await interaction.followup.send(
+        f"Your vote ({choice}) has been recorded. It is shown publicly on the "
+        "ballot — press another button any time before it closes to change it.",
+        ephemeral=True,
+    )
+
+
+async def finalize_ballot(
+    ctx: AppContext,
+    guild: discord.Guild,
+    ballot_id: int,
+    *,
+    closed_by: int | None,
+    cancelled: bool = False,
+) -> BallotRow | None:
+    """Freeze a ballot's result and publish it. Returns the closed row.
+
+    Returns ``None`` when somebody else closed it first — the deadline sweep
+    and a moderator's Close press can race, and the loser must not re-announce
+    a result. Everything after the freeze is best-effort: the card may have
+    been deleted, the thread archived, the channel gone. None of that may stop
+    the row being closed, because the row is the record.
+    """
+
+    def _close():
+        with ctx.open_db() as conn:
+            closed = close_ballot(
+                conn, ballot_id, closed_by=closed_by, cancelled=cancelled
+            )
+            if closed is None:
+                return None
+            # The ballot's own policy ticket goes with it; a ballot is recorded
+            # as a policy ticket, and leaving it 'ballot' forever would keep a
+            # decided proposal sitting in the dashboard's live queue.
+            close_policy_ticket(conn, closed["policy_id"])
+            write_audit(
+                conn,
+                guild_id=guild.id,
+                action="policy_ballot_closed",
+                actor_id=closed_by or 0,
+                extra={
+                    "ballot_id": ballot_id,
+                    "policy_id": closed["policy_id"],
+                    "question": closed["question"],
+                    "outcome": closed["outcome"],
+                    "yes": closed["yes_count"],
+                    "no": closed["no_count"],
+                    "abstain": closed["abstain_count"],
+                    "timed_out": closed_by is None and not cancelled,
+                },
+            )
+            return closed, tally_ballot(conn, ballot_id)
+
+    result = await asyncio.to_thread(_close)
+    if result is None:
+        return None
+    closed, tally = result
+
+    embed = await _render_ballot_embed(ctx, guild, closed, tally)
+    thread = guild.get_channel_or_thread(closed["thread_id"]) if closed["thread_id"] else None
+    if isinstance(thread, discord.Thread):
+        try:
+            message = await thread.fetch_message(closed["message_id"])
+            await message.edit(embed=embed, view=_ballot_view(ballot_id, closed=True))
+        except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+            log.info("Ballot %s card could not be edited on close", ballot_id)
+        try:
+            await thread.send(
+                embed=_ballot_result_embed(closed),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.info("Ballot %s result could not be posted to its thread", ballot_id)
+
+    await _post_audit(ctx, guild, _ballot_result_embed(closed))
+    return closed
+
+
+def _ballot_result_embed(closed: BallotRow) -> discord.Embed:
+    yes, no, abstain = frozen_counts(closed)
+    if closed["outcome"] == OUTCOME_PASSED:
+        title, color = "✅ Ballot Passed", discord.Color(CLR_SUCCESS)
+    elif closed["outcome"] == OUTCOME_CANCELLED:
+        title, color = "🚫 Ballot Cancelled", discord.Color(CLR_POLICY)
+    else:
+        title, color = "❌ Ballot Failed", discord.Color(CLR_JAIL)
+    note = (
+        "\n\nA passed ballot is **recorded, not enacted** — a moderator decides "
+        "whether it becomes a policy."
+        if closed["outcome"] == OUTCOME_PASSED
+        else ""
+    )
+    return discord.Embed(
+        title=title,
+        description=(
+            f"📜 {closed['question']}\n\n"
+            f"**{yes} yes · {no} no · {abstain} abstain**{note}"
+        ),
+        color=color,
+    )
+
+
+class PolicyBallotYesButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_ballot:yes:(?P<bid>\d+)",
+):
+    def __init__(self, ballot_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Yes",
+                emoji="✅",
+                style=discord.ButtonStyle.success,
+                custom_id=f"policy_ballot:yes:{ballot_id}",
+            )
+        )
+        self.ballot_id = ballot_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["bid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_ballot_vote(interaction, self.ballot_id, "yes")
+
+
+class PolicyBallotNoButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_ballot:no:(?P<bid>\d+)",
+):
+    def __init__(self, ballot_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="No",
+                emoji="❌",
+                style=discord.ButtonStyle.danger,
+                custom_id=f"policy_ballot:no:{ballot_id}",
+            )
+        )
+        self.ballot_id = ballot_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["bid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_ballot_vote(interaction, self.ballot_id, "no")
+
+
+class PolicyBallotAbstainButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_ballot:abstain:(?P<bid>\d+)",
+):
+    def __init__(self, ballot_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Abstain",
+                emoji="➖",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"policy_ballot:abstain:{ballot_id}",
+            )
+        )
+        self.ballot_id = ballot_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["bid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        await _handle_ballot_vote(interaction, self.ballot_id, "abstain")
+
+
+class PolicyBallotCloseButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_ballot:close:(?P<bid>\d+)",
+):
+    """Close the ballot early. Visible to everyone, pressable by mods only."""
+
+    def __init__(self, ballot_id: int) -> None:
+        super().__init__(
+            discord.ui.Button(
+                label="Close Ballot",
+                emoji="🔒",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"policy_ballot:close:{ballot_id}",
+            )
+        )
+        self.ballot_id = ballot_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        return cls(int(match["bid"]))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        ctx: AppContext = cast("Bot", bot).ctx
+        member = interaction.user
+        guild = interaction.guild
+        if not isinstance(member, discord.Member) or not guild:
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
+            return
+        if not (_is_mod(member, ctx) or _is_admin(member, ctx)):
+            await interaction.response.send_message(
+                "❌ Only moderators can close a ballot.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        closed = await finalize_ballot(
+            ctx, guild, self.ballot_id, closed_by=member.id
+        )
+        if closed is None:
+            await interaction.followup.send(
+                "❌ This ballot has already closed.", ephemeral=True
+            )
+            return
+        await interaction.followup.send("Ballot closed.", ephemeral=True)
 
 
 # Modals
@@ -2052,15 +2426,43 @@ async def _policy_vote_timeout_pass(bot, ctx: AppContext, guild) -> None:
             )
 
 
+async def _ballot_deadline_pass(bot, ctx: AppContext, guild) -> None:
+    """One sweep of one guild: close every community ballot past its deadline.
+
+    A ballot with ``closes_at = 0`` (the guild's deadline dial is 0) is never
+    returned here — it waits for a moderator's Close press, the same thing that
+    dial already does to the mod vote.
+    """
+    bd_guild_id = guild.id
+
+    def _get_expired_ballots():
+        with ctx.open_db() as conn:
+            return find_expired_ballots(conn, bd_guild_id)
+
+    for ballot in await asyncio.to_thread(_get_expired_ballots):
+        try:
+            await finalize_ballot(ctx, guild, ballot["id"], closed_by=None)
+        except Exception:
+            log.exception("Failed to close expired ballot %s", ballot.get("id"))
+
+
 async def sweep_expired_policy_votes(bot: discord.Client, ctx: AppContext) -> None:
     """One pass over **every** guild the bot is in.
 
     ``/policy open`` works on any server, and each server sets its own voting
     deadline on its own dashboard, so the sweep can't be home-guild-only — a
     proposal on a second server would hang in 'voting' forever at any deadline.
+
+    Community ballots ride the same pass rather than getting a loop of their
+    own: they share the deadline dial, they need the same per-guild iteration,
+    and a second 60-second loop over every guild would be duplication.
     """
     for guild in list(getattr(bot, "guilds", [])):
         await _policy_vote_timeout_pass(bot, ctx, guild)
+        try:
+            await _ballot_deadline_pass(bot, ctx, guild)
+        except Exception:
+            log.exception("Ballot deadline pass failed for guild %s", guild.id)
 
 
 async def policy_vote_timeout_loop(bot: discord.Client, ctx: AppContext) -> None:

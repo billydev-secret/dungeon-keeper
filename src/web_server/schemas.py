@@ -711,6 +711,47 @@ class PolicyTicketsResponse(BaseModel):
     policy_tickets: list[PolicyTicketEntrySchema]
 
 
+# ── Moderation: Community ballots ────────────────────────────────────────
+#
+# Every snowflake is a string: a channel, thread or member id exceeds
+# JavaScript's safe integer range, and the precision sweep fails a bare number.
+
+
+class PolicyBallotVoteSchema(BaseModel):
+    user_id: str
+    user_name: str = ""
+    choice: str
+
+
+class PolicyBallotEntrySchema(BaseModel):
+    id: int
+    policy_id: int
+    question: str
+    channel_id: str = ""
+    thread_id: str = ""
+    opened_by: str
+    opened_by_name: str = ""
+    opened_at: float
+    #: 0 when the guild's voting deadline is off — the ballot waits for a
+    #: moderator's Close press instead of expiring.
+    closes_at: float = 0
+    closed_at: float | None = None
+    closed_by: str = ""
+    closed_by_name: str = ""
+    #: "" while open, then passed / failed / cancelled.
+    outcome: str = ""
+    yes_count: int
+    no_count: int
+    abstain_count: int
+    votes: list[PolicyBallotVoteSchema] = []
+
+
+class PolicyBallotsResponse(BaseModel):
+    open_count: int
+    total_count: int
+    ballots: list[PolicyBallotEntrySchema]
+
+
 # ── Moderation: Audit log ────────────────────────────────────────────────
 
 

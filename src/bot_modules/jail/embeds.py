@@ -26,6 +26,7 @@ from typing import Any
 import discord
 
 from bot_modules.jail.logic import cap_mentions
+from bot_modules.services.name_resolver import NameFn, mention
 from bot_modules.services.embeds import (
     MOD_INFO,
     MOD_JAIL,
@@ -153,6 +154,112 @@ def build_policy_vote_update_embed(
     embed.add_field(name="❌ No", value=_format_mentions(no_ids), inline=False)
     embed.add_field(name="➖ Abstain", value=_format_mentions(abstain_ids), inline=False)
     embed.add_field(name="⏳ Awaiting", value=_format_mentions(awaiting_ids), inline=False)
+    apply_section_spacing(embed)
+    return embed
+
+
+# ── Community ballot ───────────────────────────────────────────────────
+#
+# The members' counterpart to the mod vote above, and rendered by different
+# rules for one reason: this card is posted in a channel ordinary members read.
+#
+#  * **Names, not mentions.** A ``<@id>`` in an embed is resolved by the
+#    *reading* client from its own cache, so it degrades to a bare number for
+#    anyone who has not seen that member — in a public roster that is most
+#    readers. Every id here goes through a ``name_fn``
+#    (``services/name_resolver.build_name_fn``), which also escapes markdown.
+#  * **The voter lists are capped by characters, not entries.** Embed fields
+#    stop at 1024 characters and display names vary wildly in length, so the
+#    25-mention rule the mod vote uses (``cap_mentions``) does not transfer: a
+#    ballot with 25 long nicknames would silently lose its whole field.
+
+#: Leaves room under Discord's 1024-char field ceiling for the "+N more" tail
+#: and the separators.
+DEFAULT_BALLOT_NAMES_BUDGET = 900
+
+
+def _format_names(
+    ids: Sequence[int],
+    name_fn: "NameFn | None" = None,
+    *,
+    budget: int = DEFAULT_BALLOT_NAMES_BUDGET,
+) -> str:
+    """Render ids as a comma-separated list of resolved names, or ``"—"``.
+
+    Truncates on accumulated *characters* and appends ``"+N more"``, so the
+    field fits whatever mix of short and long display names turns up.
+    """
+    resolve = name_fn or mention
+    shown: list[str] = []
+    used = 0
+    for index, uid in enumerate(ids):
+        name = resolve(uid)
+        cost = len(name) + (2 if shown else 0)
+        if used + cost > budget:
+            return f"{', '.join(shown) or '—'} *+{len(ids) - index} more*"
+        shown.append(name)
+        used += cost
+    return ", ".join(shown) or "—"
+
+
+def build_policy_ballot_embed(
+    *,
+    question: str,
+    yes_ids: Sequence[int] = (),
+    no_ids: Sequence[int] = (),
+    abstain_ids: Sequence[int] = (),
+    name_fn: "NameFn | None" = None,
+    closes_at: float | None = None,
+    outcome: str | None = None,
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
+    """The community ballot card: the question, the tally, and who voted how.
+
+    ``outcome`` is ``None`` while the ballot is open, then one of ``passed`` /
+    ``failed`` / ``cancelled``. ``closes_at`` is a unix timestamp rendered as a
+    relative Discord timestamp while open, and dropped once it has closed.
+
+    The card takes **only** the question a moderator typed. It is never handed
+    the proposal's description, a transcript, or anything else from a private
+    channel: the string in the modal is the entire seam between mod
+    deliberation and the public room, and keeping it that way is what makes
+    "widen the vote" not mean "widen the discussion".
+    """
+    if color is None:
+        color = discord.Color(MOD_POLICY)
+    if outcome == "passed":
+        color = discord.Color(MOD_SUCCESS)
+        status = "✅ Passed"
+    elif outcome == "failed":
+        color = discord.Color(_REJECTED_COLOR_INT)
+        status = "❌ Failed"
+    elif outcome == "cancelled":
+        status = "🚫 Cancelled"
+    else:
+        status = "🗳️ Open"
+
+    yes, no, abstain = list(yes_ids), list(no_ids), list(abstain_ids)
+    embed = discord.Embed(title="🗳️ Community Ballot", color=color)
+    embed.add_field(name="📜 The Question", value=question or "(no question)", inline=False)
+    embed.add_field(name="Votes Cast", value=str(len(yes) + len(no) + len(abstain)), inline=True)
+    embed.add_field(name="Status", value=status, inline=True)
+    if outcome is None and closes_at:
+        embed.add_field(name="Closes", value=f"<t:{int(closes_at)}:R>", inline=True)
+    embed.add_field(
+        name=f"✅ Yes ({len(yes)})", value=_format_names(yes, name_fn), inline=False
+    )
+    embed.add_field(
+        name=f"❌ No ({len(no)})", value=_format_names(no, name_fn), inline=False
+    )
+    embed.add_field(
+        name=f"➖ Abstain ({len(abstain)})",
+        value=_format_names(abstain, name_fn),
+        inline=False,
+    )
+    embed.set_footer(
+        text="Anyone who can see this thread may vote • Abstaining counts "
+        "toward neither side • Ties fail • Your vote is public"
+    )
     apply_section_spacing(embed)
     return embed
 

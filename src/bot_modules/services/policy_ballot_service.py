@@ -239,6 +239,25 @@ def get_open_ballot_for_policy(
     return dict(row) if row else None  # type: ignore[return-value]
 
 
+def get_open_ballot_for_thread(
+    conn: sqlite3.Connection, thread_id: int
+) -> BallotRow | None:
+    """The still-running ballot whose card lives in this thread, if any.
+
+    How `/policy close` finds a ballot to cancel: a ballot's own policy ticket
+    wears the status 'ballot', which `get_policy_ticket_by_channel` deliberately
+    does not match, so the ordinary proposal lookup can never reach it.
+    """
+    if not thread_id:
+        return None
+    row = conn.execute(
+        "SELECT * FROM policy_ballots WHERE thread_id = ? AND closed_at IS NULL "
+        "ORDER BY id DESC LIMIT 1",
+        (thread_id,),
+    ).fetchone()
+    return dict(row) if row else None  # type: ignore[return-value]
+
+
 def list_ballots(
     conn: sqlite3.Connection, guild_id: int, *, limit: int = 200
 ) -> list[BallotRow]:
