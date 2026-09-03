@@ -9,17 +9,32 @@ Scope, per Billy's calls at the top of the session:
   another slot already said, a field whose whole value is a placeholder, an
   instruction to press a button that is visibly right there, an empty state that
   announces emptiness without a next step. Not literal stub text: `Coming soon`,
-  `TBD`, `Lorem` and `Under construction` measure **zero** in this repo.
+  `TBD`, `Lorem` and `Under construction` measure **zero in member-facing embed
+  copy**. (They are not zero repo-wide — `web_server/wellness_routes/api.py:561`
+  and `:563` both return "coming soon" as a dashboard API error. Out of scope
+  here, but don't quote the "zero" figure as a repo-wide claim.)
 - **Everything member-facing, games included** — all 363 `discord.Embed(`
-  constructions were in scope, filtered to cards a member actually sees.
+  constructions across 106 files in `src/bot_modules` were in scope, filtered to
+  cards a member
+  actually sees.
 - **This review edits nothing.** A parallel session (`embed-style-review`) is
   rewriting the same strings for *form*; this one judges *substance* and hands
   over proposals. Every "Proposed" line below is a proposal, not a decision.
 
-Baseline: `main` @ `916f5981`. `embed-style-review`'s four unmerged commits were
-diffed against every file cited here — its edits are section spacing, `•`
-separators and casing. **No finding below is already fixed on that branch**, and
-none of the proposals collide with its changes.
+Baseline: `main` @ `916f5981`; every count in this document is measured against
+that commit, not against any branch. `embed-style-review`'s unmerged commits
+(seven as of 2026-09-03) were diffed against every file cited here. Most of its
+source edits are section spacing, `•` separators and casing, but not all — it
+also adds `escape_markdown()` to the fantasies recap values and rewrites
+`games_traditional.build_question_embed`'s category-label handling, so re-diff
+rather than assuming the shape. **No finding below is already fixed on that
+branch.**
+
+**One proposal does collide, and it is called out where it lives:** proposed
+guide change 3 rewrites the §Footers *Game signature* bullet, which
+`embed-style-review` has **already rewritten** on its own branch (into "a
+requirement, not an option"). See §3 for the merged wording. The other three
+proposals append to sections that branch only extends, and do not conflict.
 
 ---
 
@@ -34,20 +49,27 @@ exactly what the guide asks for. There is no sea of padding to drain.
 What there is instead is **one systemic habit with two faces**, both of them
 concentrated in the same place: the **game lobby card**.
 
-| # | Finding | Sites | Where |
-|---|---|---|---|
-| 1 | The card says its own name twice — footer is character-for-character its own title | **10** | 8 game modules, 8 of them `build_lobby_embed` |
-| 2 | A field whose entire value is `—` / `(empty)` / `(nobody yet)` | **12** | game lobbies + music queue |
-| 3 | The AMA recap thanks you twice on one card | 2 | `games_ama` |
-| 4 | The XP leaderboard says "no XP" five times on one card | 5 | `cogs/xp_cog.py` |
-| 5 | Voice panel puts "join the Hub" in the description *and* the footer | 2 | `voice_master` |
-| 6 | DM settings panel: title, description and field name are three synonyms | 3 | `dm_perms` |
-| 7 | Non-actionable "check back soon" nudges | 2 | quests, mahjong |
-| 8 | A fresh lobby showing `Participants 0` and `Questions Asked 0` | 2 | `games_traditional` |
+Two different units appear below, and mixing them is how an earlier draft of
+this table reported a wrong total. **Cards** = distinct builders affected;
+**slots** = redundant title/description/field/footer lines on a *single* card.
+Each row states which it is counting.
 
-Findings 1 and 2 together are the review: **~22 of the ~30 findings live on
-lobby cards**, and a lobby card is the single most-rendered thing in the bot —
-it is what a member stares at while waiting for a game to fill.
+| # | Finding | Count | Unit | Where |
+|---|---|---|---|---|
+| 1 | The card says its own name twice — footer is character-for-character its own title | **10** (+2 conditional) | cards | 8 game modules, 7 of them `build_lobby_embed` (plus AMA's `build_main_embed` / `build_panel_embed` and MLT's `build_join_embed`); the 2 conditional are `games_traditional` — see below |
+| 2 | A field whose entire value is `—` / `(empty)` / `(nobody yet)` | **11** | cards | game lobbies + the duels lobby base class + music queue |
+| 3 | The AMA recap thanks you twice on one card | 1 card / 2 slots | both | `games_ama` |
+| 4 | The XP leaderboard says "no XP" five times on one card | 1 card / 5 slots | both | `cogs/xp_cog.py` |
+| 5 | Voice panel puts "join the Hub" in the description *and* the footer | 1 card / 2 slots | both | `voice_master` |
+| 6 | DM settings panel: title, description and field name are three synonyms | 1 card / 3 slots | both | `dm_perms` |
+| 7 | Non-actionable "check back soon" nudges | 2 | cards | quests, mahjong |
+| 8 | A fresh lobby showing `Participants 0` and `Questions Asked 0` | 1 card / 2 slots | both | `games_traditional` |
+
+Counted consistently in **cards**, that is 27 affected builders, of which
+findings 1 and 2 are 21. Findings 1 and 2 together are therefore the review:
+**~21 of the 27 cards are lobby cards**, and a lobby card is the single
+most-rendered thing in the bot — it is what a member stares at while waiting
+for a game to fill.
 
 ---
 
@@ -70,6 +92,18 @@ and is wrong):
 | `games_mlt/embeds.py:74` | `build_join_embed` | `👑 Most Likely To` |
 | `games_story/embeds.py:56` | `build_lobby_embed` | `📖 Story Builder` |
 | `games_ttl/embeds.py:59` | `build_lobby_embed` | `🤥 Two Truths and a Lie` |
+
+Plus **two conditional sites in `games_traditional`**, which a literal-only
+sweep misses because the footer is built by a helper:
+`_footer_text(single_choice)` (`games_traditional/embeds.py:73-77`) returns the
+bare `{GAME_ICONS['traditional']} Truth or Dare` when `single_choice` is false,
+and only appends `• One category each` when it is true. Both
+`build_lobby_embed` (title at `:131`, footer at `:138`) and `build_tod_embed`
+(title at `:44`, footer at `:70`, when not `closed`) title themselves exactly
+that string. `single_choice` comes from `payload.get("single_choice", False)`,
+so **the default path prints the name twice** — this is the common rendering,
+not an edge case. Counted separately only because the duplication is
+branch-dependent; it is not an exemption.
 
 **This is not the game-signature rule misfiring.** `embed_style_guide.md`
 §Footers sanctions a *Game signature* footer — `{GAME_ICON} Game Name • extra` —
@@ -101,18 +135,25 @@ embed.set_footer(text=f"{ICON} Clapback • Hosted by {host_name}")
 embed.set_footer(text=f"{GAME_ICONS['ttl']} Two Truths and a Lie • {len(players)} in")
 ```
 
-Two builders in the repo already do exactly this and are the models to copy:
-`games_rushmore/embeds.py:129` footers `_footer(host_name)` — the host, not the
-game name — and `games_traditional/embeds.py:73-76` appends `• One category each`
-when single-choice is on, so its footer only duplicates the title in the *other*
-branch. Neither appears in the table above, because neither repeats itself.
+**The one builder in the repo that already does exactly this**, and the model to
+copy, is `games_rushmore`: `_footer(host_name)` at `games_rushmore/embeds.py:33-38`
+returns `{ICON} Mt. Rushmore Draft • Hosted by {host}` and every one of its six
+cards uses it, so no rushmore card ever prints its own title back at itself.
+
+`games_traditional/embeds.py:73-77` is **not** a model — it is the conditional
+finding listed above. It appends `• One category each` only when single-choice
+is on, which means its default (and far more common) rendering *is* the bare
+title repeated. Fixing it means giving `_footer_text` something to say in both
+branches — the host, or the participant count — not leaving the false branch
+bare.
 
 ---
 
 ## 2. A field whose entire value is a placeholder
 
-Twelve member-facing cards add a field whose whole value is `—`, `(empty)` or
-`(nobody yet)`. This one is **deliberate and documented**, which is why it needs
+Eleven member-facing cards add a field whose whole value is `—`, `(empty)` or
+`(nobody yet)` — every one is tabled below. This one is **deliberate and
+documented**, which is why it needs
 a ruling rather than a patch — four separate docstrings state the intent:
 
 - `games_mfk/embeds.py:45` — *"Empty list renders as `"—"` so the field always has a value."*
@@ -145,8 +186,16 @@ tells the reader that pressing **Join** is what fixes it.
 | `games_compliment/embeds.py:53` | `Pool (0)` / `—` | `Pool (0)` / `Nobody yet — press Join to get spun.` |
 | `games_clapback/embeds.py:71` | `(nobody yet)` | `Nobody yet — press Join to play.` |
 | `games_rushmore/embeds.py:125` | `(nobody yet)` | `Nobody yet — press Join to play.` |
+| `duels/base_game.py:728` | `👥 Players (0/N)` / `—` | `👥 Players (0/N)` / `Nobody yet — press ✋ Join to get in.` |
+| `games_ama/embeds.py:46` | `Hot Seat` / `—` | `Hot Seat` / `Nobody yet — press 🙋 Volunteer to take it.` |
 | `games_ama/embeds.py:181` | `🙋 Panel` / `—` | drop the field; the description already says *"Tap 🙋 Volunteer to join the panel"* |
-| `music/embeds.py:66` | `Up next` / `(empty)` | drop the field; when nothing is queued *and* nothing is playing, one honest line beats an empty label |
+| `music/embeds.py:66` | `Up next` / `(empty)` | drop the field **and** set the description, so the card is never left as a bare title + footer — when nothing is playing and nothing is queued, `description="Nothing playing. Use /play to queue something."`; when a track is playing, the `Now playing` field already carries the card |
+
+`duels/base_game.py:728` is the highest-leverage one and the easiest to miss:
+it is the **shared lobby builder on the duel base class**, so the same `—`
+renders for every duel game that inherits it (chicken, musical chairs, hot
+potato and the rest) rather than for one card. A per-module sweep will not
+surface it; it was found by reading the base class.
 
 **A constraint any fix must respect** — `games_story` and `games_ttl` edit their
 roster **by field index** (`set_field_at(0, …)` at `cogs/games_story_cog.py:160`
@@ -188,7 +237,8 @@ embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
 
 ## 4. The XP leaderboard says "no XP" five times
 
-`cogs/xp_cog.py:331-352`. When a server has no XP events, the card renders:
+`cogs/xp_cog.py:330-353`. When a server has no XP events **and no legacy
+totals** (`has_events` false, `has_xp` false), the card renders:
 
 ```
 description No XP recorded yet.
@@ -202,9 +252,29 @@ footer      Top 5 by XP source and time window
 Five sentences and a footer to communicate one fact: nothing has happened yet.
 The footer describes a table that isn't there.
 
-**Proposed:** when `not has_events`, send the description alone with a nudge and
-no fields — *"No XP recorded yet. Chat or hop in voice and it starts counting."*
-(matching `member_info/embeds.py:43`, which already words it exactly that way).
+**Proposed:** when `not has_events`, drop the four placeholder fields and the
+footer, and send the description alone.
+
+**Keep both descriptions — the `not has_events` branch is not one state, it is
+two.** `xp_cog.py:331-336` already picks between them, and only the `else` arm
+says "No XP recorded yet"; the `has_xp` arm says *"Existing XP totals predate
+the event ledger. New text and voice XP will appear here going forward."*, which
+is a different and true fact for a server whose totals pre-date the ledger.
+Collapsing the branch to a single nudge would delete that explanation and tell
+those servers they have no XP when they do. Only the `has_xp is False` arm gains
+the nudge:
+
+```python
+description = (
+    "Existing XP totals predate the event ledger. "
+    "New text and voice XP will appear here going forward."
+    if has_xp
+    else "No XP recorded yet. Chat or hop in voice and it starts counting."
+)
+```
+
+(matching `member_info/embeds.py:43`, which already words the second one that
+way).
 Keep the four per-source fields for the populated card, where they're doing real
 work.
 
@@ -256,10 +326,13 @@ information; pointing at it is not.
 Listing these because each one looks like filler and isn't, and a future sweep
 will find them again:
 
-- **The 70 zero-width spaces.** Mandated by §Section spacing, applied via
+- **The 64 zero-width spaces** (count on `main` @ `916f5981`; `embed-style-review`
+  adds many more `apply_section_spacing` calls, so re-count against whichever tree
+  you are reading). Mandated by §Section spacing, applied via
   `apply_section_spacing`. Not filler; do not strip.
 - **Game-signature footers in general.** Sanctioned by §Footers. Only the **10**
-  in Finding 1, where the footer equals its own title exactly, are reported.
+  unconditional sites in Finding 1 plus the **2** conditional `games_traditional`
+  ones, where the footer equals its own title exactly, are reported.
 - **`—` as a table cell.** `mahjong/sim_logic.py:536-539`, `survivor/embeds.py:35`,
   `member_info/embeds.py:92`, `services/guess_embeds.py:93`. In a column of
   values, `—` is the correct typography for "no data" and keeps rows aligned.
@@ -267,9 +340,12 @@ will find them again:
 - **The jail policy-vote skeleton** (`jail/embeds.py:97-99`). Yes/No/Abstain all
   render `—` when a vote opens, which establishes the card's shape before the
   first vote so the layout doesn't jump as counts arrive. Deliberate; leave it.
-- **`placeholder=`** — 125 uses, the discord.py select/modal API parameter.
+- **`placeholder=`** — 126 uses, the discord.py select/modal API parameter.
   Required UI text.
-- **The Todo board** — 82 `TODO` hits are the shipped feature, not code markers.
+- **The Todo board.** A case-insensitive `todo` grep over `src/` returns 509 hits,
+  essentially all of them the shipped todo-board feature — its modules, routes,
+  panels and copy — not code markers. (Case-sensitive `TODO` in `src/` is 3, none
+  of them member-facing embed copy.) Don't read a `todo` grep as tech debt here.
 - **Casino flavor copy.** *"Bright lights, long odds, and questionable financial
   decisions."* is voiced, not padded. `cogs/casino/embeds.py` is the strongest
   copy in the repo and is the standard the rest should be read against.
@@ -312,11 +388,28 @@ positive first"* — the title/footer sweep was validated against the clapback
 lobby found by hand before it was trusted, and its first (file-wide) form was
 discarded for over-reporting 22 against a true 10.
 
-**What this method would miss:** copy assembled at render time from fragments in
-a cog rather than written as a literal in a builder. Findings 4 and 8 were both
-found that way and only because those two cogs were read in full; a card built
-by string concatenation across several helpers could still hide padding no grep
-here would surface.
+**A note on the count.** The sibling style review says *364 across 107*; this one
+says 363 across 106. Both are right — the difference is scope. The 364th is
+`src/beta_tools/slash/help.py`, outside `src/bot_modules`, mod-gated behind
+`reject_if_not_mod` and not imported by the bot's module tree. It is beta
+tooling, not a member surface, so it is excluded here by definition rather than
+overlooked. Don't reconcile the two numbers by changing one.
+
+**What this method would miss — one of which it demonstrably did.** Copy
+assembled at render time from fragments in a cog rather than written as a
+literal in a builder. Findings 4 and 8 were both found that way and only because
+those two cogs were read in full.
+
+The concrete failure: the title/footer sweep matches `set_footer(text="…")` as a
+**string literal**, so it is blind to the **15 sites** that call a helper
+instead — `set_footer(text=_footer(host_name))` and friends. That is exactly how
+`games_traditional` was first scored as a compliance model when its default
+branch is a duplicate, and it is the same class of error the sibling review hit
+when three ALL-CAPS titles built via `.upper()` sailed past a literal grep.
+**Any `footer != title` gate must resolve those helpers or it will bless the two
+most-rendered duplicates in the repo.** The 15 are worth reading by hand before
+the gate is written; `games_rushmore` and `games_price` are the bulk of them and
+both pass.
 
 ---
 
@@ -357,7 +450,7 @@ Not a gap — a **conflict the guide currently loses**. §Empty states asks for 
 short plain sentence; four docstrings state the opposite convention
 (`games_mfk/embeds.py:45`, `games_compliment/embeds.py:38`,
 `games_mlt/embeds.py:52`, `music/embeds.py:43` — *"so the field always has a
-value"* / *"so the embed never has no fields"*), and **12 sites follow the code,
+value"* / *"so the embed never has no fields"*), and **11 sites follow the code,
 not the guide.** An undocumented convention that contradicts a written rule is
 how a guide stops being true. **Append to §Empty states & pagination:**
 
@@ -380,20 +473,41 @@ builders sends the first Join into the wrong slot.
 
 ### 3 — §Footers: the game signature must earn its line
 
-§Footers already gives the format as `{GAME_ICON} Game Name • extra` and its
-reason (*"every game card signs itself so screenshots stay attributable"*). It
-just never says the `• extra` is load-bearing when the title is **already** the
-game name. **Amend that bullet:**
+**⚠️ This is the one proposal that collides.** `embed-style-review` has already
+rewritten this exact bullet on its own branch, turning the signature from one of
+five things a footer *may* do into "a **requirement, not an option**". Do not
+lift the wording below over `main`'s copy of the bullet — by the time this is
+applied, `main`'s copy will be that branch's, and pasting a rewrite of the
+pre-edit text would silently revert the requirement ruling.
 
-> - **Game signature** (games only): `{GAME_ICON} Game Name • extra` — every
->   game card signs itself so screenshots stay attributable. **When the title is
->   already the bare game name, the signature has nothing left to attribute** —
->   carry the `• extra` (host, fill state, round) or the card prints its own name
->   twice. `games_rushmore/embeds.py:129` (footers the host) and
->   `games_traditional/embeds.py:73-76` (appends `• One category each`) are the
->   models.
+The gap is still real and orthogonal to that ruling: neither the old bullet nor
+the new one says the `• extra` is load-bearing when the title is **already** the
+game name. So this is an **addition to the merged bullet**, not a replacement of
+it. Applied on top of `embed-style-review`'s version, the bullet reads:
 
-This documents two builders that already comply rather than inventing a standard.
+> - **Game signature** (games only): `{GAME_ICON} Game Name • extra`. This is a
+>   **requirement, not an option** (ruling 2026-09-03): a public game card
+>   carries its signature unless its footer is genuinely doing one of the other
+>   jobs, so screenshots stay attributable. It previously read as a description
+>   of one of five things a footer *may* do, which meant an unsigned card broke
+>   no rule — and most casino, quickdraw, chicken, musical-chairs, hot-potato
+>   and duels cards carry no footer at all. Those are a known backlog, not a
+>   licence: sign a card when you touch it.
+>   **The `• extra` is not optional either** (proposed 2026-09-03). When the
+>   title is already the bare game name, the signature has nothing left to
+>   attribute — carry the `• extra` (host, fill state, round) or the card prints
+>   its own name twice. `games_rushmore/embeds.py:33-38` (a single `_footer()`
+>   helper carrying the host, used by all six of its cards) is the model.
+
+If `embed-style-review` merges first, apply only the final sentence-block. If
+this branch's proposals are applied first, the two rewrites must be merged by
+hand — they touch the same lines.
+
+This documents a builder that already complies rather than inventing a standard.
+Note that `games_traditional` is **not** a second model, despite reading like
+one: `_footer_text` appends `• One category each` in only one of its two
+branches, and the default branch is the bare title. It is a finding, not an
+exemplar — see §1.
 
 ### 4 — §Empty states: a nudge must name an action available now
 
@@ -415,9 +529,15 @@ has the house pattern: a sweep, a *guards the guard* meta-test, and a docstring
 citing the guide section. Rule 2's placeholder sweep is checkable too.
 
 **That test is repo-wide and gates other sessions' commits.** A `footer != title`
-sweep added before the 10 sites are fixed turns `games-deep-review` — and every
+sweep added before the 10 unconditional sites are fixed turns `games-deep-review` — and every
 other live session — red on code it never touched. So the order is **fix the
-sites, then add the gate**, never the reverse. Same for rule 2's 12 sites.
+sites, then add the gate**, never the reverse. Same for rule 2's 11 sites.
+
+`games_traditional`'s two conditional sites are a second reason to fix first: a
+`footer != title` sweep that resolves `_footer_text` will flag them, and one that
+only reads `set_footer` literals will not. Decide which the gate does before
+writing it, or the gate silently blesses the two most-rendered duplicates in the
+repo.
 
 Rule 1's general form (a description restating a title) is **not** mechanically
 checkable and should stay prose. Only its title/footer special case gets a test.
