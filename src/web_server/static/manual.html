@@ -137,7 +137,7 @@
 
       </tbody>
     </table>
-    <p style="font-size:0.82rem;color:var(--muted);margin-top:0.75rem">Most configuration lives on the <a href="/">web dashboard</a> — Discord slash commands focus on operational actions (jail, warn, ticket, play, game start, etc.) while persistent settings live in interactive panels.</p>
+    <p style="font-size:0.82rem;color:var(--ink-mute);margin-top:0.75rem">Most configuration lives on the <a href="/">web dashboard</a> — Discord slash commands focus on operational actions (jail, warn, ticket, play, game start, etc.) while persistent settings live in interactive panels.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          3. GAMES NIGHT
@@ -401,7 +401,7 @@
         <tr><td><strong>Config → Guess Who</strong> → Post Submit Prompt</td><td><span class="perm perm-admin">Admin</span></td><td>Re-post the persistent Submit / Help prompt at the bottom of the Guess channel. It always goes to the configured Guess channel, so there is no channel to pick</td></tr>
       </tbody>
     </table>
-    <p style="font-size:0.82rem;color:var(--muted)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a>. Any channel may be used — the bot does not require the age-restricted flag and does not check submissions against it, so mark the channel age-restricted in Discord if NSFW submissions are expected, and let your moderators police what gets posted where.</p>
+    <p style="font-size:0.82rem;color:var(--ink-mute)">The <code>/guess submit</code> and <code>/guess confess</code> commands need the configured Guess role; if no role is set they refuse with a configuration error. The Guess channel and submitter role are set on the <a href="/#/config-guess">web dashboard</a>. Any channel may be used — the bot does not require the age-restricted flag and does not check submissions against it, so mark the channel age-restricted in Discord if NSFW submissions are expected, and let your moderators police what gets posted where.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">🤫</span>
@@ -1769,7 +1769,7 @@
 
     <p>Channels the bot creates and throws away are left out entirely: <strong>Pen Pals</strong> pairing channels, <strong>Voice Master</strong> temporary rooms, jail channels, and the bio wizard's setup rooms. They're private, short-lived, and one-to-one, so counting them told you nothing about how the server is doing.</p>
 
-    <p style="font-size:0.9rem;color:var(--muted)">A handful of old messages can't be placed — ones in threads Discord has since deleted, or in channels that no longer exist. Those are left out rather than shown under an id nobody can open; it's about 3% of a month's messages. Message Search is unaffected and still finds everything, threads included.</p>
+    <p style="font-size:0.9rem;color:var(--ink-mute)">A handful of old messages can't be placed — ones in threads Discord has since deleted, or in channels that no longer exist. Those are left out rather than shown under an id nobody can open; it's about 3% of a month's messages. Message Search is unaffected and still finds everything, threads included.</p>
 
     <h3 id="bots-in-metrics">Bots and Metrics</h3>
     <p>Every metric on the dashboard counts <strong>humans only</strong>. Bot messages — yours and third-party ones like Cat Bot, Gamebot, or DISBOARD — are left out of message volume, active-user counts, channel health, participation spread, sentiment, retention cohorts, and the newcomer funnel. A channel kept busy only by a bot therefore reads as quiet, which is the intent: it tells you what your members are actually doing.</p>
@@ -1778,7 +1778,7 @@
 
     <p>The <strong>Message Search</strong> panel hides bot messages by default too, with the same checkbox. Searching for a specific bot by author is an exception: if you name the author, you get their messages whether or not the box is ticked. The AI question box follows the same rule, so asking "who posts the most here?" is answered from member activity rather than bot chatter.</p>
 
-    <p style="font-size:0.9rem;color:var(--muted)">"Bot" means any account Discord marks as a bot, including ones that have since left the server. XP was already human-only, so XP totals and leaderboards are unchanged.</p>
+    <p style="font-size:0.9rem;color:var(--ink-mute)">"Bot" means any account Discord marks as a bot, including ones that have since left the server. XP was already human-only, so XP totals and leaderboards are unchanged.</p>
 
     <h3 id="usage-telemetry">Command &amp; Panel Usage <span class="perm perm-admin">Admin</span></h3>
     <p>A dashboard panel (<strong>Reports → Bot Usage → Command &amp; Panel Usage</strong>) showing which slash commands members actually run and which dashboard panels get opened — with counts, how many distinct people used each, error counts, busiest hours, and a daily trend.</p>
@@ -1818,7 +1818,7 @@
       </div>
     </div>
 
-    <p style="font-size:0.9rem;color:var(--muted)">Bots are automatically excluded, so a member who replies to or reacts to a bot never shows up here. Reactions and voice-follows are only counted from the day the feature went live onward (there's no backfill), so early reports lean on replies and mentions.</p>
+    <p style="font-size:0.9rem;color:var(--ink-mute)">Bots are automatically excluded, so a member who replies to or reacts to a bot never shows up here. Reactions and voice-follows are only counted from the day the feature went live onward (there's no backfill), so early reports lean on replies and mentions.</p>
 
     <!-- ══════════════════════════════════════════════════════════
          19. AI MODERATION TOOLS
@@ -2559,7 +2559,7 @@
     <p>Most features keep their settings under <strong>Config</strong>. A handful instead keep them <strong>with the data they produce</strong>, at the bottom of the page you'd already have open: XP &amp; Leveling, Voice and Intake sit under <strong>Reports</strong>, and Policy Tickets sits under <strong>Moderation</strong>, below its proposal list. So: if the feature has a report or a queue you read, its dials are on that page; if it doesn't, look under Config. Games settings are grouped by kind (Operations, Live Games, Question Banks), and the social features — Guess Who, Whisper, Pen Pals, Confessions — have their own <strong>Social</strong> section.</p>
     <p>When in doubt, don't hunt the tree: type a word into the sidebar filter box and it will find the panel wherever it lives. Every row in the table below links straight to its panel, and the ones that moved say where they went.</p>
 
-    <p style="font-size:0.82rem;color:var(--muted)">Panel names below link straight to the dashboard panel.</p>
+    <p style="font-size:0.82rem;color:var(--ink-mute)">Panel names below link straight to the dashboard panel.</p>
     <table>
       <thead><tr><th>Panel</th><th>What you configure</th></tr></thead>
       <tbody>
@@ -2685,7 +2685,7 @@
 
   </main>
 
-  <p style="color:var(--muted);font-size:0.8rem;margin-top:2rem;text-align:center">
+  <p style="color:var(--ink-mute);font-size:0.8rem;margin-top:2rem;text-align:center">
     Dungeon Keeper Reference Guide
   </p>
 </div>

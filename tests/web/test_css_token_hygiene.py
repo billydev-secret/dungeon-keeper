@@ -46,9 +46,16 @@ def _declared() -> set[str]:
 
 
 def _assets() -> list[Path]:
+    # HTML is in scope because a `style=` attribute is a colour decision like
+    # any other, and the sweep not reading it is how manual.html kept seven
+    # `color: var(--muted)` paragraphs pointing at a token that had been
+    # deleted along with its inline <style> block — silently rendering them in
+    # body ink on the one page whose job is long-form reading.
     return sorted(
         p
-        for p in list(_STATIC.rglob("*.css")) + list(_STATIC.rglob("*.js"))
+        for p in list(_STATIC.rglob("*.css"))
+        + list(_STATIC.rglob("*.js"))
+        + list(_STATIC.rglob("*.html"))
         if "vendor" not in p.parts and "node_modules" not in p.parts
     )
 
@@ -74,5 +81,6 @@ def test_the_sweep_actually_reads_panel_js():
     names = {p.name for p in _assets()}
     assert "app.css" in names
     assert "tokens.css" in names
+    assert "manual.html" in names, "an inline style= attribute is unguarded again"
     assert "config-helpers.js" in names
     assert any(p.parts[-2] == "panels" for p in _assets()), "panel JS not swept"

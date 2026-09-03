@@ -52,7 +52,11 @@ def _screen_css() -> str:
     one. It also cannot leak: this sheet is loaded by manual.html alone, so
     nothing in it reaches the dashboard's Help panel in any medium."""
     css = _strip_comments_css(_STANDALONE.read_text(encoding="utf-8"))
-    return re.sub(r"@media print\s*\{.*\}\s*$", "", css, flags=re.S)
+    # Match to the print block's own closing brace (non-greedy, anchored at
+    # column 0), not to the last `}` in the file: a greedy `.*\}\s*$` would
+    # swallow every rule written *after* the print block and quietly exempt it
+    # from all three checks below.
+    return re.sub(r"^@media print\s*\{.*?^\}", "", css, flags=re.S | re.M)
 
 
 def test_the_guide_styles_nothing_inline() -> None:

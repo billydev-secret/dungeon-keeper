@@ -286,6 +286,17 @@ a { text-decoration: none; }
 
 .content.dk-help h3::after { content: none; }
 
+/* help-panel.css zeroes the top margin of the h3 that opens a section — in the
+   panel that h3 sits directly under the panel header, so leading there would
+   read as a gap. On the standalone page the same h3 ("I'm a member") is mid-
+   document with a paragraph above it, and it was rendering flush against that
+   paragraph: `.dk-help > p:first-of-type + h3` is (0,2,2) and out-specifies
+   `.content.dk-help h3` at (0,2,1), so the shorthand's margin-top lost. Restore
+   it at a specificity that wins. */
+.content.dk-help > h3:first-child,
+.content.dk-help > p:first-child + h3,
+.content.dk-help > p:first-of-type + h3 { margin-top: var(--s-6); }
+
 /* ── Measure ───────────────────────────────────────────────────────
    Prose was running 134 characters a line on a desktop window — roughly
    double a comfortable measure, on the one page whose entire job is being
@@ -345,6 +356,8 @@ a { text-decoration: none; }
     --gold-solid: #7d5800;
     --gold-soft: #f5efdc;
     --blurple: #2040a0;
+    --blurple-soft: #dce6ff;
+    --blurple-text: #2040a0;
     --green: #1a6b3c;
     --green-soft: #e8f5ee;
     --green-text: #1a6b3c;

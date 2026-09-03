@@ -498,5 +498,6 @@ the cheapest demonstration that the token layer does what it claims.
   proper reserved status palette; today each panel picks its own.
 - **Dark-only.** There is no `prefers-color-scheme` rule anywhere and a
   light theme is not planned. With the token system in place it would be a
-  contained job rather than a rewrite — the guide's print block (below) is a
-  worked example of the shape it would take.
+  contained job rather than a rewrite — the guide's print block (see "The user
+  guide is a surface, not an exception" above) is a worked example of the shape
+  it would take.

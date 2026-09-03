@@ -150,7 +150,7 @@
   vertical-align: middle;
 }
 .dk-help .perm-all   { background: var(--green-soft);            color: var(--green-text); }
-.dk-help .perm-mod   { background: rgba(88, 101, 242, 0.16);      color: #a8b3ff; }
+.dk-help .perm-mod   { background: var(--blurple-soft);          color: var(--blurple-text); }
 .dk-help .perm-admin { background: var(--red-soft);              color: var(--red-text); }
 .dk-help .perm-owner { background: var(--gold-soft);             color: var(--gold-solid); }
 

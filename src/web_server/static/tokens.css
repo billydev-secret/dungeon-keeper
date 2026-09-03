@@ -110,6 +110,12 @@
      --bg-card 7.21, --bg-rail 8.61. */
   --yellow-text:   #d7b77f;
   --blurple:       #5865f2;
+  /* Tint + text tier for the blurple, same split as the red/green pairs above.
+     They exist so the guide's MOD badge is a token rather than a literal: the
+     print block in manual-standalone.css re-declares the tokens light, and a
+     hardcoded #a8b3ff is the one thing that cannot follow it. */
+  --blurple-soft:  #5865f229;
+  --blurple-text:  #a8b3ff;
   --plum:          #c07aa1;
   --plum-soft:     #c07aa11a;
   /* Seam colour for the nav rail's spine — gold at 16%, the one place
