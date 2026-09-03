@@ -354,8 +354,8 @@ def test_how_to_play_covers_the_basics_and_the_live_clocks():
     e = mj_embeds.build_how_to_play(CARD, settings, ACCENT,
                                     "https://dash.example")
     names = [f.name for f in e.fields]
-    assert names == ["A hand, start to finish", "Claiming a discard",
-                     "Jokers", "Clocks", "Where to look"]
+    assert names == ["A Hand, Start to Finish", "Claiming a Discard",
+                     "Jokers", "Clocks", "Where to Look"]
     text = "\n".join(f.value for f in e.fields)
     # the clocks are the guild's real dials, not prose constants
     assert "120s" in text and "60s" in text and "6–8s" in text
@@ -372,7 +372,7 @@ def test_how_to_play_survives_no_card_and_no_public_dashboard():
 
     e = mj_embeds.build_how_to_play(None, MahjongSettings(), ACCENT, "")
     text = "\n".join(f.value for f in e.fields)
-    assert "hands" not in text.split("Where to look")[-1].split("\n")[0]
+    assert "hands" not in text.split("Where to Look")[-1].split("\n")[0]
     assert "Full guide" not in text          # localhost-only dev: no link
     assert "Card Viewer" in text             # the in-Discord pointers remain
 

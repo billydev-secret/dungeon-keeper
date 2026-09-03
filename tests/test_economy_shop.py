@@ -63,7 +63,7 @@ def test_shop_table_aligns_cells_and_tiers_by_price(db):
     # The panel carries every section, so the QOTD sponsorship (on by default)
     # sits among them.
     assert list(tiers) == [
-        "Essentials", "Signature", "Question of the Day", "One-shot",
+        "Essentials", "Signature", "Question of the Day", "One-Shot",
         "For a Friend",
     ]
 
@@ -233,11 +233,11 @@ def test_shop_shows_balance_to_a_member_but_not_in_the_panel(db):
 def test_shop_embed_shield_row_and_held_marker(db):
     _enable(db)
     embed = build_shop_embed(_settings(db), set(), None, panel=True)
-    row = next(f for f in embed.fields if f.name == "One-shot")
+    row = next(f for f in embed.fields if f.name == "One-Shot")
     assert "Streak shield" in row.value
     assert "held" not in row.value
     held = build_shop_embed(_settings(db), set(), None, shields_held=1)
-    assert "held" in next(f for f in held.fields if f.name == "One-shot").value
+    assert "held" in next(f for f in held.fields if f.name == "One-Shot").value
 
 
 @pytest.mark.parametrize(
@@ -246,8 +246,8 @@ def test_shop_embed_shield_row_and_held_marker(db):
         # token None → the row must be absent entirely.
         # Visibility follows the Shop & Perks checkbox now, not the price: a
         # price of 0 means free, and "don't sell it" is its own switch.
-        ({"shop_streak_shield_enabled": False}, "One-shot", None),
-        ({"price_streak_shield": 0}, "One-shot", "0"),  # free, still on sale
+        ({"shop_streak_shield_enabled": False}, "One-Shot", None),
+        ({"price_streak_shield": 0}, "One-Shot", "0"),  # free, still on sale
         ({}, "Voice", None),  # the lease ships unsold
         ({"price_voice_style": 30}, "Voice", None),  # priced but not switched on
         ({"price_voice_style": 30, "shop_voice_style_enabled": True}, "Voice", "30"),
@@ -318,9 +318,9 @@ def test_the_voice_tier_follows_its_checkbox_not_its_price(db):
 
 def test_the_streak_shield_field_follows_its_checkbox(db):
     _enable(db, price_streak_shield=30, shop_streak_shield_enabled=True)
-    assert "One-shot" in [f.name for f in build_shop_embed(_settings(db), set(), None).fields]
+    assert "One-Shot" in [f.name for f in build_shop_embed(_settings(db), set(), None).fields]
     _enable(db, shop_streak_shield_enabled=False)
-    assert "One-shot" not in [
+    assert "One-Shot" not in [
         f.name for f in build_shop_embed(_settings(db), set(), None).fields
     ]
 

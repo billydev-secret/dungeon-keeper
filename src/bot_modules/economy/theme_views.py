@@ -108,7 +108,7 @@ def render_theme_review_embed(
     embed.add_field(name="👤 From", value=sponsor_mention, inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
     embed.add_field(name="🎨 Theme", value=title[:256], inline=False)
-    embed.add_field(name="📝 The idea", value=blurb[:1024], inline=False)
+    embed.add_field(name="📝 The Idea", value=blurb[:1024], inline=False)
     if state == "approved":
         # Deliberately not a queue position: the card is not re-rendered as the
         # queue drains, so a number here would be wrong within the hour. The

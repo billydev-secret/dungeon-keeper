@@ -119,7 +119,7 @@ def build_review_embed(
     embed.add_field(name="Level", value=str(level), inline=True)
     if prune_lines:
         embed.add_field(
-            name="Access a sweep removed", value="\n".join(prune_lines), inline=False
+            name="Access a Sweep Removed", value="\n".join(prune_lines), inline=False
         )
     if resolved is not None:
         resolution, resolver = resolved
@@ -292,7 +292,7 @@ class GrantAccessButton(
     def __init__(self, card_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Grant access",
+                label="Grant Access",
                 emoji="✅",
                 style=discord.ButtonStyle.success,
                 custom_id=f"promo_review:grant:{card_id}",
@@ -360,7 +360,7 @@ class Level5GrantButton(
     def __init__(self, user_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Grant access",
+                label="Grant Access",
                 emoji="✅",
                 style=discord.ButtonStyle.success,
                 custom_id=f"promo_review:l5grant:{user_id}",

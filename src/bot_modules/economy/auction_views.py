@@ -104,7 +104,7 @@ def render_auction_card(
 
     if auction["description"]:
         embed.add_field(
-            name="🎁 Up for auction",
+            name="🎁 Up for Auction",
             value=str(auction["description"])[:1024],
             inline=False,
         )
@@ -117,18 +117,18 @@ def render_auction_card(
         if winner is not None:
             embed.add_field(name="🏆 Winner", value=f"<@{int(winner)}>", inline=True)
             embed.add_field(
-                name="🔨 Winning bid",
+                name="🔨 Winning Bid",
                 value=_coins(settings, int(auction["winning_bid"])),
                 inline=True,
             )
             embed.add_field(
-                name="Next step",
+                name="Next Step",
                 value="The host will hand over the prize.",
                 inline=False,
             )
         else:
             embed.add_field(
-                name="No bids",
+                name="No Bids",
                 value="Nobody bid — nothing changes hands.",
                 inline=False,
             )
@@ -143,14 +143,14 @@ def render_auction_card(
     else:
         if high is not None:
             embed.add_field(
-                name="🔨 Current bid", value=_coins(settings, int(high)), inline=True
+                name="🔨 Current Bid", value=_coins(settings, int(high)), inline=True
             )
             embed.add_field(
-                name="🙋 High bidder", value=f"<@{int(high_bidder)}>", inline=True
+                name="🙋 High Bidder", value=f"<@{int(high_bidder)}>", inline=True
             )
         else:
             embed.add_field(
-                name="🔨 Opening bid",
+                name="🔨 Opening Bid",
                 value=_coins(settings, min_next_bid(settings, auction)),
                 inline=True,
             )
@@ -161,7 +161,7 @@ def render_auction_card(
         )
         embed.add_field(name="🙌 Bids", value=str(bids), inline=True)
         embed.add_field(
-            name="How it works",
+            name="How It Works",
             value=(
                 f"Tap **Bid** to bid at least {_coins(settings, min_next_bid(settings, auction))}. "
                 "Outbid someone and they get their coins back instantly; the "

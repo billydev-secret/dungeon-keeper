@@ -106,7 +106,7 @@ def test_an_accepted_theme_reads_green_and_owes_nothing_back(state):
 def test_a_pending_card_carries_the_theme_and_the_idea():
     fields = _fields(_card("pending", refunded=False))
     assert fields["🎨 Theme"] == "Cursed Cooking"
-    assert fields["📝 The idea"].startswith("Post the worst")
+    assert fields["📝 The Idea"].startswith("Post the worst")
 
 
 # ── the receipt ────────────────────────────────────────────────────────

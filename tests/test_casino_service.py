@@ -1961,7 +1961,7 @@ def test_owner_pressing_hit_still_resets_the_idle_clock(db):
         assert after == NOW + 120
 
 
-# ── the floor ticker (hub panel "On the floor" section) ────────────────
+# ── the floor ticker (hub panel "On the Floor" section) ────────────────
 
 
 def test_ticker_rows_land_via_instant_settle_paths(db):

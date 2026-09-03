@@ -264,7 +264,7 @@ def test_optin_section_lists_every_row():
     embed = build_member_info_embed(
         display_name="Ada", avatar_url=None, facts=_facts(), optin_rows=rows
     )
-    section = next(f for f in embed.fields if "Opt-ins" in f.name)
+    section = next(f for f in embed.fields if "Opt-Ins" in f.name)
     for row in rows:
         assert row.label in (section.value or "")
 

@@ -91,11 +91,11 @@ def test_open_auction_card_shows_opening_bid_and_ends(db):
     embed = render_auction_card(ACCENT, SETTINGS, row, bids=0)
     assert "Founder role" in embed.title
     assert embed.color == ACCENT
-    assert "holographic" in _field(embed, "🎁 Up for auction")
+    assert "holographic" in _field(embed, "🎁 Up for Auction")
     assert f"<@{HOST}>" in _field(embed, "🎙️ Hosted by")
     # No bids yet → shows the opening floor (min_bid), not a "current bid".
-    assert "10" in _field(embed, "🔨 Opening bid")
-    assert _field(embed, "🔨 Current bid") is None
+    assert "10" in _field(embed, "🔨 Opening Bid")
+    assert _field(embed, "🔨 Current Bid") is None
 
 
 def test_open_auction_card_shows_current_high_bid(db):
@@ -105,8 +105,8 @@ def test_open_auction_card_shows_current_high_bid(db):
         place_bid(conn, SETTINGS, GUILD, aid, A, 40, now=NOW + 1)
         row = get_auction(conn, aid)
     embed = render_auction_card(ACCENT, SETTINGS, row, bids=1)
-    assert "40" in _field(embed, "🔨 Current bid")
-    assert f"<@{A}>" in _field(embed, "🙋 High bidder")
+    assert "40" in _field(embed, "🔨 Current Bid")
+    assert f"<@{A}>" in _field(embed, "🙋 High Bidder")
 
 
 def test_closed_with_winner_card_is_sold(db):
@@ -120,7 +120,7 @@ def test_closed_with_winner_card_is_sold(db):
     assert "Sold" in embed.title
     assert embed.color == discord.Color.green()
     assert f"<@{A}>" in _field(embed, "🏆 Winner")
-    assert "40" in _field(embed, "🔨 Winning bid")
+    assert "40" in _field(embed, "🔨 Winning Bid")
 
 
 def test_closed_with_no_bids_card(db):
@@ -130,7 +130,7 @@ def test_closed_with_no_bids_card(db):
         row = get_auction(conn, aid)
     embed = render_auction_card(ACCENT, SETTINGS, row, bids=0)
     assert "closed" in embed.title.lower()
-    assert _field(embed, "No bids") is not None
+    assert _field(embed, "No Bids") is not None
 
 
 def test_cancelled_card_says_refunded(db):

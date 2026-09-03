@@ -88,7 +88,7 @@ def build_turn_embed(
         inline=True,
     )
     embed.add_field(
-        name="Currently writing",
+        name="Currently Writing",
         value=f"**{current_name}** ✍️",
         inline=True,
     )

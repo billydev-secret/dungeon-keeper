@@ -96,7 +96,7 @@ def render_bounty_card(
         embed.add_field(name="💰 Paid out", value=_coins(settings, int(bounty["payout"])), inline=True)
         if int(bounty["rake_amount"]) > 0:
             embed.add_field(
-                name="🏦 House cut", value=_coins(settings, int(bounty["rake_amount"])), inline=True
+                name="🏦 House Cut", value=_coins(settings, int(bounty["rake_amount"])), inline=True
             )
     elif state in ("cancelled", "expired"):
         embed.add_field(
@@ -115,7 +115,7 @@ def render_bounty_card(
         note = "Chip in to grow the pot. A mod awards it to whoever gets it done"
         if rake > 0:
             note += f" (the house keeps {rake}% on award)"
-        embed.add_field(name="How it works", value=note + ".", inline=False)
+        embed.add_field(name="How It Works", value=note + ".", inline=False)
     if state != "open":
         embed.timestamp = discord.utils.utcnow()
     apply_section_spacing(embed)
@@ -178,11 +178,11 @@ def build_bounty_hub_embed(
             f"Nobody awarded it within **{days} days**? Everyone who chipped in "
             "is refunded in full."
         )
-    embed.add_field(name="How it works", value="\n".join(blurb), inline=False)
+    embed.add_field(name="How It Works", value="\n".join(blurb), inline=False)
 
     if not entries:
         embed.add_field(
-            name="📋 Open bounties",
+            name="📋 Open Bounties",
             value="Nothing on the board yet — post the first one.",
             inline=False,
         )
@@ -215,7 +215,7 @@ def build_bounty_hub_embed(
     hidden = open_total - len(lines)
     if hidden > 0:
         lines.append(f"…and **{hidden}** more further up the channel.")
-    embed.add_field(name="📋 Open bounties", value="\n".join(lines), inline=False)
+    embed.add_field(name="📋 Open Bounties", value="\n".join(lines), inline=False)
     apply_section_spacing(embed)
     return embed
 
@@ -417,7 +417,7 @@ class BountyHubPostButton(
     def __init__(self) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Post a bounty", emoji="🎯",
+                label="Post a Bounty", emoji="🎯",
                 style=discord.ButtonStyle.primary,
                 custom_id="econ_bounty:hub_post",
             )

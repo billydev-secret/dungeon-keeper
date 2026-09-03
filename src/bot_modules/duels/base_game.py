@@ -723,7 +723,7 @@ class BaseGame(commands.Cog):
             color=color or discord.Color(COLOR_GOLD),
         )
         if self.HOW_TO_PLAY:
-            embed.add_field(name="📖 How to play", value=self.HOW_TO_PLAY, inline=False)
+            embed.add_field(name="📖 How to Play", value=self.HOW_TO_PLAY, inline=False)
         embed.add_field(
             name=f"👥 Players ({len(game.roster)}/{max_players})",
             value="\n".join(f"• {n}" for n in names) or "—",

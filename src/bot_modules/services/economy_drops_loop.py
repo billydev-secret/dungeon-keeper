@@ -69,7 +69,7 @@ def drop_embed(
     settings: EconSettings, amount: int, expires_at: float, accent: discord.Colour
 ) -> discord.Embed:
     return discord.Embed(
-        title="🪂 Coin drop!",
+        title="🪂 Coin Drop!",
         description=(
             f"A pouch of {settings.currency_emoji} **{amount:,} "
             f"{_unit(settings, amount)}** just landed.\n"
@@ -87,7 +87,7 @@ def claimed_embed(
     accent: discord.Colour,
 ) -> discord.Embed:
     return discord.Embed(
-        title="🪂 Drop claimed!",
+        title="🪂 Drop Claimed!",
         description=(
             f"**{claimant.display_name}** grabbed {settings.currency_emoji} "
             f"**{credited:,} {_unit(settings, credited)}**."
@@ -98,7 +98,7 @@ def claimed_embed(
 
 def expired_embed(accent: discord.Colour) -> discord.Embed:
     return discord.Embed(
-        title="🪂 Drop vanished",
+        title="🪂 Drop Vanished",
         description="Nobody grabbed it in time.",
         color=accent,
     )

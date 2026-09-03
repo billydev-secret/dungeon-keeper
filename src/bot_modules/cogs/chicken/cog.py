@@ -311,7 +311,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             description="First to bail is safe — but ride to 100% and you **crash**.",
             color=accent if accent is not None else COLOR_YELLOW,
         )
-        embed.add_field(name="Still holding", value=holders, inline=False)
+        embed.add_field(name="Still Holding", value=holders, inline=False)
         embed.add_field(name="Bailed", value=bailed, inline=False)
         embed.add_field(
             name=f"⚡ Meter — {pct:.0f}%",
@@ -346,11 +346,11 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                 best = bravest_bailer(game.bail_log)
                 pct = best["meter_pct"] if best else 0.0
                 embed.add_field(
-                    name="🐔 Nerves of steel",
+                    name="🐔 Nerves of Steel",
                     value=f"**{self._name(guild, game.winner_id)}** bailed last at {pct:.0f}%",
                     inline=False,
                 )
-            embed.add_field(name="💀 Takes the stake", value=loser_name, inline=False)
+            embed.add_field(name="💀 Takes the Stake", value=loser_name, inline=False)
             stakes = game.stakes_text or "24-hour nickname surrender."
             embed.add_field(name="📋 Stakes", value=stakes, inline=False)
             if self_apply_nick:
@@ -392,16 +392,16 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                 for b in ranked
             ]
             embed = discord.Embed(
-                title="🐔 Everyone blinked!",
+                title="🐔 Everyone Blinked!",
                 description=f"🏆 **{self._name(guild, game.winner_id)}** held longest. No nicknames today.",
                 color=COLOR_GREEN,
             )
             if lines:
-                embed.add_field(name="Chicken ranking", value="\n".join(lines), inline=False)
+                embed.add_field(name="Chicken Ranking", value="\n".join(lines), inline=False)
             return embed
 
         embed = discord.Embed(
-            title="💥 Total wipeout!",
+            title="💥 Total Wipeout!",
             description="Nobody blinked — everyone rode it straight into the crash. No winner, no nicknames.",
             color=COLOR_RED,
         )

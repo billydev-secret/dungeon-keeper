@@ -992,8 +992,8 @@ def test_build_profile_show_embed_uses_template_default_for_empty_name():
     assert "*(template default)*" in fields["Saved Name"]
     assert fields["User Limit"] == "no cap"
     assert "Open" in fields["Access"]
-    assert fields["Trusted (count)"] == "0"
-    assert fields["Blocked (count)"] == "0"
+    assert fields["Trusted (Count)"] == "0"
+    assert fields["Blocked (Count)"] == "0"
 
 
 def test_build_profile_show_embed_renders_saved_name():
@@ -1008,8 +1008,8 @@ def test_build_profile_show_embed_renders_saved_name():
     assert fields["Saved Name"] == "my room"
     assert fields["User Limit"] == "5"
     assert "locked" in fields["Access"].lower()
-    assert fields["Trusted (count)"] == "3"
-    assert fields["Blocked (count)"] == "1"
+    assert fields["Trusted (Count)"] == "3"
+    assert fields["Blocked (Count)"] == "1"
 
 
 def test_build_profile_show_embed_has_blurple_color():

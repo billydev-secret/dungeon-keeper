@@ -559,7 +559,7 @@ def build_grant_audit_embed(
         for r in snap.inactive
     ]
     embed.add_field(
-        name="💤 Recently stripped, still inactive",
+        name="💤 Recently Stripped, Still Inactive",
         value="\n".join(inactive_lines)
         or f"Nobody stripped by the {snap.inactivity_days}d inactivity prune.",
         inline=False,

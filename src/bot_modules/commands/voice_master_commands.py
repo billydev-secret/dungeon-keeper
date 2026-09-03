@@ -1864,7 +1864,7 @@ class _ClaimButton(
         self._channel_id = channel_id
         super().__init__(
             discord.ui.Button(
-                label="Claim channel",
+                label="Claim Channel",
                 style=discord.ButtonStyle.success,
                 emoji="👑",
                 custom_id=f"voice_master:claim:{channel_id}",

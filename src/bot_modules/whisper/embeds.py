@@ -134,12 +134,12 @@ def build_reply_report_audit_embed(
         timestamp=now or datetime.now(timezone.utc),
     )
     embed.add_field(
-        name="Sender (anonymous)",
+        name="Sender (Anonymous)",
         value=f"{name_fn(reply.from_user_id)} (`{reply.from_user_id}`)",
         inline=False,
     )
     embed.add_field(
-        name="Reporter (recipient)",
+        name="Reporter (Recipient)",
         value=f"{name_fn(reporter_id)} (`{reporter_id}`)",
         inline=False,
     )

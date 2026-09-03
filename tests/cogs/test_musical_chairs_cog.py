@@ -442,7 +442,7 @@ async def test_lobby_embed_explains_the_rules(announce_cog, db):
     await mcdb.set_game_state(db, gid, "LOBBY", roster=json.dumps([1, 2, 3]))
     game = await mcdb.get_game(db, gid)
     embed = announce_cog._render_lobby(game, announce_cog.bot.guild, 3, 10)
-    how = next(f for f in embed.fields if f.name and "How to play" in f.name)
+    how = next(f for f in embed.fields if f.name and "How to Play" in f.name)
     assert "don't" in (how.value or "").lower() or "do nothing" in (how.value or "").lower()
     assert "Last player seated wins" in (how.value or "")
 

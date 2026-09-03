@@ -477,7 +477,7 @@ def build_how_to_play(
         color=accent,
     )
     e.add_field(
-        name="A hand, start to finish",
+        name="A Hand, Start to Finish",
         value=(
             "**1. Sit down.** Create a table or press Join on someone's; the "
             "stake is escrowed when you sit.\n"
@@ -492,7 +492,7 @@ def build_how_to_play(
         inline=False,
     )
     e.add_field(
-        name="Claiming a discard",
+        name="Claiming a Discard",
         value=(
             "Any discard is fair game for a moment. **✋ Call** takes it to "
             "complete a set of three or more, which you then expose face-up "
@@ -538,7 +538,7 @@ def build_how_to_play(
         # path behind login); the §10 heading anchors as #mahjong
         helpers.append(
             f"Full guide: {manual_url}/static/manual.html#mahjong")
-    e.add_field(name="Where to look", value="\n".join(helpers), inline=False)
+    e.add_field(name="Where to Look", value="\n".join(helpers), inline=False)
     return _footer(e, "New here? Try 🌱 Practice — free, against house bots")
 
 

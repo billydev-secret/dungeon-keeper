@@ -441,7 +441,7 @@ def test_embed_has_three_buckets_with_counts():
     names = [f.name for f in embed.fields]
     assert names[0] == "🕐 Waiting for first grant (1)"
     assert names[1] == "↩️ Stripped but came back (1)"
-    assert names[2] == "💤 Recently stripped, still inactive"
+    assert names[2] == "💤 Recently Stripped, Still Inactive"
     assert "Nismo" in str(embed.fields[0].value)
     assert "Phantom" in str(embed.fields[1].value) and "<t:100:R>" in str(embed.fields[1].value)
     assert "Ghost" in str(embed.fields[2].value)

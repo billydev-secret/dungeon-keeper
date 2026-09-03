@@ -476,7 +476,7 @@ async def apply_jail(
 
     # ── Step 7: DM the user ──────────────────────────────────────────
     dm_embed = discord.Embed(
-        title="You've been placed in a moderation hold",
+        title="You've Been Placed in a Moderation Hold",
         description=(
             f"**Server:** {guild.name}\n"
             f"**Moderator:** {moderator}\n"

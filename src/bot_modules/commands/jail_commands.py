@@ -1487,7 +1487,7 @@ async def _do_unjail(
 
     # DM
     dm_embed = discord.Embed(
-        title="You've been released",
+        title="You've Been Released",
         description=f"Your moderation hold in **{guild.name}** has been lifted.\n"
         + (f"**Reason:** {reason}" if reason else ""),
         color=CLR_SUCCESS,
@@ -1579,7 +1579,7 @@ async def check_jail_rejoin(
                 ctx,
                 member.guild,
                 discord.Embed(
-                    title="⚠️ Could not re-apply jail",
+                    title="⚠️ Could Not Re-Apply Jail",
                     description=(
                         f"{member.mention} returned with an active hold "
                         f"(jail #{jail['id']}) but I couldn't re-apply the "
@@ -1619,7 +1619,7 @@ async def check_jail_rejoin(
                 ctx,
                 member.guild,
                 discord.Embed(
-                    title="⚠️ Jail channel missing",
+                    title="⚠️ Jail Channel Missing",
                     description=(
                         f"{member.mention} returned while jailed (jail #{jail['id']}), "
                         "but I couldn't recreate their jail channel — grant "
@@ -1808,7 +1808,7 @@ async def jail_rejoin_reconcile_sweep(bot: discord.Client, ctx: AppContext) -> N
                     ctx,
                     guild,
                     discord.Embed(
-                        title="⚠️ Jail state mismatch",
+                        title="⚠️ Jail State Mismatch",
                         description=(
                             f"{member.mention} has an active hold (jail #{jail['id']}) "
                             "but isn't wearing the Jailed role, and hasn't rejoined "
@@ -2210,7 +2210,7 @@ class _TicketFromMessageModal(discord.ui.Modal, title="Open Ticket About This Me
         embed.add_field(name="Opened by", value=user.mention, inline=True)
         embed.add_field(name="Status", value="🟢 Open", inline=True)
         embed.add_field(
-            name="Source message",
+            name="Source Message",
             value=f"[Jump to message]({self.source_message.jump_url})",
             inline=False,
         )

@@ -849,6 +849,7 @@ def test_backfilled_pick_makes_player_vote_eligible():
 
 def test_join_embed_snake_explains_turn_based_flow():
     embed = build_join_embed("Billy", [], "Snacks")
+    # Prose, not a label — the guide keeps descriptions sentence-style.
     assert "How it works" in (embed.description or "")
     assert "when it's your turn" in embed.description.lower()
 

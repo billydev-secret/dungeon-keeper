@@ -634,7 +634,7 @@ def build_shop_embed(
         # guild has stopped selling would invite a second purchase it refuses.
         held = " · 🛡️ **held**" if shields_held > 0 else ""
         embed.add_field(
-            name="One-shot",
+            name="One-Shot",
             value=(
                 f"🛡️ Streak shield — {settings.currency_emoji} "
                 f"**{settings.price_streak_shield:,}** once{held}\n"

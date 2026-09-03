@@ -476,3 +476,115 @@ def test_the_spacing_helper_still_lives_where_the_sweep_expects(name):
     from bot_modules.core import branding
 
     assert hasattr(branding, name)
+
+
+# ── Title Case on titles and labels (ruling 2026-07-21) ───────────────
+
+#: Words that stay lowercase inside a title — unless they open it, close it, or
+#: open a clause after a separator.
+_TITLE_STOPWORDS = {
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
+    "nor", "of", "on", "or", "per", "the", "to", "up", "vs", "via", "with",
+    "over", "off", "out",
+}
+_WORD = re.compile(r"[A-Za-z][A-Za-z'’]*")
+_LEAD_IN = re.compile(r"^[\W\d_]+", re.UNICODE)
+#: A disabled option stub IS the empty-state message, not a label, and the
+#: guide wants those as a plain sentence. → § Empty states & pagination
+_EMPTY_STATE = re.compile(r"^(no |nobody|none|there'?s no )", re.I)
+
+
+def _title_slot(call: ast.Call) -> str | None:
+    """Which Title-Case slot this call writes, if any.
+
+    Deliberately excludes ``TextInput(label=)`` and every ``placeholder``: the
+    guide gives modal field labels their own rule (a terse noun phrase with a
+    parenthetical hint — "Reason (optional)") and select placeholders another
+    ("Pick …"). Applying Title Case to either is a false positive.
+    """
+    name = ast.unparse(call.func)
+    if name.endswith("Embed"):
+        return "title"
+    if name.endswith("add_field"):
+        return "name"
+    if "TextInput" in name:
+        return None
+    if "Button" in name or "SelectOption" in name:
+        return "label"
+    if "Modal" in name:
+        return "title"
+    return None
+
+
+def sentence_case_labels(tree: ast.AST) -> list[int]:
+    """Lines where a title or label reads as a sentence rather than a label."""
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        slot = _title_slot(node)
+        if slot is None:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg != slot:
+                continue
+            value = keyword.value
+            if not (isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                continue
+            text = value.value
+            if "{" in text:  # interpolated — the casing isn't ours to judge
+                continue
+            if slot == "label" and _EMPTY_STATE.match(text):
+                continue
+            words = _WORD.findall(_LEAD_IN.sub("", text).strip())
+            if len(words) < 2:
+                continue
+            for word in words[1:]:
+                if word.lower() in _TITLE_STOPWORDS:
+                    continue
+                if word[0].islower() and not word.isupper():
+                    hits.append(value.lineno)
+                    break
+    return hits
+
+
+def test_titles_and_labels_are_title_case():
+    """→ ``embed_style_guide.md`` § Titles, labels & casing."""
+    offenders: list[str] = []
+    for path, rel in _py_files():
+        source = path.read_text(encoding="utf-8")
+        if "add_field" not in source and "Embed(" not in source and "label=" not in source:
+            continue
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+        offenders += [f"{rel}:{line}" for line in sentence_case_labels(tree)]
+
+    assert not offenders, (
+        "Embed titles, field names, button labels and modal titles use Title "
+        "Case (ruling 2026-07-21). Prose — descriptions, errors, DMs — stays "
+        "sentence-style:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_the_title_case_sweep_can_actually_see_a_violation():
+    def one(src):
+        return sentence_case_labels(ast.parse(src))
+
+    assert one('discord.Embed(title="Daily streak")') == [1]
+    assert one('discord.Embed(title="Daily Streak")') == []
+    # A leading emoji doesn't excuse the words after it. The example is
+    # deliberately synthetic: an earlier sweep over the test suite "fixed" a
+    # realistic one and broke this guard, which is how it earned the comment.
+    assert one('e.add_field(name="🧪 Fixture label", value="x")') == [1]
+    # Stopwords stay lowercase inside a title.
+    assert one('discord.Embed(title="Nerves of Steel")') == []
+    # Acronyms keep their shape.
+    assert one('e.add_field(name="NSFW Tags", value="x")') == []
+    # A modal field label is a noun phrase with a hint, NOT Title Case.
+    assert one('discord.ui.TextInput(label="Reason (optional)")') == []
+    # A disabled option stub is an empty state, not a label.
+    assert one('discord.SelectOption(label="No results", value="x")') == []
+    # An interpolated title is not ours to judge.
+    assert one('discord.Embed(title=f"Pools — {label}")') == []

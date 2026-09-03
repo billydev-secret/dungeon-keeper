@@ -566,10 +566,10 @@ def test_reply_report_audit_embed_basic_fields():
     assert emb.title == "🚨 Whisper Reply Reported"
     assert emb.description == "rude reply"
     assert emb.color == discord.Color.red()
-    assert emb.fields[0].name == "Sender (anonymous)"
+    assert emb.fields[0].name == "Sender (Anonymous)"
     assert emb.fields[0].value is not None
     assert "100" in emb.fields[0].value
-    assert emb.fields[1].name == "Reporter (recipient)"
+    assert emb.fields[1].name == "Reporter (Recipient)"
     assert emb.fields[1].value is not None
     assert "200" in emb.fields[1].value
     assert _unspaced(emb.fields[2].value) == "harassment"
@@ -978,8 +978,8 @@ def test_reply_report_audit_embed_names_both_parties_and_keeps_ids():
         name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
     )
     fields = {f.name: _unspaced(f.value) for f in emb.fields}
-    assert fields["Sender (anonymous)"] == "Sender Sam (`100`)"
-    assert fields["Reporter (recipient)"] == "Target Tina (`200`)"
+    assert fields["Sender (Anonymous)"] == "Sender Sam (`100`)"
+    assert fields["Reporter (Recipient)"] == "Target Tina (`200`)"
 
 
 def test_audit_embed_still_shows_the_id_when_the_name_is_unknown():

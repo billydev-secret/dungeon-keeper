@@ -212,7 +212,7 @@ class NoContactCog(commands.Cog):
 
         accent = await safe_resolve_accent(self.bot.ctx, interaction.guild, log_label="no contact")
         embed = discord.Embed(
-            title="Your no-contact list",
+            title="Your No-Contact List",
             description="\n".join(lines),
             color=accent,
         )
@@ -341,7 +341,7 @@ class NoContactCog(commands.Cog):
         verb = "mentioned" if alert.kind == KIND_MENTION else "replied to"
 
         embed = discord.Embed(
-            title="No-contact alert",
+            title="No-Contact Alert",
             description=(
                 f"**{actor_name}** {verb} **{target_name}**, "
                 f"who they are under a no-contact rule with."

@@ -706,7 +706,7 @@ def _pending_theme(db_path, *, title="Cursed Cooking", price=300, user_id=778) -
         apply_credit(conn, 123, user_id, price * 2, "grant", actor_id=1)
         settings = load_econ_settings(conn, 123)
         return submit_theme(
-            conn, settings, 123, user_id, title, "The idea"
+            conn, settings, 123, user_id, title, "The Idea"
         ).submission_id
 
 

@@ -60,14 +60,14 @@ def _field(embed: discord.Embed, name_contains: str) -> str:
 
 def test_empty_board_invites_the_first_post():
     embed = build_bounty_hub_embed(ACCENT, _settings(), GUILD, [], open_total=0)
-    assert "post the first one" in _field(embed, "Open bounties")
+    assert "post the first one" in _field(embed, "Open Bounties")
 
 
 def test_lists_a_bounty_with_its_pot_backers_and_jump_link():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry()], open_total=1
     )
-    listing = _field(embed, "Open bounties")
+    listing = _field(embed, "Open Bounties")
     assert "Draw the mascot" in listing
     assert "340" in listing
     assert "4 backers" in listing
@@ -86,7 +86,7 @@ def test_backer_count_reads_naturally(contributors, expected):
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry(contributors=contributors)], open_total=1
     )
-    assert expected in _field(embed, "Open bounties")
+    assert expected in _field(embed, "Open Bounties")
 
 
 def test_a_bounty_whose_card_never_posted_is_listed_without_a_link():
@@ -99,7 +99,7 @@ def test_a_bounty_whose_card_never_posted_is_listed_without_a_link():
         [_entry(card_channel_id=0, card_message_id=0)],
         open_total=1,
     )
-    listing = _field(embed, "Open bounties")
+    listing = _field(embed, "Open Bounties")
     assert "Draw the mascot" in listing
     assert "jump" not in listing
 
@@ -108,26 +108,26 @@ def test_capped_list_says_how_many_it_is_not_showing():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry(), _entry(bounty_id=2)], open_total=9
     )
-    assert "**7** more" in _field(embed, "Open bounties")
+    assert "**7** more" in _field(embed, "Open Bounties")
 
 
 def test_uncapped_list_has_no_tail():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry()], open_total=1
     )
-    assert "more further up" not in _field(embed, "Open bounties")
+    assert "more further up" not in _field(embed, "Open Bounties")
 
 
 def test_rake_line_only_when_a_rake_is_configured():
     off = build_bounty_hub_embed(
         ACCENT, _settings(bounty_rake_pct=0), GUILD, [], open_total=0
     )
-    assert "house keeps" not in _field(off, "How it works")
+    assert "house keeps" not in _field(off, "How It Works")
 
     on = build_bounty_hub_embed(
         ACCENT, _settings(bounty_rake_pct=10), GUILD, [], open_total=0
     )
-    assert "**10%**" in _field(on, "How it works")
+    assert "**10%**" in _field(on, "How It Works")
 
 
 def test_refund_promise_names_the_window_and_vanishes_when_expiry_is_off():
@@ -136,21 +136,21 @@ def test_refund_promise_names_the_window_and_vanishes_when_expiry_is_off():
     on = build_bounty_hub_embed(
         ACCENT, _settings(bounty_expire_days=14), GUILD, [], open_total=0
     )
-    blurb = _field(on, "How it works")
+    blurb = _field(on, "How It Works")
     assert "**14 days**" in blurb
     assert "refunded in full" in blurb
 
     off = build_bounty_hub_embed(
         ACCENT, _settings(bounty_expire_days=0), GUILD, [], open_total=0
     )
-    assert "refunded in full" not in _field(off, "How it works")
+    assert "refunded in full" not in _field(off, "How It Works")
 
 
 def test_blurb_uses_the_guild_currency_name():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(currency_plural="doubloons"), GUILD, [], open_total=0
     )
-    assert "doubloons" in _field(embed, "How it works")
+    assert "doubloons" in _field(embed, "How It Works")
 
 
 # ── the 1024-char embed-field budget ───────────────────────────────────
@@ -184,7 +184,7 @@ def test_open_list_never_exceeds_the_embed_field_limit(title_len, count):
         _entries(count, title_len),
         open_total=count,
     )
-    assert len(_field(embed, "Open bounties")) <= 1024
+    assert len(_field(embed, "Open Bounties")) <= 1024
 
 
 def test_whole_embed_stays_within_discord_limits():
@@ -203,7 +203,7 @@ def test_budget_dropped_lines_are_counted_in_the_tail():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, entries, open_total=25
     )
-    listing = _field(embed, "Open bounties")
+    listing = _field(embed, "Open Bounties")
     shown = listing.count("• ")
     assert shown < len(entries)  # the budget really did bite
     assert f"**{25 - shown}** more" in listing
@@ -213,7 +213,7 @@ def test_long_titles_are_clipped_in_the_list_only():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry(title="X" * 100)], open_total=1
     )
-    listing = _field(embed, "Open bounties")
+    listing = _field(embed, "Open Bounties")
     assert "…" in listing
     assert "X" * 100 not in listing
 
@@ -222,7 +222,7 @@ def test_short_titles_are_left_alone():
     embed = build_bounty_hub_embed(
         ACCENT, _settings(), GUILD, [_entry(title="Draw the mascot")], open_total=1
     )
-    assert "Draw the mascot" in _field(embed, "Open bounties")
+    assert "Draw the mascot" in _field(embed, "Open Bounties")
 
 
 # ── the award/cancel DMs link the card, and only the card ──────────────

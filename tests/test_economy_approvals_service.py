@@ -58,7 +58,7 @@ def _fund(conn, user_id, amount=5000, guild_id=GUILD):
 def _theme(conn, user_id, title="Cursed Cooking", guild_id=GUILD):
     _fund(conn, user_id, guild_id=guild_id)
     return submit_theme(
-        conn, SETTINGS, guild_id, user_id, title, "The idea"
+        conn, SETTINGS, guild_id, user_id, title, "The Idea"
     ).submission_id
 
 

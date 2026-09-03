@@ -507,25 +507,25 @@ def test_question_prompt_warns_that_a_reply_overwrites():
 
 def test_question_prompt_shows_the_current_answer():
     embed = _question_prompt("Cold pizza, no notes.")
-    assert _field_values(embed)["Current answer"] == "Cold pizza, no notes."
+    assert _field_values(embed)["Current Answer"] == "Cold pizza, no notes."
 
 
 def test_question_prompt_stays_quiet_for_a_first_answer():
     embed = _question_prompt("")
     assert "replaces" not in (embed.description or "")
-    assert "Current answer" not in _field_values(embed)
+    assert "Current Answer" not in _field_values(embed)
 
 
 def test_question_prompt_truncates_a_long_current_answer():
     embed = _question_prompt("x" * 2000)
-    assert len(_field_values(embed)["Current answer"]) == 1024
+    assert len(_field_values(embed)["Current Answer"]) == 1024
 
 
 def test_field_prompt_warns_and_names_keep_when_editing_over_a_value():
     embed = _field_prompt(_field(1, "Pronouns"), prior="she/her")
     assert "replaces" in (embed.description or "")
     assert "Keep" in (embed.description or "")
-    assert _field_values(embed)["Current answer"] == "she/her"
+    assert _field_values(embed)["Current Answer"] == "she/her"
 
 
 def test_field_prompt_keeps_its_type_guidance_alongside_the_warning():
@@ -552,4 +552,4 @@ def test_field_prompt_warning_says_picking_for_a_choice_field():
 def test_field_prompt_stays_quiet_when_theres_nothing_to_overwrite(prior, editing):
     embed = _field_prompt(_field(1, "Pronouns"), prior=prior, editing=editing)
     assert "replaces" not in (embed.description or "")
-    assert "Current answer" not in _field_values(embed)
+    assert "Current Answer" not in _field_values(embed)

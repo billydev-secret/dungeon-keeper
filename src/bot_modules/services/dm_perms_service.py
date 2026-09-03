@@ -773,7 +773,7 @@ def build_panel_embed(
         inline=False,
     )
     embed.add_field(
-        name="💬 DM vs Friend Request — what's the difference?",
+        name="💬 DM vs Friend Request — What's the Difference?",
         value=(
             "**Direct Message** — You just want to chat with them on this server. "
             "This does *not* send a Discord friend request; it only grants permission within this community.\n\n"

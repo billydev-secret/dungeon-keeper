@@ -87,7 +87,7 @@ def build_embed(
     )
     embed.add_field(name="Duration", value=_format_duration(length_ms), inline=True)
     embed.add_field(
-        name="In queue",
+        name="In Queue",
         value=str(len(queue.tracks)),
         inline=True,
     )

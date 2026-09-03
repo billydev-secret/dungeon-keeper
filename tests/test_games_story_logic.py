@@ -454,7 +454,7 @@ def test_build_turn_embed_renders_progress_and_writer():
     )
     by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert by_name["Progress"] == "Sentence 3/10"
-    assert "Alice" in by_name["Currently writing"]
+    assert "Alice" in by_name["Currently Writing"]
 
 
 def test_build_turn_embed_highlights_active_writer_in_order():

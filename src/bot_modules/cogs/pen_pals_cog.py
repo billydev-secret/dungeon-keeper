@@ -1444,7 +1444,7 @@ async def _notify_expiry(
                 db_path=db_path,
                 guild=guild,
                 embed=discord.Embed(
-                    title="🖊️ Your pen pal channel has closed",
+                    title="🖊️ Your Pen Pal Channel Has Closed",
                     description=body,
                 ),
                 **(cast("dict[str, Any]", {"view": view} if view is not None else {})),
@@ -2185,7 +2185,7 @@ class _PenPalsDMJoinButton(
         self.guild_id = guild_id
         super().__init__(
             discord.ui.Button(
-                label="Join the pool",
+                label="Join the Pool",
                 emoji="✉️",
                 style=discord.ButtonStyle.success,
                 custom_id=f"pen_pals:dm:join:{guild_id}",
@@ -2211,7 +2211,7 @@ class _PenPalsDMLeaveButton(
         self.guild_id = guild_id
         super().__init__(
             discord.ui.Button(
-                label="Leave the pool",
+                label="Leave the Pool",
                 emoji="🚪",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"pen_pals:dm:leave:{guild_id}",

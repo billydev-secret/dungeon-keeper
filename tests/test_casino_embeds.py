@@ -170,7 +170,7 @@ def test_hub_embed_shows_ticker_lines_newest_first():
         ticker=[(2, "slots", 50, 500), (1, "coinflip", 10, 0)],
         name_fn=_named,
     )
-    field = next(f for f in embed.fields if "On the floor" in (f.name or ""))
+    field = next(f for f in embed.fields if "On the Floor" in (f.name or ""))
     assert field.value is not None
     assert field.value.index("Player2") < field.value.index("Player1")
     assert "**500**" in field.value  # the win shows its payout
@@ -181,7 +181,7 @@ def test_hub_embed_omits_empty_ticker():
     from bot_modules.cogs.casino.embeds import build_hub_embed
 
     embed = build_hub_embed(_ECON, CasinoSettings(channel_id=1), None, ticker=[])
-    assert all("On the floor" not in (f.name or "") for f in embed.fields)
+    assert all("On the Floor" not in (f.name or "") for f in embed.fields)
 
 
 def test_ticker_line_marks_push_and_partial_return():
@@ -432,7 +432,7 @@ def test_war_retreat_is_neutral_not_red():
 def test_war_standoff_shows_the_decision_not_a_verdict():
     embed = _war(player="7♠", dealer="7♦")
     names = [f.name for f in embed.fields]
-    assert "A standoff!" in names and "Result" not in names
+    assert "A Standoff!" in names and "Result" not in names
     assert embed.color != discord.Color(COLOR_GREEN)
     assert embed.color != discord.Color(COLOR_RED)
 
@@ -446,12 +446,12 @@ def test_war_result_shows_war_cards_when_drawn():
     assert "9♠" in embed.description and "5♦" in embed.description
 
 
-# ── the hub panel's "Today at the tables" standings ────────────────────
+# ── the hub panel's "Today at the Tables" standings ────────────────────
 
 
 def _standings_field(embed: discord.Embed) -> str | None:
     field = next(
-        (f for f in embed.fields if "Today at the tables" in (f.name or "")),
+        (f for f in embed.fields if "Today at the Tables" in (f.name or "")),
         None,
     )
     return field.value if field is not None else None
@@ -727,7 +727,7 @@ def _result_card() -> discord.Embed:
     """Stand-in for whatever the player already holds, with the two things
     the broadcast must carry over: the description and a result field."""
     embed = discord.Embed(
-        title="🎡 Roulette — no more bets!",
+        title="🎡 Roulette — No More Bets!",
         description="The ball lands on 🔴 **7**.",
         color=COLOR_GREEN,
     )

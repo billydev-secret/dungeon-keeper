@@ -325,9 +325,9 @@ def test_build_queue_embed_with_current_and_items():
         total_pages=1,
         loop_mode_value="off",
     )
-    assert embed.title == "🎶 Music queue"
+    assert embed.title == "🎶 Music Queue"
     fields = {f.name: _unspaced(f.value) for f in embed.fields}
-    assert fields["Now playing"] == "Now: X"
+    assert fields["Now Playing"] == "Now: X"
     assert "Up next (2 total)" in fields
     assert " 1." in fields["Up next (2 total)"]
     assert " 2." in fields["Up next (2 total)"]
@@ -345,7 +345,7 @@ def test_build_queue_embed_without_current_skips_now_playing_field():
         loop_mode_value="off",
     )
     field_names = [f.name for f in embed.fields]
-    assert "Now playing" not in field_names
+    assert "Now Playing" not in field_names
 
 
 def test_build_queue_embed_empty_queue_says_empty():
@@ -359,7 +359,7 @@ def test_build_queue_embed_empty_queue_says_empty():
         loop_mode_value="off",
     )
     fields = {f.name: _unspaced(f.value) for f in embed.fields}
-    assert fields["Up next"] == "(empty)"
+    assert fields["Up Next"] == "(empty)"
 
 
 def test_build_queue_embed_numbers_continue_across_pages():

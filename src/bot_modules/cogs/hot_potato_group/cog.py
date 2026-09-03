@@ -292,7 +292,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
             color=COLOR_RED,
         )
         embed.add_field(name="🏆 Winner", value=winner_name, inline=True)
-        embed.add_field(name="💀 Final loser", value=loser_name, inline=True)
+        embed.add_field(name="💀 Final Loser", value=loser_name, inline=True)
         embed.add_field(name="🥔 Players", value=str(len(game.roster)), inline=True)
 
         end_ts = game.resolved_at or time.time()
@@ -300,7 +300,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         bid = bravest(holds)
         if bid is not None:
             embed.add_field(
-                name="🫡 Bravest hands",
+                name="🫡 Bravest Hands",
                 value=f"**{name(bid)}** held {holds[bid]:.0f}s total",
                 inline=False,
             )

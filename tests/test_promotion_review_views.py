@@ -85,7 +85,7 @@ def test_build_embed_pruned_return_title_and_fields():
     )
     assert "returned" in embed.title.lower()
     names = {f.name for f in embed.fields}
-    assert {"Member", "Level", "Access a sweep removed"} <= names
+    assert {"Member", "Level", "Access a Sweep Removed"} <= names
 
 
 def test_build_embed_sleeper_title_no_prune_field_when_empty():
@@ -99,7 +99,7 @@ def test_build_embed_sleeper_title_no_prune_field_when_empty():
         action_hint="reactivate them",
     )
     assert "sleeper" in embed.title.lower()
-    assert "Access a sweep removed" not in {f.name for f in embed.fields}
+    assert "Access a Sweep Removed" not in {f.name for f in embed.fields}
 
 
 @pytest.mark.parametrize(

@@ -113,7 +113,7 @@ def _theme(db, user_id=REQUESTER, title="Cursed Cooking") -> int:
     _fund(db, user_id)
     with open_db(db) as conn:
         return submit_theme(
-            conn, _settings(db), GUILD_ID, user_id, title, "The idea"
+            conn, _settings(db), GUILD_ID, user_id, title, "The Idea"
         ).submission_id
 
 
@@ -286,7 +286,7 @@ async def test_the_picker_says_so_when_nothing_is_waiting(ctx, db):
     ("kind", "make", "view_cls", "title", "quote"),
     [
         pytest.param(
-            "theme", _theme, ThemeReviewView, "📋 Theme Requested", "The idea",
+            "theme", _theme, ThemeReviewView, "📋 Theme Requested", "The Idea",
             id="theme",
         ),
         pytest.param(

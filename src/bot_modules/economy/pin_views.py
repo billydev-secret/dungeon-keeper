@@ -117,11 +117,11 @@ def render_pin_live_embed(
 ) -> discord.Embed:
     """The card that actually gets pinned in the pin channel."""
     embed = discord.Embed(
-        title="📌 Pinned by a member",
+        title="📌 Pinned by a Member",
         description=message[:2048],
         color=accent,
     )
-    embed.add_field(name="Paid to pin this", value=sponsor_mention, inline=False)
+    embed.add_field(name="Paid to Pin This", value=sponsor_mention, inline=False)
     embed.set_footer(text="Pin of the Day • up for 24 hours")
     embed.timestamp = discord.utils.utcnow()
     return embed

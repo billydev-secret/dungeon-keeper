@@ -86,7 +86,7 @@ def build_intake_embed(
     """Card body. ``resolved`` = ``(resolution, resolver_mention)`` once closed."""
     done, total = svc.count_progress(steps)
     embed = discord.Embed(
-        title="🚪 New arrival — intake",
+        title="🚪 New Arrival — Intake",
         description=f"{member_mention} just joined.\n{progress_bar(done, total)}",
         color=accent,
     )
@@ -95,7 +95,7 @@ def build_intake_embed(
     )
     if account_created_ts is not None:
         embed.add_field(
-            name="Account created", value=f"<t:{int(account_created_ts)}:R>", inline=True
+            name="Account Created", value=f"<t:{int(account_created_ts)}:R>", inline=True
         )
     embed.add_field(
         name="Invited by", value=inviter_mention or "unknown", inline=True

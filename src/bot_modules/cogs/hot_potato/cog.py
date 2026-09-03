@@ -337,7 +337,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                     lines.append(f"**{name}**: +{pts} pts")
             if lines:
                 embed.add_field(
-                    name="✨ Style Points (danger zone)",
+                    name="✨ Style Points (Danger Zone)",
                     value="\n".join(lines),
                     inline=False,
                 )

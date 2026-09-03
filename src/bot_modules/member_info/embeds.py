@@ -149,7 +149,7 @@ def build_member_info_embed(
 
     if optin_rows:
         lines = [f"{row.emoji} **{row.label}** — {row.text}" for row in optin_rows]
-        embed.add_field(name="🔔 Your Opt-ins", value=fit_lines(lines), inline=False)
+        embed.add_field(name="🔔 Your Opt-Ins", value=fit_lines(lines), inline=False)
 
     if help_lines:
         embed.add_field(name="❓ More", value=fit_lines(list(help_lines)), inline=False)

@@ -194,7 +194,7 @@ def build_hub_embed(
     )
     if jackpot is not None:
         embed.add_field(
-            name="💰 Progressive jackpot",
+            name="💰 Progressive Jackpot",
             value=(
                 f"Currently {_coins(econ, jackpot)} — every lost bet feeds "
                 "it, and triple 7️⃣ on the slots takes it ALL.\n​"
@@ -203,7 +203,7 @@ def build_hub_embed(
         )
     if ticker:
         embed.add_field(
-            name="📡 On the floor",
+            name="📡 On the Floor",
             value="\n".join(
                 ticker_line(uid, game, stake, payout, name_fn=name_fn)
                 for uid, game, stake, payout in ticker
@@ -225,7 +225,7 @@ def build_hub_embed(
             )
         if rows:
             embed.add_field(
-                name="📊 Today at the tables",
+                name="📊 Today at the Tables",
                 value="\n".join(rows) + "\n​",
                 inline=False,
             )
@@ -236,7 +236,7 @@ def build_hub_embed(
             f"Daily table limit: **{settings.daily_wager_cap:,}** "
             f"{econ.currency_plural} staked per player"
         )
-    embed.add_field(name="House rules", value=" · ".join(limits), inline=False)
+    embed.add_field(name="House Rules", value=" · ".join(limits), inline=False)
     apply_section_spacing(embed)
     return embed
 
@@ -392,7 +392,7 @@ def build_help_embed(
         )
     if settings.daily_wager_cap:
         embed.add_field(
-            name="Daily limit",
+            name="Daily Limit",
             value=(
                 f"You can stake up to **{settings.daily_wager_cap:,}** "
                 f"{econ.currency_plural} per day across all tables."
@@ -576,7 +576,7 @@ def build_coinflip_spin_embed(
     accent: discord.Color | None, *, name_fn: NameFn = mention,
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="🪙 Coinflip — it's in the air!",
+        title="🪙 Coinflip — It's in the Air!",
         description=(
             f"{name_fn(user_id)} calls **{call}** for {_coins(econ, stake)}…\n"
             "The coin spins high in the air. 🪙"
@@ -628,7 +628,7 @@ def build_blackjack_reveal_embed(
         color=_accent(accent),
     )
     embed.add_field(
-        name="Their hand", value=_hand_line(player) + "\n​", inline=False
+        name="Their Hand", value=_hand_line(player) + "\n​", inline=False
     )
     embed.add_field(
         name="Dealer",
@@ -646,7 +646,7 @@ def build_roulette_bounce_embed(
         f"{_COLOR_DOTS[logic.wheel_color(n)]} {n}" for n in bounce
     )
     embed = discord.Embed(
-        title="🎡 Roulette — no more bets!",
+        title="🎡 Roulette — No More Bets!",
         description=f"The ball dances across the wheel… {frames} …",
         color=_accent(accent),
     )
@@ -703,7 +703,7 @@ def build_blackjack_embed(
         color=color,
     )
     embed.add_field(
-        name="Their hand", value=_hand_line(player) + "\n​", inline=False
+        name="Their Hand", value=_hand_line(player) + "\n​", inline=False
     )
     embed.add_field(
         name="Dealer", value=_hand_line(dealer, hide_hole=live), inline=False
@@ -757,7 +757,7 @@ def build_roulette_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
-        title="🎡 Roulette — bets open!",
+        title="🎡 Roulette — Bets Open!",
         description=(
             f"The wheel spins <t:{int(closes_at)}:R>. "
             "Pick a color, a dozen, or go all-in on a single number.\n​"
@@ -792,7 +792,7 @@ def build_roulette_result_embed(
             "The wheel spins for no one."
         )
     embed = discord.Embed(
-        title="🎡 Roulette — no more bets!",
+        title="🎡 Roulette — No More Bets!",
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
@@ -832,14 +832,14 @@ def build_derby_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, runner description, amount), placement order."""
     embed = discord.Embed(
-        title="🏇 Meadow Derby — they're at the gate!",
+        title="🏇 Meadow Derby — They're at the Gate!",
         description=(
             f"The race starts <t:{int(closes_at)}:R>. "
             "Back a critter — payouts are total return on your bet.\n​"
         ),
         color=_accent(accent),
     )
-    embed.add_field(name="The field", value=_odds_board() + "\n​", inline=False)
+    embed.add_field(name="The Field", value=_odds_board() + "\n​", inline=False)
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
     return embed
 
@@ -858,7 +858,7 @@ def build_derby_race_embed(
     econ: EconSettings, positions: list[int], accent: discord.Color | None
 ) -> discord.Embed:
     embed = discord.Embed(
-        title="🏇 Meadow Derby — and they're off!",
+        title="🏇 Meadow Derby — And They're Off!",
         description=_track_lines(positions),
         color=_accent(accent),
     )
@@ -884,7 +884,7 @@ def build_derby_result_embed(
     if not bets:
         description += " Nobody bet — the critters race for the glory alone."
     embed = discord.Embed(
-        title="🏇 Meadow Derby — photo finish!",
+        title="🏇 Meadow Derby — Photo Finish!",
         description=description + "\n​",
         color=COLOR_GREEN if winners else COLOR_RED,
     )
@@ -927,7 +927,7 @@ def build_baccarat_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, side description, amount), placement order."""
     embed = discord.Embed(
-        title="🎴 Baccarat — bets open!",
+        title="🎴 Baccarat — Bets Open!",
         description=(
             f"The cards come down <t:{int(closes_at)}:R>. "
             "Back the Player, the Banker, or the long-shot Tie — "
@@ -947,7 +947,7 @@ def build_baccarat_deal_embed(
 ) -> discord.Embed:
     """The dealing frame: both starting hands down, draws still to come."""
     embed = discord.Embed(
-        title="🎴 Baccarat — no more bets!",
+        title="🎴 Baccarat — No More Bets!",
         description=(
             f"🔵 Player  {_baccarat_hand_line(player, reveal=2)}\n"
             f"🔴 Banker  {_baccarat_hand_line(banker, reveal=2)}\n"
@@ -999,7 +999,7 @@ def build_baccarat_result_embed(
     paid = [b for b in bets if b[3] > 0]
     losers_total = sum(b[2] for b in bets if b[3] == 0)
     embed = discord.Embed(
-        title="🎴 Baccarat — cards down!",
+        title="🎴 Baccarat — Cards Down!",
         description=description,
         color=COLOR_GREEN if won else COLOR_RED,
     )
@@ -1033,7 +1033,7 @@ def build_dice_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
-        title="🎲 Dice — bets open!",
+        title="🎲 Dice — Bets Open!",
         description=(
             f"Three dice roll <t:{int(closes_at)}:R>. "
             "Call Big, Small, Odd, or Even — but any triple sweeps "
@@ -1050,7 +1050,7 @@ def build_dice_tumble_embed(
 ) -> discord.Embed:
     """The rolling frame — dice still in the air."""
     embed = discord.Embed(
-        title="🎲 Dice — no more bets!",
+        title="🎲 Dice — No More Bets!",
         description="The dice tumble across the felt… 🎲 🎲 🎲 …",
         color=_accent(accent),
     )
@@ -1083,7 +1083,7 @@ def build_dice_result_embed(
     winners = [b for b in bets if b[3] > 0]
     losers_total = sum(b[2] for b in bets if b[3] == 0)
     embed = discord.Embed(
-        title="🎲 Dice — no more bets!",
+        title="🎲 Dice — No More Bets!",
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
@@ -1116,7 +1116,7 @@ def build_keno_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, ticket description, amount), placement order."""
     embed = discord.Embed(
-        title="🔢 Keno — tickets open!",
+        title="🔢 Keno — Tickets Open!",
         description=(
             f"The draw drops <t:{int(closes_at)}:R>. "
             "Pick a tier — the house quick-picks your numbers, fate does "
@@ -1133,7 +1133,7 @@ def build_keno_tumble_embed(
 ) -> discord.Embed:
     """The drawing frame — balls still in the hopper."""
     embed = discord.Embed(
-        title="🔢 Keno — no more tickets!",
+        title="🔢 Keno — No More Tickets!",
         description="The hopper churns… numbers rattling into the chute…",
         color=_accent(accent),
     )
@@ -1168,7 +1168,7 @@ def build_keno_result_embed(
     losers = [b for b in bets if b[3] == 0]
     losers_total = sum(b[2] for b in losers)
     embed = discord.Embed(
-        title="🔢 Keno — the draw is in!",
+        title="🔢 Keno — The Draw Is In!",
         description=description,
         color=COLOR_GREEN if winners else COLOR_RED,
     )
@@ -1258,7 +1258,7 @@ def build_war_embed(
     )
     if live:
         embed.add_field(
-            name="A standoff!",
+            name="A Standoff!",
             value=(
                 "Matched cards. **Go to War** doubles your stake — win *or "
                 "tie* the next card and take 3× your original bet — or "
@@ -1289,7 +1289,7 @@ def build_my_stats_embed(
     accent: discord.Color | None,
 ) -> discord.Embed:
     """The hub's 📊 My Stats ephemeral — personal tally + cap headroom."""
-    embed = discord.Embed(title="📊 Your night at the tables", color=_accent(accent))
+    embed = discord.Embed(title="📊 Your Night at the Tables", color=_accent(accent))
     if stats is not None and int(stats["plays"]) > 0:
         wagered = int(stats["wagered"])
         returned = int(stats["returned"])
@@ -1386,7 +1386,7 @@ def build_pools_panel_embed(
         ),
         color=_accent(accent),
     )
-    embed.add_field(name="Implied odds", value=_pool_bar(prob), inline=False)
+    embed.add_field(name="Implied Odds", value=_pool_bar(prob), inline=False)
     embed.add_field(
         name="Over", value=_coins(econ, split.over), inline=True
     )
@@ -1397,7 +1397,7 @@ def build_pools_panel_embed(
         name="Pool", value=_coins(econ, split.total), inline=True
     )
     embed.add_field(
-        name="How it settles",
+        name="How It Settles",
         value=(
             "Winners split the whole pool pro-rata — you're betting against "
             "the other side, not the house. The bot counts it up when the "
@@ -1507,7 +1507,7 @@ def build_pools_void_embed(
         "to play against"
     )
     return discord.Embed(
-        title="📈 Pools — no market today",
+        title="📈 Pools — No Market Today",
         description=(
             f"The market for **{day}** has been called off: {reason}. All "
             f"**{refunded:,}** staked has been refunded in full.\n​"
@@ -1594,7 +1594,7 @@ def build_mines_embed(
     # than a shrug. A cash-out deliberately does not.
     show_bombs = step.outcome == "bombed"
     embed.add_field(
-        name="The grid",
+        name="The Grid",
         value=(
             _mines_board(step.revealed, step.bomb_tiles if show_bombs else None)
             + "\n​"

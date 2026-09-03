@@ -69,7 +69,7 @@ def test_build_embed_progress_and_fields():
     assert "▰" in (embed.description or "")
     fields = {f.name: f.value for f in embed.fields}
     assert fields["Invited by"] == "<@55>"
-    assert "<t:1600000000:R>" in fields["Account created"]
+    assert "<t:1600000000:R>" in fields["Account Created"]
     assert "⬜ SFW questions asked" in fields["Checklist"]
     assert "Resolved" not in fields
 
@@ -85,7 +85,7 @@ def test_build_embed_unknown_inviter_and_missing_account_ts():
     )
     fields = {f.name: f.value for f in embed.fields}
     assert fields["Invited by"] == "unknown"
-    assert "Account created" not in fields
+    assert "Account Created" not in fields
 
 
 # ── post_intake_card return contract (drives the legacy-ping fallback) ─

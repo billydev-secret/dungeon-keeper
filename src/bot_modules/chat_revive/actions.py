@@ -69,7 +69,7 @@ class ReviveOptInButton(
     def __init__(self, role_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="🔥 Wake me for revives",
+                label="🔥 Wake Me for Revives",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"chat_revive_optin:{role_id}",
             )

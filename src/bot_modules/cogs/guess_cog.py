@@ -1026,7 +1026,7 @@ class CropEditorView(discord.ui.View):
         preview_file = discord.File(io.BytesIO(editor_bytes), filename="preview.jpg")
         await interaction.response.edit_message(
             embed=discord.Embed(
-                title="Crop editor",
+                title="Crop Editor",
                 description="Move/zoom the red box or press Auto to snap to a detection, then ✓ Post",
             ).set_image(url="attachment://preview.jpg"),
             attachments=[preview_file],
@@ -1326,7 +1326,7 @@ async def _pipeline_and_open_editor(
 
     editor_bytes = await asyncio.to_thread(render_crop_editor, image_bytes, initial_crop)
     await interaction.followup.send(
-        embed=discord.Embed(title="Crop editor", description=embed_desc).set_image(
+        embed=discord.Embed(title="Crop Editor", description=embed_desc).set_image(
             url="attachment://preview.jpg"
         ),
         file=discord.File(io.BytesIO(editor_bytes), filename="preview.jpg"),

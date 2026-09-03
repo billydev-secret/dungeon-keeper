@@ -64,7 +64,7 @@ def build_fill_embed(
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Submitted", value=f"{submitted_count} / {player_count}", inline=True)
     if deadline_ts:
-        embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
+        embed.add_field(name="Time Left", value=f"<t:{deadline_ts}:R>", inline=True)
     embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
     apply_section_spacing(embed)
     return embed
@@ -166,8 +166,8 @@ def build_classic_fill_embed(
         color=color if color is not None else PHASE_PLAYING,
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
-    embed.add_field(name="Players done", value=f"{done_count} / {player_count}", inline=True)
-    embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
+    embed.add_field(name="Players Done", value=f"{done_count} / {player_count}", inline=True)
+    embed.add_field(name="Time Left", value=f"<t:{deadline_ts}:R>", inline=True)
     embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
     apply_section_spacing(embed)
     return embed
@@ -195,7 +195,7 @@ def build_classic_rescue_embed(
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(name="Unfilled", value=str(unfilled_count), inline=True)
-    embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
+    embed.add_field(name="Time Left", value=f"<t:{deadline_ts}:R>", inline=True)
     vols_text = ", ".join(volunteer_names) if volunteer_names else "—"
     if len(vols_text) > 1020:
         vols_text = vols_text[:1020] + "…"
@@ -227,11 +227,11 @@ def build_classic_rescue_fill_embed(
     )
     embed.add_field(name="Heat", value=HEAT_LABELS[tier], inline=True)
     embed.add_field(
-        name="Rescuers done",
+        name="Rescuers Done",
         value=f"{rescuers_done} / {rescuers_total}",
         inline=True,
     )
-    embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
+    embed.add_field(name="Time Left", value=f"<t:{deadline_ts}:R>", inline=True)
     apply_section_spacing(embed)
     return embed
 

@@ -276,7 +276,7 @@ def _delete_embed(
 def _summary_embed(description: str) -> discord.Embed:
     """The final result card."""
     return discord.Embed(
-        title="Deletion complete",
+        title="Deletion Complete",
         description=description,
         color=_DONE_COLOR,
     )

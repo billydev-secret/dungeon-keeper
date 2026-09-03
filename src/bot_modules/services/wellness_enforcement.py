@@ -342,7 +342,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     db_path=ctx.db_path,
                     guild=message.guild,
                     embed=discord.Embed(
-                        title="🐢 Slow mode is active",
+                        title="🐢 Slow Mode Is Active",
                         description=(
                             f"Your message was held. You can post again in **{_format_seconds(wait_seconds)}**.\n\n"
                             f"Your message: *{_truncate(message.content, 1500)}*\n\n"
@@ -403,7 +403,7 @@ async def wellness_on_message(ctx, message: discord.Message) -> bool:
                     db_path=ctx.db_path,
                     guild=message.guild,
                     embed=discord.Embed(
-                        title="🐢 Slow mode is now active",
+                        title="🐢 Slow Mode Is Now Active",
                         description=(
                             f"You've gone over your cap a few times — slow mode is on so you can keep posting at a calmer pace.\n\n"
                             f"You can post again in **{_format_seconds(user.slow_mode_rate_seconds)}**.\n\n"

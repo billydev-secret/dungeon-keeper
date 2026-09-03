@@ -126,7 +126,7 @@ def build_field_prompt_embed(
     e = discord.Embed(title=field.label, color=embed_color)
     if replacing:
         e.add_field(
-            name="Current answer",
+            name="Current Answer",
             value=prior[:_FIELD_VALUE_LIMIT],
             inline=False,
         )
@@ -178,7 +178,7 @@ def build_question_prompt_embed(
     e = discord.Embed(title=question_field_name(question.prompt), color=embed_color)
     if existing:
         e.add_field(
-            name="Current answer",
+            name="Current Answer",
             value=existing[:_FIELD_VALUE_LIMIT],
             inline=False,
         )

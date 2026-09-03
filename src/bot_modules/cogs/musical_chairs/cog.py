@@ -407,7 +407,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 ),
                 color=COLOR_RED,
             )
-            embed.add_field(name="Chairs left", value=str(chairs), inline=True)
+            embed.add_field(name="Chairs Left", value=str(chairs), inline=True)
             embed.add_field(name="Still in", value=alive_names, inline=False)
         else:  # MUSIC
             # Round-active embeds follow the guild accent (resolved once per game

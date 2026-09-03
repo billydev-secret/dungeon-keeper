@@ -60,8 +60,8 @@ def build_profile_show_embed(
         value=_ACCESS_STATE_LABELS.get(access_state, access_state),
         inline=True,
     )
-    embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
-    embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
+    embed.add_field(name="Trusted (Count)", value=str(trusted_count), inline=True)
+    embed.add_field(name="Blocked (Count)", value=str(blocked_count), inline=True)
     apply_section_spacing(embed)
     return embed
 
@@ -170,7 +170,7 @@ def build_howto_embed(
         color=color,
     )
     embed.add_field(
-        name="🔑 Who can get in",
+        name="🔑 Who Can Get In",
         value=(
             "Pick one **access** state:\n"
             "🔓 **Open** — all welcome · 🔞 **NSFW — open** — NSFW, but open\n"

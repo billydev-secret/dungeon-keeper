@@ -787,7 +787,7 @@ class _IconCatalogSelect(discord.ui.Select):
         ]
         options.append(
             discord.SelectOption(
-                label="Custom — upload your own",
+                label="Custom — Upload Your Own",
                 value="custom",
                 emoji="🎨",
                 description=(
@@ -1516,7 +1516,7 @@ class _ShopView(_MemberScopedView):
             actions.append((button, PERK_BLURBS["voice_style"], held_voice))
         if section == SECTION_SERVER and sponsor_enabled(settings):
             button = discord.ui.Button(
-                label="💬 Sponsor a question",
+                label="💬 Sponsor a Question",
                 style=discord.ButtonStyle.primary,
                 custom_id="econ_shop_sponsor",
             )
@@ -1526,7 +1526,7 @@ class _ShopView(_MemberScopedView):
             ))
         if section == SECTION_SERVER and pin_enabled(settings):
             button = discord.ui.Button(
-                label="📌 Pin a message",
+                label="📌 Pin a Message",
                 style=discord.ButtonStyle.primary,
                 custom_id="econ_shop_pin",
             )
@@ -1537,7 +1537,7 @@ class _ShopView(_MemberScopedView):
             # a product a member can only reach by knowing a command's name is
             # one most of them never find.
             button = discord.ui.Button(
-                label="🎭 Themed day",
+                label="🎭 Themed Day",
                 style=discord.ButtonStyle.primary,
                 custom_id="econ_shop_theme",
             )

@@ -104,7 +104,7 @@ def build_review_embed(content: str, created_at: int, accent) -> discord.Embed:
     card failed to load one.
     """
     embed = discord.Embed(
-        title="🕵️ Confession awaiting approval",
+        title="🕵️ Confession Awaiting Approval",
         description=content[:4000],
         color=accent,
         timestamp=discord.utils.utcnow(),

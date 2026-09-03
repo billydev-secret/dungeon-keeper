@@ -48,10 +48,10 @@ def build_queue_embed(
     """
     if color is None:
         color = discord.Color(_EMBED_COLOR)
-    embed = discord.Embed(title="🎶 Music queue", color=color)
+    embed = discord.Embed(title="🎶 Music Queue", color=color)
 
     if current_summary is not None:
-        embed.add_field(name="Now playing", value=current_summary, inline=False)
+        embed.add_field(name="Now Playing", value=current_summary, inline=False)
 
     if item_summaries:
         lines = [
@@ -64,7 +64,7 @@ def build_queue_embed(
             inline=False,
         )
     else:
-        embed.add_field(name="Up next", value="(empty)", inline=False)
+        embed.add_field(name="Up Next", value="(empty)", inline=False)
 
     embed.set_footer(text=f"Page {page}/{total_pages} • loop: {loop_mode_value}")
     apply_section_spacing(embed)
