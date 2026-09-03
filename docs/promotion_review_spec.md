@@ -4,8 +4,19 @@
 
 The **Level 5 Log Channel** (`xp_level_5_log_channel_id`) is the
 promotion-reviews channel. Three triggers post a review card there, each
-carrying a persistent **Grant access** button (survives restarts) so a roles
+carrying a persistent **Grant** button (survives restarts) so a roles
 manager can action a return without leaving Discord — no slash commands.
+
+The button is **labelled with the role it grants** — `Grant <role name>`,
+resolved from `promotion_review_grant_role_id` when the card is posted. A
+generic "Grant access" tells a reviewer nothing about what they are handing
+over, and a guild whose dial points at the wrong role only finds out from the
+audit log afterwards. It falls back to **"Grant access"** in three cases: no
+grant role configured, a dial pointing at a deleted role, and the **sleeper**
+card, whose Grant runs a full reactivate rather than adding the configured role.
+Labels are truncated to Discord's 80-character ceiling. The label is fixed at
+post time — cards posted before a dial change keep the old wording, since the
+rendered message carries the label, not the reconstructed view.
 
 ## Triggers
 

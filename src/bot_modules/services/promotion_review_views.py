@@ -263,6 +263,29 @@ def _forget_level_5_card(ctx: AppContext, card_id: int) -> None:
         svc.forget_level_5_card(conn, card_id)
 
 
+#: Discord truncates a button label past 80 characters.
+_LABEL_MAX = 80
+GRANT_LABEL_DEFAULT = "Grant access"
+
+
+def grant_label(role: discord.Role | None) -> str:
+    """Button label naming the role the press actually hands out.
+
+    A generic "Grant access" tells a reviewer nothing about what they are about
+    to give away — a guild whose ``promotion_review_grant_role_id`` points at
+    the wrong role finds out only afterwards, from the audit log. Naming the
+    role puts the mistake in front of the press instead of behind it.
+
+    Falls back to the generic wording when no grant role is configured or it has
+    since been deleted, and for the sleeper card, whose Grant runs a full
+    reactivate rather than adding the configured role.
+    """
+    if role is None:
+        return GRANT_LABEL_DEFAULT
+    label = f"Grant {role.name}"
+    return label if len(label) <= _LABEL_MAX else label[: _LABEL_MAX - 1] + "…"
+
+
 # ---------------------------------------------------------------------------
 # Persistent buttons — ledger-backed (pruned-return + sleeper)
 # ---------------------------------------------------------------------------
@@ -274,10 +297,10 @@ class GrantAccessButton(
 ):
     """Pruned-return: re-add the configured role. Sleeper: full reactivate."""
 
-    def __init__(self, card_id: int) -> None:
+    def __init__(self, card_id: int, label: str = GRANT_LABEL_DEFAULT) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Grant access",
+                label=label,
                 emoji="✅",
                 style=discord.ButtonStyle.success,
                 custom_id=f"promo_review:grant:{card_id}",
@@ -325,9 +348,9 @@ class DismissButton(
 class ReviewCardView(discord.ui.View):
     """Persistent Grant/Dismiss pair for one ledger-backed card."""
 
-    def __init__(self, card_id: int) -> None:
+    def __init__(self, card_id: int, label: str = GRANT_LABEL_DEFAULT) -> None:
         super().__init__(timeout=None)
-        self.add_item(GrantAccessButton(card_id))
+        self.add_item(GrantAccessButton(card_id, label))
         self.add_item(DismissButton(card_id))
 
 
@@ -342,10 +365,10 @@ class Level5GrantButton(
 ):
     """Grant the configured access role to the Level 5 promotion candidate."""
 
-    def __init__(self, user_id: int) -> None:
+    def __init__(self, user_id: int, label: str = GRANT_LABEL_DEFAULT) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Grant access",
+                label=label,
                 emoji="✅",
                 style=discord.ButtonStyle.success,
                 custom_id=f"promo_review:l5grant:{user_id}",
@@ -366,9 +389,9 @@ class Level5GrantButton(
 class Level5PromotionView(discord.ui.View):
     """Persistent single Grant button for a Level 5 promotion card."""
 
-    def __init__(self, user_id: int) -> None:
+    def __init__(self, user_id: int, label: str = GRANT_LABEL_DEFAULT) -> None:
         super().__init__(timeout=None)
-        self.add_item(Level5GrantButton(user_id))
+        self.add_item(Level5GrantButton(user_id, label))
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +433,7 @@ async def post_review_card(
                 svc.pruned_roles_for(conn, guild_id, user_id),
                 svc.member_level(conn, guild_id, user_id),
                 svc.ping_role_ids(conn, guild_id),
+                svc.grant_role_id(conn, guild_id),
             )
 
     try:
@@ -424,7 +448,9 @@ async def post_review_card(
             svc.discard(guild_id, user_id)
         return
 
-    _, kind, card_id, review_ch_id, pruned_roles, level, fallback_ping = prepared
+    (
+        _, kind, card_id, review_ch_id, pruned_roles, level, fallback_ping, grant_role_id
+    ) = prepared
 
     channel = guild.get_channel(review_ch_id)
     if not isinstance(channel, discord.abc.Messageable):
@@ -449,10 +475,18 @@ async def post_review_card(
     ping_roles = [provisioned.id] if provisioned is not None else fallback_ping
 
     accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
+    # Only the pruned-return Grant hands out the configured role; the sleeper
+    # Grant runs a full reactivate, so naming a role on it would be a lie.
+    grant_role = (
+        guild.get_role(grant_role_id)
+        if kind == svc.KIND_PRUNED_RETURN and grant_role_id > 0
+        else None
+    )
+    label = grant_label(grant_role)
     hint = (
-        "Grant access re-adds the role and closes this out."
+        f"{label} re-adds the role and closes this out."
         if kind == svc.KIND_PRUNED_RETURN
-        else "Grant access reactivates them (restores their roles)."
+        else f"{label} reactivates them (restores their roles)."
     )
     embed = build_review_embed(
         accent,
@@ -466,7 +500,7 @@ async def post_review_card(
     try:
         posted = await channel.send(
             embed=embed,
-            view=ReviewCardView(card_id),
+            view=ReviewCardView(card_id, label),
             **ping_send_kwargs(ping_roles),
         )
     except discord.HTTPException:
