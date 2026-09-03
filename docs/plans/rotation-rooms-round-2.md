@@ -1,8 +1,16 @@
 # Rotation Rooms — Round 2: Superlatives, Sealed Envelopes, Second Sight (v2)
 
-**Status:** DESIGN — proposal, no code. Target plan doc: `docs/plans/rotation-rooms-round-2.md`.
+**Status:** DESIGN — proposal, no code. Build plan: [rotation-rooms-round-2-build.md](rotation-rooms-round-2-build.md).
 **Written:** 2026-09-02. v2 folds in the adversarial review of the same day.
 **INDEX.md classification on land:** Design.
+**Reading rule:** the text below is the v2 spec as written. The build plan's §2 verifies
+every seam named here against `src/` and lists the rows it corrects (C1–C24); **where a
+row there disagrees with a line here, the plan wins**, and §4 (build order) and §5
+(verify before build) below are superseded by the plan's §4 and §2. In particular:
+`/rooms <room>` replaces the three top-level commands; the `*_paid` tables are
+`econ_<room>_rewards`; Superlatives has no `season_length_cycles`; `envelope_review`
+is not built; §2.7's `/delete_me` row means erasure (`purge_user_data`); and the
+`Testing:` rule in §4 is CLAUDE.md's — user-facing commits only, not every behaviour change.
 
 > House-rules reminder for whoever implements this: the code wins over any spec, so every
 > existing seam named below (`pay_game_rewards`, `anon_audit_log`, the no-contact service,
