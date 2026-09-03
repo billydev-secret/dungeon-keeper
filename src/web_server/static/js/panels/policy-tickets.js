@@ -11,6 +11,7 @@
  * is refused server-side regardless.
  */
 import { mountTickets } from "./mod-policy-tickets.js";
+import { mountBallots } from "./policy-ballots.js";
 import { mountSettings } from "./policy-tickets-settings.js";
 
 export function mount(container) {
@@ -18,22 +19,26 @@ export function mount(container) {
     <div class="panel">
       <header>
         <h2>Policy Tickets</h2>
-        <div class="subtitle">Proposed policy changes, how the votes went, and how long the team gets to vote</div>
+        <div class="subtitle">Proposed policy changes, how the mod team and the community voted, and how long a vote runs</div>
       </header>
       <section data-region="tickets"></section>
+      <section data-region="ballots" style="margin-top:32px;"></section>
       <section data-region="settings" style="margin-top:32px;"></section>
     </div>
   `;
 
   // mountTickets arms a 45s refresh poll and hands back the handle that clears
   // it. Dropping that handle left one poll per visit running forever — forward
-  // it, the way the queue pages do.
+  // it, the way the queue pages do. mountBallots polls on the same cadence and
+  // is forwarded for the same reason.
   const tickets = mountTickets(container.querySelector('[data-region="tickets"]'));
+  const ballots = mountBallots(container.querySelector('[data-region="ballots"]'));
   mountSettings(container.querySelector('[data-region="settings"]'));
 
   return {
     unmount() {
       tickets?.unmount?.();
+      ballots?.unmount?.();
     },
   };
 }

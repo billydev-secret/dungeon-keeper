@@ -1014,6 +1014,105 @@ def test_policy_tickets_filter_by_status(open_client, fake_ctx):
     assert {t["status"] for t in body["policy_tickets"]} == {"voting"}
 
 
+
+# ── Community ballots ────────────────────────────────────────────────
+
+
+def _seed_ballot(db_path, *, guild_id, question="Quiet hours?", closes_at=0.0):
+    from bot_modules.services.moderation import create_policy_ticket
+    from bot_modules.services import policy_ballot_service as pbs
+
+    with open_db(db_path) as conn:
+        policy_id = create_policy_ticket(
+            conn, guild_id=guild_id, creator_id=7, channel_id=0,
+            title=question, description="",
+        )
+        return pbs.open_ballot(
+            conn, guild_id=guild_id, policy_id=policy_id, channel_id=500,
+            question=question, opened_by=7, closes_at=closes_at, now=1000.0,
+        )
+
+
+def test_policy_ballots_lists_an_open_ballot_with_its_live_tally(open_client, fake_ctx):
+    from bot_modules.services import policy_ballot_service as pbs
+
+    ballot_id = _seed_ballot(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    with open_db(fake_ctx.db_path) as conn:
+        for uid, choice in ((1, "yes"), (2, "yes"), (3, "no"), (4, "abstain")):
+            pbs.cast_ballot_vote(
+                conn, ballot_id=ballot_id, guild_id=fake_ctx.guild_id,
+                user_id=uid, choice=choice, now=1100.0,
+            )
+
+    body = open_client.get("/api/moderation/policy-ballots").json()
+
+    assert body["total_count"] == 1
+    assert body["open_count"] == 1
+    entry = body["ballots"][0]
+    assert (entry["yes_count"], entry["no_count"], entry["abstain_count"]) == (2, 1, 1)
+    assert entry["outcome"] == ""
+    # Fully public by decision: the tally card in Discord already names every
+    # voter, so the panel showing them is not a privileged disclosure.
+    assert {v["user_id"] for v in entry["votes"]} == {"1", "2", "3", "4"}
+
+
+def test_policy_ballots_reports_the_frozen_counts_of_a_closed_ballot(
+    open_client, fake_ctx
+):
+    """Not re-derived from the vote rows: a member erased after the ballot
+    closed must not be able to move a result that was already announced."""
+    from bot_modules.services import policy_ballot_service as pbs
+
+    ballot_id = _seed_ballot(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    with open_db(fake_ctx.db_path) as conn:
+        for uid, choice in ((1, "yes"), (2, "yes"), (3, "no")):
+            pbs.cast_ballot_vote(
+                conn, ballot_id=ballot_id, guild_id=fake_ctx.guild_id,
+                user_id=uid, choice=choice, now=1100.0,
+            )
+        pbs.close_ballot(conn, ballot_id, closed_by=9, now=1500.0)
+        conn.execute(
+            "DELETE FROM policy_ballot_votes WHERE ballot_id = ? AND user_id = 1",
+            (ballot_id,),
+        )
+
+    entry = open_client.get("/api/moderation/policy-ballots").json()["ballots"][0]
+
+    assert entry["outcome"] == "passed"
+    assert (entry["yes_count"], entry["no_count"]) == (2, 1)
+    assert len(entry["votes"]) == 2
+    assert open_client.get("/api/moderation/policy-ballots").json()["open_count"] == 0
+
+
+def test_policy_ballots_is_guild_scoped(open_client, fake_ctx):
+    _seed_ballot(fake_ctx.db_path, guild_id=fake_ctx.guild_id, question="mine")
+    _seed_ballot(fake_ctx.db_path, guild_id=fake_ctx.guild_id + 1, question="theirs")
+
+    body = open_client.get("/api/moderation/policy-ballots").json()
+
+    assert [b["question"] for b in body["ballots"]] == ["mine"]
+
+
+def test_policy_ballot_snowflakes_are_strings(open_client, fake_ctx):
+    """A channel, thread or member id exceeds JavaScript's safe integer range."""
+    from bot_modules.services import policy_ballot_service as pbs
+
+    ballot_id = _seed_ballot(fake_ctx.db_path, guild_id=fake_ctx.guild_id)
+    with open_db(fake_ctx.db_path) as conn:
+        pbs.attach_ballot_message(
+            conn, ballot_id, thread_id=1469491362444480666, message_id=1
+        )
+        pbs.cast_ballot_vote(
+            conn, ballot_id=ballot_id, guild_id=fake_ctx.guild_id,
+            user_id=1469491362444480777, choice="yes", now=1100.0,
+        )
+
+    entry = open_client.get("/api/moderation/policy-ballots").json()["ballots"][0]
+
+    assert entry["thread_id"] == "1469491362444480666"
+    assert entry["opened_by"] == "7"
+    assert entry["votes"][0]["user_id"] == "1469491362444480777"
+
 # ── Transcripts ──────────────────────────────────────────────────────
 
 
@@ -1363,6 +1462,7 @@ def test_confessions_audit_excludes_other_features(open_client, fake_ctx):
         ("GET", "/api/moderation/tickets/1", None),
         ("GET", "/api/moderation/warnings", None),
         ("GET", "/api/moderation/policy-tickets", None),
+        ("GET", "/api/moderation/policy-ballots", None),
         ("GET", "/api/moderation/audit", None),
         ("GET", "/api/moderation/whisper-audit", None),
         ("POST", "/api/moderation/tickets/1/claim", None),

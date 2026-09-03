@@ -1772,6 +1772,7 @@
         <tr><td><strong>Role picks</strong> &mdash; which roles you chose from a role menu, and when you added or removed one</td><td>Keeping the menu in step with the roles you actually hold</td><td>Indefinitely; cleared in full by an erasure request</td></tr>
         <tr><td><strong>Party games</strong> &mdash; duels, group Hot Potato and the rest: who played whom, who won, and any nickname a game imposed on you and for how long</td><td>Running the games &mdash; cooldowns stop the same two people duelling all day, and a nickname has to be remembered to be put back</td><td>Indefinitely; cleared in full by an erasure request, which removes the whole game record rather than leaving one with a hole in it</td></tr>
         <tr><td><strong>Testing sign-offs</strong> (volunteers only) &mdash; if you test a change for the server, which test you signed off, the pass/fail verdict and any note you wrote, and what you were paid</td><td>Running the QA tracker and paying testers</td><td>Indefinitely. An erasure removes your verdicts, your notes and what you were paid; the test itself stays on the board with your name taken off it, so a sign-off someone relied on doesn't vanish</td></tr>
+        <tr><td><strong>Community ballot votes</strong> — how you voted (Yes, No or Abstain) in a <a href="#community-ballots">community ballot</a>, and when. Not anonymous by design: the ballot card in the channel names you while it runs and after it closes</td><td>Running the ballot — one vote each, changeable until it closes, and a public record of what the room decided</td><td>Indefinitely; cleared in full by an erasure request. The ballot's own result — the Yes/No/Abstain totals and whether it passed — is frozen when it closes and is kept: it is a record of a decision the server made, and it names nobody</td></tr>
         <tr><td><strong>Role pings you send</strong> — when you ping a role or <code>@everyone</code>, the fact that you did it, in which channel, and which role. Never what you wrote alongside it</td><td>The <a href="#ping-response">Ping Response</a> report, so moderators can see which roles still bring people and which have been tuned out</td><td>Indefinitely; cleared in full by an erasure request. Nobody is recorded for <em>answering</em> a ping — turnout is counted from messages and reactions already held, and only ever as a number</td></tr>
         <tr><td><strong>Command and panel usage</strong> — which slash commands you run and which dashboard pages you open</td><td>Finding features nobody uses. See <a href="#usage-telemetry">Command &amp; Panel Usage</a></td><td>Indefinitely</td></tr>
         <tr><td><strong>A gender label</strong>, applied by moderators rather than by you</td><td>Aggregate server demographics only. It is not shown to members and is not used to decide anything about you</td><td>Indefinitely — ask a mod to change or remove yours</td></tr>
@@ -2126,7 +2127,30 @@
     <div class="cmd-block">
       <span class="cmd-name">/policy vote &nbsp;&nbsp; /policy close &nbsp;&nbsp; /policy list</span>
       <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
-      <span class="cmd-desc"><strong>vote</strong> starts the formal vote on a proposal. <strong>close</strong> closes a proposal without voting (admin only). <strong>list</strong> shows all passed policies.</span>
+      <span class="cmd-desc"><strong>vote</strong> starts the formal vote on a proposal. <strong>close</strong> closes a proposal without voting (admin only) — run inside a community ballot's thread it cancels that ballot instead, recording the votes cast so far without declaring a result. <strong>list</strong> shows all passed policies.</span>
+    </div>
+
+    <h4 id="community-ballots">Community Ballots — putting a question to members</h4>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/policy ballot</span>
+      <span class="cmd-perm"><span class="perm perm-admin">Admin</span></span>
+      <span class="cmd-desc">Opens a thread in the channel you run it in and posts a ballot card with <strong>Yes</strong>, <strong>No</strong> and <strong>Abstain</strong> buttons. A modal asks for the one question members vote on — that question is the only thing the ballot carries, so nothing from a private policy channel goes with it. Run it in a normal text channel; a ballot can't open a thread inside a thread or a forum post.</span>
+      <div class="cmd-params">
+        <strong>Who votes</strong> — anyone who can see the thread. There is no role setting: to hold a veterans-only vote, launch the ballot in a veterans-only channel.<br>
+        <strong>How it's decided</strong> — a simple majority of the people who took a side. Abstaining counts toward neither Yes nor No. <strong>A tie fails</strong>, and so does a ballot nobody voted in. There is no minimum turnout.<br>
+        <strong>How long it runs</strong> — the same Voting Deadline the mod team's proposals use (Moderation → Policy Tickets, 72 hours by default). Any moderator can end it early with the <strong>Close Ballot</strong> button on the card; if the deadline is set to 0, that button is the only way it ends.<br>
+        <strong>What passing means</strong> — the result is <strong>recorded, not enacted</strong>. Nothing becomes a server policy automatically; a moderator decides whether to turn a passed ballot into one.
+      </div>
+    </div>
+
+    <div class="callout callout-warn">
+      <span class="callout-icon">🗳️</span>
+      <div class="callout-body">
+        <strong>Your vote in a community ballot is public</strong>
+        <p>This is not an anonymous poll. The ballot card names everyone who voted Yes, No and Abstain, updates as people vote, and stays in the thread afterwards as the record of what the room decided. You can change your vote any time before the ballot closes — press a different button and it replaces the old one.</p>
+        <p>Ballots never DM anyone and never ping anyone, including the people who haven't voted.</p>
+      </div>
     </div>
 
     <!-- ══════════════════════════════════════════════════════════
@@ -2987,7 +3011,7 @@
         <tr><td><strong><a href="/#/grant-audit">Grant Audit</a></strong></td><td>Members missing a grant role, split into waiting-for-first-grant, stripped-by-inactivity-but-returned, and recently stripped (still inactive)</td></tr>
         <tr><td><strong><a href="/#/xp-leaderboard">XP &amp; Leveling</a></strong></td><td>Moved to Reports → Engagement, alongside the leaderboard: Level-5 milestone role, XP announcement channels, channels excluded from XP</td></tr>
         <tr><td><strong><a href="/#/config-moderation">Moderation</a></strong></td><td>Jail category, ticket category, policy channels, warning thresholds</td></tr>
-        <tr><td><strong><a href="/#/mod-policy-tickets">Policy Tickets</a></strong></td><td>Moved to Moderation, below the proposal list: mod-team voting deadline</td></tr>
+        <tr><td><strong><a href="/#/mod-policy-tickets">Policy Tickets</a></strong></td><td>Moved to Moderation, below the proposal list: community ballots and their tallies, plus the voting deadline both the mod-team vote and a ballot run on</td></tr>
         <tr><td><strong><a href="/#/config-prune">Auto-Remove Role (Inactive)</a></strong></td><td>Inactivity pruning threshold, exemptions, and next-run preview</td></tr>
         <tr><td><strong><a href="/#/config-inactive">Inactive Sweep</a></strong></td><td>Idle-day threshold, per-run cap, automatic-sweep toggle, per-member exemptions, and a dry-run listing of who would be swept right now, for the shared <a href="#inactive">Inactive Members</a> channel</td></tr>
         <tr><td><strong><a href="/#/config-rules-watch">Rules Watch</a></strong></td><td>Enable/disable passive monitoring, set the immediate-alert channel, and — on the primary server, under a <strong>Guard Instructions</strong> card — the guard's own system prompt, moved here from the AI Models page. The alert queue itself stayed put on <a href="/#/rules-watch">Moderation → Rules Watch</a></td></tr>

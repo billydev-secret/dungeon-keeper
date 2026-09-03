@@ -352,6 +352,14 @@ _HTML_COLUMNS = {
     # way in, and the link text is the fixed literal "Open" — no member text
     # reaches this cell
     ("ping-response.js", "message_id"),
+    # outcome badge: the class name is one of four literals picked by an
+    # if/else over the row's own outcome, and the fallback branch esc()s. No
+    # member-supplied text reaches it — the ballot's question is a separate,
+    # escaped column.
+    ("policy-ballots.js", "closed_at"),
+    # roll-call button keyed by the ballot's integer row id, Number()-coerced
+    # into a data-* attribute
+    ("policy-ballots.js", "id"),
 }
 
 
