@@ -15,6 +15,7 @@ from __future__ import annotations
 import discord
 
 from bot_modules.games.constants import BRAND_COLOR
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_session_recap_embed(
@@ -59,4 +60,5 @@ def build_session_recap_embed(
         )
 
     embed.set_footer(text="Community Games • Session Recap")
+    apply_section_spacing(embed)
     return embed

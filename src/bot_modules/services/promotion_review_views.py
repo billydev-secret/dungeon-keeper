@@ -34,6 +34,7 @@ from bot_modules.core.utils import get_guild_channel_or_thread
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -128,6 +129,7 @@ def build_review_embed(
             svc.RESOLUTION_DISMISSED: "🚫 Dismissed",
         }.get(resolution, "Resolved")
         embed.add_field(name="Resolved", value=f"{verb} by {resolver}", inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

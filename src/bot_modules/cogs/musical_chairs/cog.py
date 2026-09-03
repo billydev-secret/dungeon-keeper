@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -425,6 +426,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
 
         stakes = game.stakes_text or "Last seated wins; the runner-up surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
+        apply_section_spacing(embed)
         return embed
 
     def render_result_state(
@@ -480,6 +482,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
                 ),
                 inline=False,
             )
+        apply_section_spacing(embed)
         return embed
 
     def build_game_view(self, game_id: int) -> SitView:

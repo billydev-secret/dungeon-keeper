@@ -20,6 +20,7 @@ from bot_modules.games.constants import (
     PHASE_PLAYING,
 )
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_wyr_embed(
@@ -74,6 +75,7 @@ def build_wyr_embed(
     embed.add_field(name="Votes", value=f"{a_label}\n{b_label}", inline=False)
     anon_badge = " • 👁 Anonymous" if anonymous else ""
     embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather • Round {round_num}{anon_badge}")
+    apply_section_spacing(embed)
     return embed
 
 

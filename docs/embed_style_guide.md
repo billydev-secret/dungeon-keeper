@@ -186,9 +186,16 @@ Which embed slot does which job:
 - Builders that assemble a `discord.Embed` directly should call
   `apply_section_spacing(embed)` (`bot_modules.core.branding`, exposing
   `SECTION_SPACER`) once after adding fields — it appends the spacer to every
-  field but the last, idempotently. String-layer builders that return
+  stacked field but the last, idempotently. String-layer builders that return
   `(name, value)` pairs (login digest, weekly leaderboard) stay
   Discord-object-free and append the same `"\n​"` spacer themselves.
+- **`inline=True` fields are skipped** (ruling 2026-09-03). The spacer stops a
+  section heading hugging the value above it, and an inline field has no
+  heading below it — it sits *beside* its neighbours, and Discord starts a
+  fresh row for whatever follows the group. Spacing one only makes its box
+  taller, which on a three-across row is dead height on every card. Because the
+  helper handles that itself, **every** multi-field builder calls it; there is
+  no "this card has triples so leave it alone" exemption to reason about.
 
 ## Tables & column alignment
 
@@ -504,8 +511,9 @@ overclaimed, and review caught it:
   hands it over later is covered (`todo/board_logic.render_board_footer` and
   `economy/game_rewards.append_payout_footer` were both invisible before).
   Footer text assembled under some other name still slips through.
-- Cards mixing `inline=True` triples are deliberately outside the spacing
-  sweep — that one is a layout judgement, not a mechanical rule.
+- The spacing sweep covers **every** builder with two or more fields. It used
+  to exempt cards with `inline=True` triples; the helper skips those fields
+  itself now, so the exemption is gone.
 
 ### Closed by the 2026-09-02 sweep (verified zero — don't go looking)
 

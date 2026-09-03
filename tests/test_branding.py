@@ -53,6 +53,38 @@ def test_preserves_field_name_and_inline_flag():
     assert embed.fields[0].value == "a" + SECTION_SPACER
 
 
+def test_inline_fields_are_skipped():
+    """An inline field has no heading below it — it sits beside its neighbours.
+
+    Spacing one only makes its box taller, so a three-across row would carry
+    dead height on every card. Skipping them is what lets the helper be applied
+    to every builder rather than only the all-stacked ones (ruling 2026-09-03).
+    """
+    embed = discord.Embed(title="t")
+    embed.add_field(name="Host", value="a", inline=True)
+    embed.add_field(name="Hot Seat", value="b", inline=True)
+    embed.add_field(name="Mode", value="c", inline=True)
+    embed.add_field(name="Rules", value="d", inline=False)
+    embed.add_field(name="Players", value="e", inline=False)
+
+    apply_section_spacing(embed)
+
+    assert [f.value for f in embed.fields[:3]] == ["a", "b", "c"]
+    # The stacked section before the last one still gets its breathing room.
+    assert embed.fields[3].value == "d" + SECTION_SPACER
+    assert embed.fields[4].value == "e"
+
+
+def test_a_card_of_only_inline_fields_is_untouched():
+    embed = discord.Embed(title="t")
+    for name, value in (("Yes", "3"), ("No", "1"), ("Abstain", "0")):
+        embed.add_field(name=name, value=value, inline=True)
+
+    apply_section_spacing(embed)
+
+    assert [f.value for f in embed.fields] == ["3", "1", "0"]
+
+
 def test_single_field_is_untouched():
     embed = apply_section_spacing(_embed("only"))
     assert embed.fields[0].value == "only"

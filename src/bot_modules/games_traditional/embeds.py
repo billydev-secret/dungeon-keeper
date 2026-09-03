@@ -18,6 +18,7 @@ from bot_modules.games_traditional.logic import (
     question_pool_size,
     summarize_asked_by_category,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 # Per-category card styling: (emoji, accent color). Truths are cool-toned
 # and inquisitive; dares are warm-toned and bold; the NSFW variants get
@@ -67,6 +68,7 @@ def build_tod_embed(
         embed.add_field(name=CAT_LABELS[cat], value=value, inline=True)
 
     embed.set_footer(text=_footer_text(payload.get("single_choice", False)))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -106,6 +108,7 @@ def build_recap_embed(
         if count:
             label = CAT_LABELS.get(cat, cat)
             embed.add_field(name=label, value=str(count), inline=True)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -136,6 +139,7 @@ def build_lobby_embed(
     embed.add_field(name="Participants", value="0", inline=True)
     embed.add_field(name="Questions Asked", value="0", inline=True)
     embed.set_footer(text=_footer_text(single_choice))
+    apply_section_spacing(embed)
     return embed
 
 

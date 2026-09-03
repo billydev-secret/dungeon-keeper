@@ -83,6 +83,7 @@ def build_lobby_embed(
         inline=False,
     )
     embed.set_footer(text=f"{ICON} Clapback")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -129,6 +130,7 @@ def build_submit_embed(
             inline=False,
         )
     embed.set_footer(text=f"{ICON} Clapback")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -168,6 +170,7 @@ def build_vote_embed(
     embed.add_field(name="Timer", value=deadline_str, inline=True)
     embed.add_field(name="Votes", value=str(vote_count), inline=True)
     embed.set_footer(text=f"{ICON} Clapback")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -478,4 +481,5 @@ def build_recap_embed(
     embed.set_footer(text=f"{ICON} Clapback")
     # `anonymous` already consumed for best_record; kept for clarity.
     _ = anonymous
+    apply_section_spacing(embed)
     return embed

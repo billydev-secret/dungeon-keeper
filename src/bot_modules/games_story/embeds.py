@@ -16,6 +16,7 @@ from typing import Callable
 import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
+from bot_modules.core.branding import apply_section_spacing
 
 NameResolver = Callable[[int], str]
 
@@ -54,6 +55,7 @@ def build_lobby_embed(
     if start_at:
         embed.add_field(name="⏰ Starting", value=f"<t:{start_at}:R>", inline=True)
     embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -100,6 +102,7 @@ def build_turn_embed(
             order_lines.append(f"  {name}")
     embed.add_field(name="Turn Order", value="\n".join(order_lines), inline=False)
     embed.set_footer(text=f"{GAME_ICONS['story']} Story Builder")
+    apply_section_spacing(embed)
     return embed
 
 

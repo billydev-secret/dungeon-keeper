@@ -21,6 +21,19 @@ from bot_modules.games_wyr.logic import (
     parse_question_input,
     toggle_vote,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Stacked fields carry ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 # ── parse_question_input ─────────────────────────────────────────────
 
@@ -145,7 +158,7 @@ def test_next_button_label_many():
 
 
 def _field_by_name(embed) -> dict[str, str]:
-    return {f.name: f.value for f in embed.fields}
+    return {f.name: _unspaced(f.value) for f in embed.fields}
 
 
 def test_build_wyr_embed_title_when_open():

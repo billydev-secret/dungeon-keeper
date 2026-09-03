@@ -155,6 +155,7 @@ def build_pick_confirm_embed(
         value=strike_hearts(st["strikes_used"], st["strikes_allowed"]),
         inline=True,
     )
+    apply_section_spacing(embed)
     return embed
 
 

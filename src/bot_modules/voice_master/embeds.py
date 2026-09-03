@@ -12,6 +12,7 @@ only builds the embed payload.
 from __future__ import annotations
 
 import discord
+from bot_modules.core.branding import apply_section_spacing
 
 
 # Human labels for the four access states, shown in the profile embed.
@@ -61,6 +62,7 @@ def build_profile_show_embed(
     )
     embed.add_field(name="Trusted (count)", value=str(trusted_count), inline=True)
     embed.add_field(name="Blocked (count)", value=str(blocked_count), inline=True)
+    apply_section_spacing(embed)
     return embed
 
 

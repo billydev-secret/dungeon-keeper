@@ -85,6 +85,7 @@ def build_acceptance_embed(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -105,6 +106,7 @@ def build_denial_embed_for_view(
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
     if reply:
         embed.add_field(name="Your Reply", value=safe_field_text(reply), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -139,6 +141,7 @@ def build_denial_embed_for_requester(
             value=safe_field_text(reply),
             inline=False,
         )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -169,6 +172,7 @@ def build_request_dm_embed(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -196,6 +200,7 @@ def build_request_sent_embed(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -240,6 +245,7 @@ def build_revoked_embed(
     )
     embed.add_field(name="Request Type", value=type_label, inline=True)
     embed.add_field(name="Reason", value=safe_field_text(reason), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

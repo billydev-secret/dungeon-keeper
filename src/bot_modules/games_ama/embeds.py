@@ -19,6 +19,7 @@ import discord
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.games_ama.logic import remaining_questions_text
+from bot_modules.core.branding import apply_section_spacing
 
 # A function that maps a uid (as int) to a display name.
 NameResolver = Callable[[int], str]
@@ -46,6 +47,7 @@ def build_lobby_embed(
     embed.add_field(name="Hot Seat", value="—", inline=True)
     embed.add_field(name="Mode", value=mode, inline=True)
     embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -112,6 +114,7 @@ def build_main_embed(
         )
 
     embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -195,6 +198,7 @@ def build_panel_embed(
         )
 
     embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -309,4 +313,5 @@ def build_recap_embed(
     embed.add_field(name="🔄 Hot Seat Rotations", value=str(rotations), inline=True)
     embed.add_field(name="🎙️ Mode", value=mode.title(), inline=True)
     embed.set_footer(text=f"{GAME_ICONS['ama']} Thanks for playing Anonymous AMA!")
+    apply_section_spacing(embed)
     return embed

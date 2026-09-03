@@ -223,9 +223,19 @@ def apply_section_spacing(embed: discord.Embed) -> discord.Embed:
     login digest (``quest_digest``) and weekly leaderboard already apply at
     their string layer; this is the equivalent for builders that assemble a
     ``discord.Embed`` directly. Returns the same embed for convenient chaining.
+
+    **``inline=True`` fields are skipped.** The spacer exists to stop a section
+    heading hugging the value above it, and an inline field has no heading
+    below it — it sits *beside* its neighbours, and Discord starts a fresh row
+    for whatever follows the group. Spacing one only makes its box taller, and
+    on a three-across row that is dead height on every card. This is what let
+    the helper be applied to every builder rather than only the ones whose
+    fields all stack (ruling 2026-09-03).
     """
     for i in range(len(embed.fields) - 1):
         field = embed.fields[i]
+        if field.inline:
+            continue
         value = field.value or ""
         if not value.endswith(SECTION_SPACER):
             embed.set_field_at(

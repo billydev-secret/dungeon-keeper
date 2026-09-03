@@ -24,6 +24,7 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games_mfk.logic import DEFAULT_LABELS
+from bot_modules.core.branding import apply_section_spacing
 
 
 def _title_for(labels: list[str]) -> str:
@@ -72,6 +73,7 @@ def build_lobby_embed(
         name=f"Pool ({len(participants)})", value=pool_str, inline=False
     )
     embed.set_footer(text=f"{GAME_ICONS['mfk']} {title_str}")
+    apply_section_spacing(embed)
     return embed
 
 

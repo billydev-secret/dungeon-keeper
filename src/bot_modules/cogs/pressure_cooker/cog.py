@@ -213,6 +213,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
                 lines.append(f"{name}: +{entry.roll} → {gauge_after}{bust}")
             embed.add_field(name="Pump Log", value="\n".join(lines), inline=False)
 
+        apply_section_spacing(embed)
         return embed
 
     def build_game_view(self, game_id: int) -> GameView:

@@ -73,6 +73,7 @@ def build_join_embed(
         inline=False,
     )
     embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To")
+    apply_section_spacing(embed)
     return embed
 
 

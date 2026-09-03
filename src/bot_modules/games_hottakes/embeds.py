@@ -46,6 +46,7 @@ def build_lobby_embed(
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Submissions", value=str(submission_count), inline=True)
     embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -149,4 +150,5 @@ def build_recap_embed(
     embed.add_field(
         name="Total Voters", value=str(len(summary["total_voters"])), inline=True
     )
+    apply_section_spacing(embed)
     return embed

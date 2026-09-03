@@ -80,6 +80,19 @@ from bot_modules.voice_master.logic import (
     validate_transfer_target,
     validate_trust_add,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Stacked fields carry ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── classify_claim_attempt ───────────────────────────────────────────
@@ -975,7 +988,7 @@ def test_build_profile_show_embed_uses_template_default_for_empty_name():
         blocked_count=0,
     )
     assert isinstance(embed, discord.Embed)
-    fields = {f.name: f.value or "" for f in embed.fields}
+    fields = {f.name: _unspaced(f.value) for f in embed.fields}
     assert "*(template default)*" in fields["Saved Name"]
     assert fields["User Limit"] == "no cap"
     assert "Open" in fields["Access"]
@@ -991,7 +1004,7 @@ def test_build_profile_show_embed_renders_saved_name():
         trusted_count=3,
         blocked_count=1,
     )
-    fields = {f.name: f.value or "" for f in embed.fields}
+    fields = {f.name: _unspaced(f.value) for f in embed.fields}
     assert fields["Saved Name"] == "my room"
     assert fields["User Limit"] == "5"
     assert "locked" in fields["Access"].lower()

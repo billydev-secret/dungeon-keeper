@@ -127,6 +127,7 @@ def build_join_embed(
         name=f"Players ({len(player_names)})", value=pool_str, inline=False,
     )
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 

@@ -32,6 +32,7 @@ from bot_modules.economy.intake_rewards import pay_intake_steps
 from bot_modules.economy.leaderboard import progress_bar
 from bot_modules.services import intake_service as svc
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -107,6 +108,7 @@ def build_intake_embed(
         embed.add_field(
             name="Resolved", value=headline.format(by=resolver), inline=False
         )
+    apply_section_spacing(embed)
     return embed
 
 

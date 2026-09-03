@@ -53,6 +53,7 @@ from bot_modules.economy.view_helpers import (
     refresh_todo_board,
     review_surface,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -104,6 +105,7 @@ def render_pin_review_embed(
         )
     if state != "pending":
         embed.timestamp = discord.utils.utcnow()
+    apply_section_spacing(embed)
     return embed
 
 

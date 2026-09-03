@@ -2,6 +2,7 @@ import re
 import discord
 from bot_modules.games.constants import GAME_ICONS, PHASE_JOINING, PHASE_PLAYING, PHASE_RESULTS, PHASE_RECAP
 from .data import HEAT_LABELS, HEAT_ICONS
+from bot_modules.core.branding import apply_section_spacing
 
 _MARKER_RE = re.compile(r"\{(\w+)\}")
 _GAME_NAME = "LegitLibs"
@@ -37,6 +38,7 @@ def build_join_embed(
         inline=False,
     )
     embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -64,6 +66,7 @@ def build_fill_embed(
     if deadline_ts:
         embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
     embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -166,6 +169,7 @@ def build_classic_fill_embed(
     embed.add_field(name="Players done", value=f"{done_count} / {player_count}", inline=True)
     embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
     embed.set_footer(text=f"{_ICON} {_GAME_NAME} • Host: {host_name}")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -200,6 +204,7 @@ def build_classic_rescue_embed(
         value=vols_text,
         inline=False,
     )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -227,6 +232,7 @@ def build_classic_rescue_fill_embed(
         inline=True,
     )
     embed.add_field(name="Time left", value=f"<t:{deadline_ts}:R>", inline=True)
+    apply_section_spacing(embed)
     return embed
 
 

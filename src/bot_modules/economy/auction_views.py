@@ -53,6 +53,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
     notify_member,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -169,6 +170,7 @@ def render_auction_card(
             ),
             inline=False,
         )
+    apply_section_spacing(embed)
     return embed
 
 

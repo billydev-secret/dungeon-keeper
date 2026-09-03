@@ -101,6 +101,7 @@ def build_bio_embed(payload: BioRenderPayload) -> discord.Embed:
     ts = _parse_timestamp(payload.created_at_iso)
     if ts is not None:
         embed.timestamp = ts
+    apply_section_spacing(embed)
     return embed
 
 

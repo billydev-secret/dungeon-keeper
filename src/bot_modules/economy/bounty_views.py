@@ -118,6 +118,7 @@ def render_bounty_card(
         embed.add_field(name="How it works", value=note + ".", inline=False)
     if state != "open":
         embed.timestamp = discord.utils.utcnow()
+    apply_section_spacing(embed)
     return embed
 
 

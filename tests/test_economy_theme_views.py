@@ -20,6 +20,19 @@ from bot_modules.economy.theme_views import (
 )
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Stacked fields carry ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 _SETTINGS = EconSettings(
     currency_emoji="💎", currency_name="gem", currency_plural="gems", theme_hours=24
@@ -55,7 +68,7 @@ def _card(state: str, *, refunded: bool) -> discord.Embed:
 
 
 def _fields(embed: discord.Embed) -> dict[str, str]:
-    return {f.name: f.value for f in embed.fields}
+    return {f.name: _unspaced(f.value) for f in embed.fields}
 
 
 # ── the card ───────────────────────────────────────────────────────────

@@ -30,6 +30,7 @@ from bot_modules.services.embeds import (
     fit_lines,
     xp_breakdown_parts,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 def _account_value(facts: AccountFacts) -> str:
@@ -156,4 +157,5 @@ def build_member_info_embed(
     if has_chart:
         embed.set_image(url="attachment://info_activity.png")
     embed.set_footer(text="Only you can see this.")
+    apply_section_spacing(embed)
     return embed

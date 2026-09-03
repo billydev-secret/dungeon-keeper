@@ -56,6 +56,7 @@ from bot_modules.services.economy_theme_service import (
     theme_window_seconds,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -147,6 +148,7 @@ def render_theme_review_embed(
         )
     if state != "pending":
         embed.timestamp = discord.utils.utcnow()
+    apply_section_spacing(embed)
     return embed
 
 

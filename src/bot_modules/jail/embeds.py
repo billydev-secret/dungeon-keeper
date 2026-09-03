@@ -35,6 +35,7 @@ from bot_modules.services.embeds import (
     MOD_WARNING,
     xp_breakdown_parts,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 
@@ -102,6 +103,7 @@ def build_policy_vote_initial_embed(
         value=_format_capped_mentions(eligible_ids, max_count=max_mentions),
         inline=False,
     )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -151,6 +153,7 @@ def build_policy_vote_update_embed(
     embed.add_field(name="❌ No", value=_format_mentions(no_ids), inline=False)
     embed.add_field(name="➖ Abstain", value=_format_mentions(abstain_ids), inline=False)
     embed.add_field(name="⏳ Awaiting", value=_format_mentions(awaiting_ids), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -239,6 +242,7 @@ def build_ticket_open_embed(
             "the moderator transcript channel."
         )
     )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -363,6 +367,7 @@ def build_modinfo_embed(
     )
 
     embed.set_image(url="attachment://modinfo_activity.png")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -484,6 +489,7 @@ def build_policy_proposal_embed(
     embed.add_field(name="Proposed by", value=proposer_mention, inline=True)
     embed.add_field(name="Status", value="💬 Open for Discussion", inline=True)
     embed.set_footer(text="Use /policy vote to start the formal vote when ready.")
+    apply_section_spacing(embed)
     return embed
 
 

@@ -1417,6 +1417,7 @@ def build_pools_panel_embed(
         inline=False,
     )
     embed.set_image(url=f"attachment://{pools_charts.LIVE_FILENAME}")
+    apply_section_spacing(embed)
     return embed
 
 

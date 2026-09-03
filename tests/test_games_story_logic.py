@@ -40,6 +40,19 @@ from bot_modules.games_story.logic import (
     resolve_starter,
     should_end_after_skip,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Stacked fields carry ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── clamp_max_sentences ─────────────────────────────────────────────
@@ -414,7 +427,7 @@ def test_build_lobby_embed_has_expected_fields():
     embed = build_lobby_embed(host_name="Alice", visibility="blind", max_sentences=10)
     assert embed.title is not None
     assert "Story Builder" in embed.title
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert "Writers (0)" in by_name
     assert by_name["Writers (0)"] == "—"
     assert by_name["Host"] == "Alice"
@@ -439,7 +452,7 @@ def test_build_turn_embed_renders_progress_and_writer():
         turn_order=[1, 2, 3],
         name_resolver={1: "Alice", 2: "Bob", 3: "Carol"}.__getitem__,
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert by_name["Progress"] == "Sentence 3/10"
     assert "Alice" in by_name["Currently writing"]
 
@@ -452,7 +465,7 @@ def test_build_turn_embed_highlights_active_writer_in_order():
         turn_order=[1, 2, 3],
         name_resolver={1: "Alice", 2: "Bob", 3: "Carol"}.__getitem__,
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     order_text = by_name["Turn Order"]
     # Bob (active) should be wrapped with ▸ markers and ✍️
     assert "▸ Bob" in order_text
@@ -470,7 +483,7 @@ def test_build_turn_embed_escapes_markdown_in_names():
         turn_order=[1, 2],
         name_resolver={1: "*tricky*", 2: "_bold_"}.__getitem__,
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     order_text = by_name["Turn Order"]
     assert "\\*tricky\\*" in order_text
     assert "\\_bold\\_" in order_text
@@ -488,7 +501,7 @@ def test_build_complete_story_embed_renders_description_and_summary():
     assert embed.description == "*A short story.*"
     assert embed.title is not None
     assert "Complete Story" in embed.title
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert "A Community Original" in by_name
     assert "4 writers" in by_name["A Community Original"]
     assert "8 sentences" in by_name["A Community Original"]

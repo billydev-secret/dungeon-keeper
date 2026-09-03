@@ -38,6 +38,24 @@ from bot_modules.services.embeds import (
     MOD_TICKET,
     MOD_WARNING,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Stacked fields carry ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
+
+def _fv(embed, name):
+    """The named field's value, spacer removed."""
+    field = _field_by_name(embed, name)
+    return None if field is None else _unspaced(field.value)
+
 
 
 def _field_by_name(embed, name):
@@ -57,17 +75,17 @@ def test_initial_vote_embed_zero_voters():
     )
     assert embed.title == "🗳️ Policy Vote: policy-test"
     assert embed.color is not None and embed.color.value == MOD_POLICY
-    assert _field_by_name(embed, "Votes Cast").value == "0/0"
-    assert _field_by_name(embed, "Status").value == "🗳️ Voting"
-    assert _field_by_name(embed, "⏳ Awaiting").value == "—"
+    assert _fv(embed, "Votes Cast") == "0/0"
+    assert _fv(embed, "Status") == "🗳️ Voting"
+    assert _fv(embed, "⏳ Awaiting") == "—"
 
 
 def test_initial_vote_embed_with_small_eligible_roster():
     embed = build_policy_vote_initial_embed(
         channel_name="p1", vote_text="text", eligible_ids=[10, 20, 30],
     )
-    assert _field_by_name(embed, "Votes Cast").value == "0/3"
-    awaiting = _field_by_name(embed, "⏳ Awaiting").value
+    assert _fv(embed, "Votes Cast") == "0/3"
+    awaiting = _fv(embed, "⏳ Awaiting")
     assert "<@10>" in awaiting and "<@20>" in awaiting and "<@30>" in awaiting
     assert "more" not in awaiting  # no overflow
 
@@ -79,7 +97,7 @@ def test_initial_vote_embed_caps_mentions_with_overflow_note():
     embed = build_policy_vote_initial_embed(
         channel_name="p1", vote_text="text", eligible_ids=eligible,
     )
-    awaiting = _field_by_name(embed, "⏳ Awaiting").value
+    awaiting = _fv(embed, "⏳ Awaiting")
     assert "<@0>" in awaiting  # first ID shown
     assert "<@39>" not in awaiting  # 40th ID truncated (over 25-cap)
     assert f"+{40 - DEFAULT_MAX_ELIGIBLE_MENTIONS} more" in awaiting
@@ -89,7 +107,7 @@ def test_initial_vote_embed_respects_custom_cap():
     embed = build_policy_vote_initial_embed(
         channel_name="p1", vote_text="t", eligible_ids=[1, 2, 3, 4, 5], max_mentions=2,
     )
-    awaiting = _field_by_name(embed, "⏳ Awaiting").value
+    awaiting = _fv(embed, "⏳ Awaiting")
     assert "+3 more" in awaiting
 
 
@@ -116,11 +134,11 @@ def test_update_embed_running_tally():
     )
     assert embed.title == "🗳️ Policy Vote: Title"
     assert embed.color is not None and embed.color.value == MOD_POLICY
-    assert _field_by_name(embed, "Status").value == "🗳️ Voting"
-    assert _field_by_name(embed, "Votes Cast").value == "2/4"  # 1 yes + 1 abstain
-    assert _field_by_name(embed, "✅ Yes").value == "<@10>"
-    assert _field_by_name(embed, "❌ No").value == "—"
-    assert _field_by_name(embed, "➖ Abstain").value == "<@20>"
+    assert _fv(embed, "Status") == "🗳️ Voting"
+    assert _fv(embed, "Votes Cast") == "2/4"  # 1 yes + 1 abstain
+    assert _fv(embed, "✅ Yes") == "<@10>"
+    assert _fv(embed, "❌ No") == "—"
+    assert _fv(embed, "➖ Abstain") == "<@20>"
 
 
 def test_update_embed_adopted():
@@ -130,8 +148,8 @@ def test_update_embed_adopted():
         outcome="adopted",
     )
     assert embed.color is not None and embed.color.value == MOD_SUCCESS
-    assert _field_by_name(embed, "Status").value == "✅ Adopted"
-    assert _field_by_name(embed, "Votes Cast").value == "3/3"
+    assert _fv(embed, "Status") == "✅ Adopted"
+    assert _fv(embed, "Votes Cast") == "3/3"
 
 
 def test_update_embed_rejected():
@@ -140,7 +158,7 @@ def test_update_embed_rejected():
         yes_ids=[1], no_ids=[2], abstain_ids=[], awaiting_ids=[],
         outcome="rejected",
     )
-    assert _field_by_name(embed, "Status").value == "❌ Rejected"
+    assert _fv(embed, "Status") == "❌ Rejected"
 
 
 def test_update_embed_handles_empty_vote_text():
@@ -149,7 +167,7 @@ def test_update_embed_handles_empty_vote_text():
         policy_title="t", vote_text="",
         yes_ids=[], no_ids=[], abstain_ids=[], awaiting_ids=[1],
     )
-    assert _field_by_name(embed, "📜 Policy Text").value == "(no text)"
+    assert _fv(embed, "📜 Policy Text") == "(no text)"
 
 
 # ── build_policy_list_embed ───────────────────────────────────────────
@@ -227,8 +245,8 @@ def test_ticket_open_embed_basic():
     assert embed.title == "🎫 Ticket #42"
     assert embed.description == "My issue"
     assert embed.timestamp == now
-    assert _field_by_name(embed, "Opened by").value == "<@1>"
-    assert _field_by_name(embed, "Status").value == "🟢 Open"
+    assert _fv(embed, "Opened by") == "<@1>"
+    assert _fv(embed, "Status") == "🟢 Open"
     assert "archived" in embed.footer.text
 
 
@@ -265,9 +283,9 @@ def test_modinfo_embed_minimal_no_warnings_no_tickets():
     assert embed.color is not None and embed.color.value == MOD_INFO
     # Avatar None → no thumbnail
     assert embed.thumbnail.url is None or embed.thumbnail.url == ""
-    assert _field_by_name(embed, "⭐ Level").value == "No XP recorded"
-    assert _field_by_name(embed, "🔍 Watch List").value == "Not watched"
-    assert _field_by_name(embed, "🔒 Jail").value == "Not currently jailed"
+    assert _fv(embed, "⭐ Level") == "No XP recorded"
+    assert _fv(embed, "🔍 Watch List") == "Not watched"
+    assert _fv(embed, "🔒 Jail") == "Not currently jailed"
     assert "Last seen: Never" in _field_by_name(
         embed, "💬 Activity — 0 msgs (30d)"
     ).value
@@ -309,20 +327,20 @@ def test_modinfo_embed_full_kitchen_sink():
         ts_formatter=lambda ts: f"t{ts}" if ts else "N/A",
     )
     assert embed.thumbnail.url == "https://example.com/avatar.png"
-    assert "Level **7**" in _field_by_name(embed, "⭐ Level").value
-    assert "12,345 XP" in _field_by_name(embed, "⭐ Level").value
-    assert "**2 mods watching**" in _field_by_name(embed, "🔍 Watch List").value
+    assert "Level **7**" in _fv(embed, "⭐ Level")
+    assert "12,345 XP" in _fv(embed, "⭐ Level")
+    assert "**2 mods watching**" in _fv(embed, "🔍 Watch List")
 
-    jail_field = _field_by_name(embed, "🔒 Jail").value
+    jail_field = _fv(embed, "🔒 Jail")
     assert "Currently jailed" in jail_field
     assert "Expires:" in jail_field
     assert "spam" in jail_field
     assert "**Past jails:** 1" in jail_field
 
-    warn_field = _field_by_name(embed, "⚠️ Warnings").value
+    warn_field = _fv(embed, "⚠️ Warnings")
     assert "**Active:** 1 / **Total:** 2" in warn_field
 
-    ticket_field = _field_by_name(embed, "📩 Tickets").value
+    ticket_field = _fv(embed, "📩 Tickets")
     assert "**Open:** 1 / **Closed:** 2" in ticket_field
     assert "#10" in ticket_field  # most recent
 
@@ -345,7 +363,7 @@ def test_modinfo_embed_xp_source_breakdown():
         top_channels=[], msgs_30d_total=0,
         ts_formatter=lambda ts: "t",
     )
-    level = _field_by_name(embed, "⭐ Level").value
+    level = _fv(embed, "⭐ Level")
     assert "Level **12**" in level
     assert "💬 Text 31.2k" in level
     assert "🔊 Voice 9.8k" in level
@@ -366,7 +384,7 @@ def test_modinfo_embed_no_xp_source_breakdown_when_absent():
         top_channels=[], msgs_30d_total=0,
         ts_formatter=lambda ts: "t",
     )
-    assert _field_by_name(embed, "⭐ Level").value == "Level **3** · 200 XP"
+    assert _fv(embed, "⭐ Level") == "Level **3** · 200 XP"
 
 
 def test_modinfo_embed_singular_watcher_label():
@@ -380,7 +398,7 @@ def test_modinfo_embed_singular_watcher_label():
         top_channels=[], msgs_30d_total=0,
         ts_formatter=lambda ts: "t",
     )
-    assert "1 mod watching" in _field_by_name(embed, "🔍 Watch List").value
+    assert "1 mod watching" in _fv(embed, "🔍 Watch List")
 
 
 # ── Audit embeds ──────────────────────────────────────────────────────
@@ -486,7 +504,7 @@ def test_policy_proposal_embed_basic():
     assert embed.title == "📋 Policy Proposal #1: Foo"
     assert embed.description == "Bar"
     assert embed.timestamp == now
-    assert _field_by_name(embed, "Status").value == "💬 Open for Discussion"
+    assert _fv(embed, "Status") == "💬 Open for Discussion"
     assert "Use /policy vote" in embed.footer.text
 
 
@@ -503,7 +521,7 @@ def test_policy_close_embed_with_reason():
     )
     assert embed.title == "📋 Policy Proposal Closed"
     assert "**Foo**" in embed.description
-    assert _field_by_name(embed, "Reason").value == "rescinded"
+    assert _fv(embed, "Reason") == "rescinded"
 
 
 def test_policy_close_embed_no_reason_no_field():
@@ -519,8 +537,8 @@ def test_adopted_policies_embed_listing():
         ]
     )
     assert embed.title == "📜 Adopted Policies from This Proposal"
-    assert _field_by_name(embed, "P1").value == "d1"
-    assert _field_by_name(embed, "P2").value == "d2"
+    assert _fv(embed, "P1") == "d1"
+    assert _fv(embed, "P2") == "d2"
     assert embed.color is not None and embed.color.value == MOD_SUCCESS
 
 
@@ -528,4 +546,4 @@ def test_adopted_policies_embed_truncates_long_descriptions():
     """Discord field values cap at 1024 chars — the builder must truncate."""
     long_desc = "x" * 2000
     embed = build_adopted_policies_embed([{"title": "P", "description": long_desc}])
-    assert len(_field_by_name(embed, "P").value) == 1024
+    assert len(_fv(embed, "P")) == 1024

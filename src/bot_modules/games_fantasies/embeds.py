@@ -144,4 +144,5 @@ def build_recap_embed(results: list[dict[str, Any]], color: "discord.Color | Non
         inline=True,
     )
 
+    apply_section_spacing(embed)
     return embed

@@ -336,6 +336,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 ),
                 inline=False,
             )
+        apply_section_spacing(embed)
         return embed
 
     def build_game_view(self, game_id: int) -> PassGroupView:

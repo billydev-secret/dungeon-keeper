@@ -5,7 +5,7 @@ teeth — accent colour (``test_embed_accent_contract.py``) and member names
 (the per-feature ``name_fn`` sweeps) — and everything else drifted quietly for
 want of a gate. A 2026-09 review found 77 denial replies missing the ``❌``
 the 2026-07-21 ruling requires, nine footers separating with ``·`` instead of
-``•``, and 40 multi-section builders never calling ``apply_section_spacing``.
+``•``, and 101 multi-field builders never calling ``apply_section_spacing``.
 None of that was catchable by review alone at 364 call sites.
 
 Each sweep below owns one rule, names the guide section it comes from, and
@@ -15,7 +15,7 @@ reintroduced violation is actually seen.
 Adding a builder? None of this asks anything of you that the guide doesn't
 already: prefix a denial with ``❌``, separate footer clauses with ``•``, say
 "Pick…" on a select, and call ``apply_section_spacing(embed)`` once after the
-fields on a card whose sections stack.
+fields on any card with more than one (the helper skips inline fields itself).
 """
 
 from __future__ import annotations
@@ -366,12 +366,12 @@ def _add_field_inline_flags(fn: ast.AST, var: str) -> list[object]:
 
 
 def unspaced_stacked_builders(tree: ast.AST) -> list[int]:
-    """Builders that stack 2+ ``inline=False`` sections without the spacer.
+    """Builders that add 2+ fields and never call ``apply_section_spacing``.
 
-    Scoped deliberately to *pure stacked* cards — the shape
-    ``apply_section_spacing`` documents itself for. A card mixing ``inline=True``
-    triples is a layout judgement call, not a mechanical one, so it is left to
-    a human.
+    This used to be scoped to *pure stacked* cards, because the helper spaced
+    inline fields too and that only made a three-across row taller. The helper
+    skips ``inline=True`` now (ruling 2026-09-03), so the rule applies to every
+    builder and the exemption is gone.
     """
     hits: list[int] = []
     for fn in ast.walk(tree):
@@ -400,11 +400,8 @@ def unspaced_stacked_builders(tree: ast.AST) -> list[int]:
             if isinstance(node, ast.Return) and isinstance(node.value, ast.Name)
         }
         for var in built & returned:
-            flags = _add_field_inline_flags(fn, var)
-            if len(flags) < 2:
+            if len(_add_field_inline_flags(fn, var)) < 2:
                 continue
-            if any(flag is True or flag == "expr" for flag in flags):
-                continue  # has inline triples — a human decides
             hits.append(fn.lineno)
     return sorted(set(hits))
 
@@ -462,8 +459,9 @@ def test_the_spacing_sweep_can_actually_see_a_violation():
 
     assert unspaced_stacked_builders(stacked) == [1]
     assert unspaced_stacked_builders(spaced) == []
-    # Inline triples are a layout judgement, deliberately out of the sweep.
-    assert unspaced_stacked_builders(triples) == []
+    # A card mixing inline triples is in scope now — the helper skips the
+    # inline fields itself, so the builder still has to call it.
+    assert unspaced_stacked_builders(triples) == [1]
     # One field has nothing to space against.
     assert unspaced_stacked_builders(single) == []
 

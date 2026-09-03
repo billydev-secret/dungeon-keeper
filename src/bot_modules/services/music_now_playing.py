@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 import discord
 
 from bot_modules.services.music_queue import GuildQueue, LoopMode
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.cogs.music_cog import MusicCog
@@ -99,6 +100,7 @@ def build_embed(
     if state_bits:
         embed.set_footer(text=" • ".join(state_bits))
 
+    apply_section_spacing(embed)
     return embed
 
 

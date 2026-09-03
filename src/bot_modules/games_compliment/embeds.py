@@ -23,6 +23,7 @@ from __future__ import annotations
 import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_lobby_embed(
@@ -55,6 +56,7 @@ def build_lobby_embed(
         name=f"Pool ({len(participants)})", value=pool_str, inline=False
     )
     embed.set_footer(text=f"{GAME_ICONS['compliment']} Spin the Compliment")
+    apply_section_spacing(embed)
     return embed
 
 
