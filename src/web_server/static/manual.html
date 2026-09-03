@@ -576,7 +576,7 @@
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
-        <tr><td><code>/games play wyr</code></td><td><strong>Would You Rather</strong> — vote 🅰️/🅱️ on either/or scenarios; players can queue their own questions mid-game. Tallies are anonymous while a round runs; the host or any mod can press <strong>👀 Reveal Voters</strong> to name who picked which side, and every reveal is recorded in the <a href="/#/anon-audit">Anonymous Features Audit</a></td></tr>
+        <tr><td><code>/games play wyr</code></td><td><strong>Would You Rather</strong> — vote 🅰️/🅱️ on either/or scenarios; players can queue their own questions mid-game. Tallies are anonymous while a round runs; the host or any mod can press <strong>👀 Reveal Voters</strong> to name who picked which side, and every reveal is recorded in the <a href="/#/anon-audit">Anonymity Audit</a></td></tr>
         <tr><td><code>/games play nhie</code></td><td><strong>Never Have I Ever</strong> — vote Guilty 😈 or Innocent 😇; run out of lives and you're eliminated</td></tr>
         <tr><td><code>/games play mlt</code></td><td><strong>Most Likely To</strong> — vote which player fits the prompt; crowns tally across rounds</td></tr>
         <tr><td><code>/games play mfk</code></td><td><strong>Marry, Fornicate, Kiss</strong> — each player sorts 3 random members from the pool (custom labels supported)</td></tr>
@@ -703,7 +703,7 @@
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
       <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels.</span>
       <div class="cmd-params">
-        Both start commands take optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
+        Optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
       </div>
     </div>
 
@@ -866,7 +866,7 @@
     <h2 id="confessions" class="section-break"><span class="section-num">7</span> Confessions</h2>
 
     <h3 id="confess">Anonymous Confessions</h3>
-    <p>The confessions system lets members post anonymously to a configured channel. Confessions themselves carry no identifier at all. Anyone replying in a confession's thread gets a colored emoji and nickname (e.g. 🔴 Brave Owl) that stays consistent within that thread so a conversation is followable — everyone sees it, and it says nothing about who the person is. To put a real name to a confession or reply, mods use the admin-only <a href="/#/confessions-audit">Confessions Audit Log</a>.</p>
+    <p>The confessions system lets members post anonymously to a configured channel. Confessions themselves carry no identifier at all. Replying gives you a colored emoji and nickname (e.g. 🔴 Brave Owl) — everyone sees it, and it says nothing about who the person is. Pick <strong>🎭 Reply Anonymously</strong> and that identity stays consistent for every reply you make in the thread, so a conversation is followable; pick <strong>🎲 Reply as Someone New</strong> and you get a fresh, one-time identity just for that reply, nothing stored. To put a real name to a confession or reply, mods use the admin-only <a href="/#/confessions-audit">Confessions Audit Log</a>.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/confess</span>
@@ -919,7 +919,7 @@
     <p>The server's <strong>Pairing Mode</strong>, set on the dashboard, decides when:</p>
     <ul>
       <li><strong>Instant</strong> — you're matched straight away if someone eligible is already waiting; otherwise you sit in the pool and are matched the moment the next person joins.</li>
-      <li><strong>Once a day</strong> — never matches on join. Everyone who joins queues up, and the whole pool is paired in one batch at 8:00 AM Eastern.</li>
+      <li><strong>Scheduled</strong> — never matches on join. Everyone who joins queues up, and the whole pool is paired in one batch at a day/time your server sets on the dashboard (in your server's own time zone) — the signup panel and your join DM tell you when that is.</li>
     </ul>
 
     <h4>Who you won't be matched with</h4>
@@ -949,14 +949,14 @@
     <table>
       <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — instant mode matches you on the spot if someone's waiting, otherwise (or in "once a day" mode) you join the pool and wait for the next match</td></tr>
+        <tr><td><code>/penpals join</code></td><td><span class="perm perm-all">Everyone</span></td><td>Get a pen pal — instant mode matches you on the spot if someone's waiting, otherwise (or in scheduled mode) you join the pool and wait for the next match</td></tr>
         <tr><td><code>/penpals leave</code></td><td><span class="perm perm-all">Everyone</span></td><td>Leave the pool and stay out — works while you're waiting <em>or</em> mid-chat, and holds until you join again. Doesn't end a chat you're already in</td></tr>
         <tr><td><code>/penpals status</code></td><td><span class="perm perm-all">Everyone</span></td><td>Whether you're waiting, matched, or taking a break — and when your session ends</td></tr>
         <tr><td><code>/penpals block</code></td><td><span class="perm perm-all">Everyone</span></td><td>Open a private panel to pick members Pen Pals should never match you with (or unblock them) — one block is enough, the other person is never told, and it doesn't end a chat you're already in</td></tr>
         <tr><td><code>/penpals new-question</code></td><td><span class="perm perm-all">Everyone</span></td><td>Swap the current conversation-starter for a fresh one (limited swaps per session)</td></tr>
         <tr><td><code>/penpals end</code></td><td><span class="perm perm-all">Everyone</span></td><td>End your current session early and close the shared channel</td></tr>
         <tr><td><code>/penpals pair &lt;user1&gt; &lt;user2&gt;</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force-pair two specific members, bypassing the pool — both must already have joined the pool and not have left it, so force-pairing never overrides opt-in</td></tr>
-        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, once a day at 8am Eastern in Once-a-day mode)</td></tr>
+        <tr><td><code>/penpals round</code></td><td><span class="perm perm-mod">Mod</span></td><td>Force a pool sweep right now, instead of waiting for the automatic sweep (every few minutes in Instant mode, once a day at your server's configured time in Scheduled mode)</td></tr>
       </tbody>
     </table>
 
@@ -964,7 +964,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/#/pen-pals">web dashboard</a></strong>
-        <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Once a day</em> to queue everyone and pair the whole pool in a single batch at 8:00 AM Eastern instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
+        <p>The <strong>Social → Pen Pals</strong> panel holds the whole feature on one page: the enable toggle and wiring (channel category), session length, and the re-match cooldown, with the conversation-starter question bank below them. Moderators can change both halves — Pen Pals settings are moderator-level rather than admin-only, so whoever curates the prompts can also set the channel they post in. <strong>Pairing Mode</strong> picks how matches happen — <em>Instant</em> (the default) matches the moment a partner is waiting, or <em>Scheduled</em> to queue everyone and pair the whole pool in a single batch at a day/time you set (in your server's own time zone) instead. <strong>Who Can See Each Chat</strong> controls how much staff oversight the private rooms get — <em>Admins only</em>, <em>Admins and mods</em> (the default), or <em>Everyone</em> (anyone can read the chat but only the two members can post). It applies to chats opened after you save; chats already running keep their original visibility. <strong>Session Opening Message</strong> is an optional note you write once — it's shown at the top of the pinned intro embed every time a chat opens, above who's matched and when the chat ends. Leave it blank for no message. Under <strong>Timing &amp; Limits</strong>, <strong>Nudge A Quiet Partner After</strong> sets how many hours a message can go unanswered before the bot reminds the member who owes a reply — it pings that one member, fires once per silence, and is skipped once the closing-soon warning is out. It ships at 0 (no reminders); 6 hours is a sensible starting point on a 24-hour session.</p>
         <p><strong>Pool Activity</strong>, below the settings, is the log of who joined or left the matching pool and why — signed up, matched, chat ended, left the server, or left out for never posting. It exists because the pool itself only shows who is waiting <em>right now</em>: a pool that has quietly stopped moving looks exactly like one nobody has ever joined, which is how a five-day stall went unnoticed. If matching seems to have stopped, read this list first.</p>
       </div>
     </div>
@@ -1724,12 +1724,12 @@
     </div>
 
     <h3 id="emoji-stealer">Emoji Stealer</h3>
-    <p>Grab a custom emoji you've seen — in a message's text or its reactions — and add it to a server you help run. Right-click a message → <strong>Apps → Steal Emoji</strong>, or use the slash command with a direct image URL. When several emojis (or several eligible servers) are in play, a picker lets you choose — including <strong>Steal All</strong>. Oversized animated GIFs are downscaled automatically to fit Discord's emoji size limit. See also the <a href="#context-menus">context-menu overview</a>.</p>
+    <p>Grab a custom emoji you've seen — in a message's text or its reactions — and add it to a server you help run. Right-click a message → <strong>Apps → Steal Emoji</strong>, or use the slash command with a direct image URL. Only servers where you have Manage Expressions, Manage Server, or Administrator — and where the <strong>bot</strong> also has Manage Expressions — are offered; if none qualify you're told so instead of getting a picker. When several emojis (or several eligible servers) are in play, a picker lets you choose — including <strong>Steal All</strong>. If the destination server already has that emoji, you get a warning to confirm before it uploads anyway (Steal All skips this and just reports what it left out). Oversized animated GIFs are downscaled automatically to fit Discord's emoji size limit. See also the <a href="#context-menus">context-menu overview</a>.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/steal_emoji url:&lt;url&gt; name:&lt;name&gt;</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Upload an emoji from any HTTPS image URL. The <strong>bot</strong> needs Manage Expressions in the destination server.</span>
+      <span class="cmd-desc">Upload an emoji from any HTTPS image URL, into a server where you have Manage Expressions, Manage Server, or Administrator (and the bot has Manage Expressions).</span>
       <div class="cmd-params">
         <strong>url</strong> — direct image link (must start with <code>https://</code>). The image itself must be PNG, GIF, WEBP, or JPG — the bot checks the actual content, so the URL's file extension doesn't matter.<br>
         <strong>name</strong> — at least 2 characters: letters, numbers, underscores.
@@ -1834,7 +1834,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>The mod desk lives on the <a href="/">web dashboard</a></strong>
-        <p>Beyond the commands below, the dashboard is where review work happens: ticket, jail, and warning review with transcripts, message search, a live server log, and the audit feeds (DMs, whispers, confessions, quotes, Guess rounds, and <a href="/#/anon-audit">Anonymous Features</a> — who is really behind each anonymous submission in the party games).</p>
+        <p>Beyond the commands below, the dashboard is where review work happens: ticket, jail, and warning review with transcripts, message search, a live server log, and the audit feeds (DMs, whispers, confessions, quotes, Guess rounds, and <a href="/#/anon-audit">Anonymity Audit</a> — who is really behind each anonymous submission in the party games).</p>
         <p>The <a href="/#/mod-audit">Audit Log</a> is the record of what moderators did to members: jails and releases, warnings issued and revoked, ticket activity, and pulls into or removals from a channel. Nothing else is in it. Voice Control in particular is not — a member creating, renaming or abandoning their own voice channel is self-service, and it is by far the busiest thing the bot records, so including it buried everything a moderator actually needed to see.</p>
         <p><strong>Message Search</strong> opens with just a regex box and a <em>+ Filter</em> button. Filters are added one at a time from that menu — author, channel, mentions, reply-to, emotion, sentiment range, length, attachments, reactions, dates, deleted state, show-bots, sort — and each becomes a small chip showing its value that you can remove with its ✕. Only the filters you are using take up space.</p>
         <p><strong>Click a result to read around it.</strong> The hit expands in place into a scrollable box showing the stored messages before and after it in the same channel, with the hit highlighted, and <em>Load older</em> / <em>Load newer</em> at the ends. Opening another result closes the first. This reads the server's own archive rather than Discord, so it still works for messages Discord no longer has — and unlike search it includes bot messages, because leaving them out would misrepresent the conversation.</p>
@@ -1945,7 +1945,7 @@
             <tr>
               <td>Message</td>
               <td><strong>Steal Emoji</strong></td>
-              <td>Extracts any custom emojis from the message and lets you add one (or all) to a server you manage — requires Manage Expressions in that server. Also available as a slash command for grabbing any image URL directly — see <a href="#emoji-stealer">Emoji Stealer</a>.</td>
+              <td>Extracts any custom emojis from the message and lets you add one (or all) to a server where you have Manage Expressions, Manage Server, or Administrator (and the bot has Manage Expressions). Also available as a slash command for grabbing any image URL directly — see <a href="#emoji-stealer">Emoji Stealer</a>.</td>
             </tr>
             <tr>
               <td>Message</td>
@@ -1963,11 +1963,11 @@
     </div>
 
     <h3 id="quote-cards">Quote Cards</h3>
-    <p>The right-click <strong>Quote</strong> action above is the everyday way to make a quote card. Every render is recorded in a mod-visible audit log on the dashboard, so mods can always see who quoted whom. Two mod commands round it out:</p>
+    <p>The right-click <strong>Quote</strong> action above is the everyday way to make a quote card, and every card made that way is recorded in a mod-visible audit log on the dashboard, so mods can always see who quoted whom. Two more ways round it out — a mod-only command and a trigger anyone can use — and neither writes to that audit log, since neither is tied to a specific message someone posted:</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/banner text:...</span>
-      <span class="cmd-perm"><span class="perm perm-mod">Mod — Manage Messages</span></span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
       <span class="cmd-desc">Render any text as a banner-style quote card and post it in the current channel — for announcements and flavor, no source message needed.</span>
       <div class="cmd-params">
         <strong>theme</strong> — optional color grading (defaults to your server branding). <strong>font</strong> — optional typeface. <strong>title</strong> — optional heading above the quote.
@@ -2310,7 +2310,7 @@
       <li><strong>Cross-platform</strong> — someone shows they have already looked at another member's content on Reddit, Instagram, OnlyFans, Snapchat, Telegram or TikTok. Asking someone for their handle, or recognizing them from another platform, is ordinary and is not recorded — only demonstrating you went and looked. If the person raised that platform themselves in the last month, nothing is recorded.</li>
     </ul>
 
-    <p>Both are deliberately rare — measured across fifteen months of server history they fire about once a month between them. If the ledger starts filling up, something has been widened and should be looked at.</p>
+    <p>Both are deliberately rare — measured across roughly 5 months of server history they fire about once a month between them. If the ledger starts filling up, something has been widened and should be looked at.</p>
 
     <div class="callout callout-info">
       <span class="callout-icon">ℹ️</span>
@@ -3007,7 +3007,7 @@
         <tr><td><strong><a href="/#/config-bios">Bios</a></strong></td><td>Profile field set, icebreaker question pool, wiring (channel, wizard category, embed color), trigger-button copy</td></tr>
         <tr><td><strong><a href="/#/config-confessions">Confessions</a></strong></td><td>Channel, optional mod-log channel, panic mode</td></tr>
         <tr><td><strong><a href="/#/config-dms">DM Permissions</a></strong></td><td>Where the DM panel is posted, the audit channel, and the role that marks each DM mode. A DM request goes straight to the member it names, who accepts or declines it on the buttons &mdash; moderators are not part of that decision, so there is no channel requests wait in</td></tr>
-        <tr><td><strong><a href="/#/anon-audit">Anonymous Features Audit</a></strong></td><td>The trail behind every anonymous submission in AMA, Free For All, Hot Takes, Fantasies, Clapback, Would You Rather and Spin the Compliment — who posted it, who moderated it, and when. Also sets how long that history is kept (90 days by default; a nightly sweep deletes anything older, or choose <em>Keep forever</em>) — this one setting covers <a href="/#/confessions-audit">Confessions</a> too, which keeps its own panel but shares the same retention window. Admin-only. Submission text is read from the server's message archive rather than copied into the audit, so it shows only while message-content storage is on, and is blank for anything that never became a message — a screened AMA question the host rejected, a queued Would You Rather prompt</td></tr>
+        <tr><td><strong><a href="/#/anon-audit">Anonymity Audit</a></strong></td><td>The trail behind every anonymous submission in AMA, Free For All, Hot Takes, Fantasies, Clapback, Would You Rather and Spin the Compliment — who posted it, who moderated it, and when. Also sets how long that history is kept (90 days by default; a nightly sweep deletes anything older, or choose <em>Keep forever</em>) — this one setting covers <a href="/#/confessions-audit">Confessions</a> too, which keeps its own panel but shares the same retention window. Admin-only. Submission text is read from the server's message archive rather than copied into the audit, so it shows only while message-content storage is on, and is blank for anything that never became a message — a screened AMA question the host rejected, a queued Would You Rather prompt</td></tr>
         <tr><td><strong><a href="/#/nsfw-blocks">Blocked Images</a></strong></td><td>Every image the bot removed for looking explicit — who posted it, which channel, which rule caught it, and how sure the bot was (0 to 1). Removals made while <em>Nudity in SFW channels</em> is set to log-only are listed too, marked <em>Log only</em>, so you can judge accuracy without anything being deleted. A blank score means the bot could not read the image at all: spoiler channels remove those on purpose, so a failed check is never a way through. This is the place to spot a wrong call and put it right. Images removed by <em>Nudity in SFW channels</em> are DM'd back to the poster automatically; images removed in a spoiler-required channel are <strong>not</strong>, so the poster will need to re-upload. Admin-only</td></tr>
         <tr><td><strong><a href="/#/nsfw-tags">Image Tags</a></strong></td><td>What was detected over the last 30 days: how many images were checked, how many were judged explicit, which body parts were tagged, and how the confidence scores were spread. Only age-gated channels and the channels on your spoiler-required list are tagged and recorded — checks anywhere else leave no trace here. For the same labels plotted <em>over time</em>, see the <a href="/#/nsfw-gender">NSFW by Gender</a> report and switch <em>Breakdown</em> to <em>By tag</em>. The two "disagreement" figures are the useful ones: images judged explicit that the body-part tagger saw nothing in, and the reverse. Admin-only</td></tr>
         <tr><td><strong><a href="/#/nsfw-gender">NSFW by Gender</a></strong></td><td>Activity in your age-gated channels, charted over time as a stacked bar or a line, at daily, weekly or monthly resolution, with a slider to zoom into part of the window. The <strong>Breakdown</strong> setting picks what the bands mean. <em>By gender</em> splits posting by the gender tags moderators have applied (see <a href="/#/gender-admin">Gender Tagging</a>) — it stays empty until some members are tagged. <em>By tag</em> instead shows what the image tagger labelled, so you can see whether what gets posted is shifting; this half covers age-gated <em>and</em> spoiler-required channels, because those are the only places the tagger runs. Every figure has a table under the chart, so a label seen once or twice is still readable even when its band is too thin to see. <em>By gender</em> is available to moderators; <em>By tag</em> is admin-only, and a moderator sees it listed but greyed out</td></tr>

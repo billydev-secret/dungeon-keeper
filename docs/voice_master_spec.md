@@ -235,12 +235,17 @@ Admin profile views are logged. Sleep-kick timers, empty-grace timers and claim-
 ## Economy: the voice-style lease (sinks round 3, stage 3)
 
 **Rename and user-limit are leased controls** when the guild's economy is
-enabled AND `price_voice_style` > 0 (Sinks page; the shipped default is 0 =
-everything stays free). The verdict is pure (`logic.style_lease_blocks`) and
-enforced at the `_apply_rename` / `_apply_limit` choke point (covers the slash
-commands and the panel) plus the hub-spawn profile loader — saved name/limit
-stay stored but only re-apply while the member holds the `voice_style`
-rental entitlement (beneficiary-based, so gifts count). A lapse best-effort
-reverts a live temp channel to the template name and default limit. The
-access dial, invite/kick/transfer, and reset are never gated. See
-`docs/economy_spec.md` §6 and `docs/plans/economy-sinks-round-3.md`.
+enabled AND the guild has switched on selling the lease (`shop_voice_style_enabled`,
+the "Voice Style" checkbox on the Sinks page; shipped default is **off**, so
+everything stays free until an admin opts in). Migration 182 replaced the
+older `price_voice_style > 0` gate with this explicit checkbox — a guild can
+now sell the lease at a price of 0, which arms the paywall and charges
+nothing, so price alone no longer means "off". The verdict is pure
+(`logic.style_lease_blocks`) and enforced at the `_apply_rename` / `_apply_limit`
+choke point (covers the slash commands and the panel) plus the hub-spawn
+profile loader — saved name/limit stay stored but only re-apply while the
+member holds the `voice_style` rental entitlement (beneficiary-based, so
+gifts count). A lapse best-effort reverts a live temp channel to the template
+name and default limit. The access dial, invite/kick/transfer, and reset are
+never gated. See `docs/economy_spec.md` §6 (§6.1 covers the per-perk switch)
+and `docs/plans/economy-sinks-round-3.md`.

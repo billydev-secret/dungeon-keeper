@@ -136,7 +136,7 @@ python -m dungeonkeeper
 
 On first boot the bot applies all migrations, syncs slash commands globally
 (production mode), and connects. Configure it from the **web dashboard**: open
-**Config → Moderation** and set the mod and admin roles, the jail and ticket
+**Config → Moderation & Privacy** and set the mod and admin roles, the jail and ticket
 categories, and the log and transcript channels. (A `/setup` wizard walked
 through the same six settings until 2026-07-28; it was removed once every one
 of them had a home on that page.)

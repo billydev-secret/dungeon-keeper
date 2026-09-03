@@ -5,7 +5,7 @@
 ## Purpose
 
 Automatically applies a configured set of roles to every new human member the
-moment they join. No commands — dashboard-configured (**Config → Roles →
+moment they join. No commands — dashboard-configured (**Config → New Members →
 Auto-Role**, panel id `config-auto-role`, admin-only), per the "config lives
 on the web" rule.
 
@@ -40,7 +40,7 @@ rejoin beyond the join event itself firing again.
 | Roles to assign on join | `config_ids` bucket `auto_role_ids` (per guild) | The role set. Empty = feature off. |
 
 The panel (`src/web_server/static/js/panels/config-auto-role.js`) shows a
-checkbox list of the guild's non-managed roles and saves via
+type-to-filter multi-select of the guild's non-managed roles and saves via
 `PUT /api/config/auto-role` (`update_auto_role` in
 `src/web_server/routes/config.py`, admin-gated with
 `require_perms({"admin"})`; save clears and rewrites the bucket). Current

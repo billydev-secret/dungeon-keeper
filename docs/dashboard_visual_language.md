@@ -1,6 +1,6 @@
 # Dashboard visual language (Reference)
 
-What the dashboard is made of, visually, and the rules that keep 141 panels
+What the dashboard is made of, visually, and the rules that keep 142 panels
 looking like one tool. `dashboard_ia.md` owns *where a page lives*; this owns
 *what it looks like once you're on it*. Everything here is in
 `src/web_server/static/app.css`.
@@ -96,11 +96,11 @@ Reach for `.badge-*` and `.t-chip.*` before inventing a colour.
 
 ## Buttons: one filled primary, and never a destructive one
 
-`.act-btn` is the shared button, used by Tickets, Jails, Todo, Announcements,
-Docs and Role Menus. It has two meaningful variants:
+`.act-btn` is the shared button, used by Tickets, Jails, Todo, Warnings,
+Announcements, Docs and Role Menus. It has two meaningful variants:
 
 - **`.ghost`** — transparent, outlined, dimmed. By far the most-used variant
-  (13 call sites against two each for the others); it was for a while declared
+  (13 call sites against three each for the others); it was for a while declared
   *twice*, once here and once inside the Docs panel's block but globally
   scoped, with the later one silently winning for the whole dashboard.
 - **`.primary`** — the single filled button in a group, and it is always
@@ -116,7 +116,7 @@ dialog's button, where a decision is actually being taken.
 
 That rule reaches both button kits. `.btn-danger` — the `.btn` kit's
 destructive variant, and the far more used one, 33 call sites against
-`.act-btn.danger`'s two — was still a solid `--red` fill with white text, which
+`.act-btn.danger`'s three — was still a solid `--red` fill with white text, which
 is 3.77:1 as well as too loud. It is now outlined in the same `--red-text`
 tier, and the solid treatment is **scoped to `.confirm-box`**, which is the
 exception the rule already named. That button's fill is Discord's darker
@@ -170,7 +170,7 @@ and `aria-current`, and activation comes from `bindRowActivation` in `ui.js`
 rather than a fifth copy of the same click/keydown pair. `.active` was
 colour-only; `aria-current` is what says "this one" out loud.
 
-**Sortable headers.** `renderSortableTable` backs 14 panels and emitted bare
+**Sortable headers.** `renderSortableTable` backs 15 panels and emitted bare
 `<th data-sort>` with a delegated click. `aria-sort` appeared nowhere in the
 static tree, so the current sort was carried by a `::after` arrow alone.
 Headers are now focusable, answer Enter and Space, and declare
@@ -320,7 +320,7 @@ now.
 
 ## The signature: the rail is an index
 
-The sidebar is the one surface on all 141 panels, so it carries the whole
+The sidebar is the one surface on all 142 panels, so it carries the whole
 visual identity and everything else stays quiet.
 
 - **`.nav-group.current` sets wider** — 125% against 85% for the other nine

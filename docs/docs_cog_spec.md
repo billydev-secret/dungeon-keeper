@@ -32,7 +32,7 @@ Embed color: the doc's `accent` hex if set, otherwise the guild's branding accen
 
 ### Posting and sync reconciliation
 
-`post` upserts a **placement** (doc × channel) and renders into it. Postable channel types: text channels, threads, and voice-channel chats (the slash command only offers text channels; the dashboard can place into any of the three).
+`post` upserts a **placement** (doc × channel) and renders into it. Postable channel types: text channels, threads, and voice-channel chats (`core.utils.POSTABLE_CHANNELS`) — the dashboard's channel picker can place a doc into any of the three; there's no separate, narrower surface anymore.
 
 `sync` reconciles the rendered embed list against the placement's tracked message ids position-by-position: edit where a tracked message exists, send where it doesn't, delete the surplus (doc shrank). If a tracked message was manually deleted mid-list, the mapping is "torn": since `channel.send` only appends, everything from the tear down is re-sent fresh and the stale tail deleted, keeping the channel visually in doc order. On `Forbidden`/HTTP errors the sync bails with a per-channel status (`ok` / `missing_channel` / `forbidden` / `error`) but never loses track of still-live message ids. Resulting ids are persisted after every sync (except when the channel itself is gone).
 

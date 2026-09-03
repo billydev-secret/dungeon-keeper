@@ -13,7 +13,7 @@ A leveling system for Discord activity. Five independent sources push positive X
 | Reaction given | Listener | n/a | When a member reacts to *another* member's message, the reactor earns a flat stipend, once per message ever. See [[events-spec]] |
 | Voice tick | Background loop | n/a | Members in a qualifying voice channel earn XP per completed interval |
 
-The dashboard exposes the leaderboard and a time-to-level histogram (any level 2–100), plus an admin config panel for the XP coefficients and the role/channel ids. See [[reporting-spec]] for the dashboard wrapper.
+The dashboard exposes the leaderboard, a time-to-level-5 histogram (days-to-reach-level-5 distribution — mean/median/std dev/mode, fixed to the role-grant level rather than a chosen one), and an admin config panel for the XP coefficients and the role/channel ids. See [[reporting-spec]] for the dashboard wrapper.
 
 ## Behavior
 
@@ -21,7 +21,7 @@ The dashboard exposes the leaderboard and a time-to-level histogram (any level 2
 
 - **Text message XP**: every qualified word in a non-bot, non-system message earns a small per-word amount. Replying to another human adds a flat reply bonus. Qualified words exclude URLs, custom Discord emoji, `:shortcode:` emoji, tokens shorter than 3 characters, and tokens with no alphanumerics. URL-only or emoji-only messages award nothing.
 - **Voice XP**: every completed voice interval (default 60 seconds) in a qualifying channel pays a flat amount. A channel qualifies when it has at least 2 non-bot humans and is not the guild's AFK channel. The qualification clock resets to zero when the human count drops below the threshold.
-- **Image-reaction XP**: when a non-bot reactor adds any reaction to a message whose author posted a non-spoilered image, the **author** receives a flat stipend. The reactor gets nothing. Self-reactions and bot reactions don't pay out.
+- **Image-reaction XP**: when a non-bot reactor adds any reaction to a message whose author posted an image attachment, the **author** receives a flat stipend. Spoiler status isn't checked — a spoilered image pays the same as an unspoilered one. The reactor gets nothing. Self-reactions and bot reactions don't pay out.
 - **Reaction-given XP**: when a non-bot member reacts to *another* member's message, the **reactor** receives a flat stipend (default 0.34, coeff `xp_coeff_reaction_given_xp` — double the image-react rate). Awarded at most **once per (message, reactor) ever** via a dedup table, so react/unreact can't farm. No self-reactions, no bots. This is the same event that feeds the economy's XP→currency conversion (see [[economy-spec]] §3.2).
 
 ### Anti-grind multipliers (text only)
@@ -58,7 +58,7 @@ Crossing level 5 (the configured role-grant level) grants the level-5 role and p
 | When | The user sees |
 |---|---|
 | `/xp_leaderboards` used in DMs | "This command only works in a server." |
-| `/xp_leaderboards` caller not resolvable as a member | "Could not resolve your member record in this guild." |
+| `/xp_leaderboards` caller not resolvable as a member | "Could not resolve your member record in this server." |
 | `/xp_leaderboards` with no XP recorded yet | Empty-state embed: "No tracked … XP yet" for each source |
 | `/xp_leaderboards` when only legacy totals exist | "Existing XP totals predate the event ledger. New text and voice XP will appear here going forward." |
 | `/xp_give` by non-authorised user | "You don't have permission to use this command." |
@@ -85,9 +85,11 @@ Per-guild settings, all editable from the dashboard XP panel:
 - **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates).
 - **Grant-allowlist** — extra user ids (beyond mods) allowed to invoke `/xp_give`.
 - **Channel exclusion list** — channels (and threads whose parent is in the list) where text and image-reaction XP are suppressed. An excluded **voice** channel likewise never qualifies for a tick, so it pays neither voice XP nor the daily voice login. The AFK voice channel is implicitly excluded.
+- **Event retention** — an opt-in, off-by-default toggle. Once on, a nightly rollup summarizes each complete day's `xp_events` rows into a per-(member, source, day) `xp_daily` table and then prunes the raw rows older than 90 days; every leaderboard/reporting reader unions the two so the switch changes nothing member-visible.
+- **Promotion Review Grant Role / Ping Role** — the role the level-5 card's Grant button hands out, and the role pinged when a promotion-review card posts. See `promotion_review_spec.md`.
 
-Two internal knobs — the voice-tick poll period and the role-grant level itself — are pinned in code and not exposed. The level-5 promotion post's 2-day tenure minimum and the "Spicy access" field's grant role (`grant_roles["nsfw"]`, see `role_grant_spec.md`) are likewise not dashboard-configurable.
+One internal knob — the voice-tick poll period — is pinned in code and not exposed. The role-grant level itself and the level-5 promotion post's 2-day tenure minimum are likewise pinned. The "Spicy access" field's grant role is the dashboard's Promotion Review Grant Role above when set, falling back to the grant whose internal key is literally `nsfw` (see `role_grant_spec.md`) when it isn't.
 
 ## Stored data
 
-Per-guild and per-member: a totals row (total XP, cached level, the highest level actually announced, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, reaction-given, grant, quest) with optional channel id, a per-(message, reactor) dedup table backing the once-ever reaction-given award, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, an append-only role-event audit (every grant and removal the bot sees, not just XP rewards), and a `pending_promotion_posts` row per member whose level-5 post is waiting out the tenure minimum (cleared by the recheck sweep). The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.
+Per-guild and per-member: a totals row (total XP, cached level, the highest level actually announced, last-message timestamp and fingerprint for the cooldown / duplicate multipliers), an append-only event ledger tagged by source (text, reply, voice, image-react, reaction-given, grant, quest) with optional channel id, a per-(message, reactor) dedup table backing the once-ever reaction-given award, live voice-session state (current channel, qualifying-since timestamp, intervals already paid), a last-activity row for inactivity reports, a processed-messages ledger for backfill idempotency, an append-only role-event audit (every grant and removal the bot sees, not just XP rewards), and a `pending_promotion_posts` row per member whose level-5 post is waiting out the tenure minimum (cleared by the recheck sweep). When a guild opts into event retention, a per-(member, source, channel, day) `xp_daily` rollup table and a single-row `xp_rollup_state` watermark back the nightly summarize-then-prune pass. The pair-streak state lives only in memory and resets on bot restart. No DM data is ever stored.

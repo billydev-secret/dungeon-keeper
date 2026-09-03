@@ -9,7 +9,12 @@ Both surfaces resolve it and pass `assistant_name=` into `answer_advisor`,
 which threads it through the system prompt (`system_instructions(name)`) and
 the failure message (`error_msg(name)`). Stage 2c shipped: **public tutorial
 posts** — `/ask public: True` (mods only) answers in a room-facing register and
-publishes to the channel behind a preview. See INDEX.md → Design spec.
+publishes to the channel behind a preview. See
+[help_bot_knowledge.md](help_bot_knowledge.md) for the settings-registry/
+gap-detection/proactive-surfacing work built on top of this base — the same
+assistant, staged as a separate plan. (No standalone Reference/Design spec
+exists yet for this feature; user-facing behavior is documented in
+`manual.html` §Ask Billy-bot.)
 
 ## Goal
 

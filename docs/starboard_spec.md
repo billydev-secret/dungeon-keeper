@@ -7,9 +7,11 @@ Two related features that ride together. **Starboard** reposts highly-reacted me
 | Command | Type | Permission | Purpose |
 |---|---|---|---|
 | `Quote` | Message context menu | Everyone | Generate a quote card from the clicked message |
+| `/banner` | Slash command | Mod (`ctx.is_mod` — manage_guild/administrator or a configured mod role; Discord's UI defaults to hiding it from non-Manage-Messages members via `default_permissions`, which isn't the actual gate) | Render arbitrary text (no source message) as a banner-style quote card and post it |
+| Reply + mention the **MakeItAQuote** role | Message trigger | Everyone | Renders the replied-to message as a quote card, same as the context menu (role must be created by an admin and set mentionable) |
 | Web `/api/config/starboard` | Web (dashboard) | Admin | Edit channel, threshold, emoji, enabled flag, exclusion list |
 
-There are no starboard slash commands — all configuration lives on the web dashboard's Starboard panel.
+There are no starboard slash commands — starboard configuration lives entirely on the web dashboard's Starboard panel. `/banner` and the MakeItAQuote reply trigger are quote-only alternate entry points into card rendering; they don't touch starboard config.
 
 Bot perms required: **Send Messages** + **Embed Links** in the starboard channel; **Read Message History** in source channels for embed building; **Attach Files** in the channel where Quote cards post.
 
@@ -29,7 +31,7 @@ Reactions in the exclusion list, reactions on the starboard's own posts, and rea
 
 Right-click a non-empty, non-system message and pick **Quote**. The bot shows an ephemeral picker (theme select, font select, border select, **Generate** / **Cancel**) for 120 s. On Generate, the bot fetches the author's avatar, renders the quote card (text laid over a color-graded avatar with vignette), and shows a preview with **Post** / **Cancel**. On Post, the card goes to the channel publicly, then the bot auto-reacts to its own post with the guild's starboard emoji — so a beloved quote can itself reach the starboard.
 
-Each quote post writes an audit row (who quoted whom, where, theme/font used).
+Each quote post made through this context-menu flow writes an audit row (who quoted whom, where, theme/font/border used). `/banner` and the MakeItAQuote reply trigger do **not** write to this log — the audit table has exactly one insert site, in the context-menu Post button's handler.
 
 ## Permissions
 
@@ -59,7 +61,7 @@ Each quote post writes an audit row (who quoted whom, where, theme/font used).
 | Key | Default | Format |
 |---|---|---|
 | Starboard channel | unset | guild text channel |
-| Threshold | `3` | int, 1–100 |
+| Threshold | `3` | int, ≥ 1 (no upper bound enforced) |
 | Trigger emoji | `⭐` | unicode or custom emoji |
 | Enabled | on | on / off |
 | Excluded channels | empty | per-guild set |

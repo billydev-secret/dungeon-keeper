@@ -109,8 +109,10 @@ A single message the bot keeps at the **bottom of a configured channel**.
   done".
 - **Staying at the bottom.** A member message in the board's channel arms a 6s
   debounce, then the board is deleted and re-posted (Discord has no reorder
-  API). Reuses `economy.guide.should_restick_guide` — bot messages are filtered
-  by the caller so a repost can't self-loop. Placement is serialised per guild
+  API). Reuses `core.sticky.StickyPanel` — the shared sticky machinery, itself
+  extracted from this board's own original code — whose `on_message` filters
+  out bot messages unless the panel opts into `restick_on_bot` (the todo board
+  doesn't), so a repost can't self-loop. Placement is serialised per guild
   by an `asyncio.Lock`, and the stored ids are re-read *inside* the lock so a
   racing post can't orphan the live board.
 - **Staying current.** Task mutations from Discord refresh the board
@@ -303,9 +305,10 @@ migration cannot call Discord — and goes stale until someone deletes it. In
 prod this never arises. Pinned in
 `tests/test_migration_180_todo_board_merge.py` against production's real rows.
 
-> Not covered: `economy_auction_service.sticky_panel_channels` still does not
-> know about the todo board, so `/bank auction start` won't warn about it.
-> Tracked as todo #103.
+> **Now covered.** `services.sticky_registry` lists the todo board under the
+> `todo-board` key alongside the other resident sticky panels, so
+> `/bank auction start` does warn when the target channel already holds it
+> (`economy/auction_views._sticky_check`). Todo #103 tracked this gap.
 
 ### Recurring tasks
 
@@ -613,9 +616,12 @@ economy owns and `docs/data_register.md` already covers.
   the ephemeral detail view; its persistent Approve/Deny buttons stay
   registered so the cards posted before the move are still clickable.
 - The **`Add to Todo` message context menu** described in earlier revisions of
-  this spec **does not exist in the code** — no `ContextMenu` is registered, and
-  nothing but the slash command, the board, and the web routes calls
-  `create_todo`. The `todos.description` and `todos.source_message_url` columns
+  this spec **does not exist in the code** — no `ContextMenu` is registered.
+  `create_todo` is called only from the slash command, the board, the web
+  routes, the recurring spawner (`todo_recurring_service._spawn_one`), and the
+  shop's purchase fulfillment (`economy_shop_items_service`, which is where the
+  `purchase_id`-marked rows above come from). The `todos.description` and
+  `todos.source_message_url` columns
   (migration `008`) were added for it; `description` is now populated by the
   board's optional notes field and by recurring definitions, and
   `source_message_url` is currently written by nothing. Removed from the spec

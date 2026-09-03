@@ -51,7 +51,7 @@ The DM's buttons survive bot restarts; per-request state is recovered via the DM
 
 If the bot has been removed from the guild between the request being sent and the click, the target's DM is replaced with a "this guild is no longer available" embed and the request row is dropped.
 
-The panel auto-bumps to the bottom of its channel on any new message there, debounced to one bump per **2 seconds** per guild to avoid thrashing during busy periods.
+The panel auto-bumps to the bottom of its channel on new activity there, via a **trailing-edge** debounce per guild: a burst of chat settles into one repost once the channel has been quiet for **6 seconds**, rather than the panel jumping on the first message of every burst.
 
 The panel is also **posted automatically on boot** into each guild's configured panel channel. Since the 2026-07-28 command-surface audit it is the only route to a member's own DM settings, so it can't depend on an admin remembering to press "post panel" on the dashboard. The bootstrap uses `place_or_refresh`, which edits in place when the panel is already the configured channel's — restarts refresh it rather than stacking duplicates. A guild with no configured panel channel is skipped (there is nowhere to put it); a configured channel that has been deleted or is no longer a text channel logs a warning and is skipped. The dashboard's **Post panel** action still exists for moving the panel to a different channel.
 
@@ -66,7 +66,7 @@ The dashboard's audit log lists every state transition: requested, accepted, den
 
 ## Permissions
 
-- The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them. Since 2026-08-22 they are provisioned through `core/role_provision.py`: an existing role of the same name is adopted rather than twinned, the created roles carry no permissions, and a Discord failure (a rate limit, a 5xx) now degrades to leaving the member's current modes alone instead of escaping into their button click; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
+- The bot needs **Manage Roles** to create and assign the three DM-mode roles, with its top role above them. Since 2026-08-26 they are provisioned through `core/role_provision.py`: an existing role of the same name is adopted rather than twinned, the created roles carry no permissions, and a Discord failure (a rate limit, a 5xx) now degrades to leaving the member's current modes alone instead of escaping into their button click; **Send Messages** + **Embed Links** in the panel channel and the audit channel; **Read Message History** in the panel channel for the bump-to-bottom guard.
 - The settings panel is guild-only (it reads mode roles) and refuses to open from a DM; no other Discord-side gate.
 - The panel button is open to everyone; Accept / Deny hard-check that the clicker is the target.
 - Dashboard endpoints require the **admin** role.
@@ -114,7 +114,7 @@ Per-guild settings an admin chooses via the dashboard:
 
 Where the panel lives is set by posting it (Post Panel), not by a channel dial: the channel and message id are bot-managed and not user-editable. There was once a separate "request channel" setting; nothing ever read it, and it has been removed rather than left looking like a control.
 
-Built-in behavioral constants (not user-tunable): the expiry sweep runs hourly, reason fields cap at 250 characters, and the panel-bump debounce is 2 seconds per guild.
+Built-in behavioral constants (not user-tunable): the expiry sweep runs hourly, reason fields cap at 250 characters, and the panel-bump debounce is a 6-second trailing-edge quiet period per guild.
 
 ## Stored data
 

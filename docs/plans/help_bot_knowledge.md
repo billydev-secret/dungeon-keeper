@@ -1,7 +1,15 @@
 # Plan — Billy-bot: lower the threshold for using features
 
+Follow-on plan to [ai-advisor.md](ai-advisor.md), which builds and ships the
+base Q&A assistant this plan turns into a setup guide — same feature
+("Billy-bot"), staged as a separate plan rather than a continuation of that
+one's stage numbering.
+
 **Branch:** `help-bot-knowledge`
-**Status:** all four stages built 2026-07-23
+**Status:** Stages 1–7 built, plus two naming/coverage corrections
+2026-08-30 (see bottom of this file). The "all four stages" below refers to
+this plan's original four-stage scope (2026-07-23); stages 5–7 and the
+2026-08-30 corrections were added later as the same effort continued.
 
 ## Problem
 

@@ -1,6 +1,6 @@
 # Clapback — functional spec
 
-**Status: Reference** — matches current behavior as of 2026-07-27.
+**Status: Reference** — matches current behavior as of 2026-08-30.
 
 Head-to-head comedy party game. Everyone answers the same prompt, answers are
 bracketed into one-on-one matchups, and the room votes the funnier one.
@@ -34,7 +34,7 @@ clamped by `logic.clamp_config_values`:
 | Option | Default | Range |
 |---|---|---|
 | `rounds` | 5 | 1–15 |
-| `timer` (submit window, seconds) | — | 15–180 |
+| `timer` (submit window, seconds) | 120 | 15–180 |
 | `vote_timer` (per matchup, seconds) | 40 | 10–60 |
 | `anonymous` | false | hides author names on the reveal |
 | `tags` | — | restricts the bank draw |

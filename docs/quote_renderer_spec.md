@@ -12,7 +12,7 @@ treat changes here as cross-cutting.
 
 | Caller | Function | Mode | Notes |
 |---|---|---|---|
-| `quote_cog` `/quote` (message context menu) | `render_quote_card` | avatar (`circle`/`square`) | Quotes a message; avatar on the left, quote on the right. Theme/font/border picked in an ephemeral style view. |
+| `quote_cog` **Quote** (message context menu — right-click a message → Apps → Quote) | `render_quote_card` | avatar (`circle`/`square`) | Quotes a message; avatar on the left, quote on the right. Theme/font/border picked in an ephemeral style view. |
 | `quote_cog` `/banner` | `render_quote_card` | `none` (banner) | Free-text banner; guild icon (or invoker avatar) as background. Uses the guild's uploaded border by default. |
 | `economy_cog` QOTD | `render_quote_card` | `none` | `author_name="Question of the Day"`, `theme=midnight`. Falls back to a plain embed if no image / render raises. |
 | `games_photo_cog` launch | `render_quote_card` | `none` | Photo-challenge prompt card, `theme=golden_meadow`. |
@@ -67,7 +67,8 @@ the frame can't be read, the requested canvas is used as-is.
 - `"square"` — rounded-square crop (shows the whole avatar uncropped).
 - `"none"` — no avatar box. The prompt is **center-aligned** across the card and
   `author_name` becomes a centered **header** above it. This is the "banner" /
-  announcement look every non-`quote` caller uses. (Avatar modes keep the body
+  announcement look every caller other than the **Quote** context menu uses.
+  (Avatar modes keep the body
   **left-aligned** in the right-hand column — only banner/announcement bodies are
   centered. Body lines are clamped left of the floral corner so centering never
   runs text under the flowers.)
@@ -119,8 +120,8 @@ inside `QUOTE_MAX_CHARS`) the quote ran off both card edges, and the attribution
 which follows the quote rather than sitting at a fixed y — went off the bottom with
 it and vanished from the PNG. The banner path had the same gap (~130 chars
 overflowed a 900×500 card; `QUOTE_MAX_CHARS` put the tail at y=725 on a 500px
-canvas), which mattered more because it is the layout every non-`/quote` caller
-uses.
+canvas), which mattered more because it is the layout every caller other than the
+**Quote** context menu uses.
 
 Ellipsizing happens **after the block's final position is known**, and the closing
 `…”` is re-fitted to the last line's own row via `ellipsize_line()`. Appending it
@@ -159,7 +160,7 @@ their artwork.
 
 The **default frame is resolved at the top of `render_quote_card()`**, not just
 before compositing. Filling it in late meant a caller passing no `border_style` —
-which is every caller except `/quote` — laid its text out as if the card were bare
+which is every caller except the **Quote** context menu — laid its text out as if the card were bare
 and then had the poppy frame drawn over it, putting the last lines back under the
 petals.
 

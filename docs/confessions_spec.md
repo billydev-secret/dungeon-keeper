@@ -11,13 +11,13 @@ Anonymous confession box with a persistent **Confess** launcher button at the bo
 | **🎭 Reply Anonymously** | Persistent button | Everyone | Open the reply modal with the user's **stable** identity for this thread |
 | **🎲 Reply as Someone New** | Persistent button | Everyone | Open the reply modal with a fresh **ephemeral** identity (not stored) |
 | **❓ What's this?** | Persistent button | Everyone | Ephemeral help text comparing the two reply modes |
-| Confessions config | Web | Admin reads; Game host writes | Edit destination channel, optional mod-log channel, cooldown, character cap, panic / replies / approval flags, per-day limit |
+| Confessions config | Web | Admin | Edit destination channel, optional mod-log channel, cooldown, character cap, panic / replies / approval flags, per-day limit |
 | **🕵️ Confessions** (todo-board button) | Persistent button | Moderator | Open the approval queue: an ephemeral pick-one select, then an Approve / Reject card |
 | Confessions block list | Web | Admin | Add / remove per-guild blocklist entries |
 | Launcher placement | Web | Game host | Post / move the launcher button to a specified channel |
 | Confessions audit log | Web | Admin | Every confession and anonymous reply with its real author, joined with archived bodies for moderator review |
 
-Bot-side perms required in the destination channel: **Send Messages**, **Embed Links** (for the log embed), **Create Public Threads** (text-channel destination — the bot creates a thread for the reply bar) or **Send Messages in Threads** (forum destination). All modals reject DMs implicitly.
+Bot-side perms required in the destination channel: **Send Messages**, **Embed Links** (the confession itself posts as an embed), **Create Public Threads** (text-channel destination — the bot creates a thread for the reply bar) or **Send Messages in Threads** (forum destination). All modals reject DMs implicitly.
 
 ## Behavior
 
@@ -96,7 +96,7 @@ pointing at a dashboard that doesn't have them.
 
 ### Reply identity model
 
-Each confession thread maintains two shuffled pools: a **name pool** of 660 entries (20 adjectives × 33 animals — e.g. "Brave Aardvark") and a **color pool** of 22 unicode circles. Both pools are popped without replacement; when a pool is exhausted, it reshuffles and a cycle counter advances. Persistent and ephemeral replies share the same pools — once a color or name has been handed out in a cycle, neither path hands it out again until the pool refills.
+Each confession thread maintains two shuffled pools: a **name pool** of 680 entries (20 adjectives × 34 animals — e.g. "Brave Aardvark") and a **color pool** of 22 unicode circles. Both pools are popped without replacement; when a pool is exhausted, it reshuffles and a cycle counter advances. Persistent and ephemeral replies share the same pools — once a color or name has been handed out in a cycle, neither path hands it out again until the pool refills.
 
 - **🎭 Reply Anonymously** (persistent) — the user's identity for this thread is stored and stable across every reply they make in it. Older threads predating the pool system lazy-backfill from the original hash-based mapping so the identity stays visually consistent.
 - **🎲 Reply as Someone New** (ephemeral) — a fresh name and circle are popped from the pools just for this reply. Nothing is stored against the user; subsequent ephemeral replies give different identities.
@@ -107,6 +107,10 @@ Each confession thread maintains two shuffled pools: a **name pool** of 660 entr
 Same set of guards as a confession, plus a check that replies are enabled in this guild. The reply cooldown is half the post cooldown with a 30-second floor. There is no per-day limit on replies. The reply is posted in the spawned Discord thread when known, otherwise as a Discord reply to the parent message. If the original confessor opted into reply notifications, the bot DMs them with jump links to the reply and the original confession; closed DMs and other DM failures are silent. That DM is a branded embed (`send_branded_dm` — guild accent, name and icon in the footer) and keeps `AllowedMentions.none()`, since the body carries member-authored text.
 
 `@everyone` and `@here` in any confession or reply body are defanged before posting. Bodies are hard-truncated to 2 000 characters after the identity prefix.
+
+### No-contact enforcement
+
+Submitting a reply consults the [no-contact list](no_contact_spec.md): the pair check runs against `parent_author_id`, the member being replied to, since a reply is directed even though the confession it lands on is anonymous. When the replier and the parent confessor are a no-contact pair, the reply silently no-ops — nothing is posted, no launcher re-pin, no DM — and the interaction completes exactly the way an ordinary successful reply does, deleting the ephemeral "thinking" placeholder with no error shown. He does not know whose confession this is, so a reply that quietly fails to appear can't be attributed to her; there is nothing for him to connect it to. A confession itself has no directed recipient and is never gated this way — only a reply is.
 
 ### Launcher button maintenance
 
@@ -119,13 +123,13 @@ Pure help text. Posts an ephemeral comparison of the two reply modes. No databas
 ## Permissions
 
 - **Discord side** — every entry point is open to all guild members; the cog only enforces the per-guild blocklist and the global panic flag. Both modals reject DMs implicitly by checking guild context.
-- **Dashboard** — reading the confessions config requires admin; editing the config and posting the launcher require the game-host tier; block / unblock requires admin; the audit log requires admin.
+- **Dashboard** — reading and editing the confessions config requires admin; posting the launcher requires the game-host tier; block / unblock requires admin; the audit log requires admin.
 
 ## User-visible errors
 
 | When | The user sees |
 |---|---|
-| Confessions not configured for this guild | "Bot is not configured. Ask an admin " |
+| Confessions not configured for this guild | "Bot is not configured. Ask an admin to set destination/log channels." (confession) / "Bot is not configured." (reply) |
 | Panic mode is on | "Confessions are temporarily disabled." |
 | Notify-pref textbox contains something other than yes / no / empty | "Invalid notify setting. Use `yes` or `no`." |
 | Body is empty after trim | "Confession/Reply can't be empty." |
@@ -139,6 +143,7 @@ Pure help text. Posts an ephemeral comparison of the two reply modes. No databas
 | Destination channel rejects the post (perms) | "Failed to post confession/reply (missing perms?)." |
 | Reply parent message gone | "That message no longer exists." |
 | Reply thread locked | "This confession thread is locked." |
+| Replier and the parent confessor are a no-contact pair | No visible error — the interaction completes like an ordinary successful reply; nothing is actually posted |
 | Generic button interaction error | "Something went wrong handling that {action}." |
 | Bot lacks access to act on a button | "I don't have enough access to handle that action." |
 | Slash command raises | "An unexpected error occurred. Please try again." |
@@ -150,7 +155,7 @@ Stale-interaction races (Discord internal-defer collisions) silently no-op — t
 - **No anonymous DMs to the bot.** Every entry point requires a guild context.
 - **No author edit or delete.** Once posted, only mods can remove a confession via Discord directly; the bot offers no command for that.
 - **No separate identities for replies-to-replies.** Replying to a reply inherits the root thread's identity pool, so the same person keeps the same name and color throughout.
-- **No backfill for deleted spawned threads.** If the thread was deleted manually, the reply button still works but posts as a direct Discord reply in the destination channel.
+- **No backfill for deleted spawned threads.** The stored thread id is never cleared, so if the thread was deleted manually the reply button still tries it first and fails with "Couldn't access the confession thread." — it does **not** fall back to posting as a direct Discord reply. That fallback only happens when no thread id was ever recorded (thread creation failed at post time) or via the legacy pre-threading `cr` button on posts from before the reply-in-thread feature.
 - **No web-side authoring.** The dashboard configures the feature; submission is Discord-only.
 - **No dashboard approval queue.** Approving is a mod action, and it happens on the todo board only.
 - **No rejected-confession archive.** A rejected body is deleted, not kept for later review.
@@ -197,6 +202,6 @@ never the body; see migration 145). The two lifetimes are deliberately
 independent: seven days is the operational TTL that bounds thread identity and
 reply routing, not a sensible retention policy for a moderation record. Audit
 rows expire on the guild-wide anon-audit retention window (default 90 days,
-`0` to keep forever), configured on the Anonymous Features panel.
+`0` to keep forever), configured on the Anonymity Audit panel.
 
 Ephemeral identity replies pop the shared pools but never write an assignment row, by design — that's what makes them ephemeral. Launcher state lives in memory as per-guild locks; pool state lives in the database so identities survive bot restarts.

@@ -13,15 +13,26 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 | **Close Round** button | Persistent | Round opener or admin | Resolve the round (blocked until min-game-time elapses unless the round was opened with `ping:false`) |
 | **Ask Question** button | Persistent | Eligible questioner | Open the question modal |
 | **Reply** button | Persistent | Allowed replier | Open the reply modal; first valid reply locks the question |
-| Risky panel | Web (dashboard) | Admin | Configure the ping role and the min-game-time floor |
+| Risky Rolls panel | Web (dashboard) | Admin | Configure the ping role, the min-game-time floor, and the per-channel round cap |
+| Feature Rotation "Setup" | Web (dashboard) | Admin | Pick Risky Rolls as a room's featured game — a round starts automatically each day the room is featured, no command involved |
+| Scheduled Games | Web (dashboard) | Admin | Schedule recurring/one-off Risky Rolls launches in a channel, independent of (and stacking with) Feature Rotation |
 
 ## Behavior
 
 ### Starting a round
 
-`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has 10 active games, then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!") — allow-listing exactly that role rather than a blanket `roles=True`. A guild that has **never** set the dial gets a `@Risky Rolls` role created on the first pinged round (`core/role_provision.py`); an admin who picked "(none)" keeps silent rounds. Passing `ping:false` skips the role ping and bypasses the min-game-time floor — the two move together, since the floor exists to give pinged members time to arrive. (This replaced the separate `/risky start_no_ping` command on 2026-07-28.)
+`/risky start` opens a new round. The bot checks Send Messages + Embed Links in the channel, refuses if the channel already has the configured number of active games (default 10, dashboard-adjustable — see **Configuration**), then posts the round embed with the **Roll / How to Play / Close Round** buttons. If a ping role is configured, the bot also posts a one-line ping ("A new Risky Rolls round has begun!") — allow-listing exactly that role rather than a blanket `roles=True`. A guild that has **never** set the dial gets a `@Risky Rolls` role created on the first pinged round (`core/role_provision.py`); an admin who picked "(none)" keeps silent rounds. Passing `ping:false` skips the role ping and bypasses the min-game-time floor — the two move together, since the floor exists to give pinged members time to arrive. (This replaced the separate `/risky start_no_ping` command on 2026-07-28 — the callbacks were identical but for the flag, so the flag absorbed the command.)
 
 An auto-close is scheduled at start: by default the round auto-closes 120 minutes after start, or sooner once 25 distinct players have rolled (whichever comes first, never before the min-game-time floor).
+
+### Starting automatically (Feature Rotation / Scheduled Games)
+
+A round doesn't need `/risky start` at all. Two dashboard-configured paths call the same launcher (`RiskyRollCog.launch`, registered as `bot.game_launchers["risky_roll"]`) with no interaction behind it:
+
+- **Feature Rotation** — an admin picks Risky Rolls under a room's "run a game while this room is open" setup (`/#/feature-rotation`). A round starts the moment the room becomes the day's featured room and, if still open, is closed out when the room's day ends through the round's own resolution (winner picked, no-contact gate consulted, question prompts sent) rather than a silent cancel — though most rounds resolve on their own auto-close timer well before then.
+- **Scheduled Games** (`/#/games-scheduling`) — a recurring or one-time schedule targeting a channel, independent of Feature Rotation. A schedule skips a day the rotation currently has that room hidden.
+
+Both paths refuse to start on top of an already-running round in the channel — `launch()` caps a channel at **one** auto-launched round regardless of the dashboard's per-channel round cap (that cap governs `/risky start` only), so neither auto-launch path trips over the other or over a round already open by hand; picking Risky Rolls for a room's Feature Rotation slot *and* scheduling Risky Rolls in that same channel just means both fire on the room's open day, stacking rather than replacing each other, one after the other closes. An auto-launched round always opens quietly: it skips the role ping and the min-game-time floor unconditionally (equivalent to `ping:false`). The round's opener differs by path, though — Feature Rotation launches with `host_id=0` (hosted by nobody), while Scheduled Games launches with the schedule's creator as `host_id`, so a scheduled round's opener is whoever set up that schedule.
 
 ### Rolling
 
@@ -111,7 +122,7 @@ mentions rather than blocking cog load.
 |---|---|
 | `/risky start` in a DM | "This command can only be used in a server channel." |
 | `/risky start` missing Send Messages / Embed Links | The explicit missing-perm list |
-| `/risky start` with 10 active games in channel | "This channel already has 10 active games. Close one before starting another." |
+| `/risky start` with the channel at its configured game cap (default 10) | "This channel already has N active games. Close one before starting another." |
 | `/risky start` fails after setup | "Risky Rolls could not finish setup. Start a new round." |
 | `/risky reset_state` with nothing to wipe | "No active or pending Risky Rolls state was found in this channel." |
 | Non-admin `/risky reset_state` | "You do not have permission to use that command." |
@@ -128,11 +139,12 @@ mentions rather than blocking cog load.
 | **Reply** from non-recipient | "Only the question's recipient can reply." |
 | **Reply** when question message was deleted | "The question message no longer exists." |
 | Dashboard sends negative min-game-seconds | HTTP 400 |
+| Dashboard sends max-games-per-channel < 1 | HTTP 400 |
 
 ## Economy integration
 
 Pressing **Roll** fires the `risky_roll` economy quest trigger (once per member
-per round, keyed on the game id — `bot_modules/services/risky_roll/views.py:337-341`,
+per round, keyed on the game id — `bot_modules/services/risky_roll/views.py:386-389`,
 via `fire_member_trigger`). The roll itself is the qualifying act, so it fires at
 roll time, not round close. Best-effort: an economy failure never blocks the roll.
 
@@ -140,7 +152,7 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 
 - **No leaderboards.** Wins / losses aren't aggregated; closed rounds delete their state.
 - **No DM mode.** Server-only.
-- **No multi-channel rounds.** A round lives in one channel; the 10-active-games cap is per channel.
+- **No multi-channel rounds.** A round lives in one channel; the per-channel game cap (**Configuration**, default 10) applies per channel.
 - **No editing / cancelling an already-asked question.** Once submitted, the question is locked.
 - **No multi-reply chains.** First valid reply finalises the question.
 - **No spectator participation.** Only members who clicked Roll appear in the round.
@@ -157,8 +169,9 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 
 | Key | Default | Purpose |
 |---|---|---|
-| Ping role | unset | Optional role to ping on `/risky start` (not when `ping:false`). Setting it to "no role" clears the row |
-| Min game seconds | unset = 0 (no floor) | Floor on round duration; blocks an early **Close Round** and delays auto-close by the same amount. Saving 0 clears the row. `ping:false` bypasses |
+| Ping role | unset | Optional role to ping on `/risky start` (not when `ping:false`, and not on an auto-launched round — see **Starting automatically**). Setting it to "no role" clears the row |
+| Min game seconds | unset = 0 (no floor) | Floor on round duration; blocks an early **Close Round** and delays auto-close by the same amount. Saving 0 clears the row. `ping:false` and an auto-launched round both bypass it |
+| Max games per channel | 10 | How many rounds `/risky start` will let stack in one channel before refusing (1–100). Auto-launched rounds ignore this dial — they cap at one per channel regardless |
 
 Per-round only (not persisted as config):
 - **Auto-close after N players** — default 25 (must be ≥ 2).
@@ -172,6 +185,6 @@ Four per-guild tables:
   The table also carries a `reroll_user_ids` column, left over from a player-visible reroll flow that was never wired up; nothing reads or writes it (see **Non-goals**).
 - **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock.
 - **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days.
-- Two per-guild rows in the shared config table for the ping role and the min-game-time floor.
+- Three per-guild rows in the shared config table for the ping role, the min-game-time floor, and the max-games-per-channel cap.
 
 No DM data. No filesystem cache. In-flight rounds, prompts, and questions persist across restarts; the cog rebuilds in-memory state and re-attaches persistent views on next boot.
