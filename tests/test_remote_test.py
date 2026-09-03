@@ -452,10 +452,13 @@ def test_locks_are_synced_so_the_remote_can_detect_staleness():
         assert name in rt.SYNC_PATHS
 
 
-def test_readme_is_synced_so_its_doc_test_cant_go_stale():
-    # test_games_help_logic.py checks README.md's party-game count against
-    # the code — without shipping it every run, a remote's only copy is
-    # whatever its initial `git clone` had, drifting silently forever after.
+def test_prose_docs_are_synced_so_their_doc_tests_cant_go_stale():
+    # test_games_help_logic.py checks docs/features.md's party-game count
+    # against the code — without shipping it every run, a remote's only copy
+    # is whatever its initial `git clone` had, drifting silently forever
+    # after. README.md rides along for the same reason: it is tiny, and it
+    # carried this very tripwire until 2026-09-03.
+    assert "docs" in rt.SYNC_PATHS
     assert "README.md" in rt.SYNC_PATHS
 
 

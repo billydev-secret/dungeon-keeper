@@ -20,8 +20,9 @@ pages. The bot registers about 160 slash commands and 6 right-click menus.
 - **AI Moderation** — On-demand AI review of a user, a channel, or a free-form question, backed by a guard model that learns your community's consent norms from confirmed and dismissed flags.
 - **Rules Watch** — A passive, recall-leaning monitor that pre-screens public chat with cheap heuristics, then weighs suspicious messages against context signals. Flags route to a human-reviewed queue.
 - **Spoiler guard** — Unflagged images in spoiler-required channels are removed with a friendly, self-deleting reminder. Bypass roles keep trusted members exempt.
+- **Message Search** — A moderator-only dashboard search over the message archive, filtered by member, channel and time window (regex optional), with a context view around each hit and a JSON export. Only reaches what the archive actually holds — message content is off by default.
 - **Policies** — Collaborative rule proposals with an open / vote / close / list flow, so policy changes get decided in the open.
-- **Purge, cleanup & privacy** — Bulk-delete messages by count and/or cutoff time, plus scheduled cleanup: a server-wide sweep that retires everything past a set age outside protected channels, and per-channel schedules on their own age and interval. Pinned messages are never touched. Members erase all of their own data with `/delete_me`; mods fully purge a user with `/delete_user`.
+- **Purge, cleanup & privacy** — Bulk-delete messages by count and/or cutoff time, plus scheduled cleanup: a server-wide sweep that retires everything past a set age outside protected channels, and per-channel schedules on their own age and interval. The scheduled sweeps never touch a pinned message (a manual purge is deliberate and takes what you point it at). Members erase all of their own data with `/delete_me`; mods fully purge a user with `/delete_user`.
 
 ## XP & analytics
 
@@ -39,6 +40,7 @@ pages. The bot registers about 160 slash commands and 6 right-click menus.
 - **Voice Control** — Join a hub channel to instantly spawn your own voice room, then lock, hide, rename, limit, invite, kick, transfer, or claim it. Profiles persist trust lists, blocks, and knock-to-join.
 - **Music** — YouTube and Spotify playback via Lavalink with a persistent now-playing card and queue. Mod-only 24/7 mode parks the bot in a channel and auto-queues from a playlist when idle.
 - **Music Playlist** — One watched channel feeds a rolling Spotify playlist: links are parsed and confidence-matched, with a dashboard review queue for anything uncertain.
+- **Voice Transcription** — Voice messages posted in allow-listed channels get transcribed locally (faster-whisper, nothing leaves the box) so the room isn't split between people who can play audio and people who can't. A right-click menu transcribes any audio attachment on demand.
 
 ## Party games
 
@@ -108,6 +110,8 @@ Musical Chairs (3+ players).
 
 - **Role grants** — Hand out community roles through a per-role permission allowlist (greeters can grant Denizen, mods can grant NSFW or Veteran) without handing anyone Manage Roles.
 - **Role menus** — Self-assign roles via persistent button or dropdown menus, built, previewed, and published entirely from the dashboard's Oracle builder.
+- **Auto-role** — A dashboard-configured role set applied to every new human member on join, filtered at apply time for hierarchy and managed roles, and skipped for a jailed member rejoining.
+- **Discord Onboarding** — Publishes the bot's opt-in ping roles into Discord's own "Channels & Roles" onboarding prompts, where members actually pick roles up. Editing replaces the whole prompt list, so nothing is written without an explicit confirm.
 - **Announcements** — Dashboard-queued one-shot channel posts: embed + ping line, live preview, guild-local scheduling, sent history, and up to five self-assign role buttons.
 - **Docs** — Author rules pages, guides, and FAQs on the dashboard and post them into channels as bot-maintained messages; editing re-renders every posted copy in place.
 - **Welcome / leave** — Configurable join and leave messages, edited and previewed live from the dashboard.
