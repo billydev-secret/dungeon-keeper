@@ -2660,6 +2660,10 @@
 
     <p>Channels are enabled, configured, and disabled from the <strong>Auto-Thread</strong> panel on the <a href="/#/config-needle">web dashboard</a>.</p>
 
+    <p><strong>Thread status markers.</strong> The bot can react on the original post with one of three emoji so its thread's state is readable without opening it: <strong>Thread Open</strong> when the thread is created, <strong>Thread Archived</strong> once it closes, and <strong>Thread Locked</strong> if a moderator locks it. Only one shows at a time, and leaving a box empty skips that state. Switch them on per channel with <em>Mark Thread Status with Emoji</em>. (These were previously labelled "Waiting for an Answer" and "Answered or Archived", which only made sense in a help channel — the markers track whether the <em>thread</em> is open, not whether a question got answered.)</p>
+
+    <p>Separately, <strong>Clear the Open Marker on the First Reply</strong> takes the open marker off as soon as anyone other than the poster replies, so a support channel shows at a glance which posts nobody has picked up yet. <strong>It does not archive or close the thread</strong> &mdash; conversation carries on exactly as before. (Its old label said "Mark Answered", and the setting is still called <em>archive immediately</em> under the hood; neither described what it does, which is why the whole group has been renamed.)</p>
+
     <div class="cmd-block">
       <span class="cmd-name">/close &nbsp;&nbsp; /title name:&lt;new-name&gt;</span>
       <span class="cmd-perm"><span class="perm perm-all">Thread owner</span> or Manage Threads</span>
