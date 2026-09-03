@@ -32,12 +32,13 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 
 ### Web dashboard
 
-The dashboard mirrors the moderator surface. Jail endpoints are read-only — releases happen in Discord.
+The dashboard mirrors the moderator surface.
 
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/moderation/stats` | Counts, averages, top moderators |
 | `GET` | `/api/moderation/jails` | List jail records |
+| `POST` | `/api/moderation/jails/{id}/release` | Release a jail — routes through the same `_do_unjail` flow as `/unjail`, departed members included |
 | `GET` | `/api/moderation/tickets` | List tickets (filter by status) |
 | `GET` | `/api/moderation/tickets/{id}` | Single-ticket detail |
 | `POST` | `/api/moderation/tickets/{id}/claim` | Claim a ticket |
@@ -83,7 +84,7 @@ First-run configuration is **Config → Moderation** on the dashboard: mod roles
 
 Mod runs `/jail`, the right-click "Jail User" menu, or the dashboard. Rejects if the target is a bot, already jailed, or a mod. The flow snapshots every current role, strips them, assigns `@Jailed`, and creates a fresh private channel named `jail-{username}-{timestamp}` visible to the target and mod roles only. The `@Jailed` role itself is denied view on this channel so jailed users can't see each other's channels. The bot posts an intake embed in the channel and DMs the member: who jailed them, why, and how long the hold lasts (or "indefinite" if no duration was given). Tone is firm but neutral — "you've been placed in a moderation hold." Durations accept `30m`, `2h`, `1d`, `7d`, `1w`; no value means indefinite.
 
-The jail record (with the role snapshot) is written to the database the instant the roles are stripped — *before* the channel is created — so restoration is never lost. If channel creation then fails (missing **Manage Channels**), the member stays jailed with an intact record: the auto-release loop and `/jail release` both still work, and a mod only needs to grant the permission. The channel id is filled in on the same row once the channel exists.
+The jail record (with the role snapshot) is written to the database the instant the roles are stripped — *before* the channel is created — so restoration is never lost. If channel creation then fails (missing **Manage Channels**), the member stays jailed with an intact record: the auto-release loop and `/unjail` (Discord or the dashboard's Release button) both still work, and a mod only needs to grant the permission. The channel id is filled in on the same row once the channel exists.
 
 A background task checks once a minute for expired jails and runs the unjail flow automatically with reason "Jail duration expired." A 24-hour jail set at 11 pm Friday actually ends at 11 pm Saturday even if no mod is online.
 
@@ -187,7 +188,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
   goes, but a `warning_delete` audit entry keeps what it held, so the deletion itself is
   never a silent gap in the record.
 - **No appeal system.** There's no member-facing "appeal my jail" flow; the jail channel itself is the conversation.
-- **No web-side jail release or ticket delete.** Both destructive actions happen only in Discord.
+- **No web-side ticket delete.** That destructive action happens only in Discord. (Jail release is available from the dashboard — see the Release hold row above — and routes through the same `/unjail` flow.)
 - **No per-user ticket cap.** A member can open as many tickets as they want.
 - **No spectator visibility on tickets or jails.** Only the primary user, mods, pulled participants, and (after escalation) admins can see the channel.
 

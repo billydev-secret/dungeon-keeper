@@ -9,6 +9,7 @@ Self-service per-guild birthday tracker. Members set their own birthday (month +
 | `/birthday set` | Slash | Everyone (server only) | Open a modal: month (1–12), day (1–31), optional "birthday request" (≤100 chars) |
 | `/birthday remove` | Slash | Everyone (server only) | Remove your own birthday |
 | Birthday panel | Web (dashboard) | Admin | Configure the announcement hour (its own Timing card) and any number of announcement channels, each its own card with its own message template and pin toggle |
+| Birthday Calendar panel (Reports → Member Lists) | Web (dashboard) | Moderator | Browse upcoming birthdays over a selectable window (30/60/90/365 days, default 90), sorted by days-until |
 
 ## Behavior
 
@@ -73,7 +74,7 @@ Every card is its own form: saving or removing one channel never touches unsaved
 ## Permissions
 
 - **User-side**: `/birthday set` and `/birthday remove` are open to every member.
-- **Dashboard**: admin only.
+- **Dashboard**: the Birthdays settings panel (hour, channels, templates, pin toggles) is admin only to save; the Birthday Calendar report is moderator-level.
 - **Bot-side**: **Send Messages** in each configured channel; **Manage Messages** there too when the pin toggle is on (pinning is silently skipped without it).
 
 ## User-visible errors

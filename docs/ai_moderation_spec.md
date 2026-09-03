@@ -19,9 +19,9 @@ LLM-assisted moderation backed by a local model. Three systems share the same mo
 | `/watch list` | Slash | Mod | Show everyone you're currently watching |
 | `Report Rule Violation` | Message context menu | Mod | Modal (optional rule number + note) that inserts a manual `immediate`-tier event for the message and pre-labels it a confirmed violation |
 | Rules Watch enable/disable + alert channel | Web | Admin | Toggle passive monitoring and set the immediate-alert channel (dashboard's Rules Watch config panel — replaced the retired `/rules-watch enable`/`disable`/`set-channel` commands) |
-| AI config (prompts / clear) | Web | Admin | Read or override the bot-wide system prompt for each command, including the Rules Watch guard |
+| AI config (prompts / clear) | Web | Moderator to view; Admin to edit | Read or override the bot-wide system prompt for each command, including the Rules Watch guard |
 | AI prompt test | Web | Admin | Run the current prompt against arbitrary input |
-| Model status / source / reload | Web | Admin | Inspect or change the loaded model file |
+| Model status / source / reload | Web | Moderator to view status; Admin to change source/reload | Inspect or change the loaded model file |
 | Guild-wide message query | Web | Moderator | Free-form question against the local archive with optional filters |
 | Rules Watch alert queue | Web | Moderator | Review flagged events (including the unlabeled digest tier); Confirm / Dismiss with inline label buttons. Replaced the retired `/rules-watch digest` and `/rules-watch label` commands |
 | Rules Watch label stats | Web | Moderator | Label counts, false-positive rate, events by tier and rule. Replaced the retired `/rules-watch stats` command |
@@ -134,7 +134,7 @@ When a moderator clicks **✅ Confirmed violation** or **❌ False positive** on
   see `docs/plans/command-surface-audit.md`.)
 - The alert embed's buttons are disabled after labeling.
 
-The mod-only **Report Rule Violation** message context menu is the reverse path: instead of labeling an event the monitor raised, it *creates* one — a manual `immediate`-tier event for the reported message, pre-labeled as a confirmed violation, with an optional rule number and note captured in a modal. These are high-value positive training examples and the primary human-reporting capture path (see §12.4 of `rules_watch_cog.md`).
+The mod-only **Report Rule Violation** message context menu is the reverse path: instead of labeling an event the monitor raised, it *creates* one — a manual `immediate`-tier event for the reported message, pre-labeled as a confirmed violation, with an optional rule number and note captured in a modal. These are high-value positive training examples and the primary human-reporting capture path (see §12.4a of `rules_watch_cog.md`).
 
 These labels are the primary long-term output of the system. As confirmed and dismissed events accumulate, the label set describes *this* community's consent norms in a form no public dataset can provide.
 
@@ -162,9 +162,9 @@ The `model` argument threaded through `chat()` remains ignored on both backends 
 
 - The bot needs **Read Message History** wherever the archive is populated.
 - `/ai *` requires the bot's **admin** check.
-- `/watch *` and `/rules-watch *` require the bot's **mod** check; add/remove/enable reject DMs.
+- `/watch *` requires the bot's **mod** check; add/remove reject DMs. The `/rules-watch *` command family was removed 2026-07-28 — see Commands above.
 - The DM relay needs each watcher to allow DMs from server members. Failures are logged and dropped.
-- Dashboard endpoints require **admin** except the guild-wide message query and the Rules Watch queue/stats, which require **moderator**.
+- Dashboard endpoints require **admin** to change anything (prompt save/reset, model source, model reload, Rules Watch enable/disable+channel); viewing the AI config panel, model status, the guild-wide message query, and the Rules Watch queue/stats/status require **moderator**.
 
 ---
 
@@ -173,7 +173,7 @@ The `model` argument threaded through `chat()` remains ignored on both backends 
 | When | The user sees |
 |---|---|
 | Non-admin runs `/ai *` | "You don't have permission to use this command." |
-| Non-mod runs `/watch *` or `/rules-watch *` | "Permission denied." |
+| Non-mod runs `/watch *` | "You don't have permission to use this command." |
 | LLM not configured | "OLLAMA_BASE_URL is not set — AI features require a local Ollama instance." |
 | `/ai *` invoked in DMs | "This command only works in a server." |
 | `/ai scan` / `/ai channel` in voice/category/forum channel | "This command only works in text channels and threads." |
@@ -185,7 +185,7 @@ The `model` argument threaded through `chat()` remains ignored on both backends 
 | Dashboard guild-wide query, LLM not configured | "LLM is not configured." |
 | Dashboard guild-wide query, guild unavailable | "Guild not available" |
 | Dashboard prompt update, unknown key | "Unknown prompt key: {key}" |
-| Dashboard model reload, no source set | "No model source configured." |
+| Dashboard model reload, no source set | "No model source configured — set model path and HuggingFace details first." |
 | Dashboard label, event not found | 404 |
 
 The "OLLAMA_BASE_URL" wording is legacy — the check is whether a model file or HuggingFace source has been configured.

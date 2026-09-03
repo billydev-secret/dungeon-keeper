@@ -4,12 +4,25 @@
 
 The **Level 5 Log Channel** (`xp_level_5_log_channel_id`) is the
 promotion-reviews channel. Three triggers post a review card there, each
-carrying a persistent **Grant access** button (survives restarts) so a roles
+carrying a persistent **Grant** button (survives restarts) so a roles
 manager can action a return without leaving Discord — no slash commands.
+
+The button is **labelled with the role it grants** — `Grant <role name>`,
+resolved from `promotion_review_grant_role_id` when the card is posted. A
+generic "Grant access" tells a reviewer nothing about what they are handing
+over, and a guild whose dial points at the wrong role only finds out from the
+audit log afterwards. It falls back to **"Grant access"** in three cases: no
+grant role configured, a dial pointing at a deleted role, and the **sleeper**
+card, whose Grant runs a full reactivate rather than adding the configured role.
+Labels are truncated to Discord's 80-character ceiling. The label is fixed at
+post time — cards posted before a dial change keep the old wording, since the
+rendered message carries the label, not the reconstructed view.
 
 ## Triggers
 
-All three cards ping `promotion_review_ping_role_id` when it is set.
+All three cards ping `promotion_review_ping_role_id` when it is set, and the
+guild's `mod_role_ids` when it is not (see "The two roles are different
+settings").
 
 | Kind | Fires when | Grant button does |
 |------|-----------|-------------------|
@@ -33,23 +46,32 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
 | Key | Role it names | Used for |
 |-----|---------------|----------|
 | `promotion_review_grant_role_id` | The role handed **to** the promoted member | What the Grant button adds (`_do_grant_role`) |
-| `promotion_review_ping_role_id` | Your **role managers** | Pinged when a card posts, so a human sees it |
+| `promotion_review_ping_role_id` | Your **role managers** | Pinged when a card posts, so a human sees it. Unset ⇒ falls back to `mod_role_ids` |
 
 Neither is the approver gate — that is `_can_action`: administrator, Manage
-Roles, or a configured mod. A card pings the ping role only; leave it "(none)"
-and all three cards post silently, as they did before this shipped.
+Roles, or a configured mod.
 
 Since 2026-08-22 a guild that has **never touched** the ping dial gets a
 `@Promotion Reviewers` role created when the first card posts
-(`core/role_provision.py`). Explicitly choosing "(none)" is a different state —
-it writes a stored 0 and is respected forever; only the never-configured case
-provisions.
+(`core/role_provision.py`).
+
+**Mod-role fallback (2026-09-02).** With no provisioned or configured ping
+role, the card falls back to the guild's `mod_role_ids` rather than posting to
+nobody — `promotion_review_service.ping_role_ids`, which the dial always
+overrides when set. A stored 0 here is usually an *artifact*, not a decision:
+XP Settings saves as one form, so changing any XP dial writes a 0 over this
+one, and prod showed exactly that — the main guild sat at 0 while its cards
+posted silently. The fallback targets the roles that can actually action a
+card, matching what the economy's approval cards do with `manager_role_id`.
+Admin roles are deliberately excluded: they overlap the mod roles in every
+configured guild, so including them would only ping the same people twice.
 
 The mention goes in the message **content** (a role mention inside an embed
-renders but never notifies) and allow-lists exactly that one role via
-`ping_send_kwargs`. Note `discord.AllowedMentions`' unset fields default to
-*allow*, so `everyone`/`users`/`replied_user` are pinned `False` explicitly —
-the bare `AllowedMentions(roles=[...])` form still serializes
+renders but never notifies) and allow-lists exactly those roles by id via
+`core.utils.role_ping_kwargs`, never a blanket `roles=True`. Note
+`discord.AllowedMentions`' unset fields default to *allow*, so
+`everyone`/`users`/`replied_user` are pinned `False` explicitly — the bare
+`AllowedMentions(roles=[...])` form still serializes
 `parse: ['everyone', 'users']`.
 
 ## Mechanics
@@ -66,7 +88,7 @@ the bare `AllowedMentions(roles=[...])` form still serializes
   role diff in `events_cog` re-renders just that field whenever the spicy-access
   role is added or removed — so the card tracks access granted by `/grant` or by
   a hand-added role, neither of which it could see before. **Which role that
-  is** (`xp_service.nsfw_grant_role_id`, 2026-08-29): the dashboard's
+  is** (`xp_service.nsfw_grant_role_id`, 2026-08-30): the dashboard's
   **Promotion Review Grant Role** (`promotion_review_grant_role_id`, XP &
   Leveling panel) when set — the role the button hands out is by definition the
   access being reviewed, so button and field now move together — falling back to

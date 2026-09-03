@@ -288,23 +288,40 @@ async def maybe_log_level_5(
     # registered in __main__ — so it stays actionable across restarts.
     from bot_modules.services.promotion_review_views import (
         Level5PromotionView,
+        grant_label,
         ping_send_kwargs,
     )
 
-    # Pings promotion_review_ping_role_id (the role managers who review), which
-    # is *not* the grant role above. Silent when unset or without a db_path.
-    ping_role = 0
+    # Pings promotion_review_ping_role_id, falling back to the guild's mod
+    # roles — the people who can action the card. Neither is the *grant* role
+    # above, which is what the button hands to the member. Silent when nothing
+    # is configured, or without a db_path.
+    ping_roles: list[int] = []
+    grant_role: discord.Role | None = None
     if db_path is not None:
         try:
-            ping_role = await asyncio.to_thread(_ping_role_id, db_path, member.guild.id)
+            ping_roles = await asyncio.to_thread(
+                _ping_role_id, db_path, member.guild.id
+            )
         except Exception:
             log.exception("Failed to read the promotion-review ping role; posting silent.")
+        # The button's label names the role it hands out, so a mis-set dial is
+        # visible before the press rather than in the audit log afterwards.
+        try:
+            grant_role_id = await asyncio.to_thread(
+                _grant_role_id, db_path, member.guild.id
+            )
+        except Exception:
+            log.exception("Failed to read the promotion-review grant role; using the generic label.")
+        else:
+            if grant_role_id > 0:
+                grant_role = member.guild.get_role(grant_role_id)
 
     try:
         posted = await channel.send(
             embed=embed,
-            view=Level5PromotionView(member.id),
-            **ping_send_kwargs(ping_role),
+            view=Level5PromotionView(member.id, grant_label(grant_role)),
+            **ping_send_kwargs(ping_roles),
         )
     except discord.Forbidden:
         log.warning(
@@ -349,11 +366,20 @@ async def maybe_log_level_5(
         )
 
 
-def _ping_role_id(db_path: Path, guild_id: int) -> int:
+def _ping_role_id(db_path: Path, guild_id: int) -> list[int]:
+    """Roles the Level 5 card pings — the dial, else the guild's mod roles."""
     from bot_modules.core.db_utils import open_db
 
     with open_db(db_path) as conn:
-        return promo_svc.ping_role_id(conn, guild_id)
+        return promo_svc.ping_role_ids(conn, guild_id)
+
+
+def _grant_role_id(db_path: Path, guild_id: int) -> int:
+    """The role the Level 5 card's Grant button hands out (0 when unset)."""
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        return promo_svc.grant_role_id(conn, guild_id)
 
 
 def _record_level_5_card(

@@ -742,6 +742,45 @@ def test_run_sponsor_expiry_refunds_and_notices(db):
         assert get_balance(conn, GUILD, USER) == 200
 
 
+def test_every_expiry_sweep_names_the_request_it_expired(db):
+    """The sweep has to hand the caller a submission id, or the card it just
+    refunded goes on showing Approve/Decline in the approvals channel for good
+    — the board self-corrects, a posted message does not."""
+    _enable(
+        db,
+        price_qotd_sponsor=40, qotd_sponsor_expire_days=14,
+        price_pin_of_day=150, pin_channel_id=6668, pin_expire_days=3,
+        flash_theme_enabled=True, price_flash_theme=300,
+        theme_channel_id=6666, theme_expire_days=3,
+    )
+    sponsor_id = _sponsor(db)
+    from bot_modules.services.economy_pin_service import submit_pin
+    from bot_modules.services.economy_theme_service import submit_theme
+
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+        apply_credit(conn, GUILD, USER, 5000, "grant", actor_id=9001)
+        pin_id = submit_pin(conn, settings, GUILD, USER, "Raid at eight").submission_id
+        theme_id = submit_theme(
+            conn, settings, GUILD, USER, "Cursed Cooking", "The idea"
+        ).submission_id
+        stale = time.time() - 60 * 86400
+        for table in (
+            "econ_qotd_submissions", "econ_pin_submissions", "econ_theme_submissions",
+        ):
+            conn.execute(f"UPDATE {table} SET created_at = ?", (stale,))
+
+    now = time.time()
+    with open_db(db) as conn:
+        sponsor_notices = economy_loop.run_sponsor_expiry(conn, GUILD, now)
+        pin_sweep = economy_loop.run_pin_expiry(conn, GUILD, now)
+        theme_sweep = economy_loop.run_theme_expiry(conn, GUILD, now)
+
+    assert [n.submission_id for n in sponsor_notices] == [sponsor_id]
+    assert [n.submission_id for n in pin_sweep.refunds] == [pin_id]
+    assert [n.submission_id for n in theme_sweep.refunds] == [theme_id]
+
+
 def test_run_sponsor_expiry_skips_approved_and_disabled_guilds(db):
     from bot_modules.services.economy_qotd_sponsor_service import resolve_submission
 

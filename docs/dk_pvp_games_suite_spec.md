@@ -321,7 +321,7 @@ CREATE TABLE duel_cooldowns (        -- per-pair (duel) cooldowns
 CREATE TABLE duel_config (           -- per-guild, per-game config
     guild_id INTEGER NOT NULL, game_type TEXT NOT NULL,
     cooldown_hours INTEGER DEFAULT 48, sentence_hours INTEGER DEFAULT 24,
-    allow_early_revert INTEGER DEFAULT 0, channel_allowlist TEXT DEFAULT '[]',
+    channel_allowlist TEXT DEFAULT '[]',
     nick_denylist TEXT DEFAULT '[]', max_nick_length INTEGER DEFAULT 32,
     max_stakes_length INTEGER DEFAULT 200,
     challenge_limit_per_hour INTEGER NOT NULL DEFAULT 30,   -- 177; 0 = no limit
@@ -335,8 +335,10 @@ all six games in `duels/base_duel.py` / `base_game.py`, and are configurable per
 the web dashboard's Games nav section (one "Config" panel per game) — see §8.
 `nick_denylist` is set from the same panels as of 2026-08-29 ("Extra Banned Words",
 comma-separated; stored lowercased and de-duplicated, capped at 40 entries of 64 characters).
-`allow_early_revert` is a column no code reads — it is deliberately absent from
-`duels/db.py._CONFIG_DEFAULTS` so nothing mistakes it for a setting.
+`duel_config` originally also carried an `allow_early_revert` column (migration `032`); nothing
+ever read or wrote it, and `194_drop_dead_game_config_columns.sql` (2026-08-30) dropped it
+outright — it is not merely absent from `duels/db.py._CONFIG_DEFAULTS`, it no longer exists as
+a column at all (see §11).
 
 **Per-game state tables** (one migration each)
 
@@ -365,9 +367,11 @@ fully rehydrates after a restart.
   It sweeps stale games (below) and reverts any `duel_nicks` row past `expires_at` that isn't
   yet reverted (restore original nick, DM the loser, mark reverted, log).
 - **Stale-game reaper** (thresholds from each game's `fetch_sweepable`): `PENDING` challenges
-  expire **60s** after creation; `ACTIVE` games with no activity for **5 min** become
-  `ABANDONED` (no nickname consequences); `RESOLVED` games where the winner never named the
-  loser become `NO_NICK_SET` after **5 min**; idle lobbies become `EXPIRED_LOBBY`.
+  expire **5 minutes** after creation (`CHALLENGE_RESPONSE_SECONDS`, see §3 — it was 60s until
+  2026-08-30); `ACTIVE` games with no activity become `ABANDONED` after **10 min** (Pressure
+  Cooker is the one exception, at **5 min**) (no nickname consequences); `RESOLVED` games where
+  the winner never named the loser become `NO_NICK_SET` after **5 min**; idle lobbies become
+  `EXPIRED_LOBBY`.
 - **In-game timers** — hidden fuses (Hot Potato), draw delays (Quickdraw), the meter climb +
   crash (Chicken), and music/scramble windows (Musical Chairs) are per-game `asyncio` tasks
   keyed to the game id; cancelled/rescheduled on the relevant interactions.
@@ -399,23 +403,29 @@ Slugs: `pressure`, `quickdraw`, `hotpotato`, `hotpotatogroup`, `chicken`, `music
 |---|---|---|
 | `start [stakes] [wager]` | Anyone | Open a join lobby. |
 
-**`cancel`/`stats`/`revert`/`config` — all removed, none were ever reachable.** Every one of
-these subcommands (plus `config`, see below) was stripped from each cog's command tree in
-`setup()` (`cog.<group>.remove_command(...)`) before it ever registered under `/games`, so
-none of them were ever actually callable in Discord — a pending challenge could only be
-cancelled via timeout (60s) or the lobby's `🚫` button, W/L stats and Hot Potato's style points
-had no way to be viewed, and the nickname "early revert" toggle (`allow_early_revert`) had no
-command to exercise it, on any game, ever. Rather than wire these up, the dead command methods
-and their now-orphaned db-layer stats/revert-shim functions were deleted outright — they
-weren't needed for these short-lived games. `allow_early_revert` remains an
-unused column on the shared `duel_config` table (see §10) and is not surfaced anywhere;
-`nick_denylist` was always enforced and is now settable from each game's dashboard panel. A pending challenge still self-expires after 60s (see §7's stale-game reaper) so
-dropping `cancel` has no user-facing gap.
+**`cancel`/`stats`/`revert`/`config` — all removed, none were ever reachable.** None of
+these subcommands (plus `config`, see below) exist in any of the six cogs today — the command
+methods and their now-orphaned db-layer stats/revert-shim functions were deleted outright
+(`bot.tree.remove_command(...)` in each cog's `setup()` only removes the auto-registered
+top-level game-name command so the group can be re-parented under `/games`; it isn't how the
+dead subcommands went away). So none of them were ever actually callable in Discord — a
+pending challenge could only be cancelled via timeout (5 minutes) or the lobby's `🚫` button,
+W/L stats and Hot Potato's style points had no way to be viewed, and the nickname "early
+revert" toggle (`allow_early_revert`) had no command to exercise it, on any game, ever. They
+weren't needed for these short-lived games. `allow_early_revert` doesn't even exist as a
+column any more — migration `194` dropped it (see §11); `nick_denylist` was always enforced
+and is now settable from each game's dashboard panel. A pending challenge still self-expires
+after 5 minutes (see §7's stale-game reaper) so dropping `cancel` has no user-facing gap.
 
 **Per-game config — web dashboard only.** Settings (cooldowns, sentence duration,
 channel allowlist, nickname/stakes length caps, plus each game's own mechanics knobs) live on
 the web dashboard's **Games** nav section, one "Config" panel per game
-(`config-games-<slug>.js` / `PUT /api/config/games-<slug>`):
+(`config-games-<slug>.js`, using the same no-separator slug as the `/games <slug>` command —
+`config-games-hotpotato.js`, `config-games-musicalchairs.js`, etc.). The `PUT` endpoint
+underneath is `/api/config/games-<slug>` only for the four single-word games
+(`games-pressure`, `games-quickdraw`, `games-chicken`); Hot Potato (duel/group) and Musical
+Chairs hit hyphenated multi-word paths instead — `PUT /api/config/games-hot-potato`,
+`/api/config/games-hot-potato-group`, `/api/config/games-musical-chairs`:
 
 | Game | Panel fields |
 |---|---|
@@ -647,12 +657,16 @@ out the wait-then-press rule.
 - `challenge_limit_per_hour` 30 (0 = no limit)
 - `nick_denylist` `[]` — extra banned words, enforced on every nickname and every line of
   stakes text, set from each game's dashboard panel ("Extra Banned Words")
-- `allow_early_revert` — a real column, but unused: nothing reads or writes it (the games that
-  carried a `revert` command never had it wired into the live tree — see §8), so it is not in
-  `_CONFIG_DEFAULTS` either. Same story for `quickdraw_config.void_on_double_noshow` (a draw
+- `allow_early_revert` was a real column, but nothing ever read or wrote it (the games that
+  carried a `revert` command never had it wired into the live tree — see §8). Migration `194`
+  (`194_drop_dead_game_config_columns.sql`, 2026-08-30) dropped it outright, along with six
+  sibling dead columns the same audit found: `quickdraw_config.void_on_double_noshow` (a draw
   nobody answers is always voided), `hp_group_config.shake_threshold` / `pass_mode` (the shake
   threshold is fixed in `game.shake_emoji`; passing is always clockwise), and `lobby_timeout`
-  on all three group tables (the stale-lobby sweep uses its own fixed window)
+  on all three group tables — `hp_group_config`, `chicken_config`, `mc_config` (the stale-lobby
+  sweep hard-codes its own 90s-since-last-action window in each `fetch_sweepable_games`). None
+  of these seven columns exist in the schema any more, so none of them are in
+  `_CONFIG_DEFAULTS` either
 
 **Rate limit:** `challenge_limit_per_hour` challenges/starts per user per hour, per game
 (in-memory sliding window, per-guild dial on each game's dashboard Config panel).

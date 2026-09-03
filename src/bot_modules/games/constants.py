@@ -48,8 +48,9 @@ GAME_ICONS = {
 }
 
 # Games in GAME_ICONS that are duels/lobby/standalone rather than party games.
-# The README and web manual advertise a party-game *count* in prose; these keys
-# are excluded from it (see the tripwires in tests/test_games_help_logic.py).
+# docs/features.md and the web manual advertise a party-game *count* in prose;
+# these keys are excluded from it (see the tripwires in
+# tests/test_games_help_logic.py).
 DUEL_GAME_KEYS = frozenset({
     'pressure', 'quickdraw', 'chicken', 'hot_potato', 'hot_potato_group',
     'musical_chairs', 'risky_roll',

@@ -37,7 +37,7 @@ theme (Server, Roles, New Members, Members, Moderation & Safety, Channels &
 Messages, Voice, AI & Maintenance).
 
 The user-facing statement of the same rule is the **Where a Setting Lives**
-subsection of `manual.html` §27 Configuration Reference (help page
+subsection of `manual.html` §29 Configuration Reference (help page
 `help-config`) — keep the two in step.
 
 ## Sections
@@ -60,7 +60,7 @@ decided in `docs/plans/dashboard-config-ia.md`:
 
 * Reports: "General" → **Activity** (the one heading that named nothing) and
   DAU/MAU joined its volume-metric siblings there; NSFW by Gender moved to
-  the Moderation heading beside Sentiment & Tone (content analytics, not an
+  the Moderation heading beside Flagged Messages (content analytics, not an
   engagement metric). The one-item adminOnly "Bot Usage" heading retired —
   Command & Panel Usage now lives under **Dev**, its actual audience.
 * Moderation: the eight bare items gained the **Queues & Workflows** heading
@@ -128,12 +128,15 @@ splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
 
 * **Operations** — Play Statistics, Scheduling, Global Config, External Tracking.
 * **Live Games** — one page of dials per game that runs live in a channel
-  (LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
-  (Group), Chicken, Musical Chairs, Photo Challenge — which had been a
-  top-level section with a single item under the same gate — plus Survivor
-  and Meadow Mahjong, added after the IA1 write-up).
-* **Question Banks** — the nine prompt banks (WYR, NHIE, Most Likely To,
-  Rushmore, Price, Clapback, AMA, FFA, Traditional ToD).
+  (Anonymous AMA, LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot
+  Potato, Hot Potato (Group), Chicken, Musical Chairs, Photo Challenge — which
+  had been a top-level section with a single item under the same gate — plus
+  Survivor and Meadow Mahjong, added after the IA1 write-up). AMA moved here
+  from Question Banks once its bank came off: every AMA question is typed by
+  a member mid-game, so there was never a bank to fill; its route id stays
+  `games-ama`, only the grouping moved.
+* **Question Banks** — the eight prompt banks (WYR, NHIE, Most Likely To,
+  Rushmore, Price, Clapback, FFA, Traditional ToD).
 
 **Economy** was the last flat list, twelve items deep; it gained four subgroups
 in 2026-08 (IA2):
@@ -241,6 +244,29 @@ and every Confessions endpoint is admin-gated server-side.
   the static label is only the fallback, and it must keep matching the manual's
   own `ask-guide` heading so the help panel still de-duplicates the title.
 
+## Bot-global controls on a secondary guild
+
+Some controls are bot-global rather than per-guild (the AI prompts, the guard
+instructions, server file paths), and their routes 403 off the primary guild.
+Panels handle that in one of two ways, and the difference is deliberate — do
+not harmonise them:
+
+* **Explain it** when something else points the admin at the control.
+  `rules-watch-settings.js` renders a hint saying the prompt is shared by every
+  server and can only be edited from the primary server's copy of the page.
+  It has to: both `manual.html` and the AI Models page tell readers the guard's
+  instructions live on Rules Watch settings, so a secondary-guild admin who
+  found nothing there would reasonably conclude the page was broken.
+* **Omit it silently** when nothing does. `config-global.js` simply doesn't
+  render its "Server File Paths" card off-primary. No manual section, help
+  entry or sibling panel mentions that card, so a secondary-guild admin has no
+  reason to expect it, and a note explaining an absence they never noticed is
+  just noise on a page they can't act on.
+
+The test is whether a reader was *sent* to the control. If you add a pointer to
+a bot-global control from anywhere a secondary-guild admin can read, the
+destination panel needs the explanatory hint.
+
 ## Panel-local URL state
 
 Route convention: `#/<page-id>?key=val&…`. Panel state that a user would expect
@@ -253,8 +279,10 @@ Every enumerated param is validated against its own value list on read, and id
 params are parsed as numbers that simply match no row when they're junk — a
 stale or hand-edited URL must fall back to the default view, never error.
 
-Adopted by the sixteen analytics panels and by all five mod workflow panels
-(tickets, jails, rules-watch, qa-tracker, todo). Tests:
+Adopted by seventeen analytics panels under Reports (Ping Response included),
+by Grant Audit under Moderation → Audit Logs, by Command & Panel Usage under
+Dev, and by all five mod workflow panels (tickets, jails, rules-watch,
+qa-tracker, todo). Tests:
 `tests/web/test_mod_queue_deeplinks.py` (round trip in a browser) and the
 `syncHash`-id sweep in `tests/web/test_frontend_wiring.py`.
 

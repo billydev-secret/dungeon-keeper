@@ -2,7 +2,7 @@
 
 A self-managed boundary tool. Members opt in, pick their own enforcement level, set message caps, and schedule blackout windows. When someone hits a limit, the bot adds friction (per-user slow mode) rather than locking them out. **This is not therapy** — a one-time disclaimer surfaces during setup.
 
-> **Document status (2026-07-15):** This doc was previously "Aspirational" and described ~22 `/wellness` slash commands as if they were live. In reality the surface is split by *how you reach a feature*, not by which feature: the **enforcement engine, background loops, and the web dashboard CRUD are built and wired**, but **only three slash commands exist**. The sections below reflect that. Everything not confirmed in code lives under [Not Yet Built / Roadmap](#not-yet-built--roadmap), preserved for design intent. *(The provisioning gap this note originally flagged was closed 2026-08-29 — see Activation, next.)*
+> **Document status (2026-07-15):** This doc was previously "Aspirational" and described ~22 `/wellness` slash commands as if they were live. In reality the surface is split by *how you reach a feature*, not by which feature: the **enforcement engine, background loops, and the web dashboard CRUD are built and wired**, but **only two slash commands exist** (`/wellness away on`/`away off` collapsed into the single `/wellness away set` 2026-07-28, dropping the count from three to two). The sections below reflect that. Everything not confirmed in code lives under [Not Yet Built / Roadmap](#not-yet-built--roadmap), preserved for design intent. *(The provisioning gap this note originally flagged was closed 2026-08-29 — see Activation, next.)*
 
 ---
 
@@ -25,18 +25,18 @@ Everything in this section is confirmed present and wired in `src/`. Configurati
 
 ### Slash commands (all that exist)
 
-The `/wellness` group (`wellness_cog.py`) registers exactly three commands:
+The `/wellness` group (`wellness_cog.py`) registers exactly two commands:
 
 | Command | Permission | Behavior |
 |---|---|---|
 | `/wellness setup` | Everyone (server only) | Opens an ephemeral 2-step wizard: (1) disclaimer + timezone select, (2) enforcement level (Gentle / Slow mode / Gradual — the never-enforced "Cooldown" level was retired 2026-07-30; stored legacy rows keep their old behavior). On completion, writes the member's opt-in row and assigns the Wellness Guardian role. **Aborts early** if the guild has no `role_id` configured (see activation gap). **A re-run preserves settings it does not ask about** (fixed 2026-08-22): the wizard collects timezone and enforcement only, and `opt_in_user` used to write the module-default `notifications_pref` on every call — so a member who chose "ephemeral only" on the dashboard and later re-ran the wizard to change timezone had DMs silently switched back on. `opt_in_user` now treats an omitted `enforcement_level` / `notifications_pref` as "leave it alone", matching how `public_commitment` and the away fields were already handled. |
 | `/wellness away set state:<on\|off>` | Opted-in members | Turns the away auto-reply on or off. Optional `message` arg (≤ 500 chars, on only — passing it with `off` is refused rather than silently dropped); if omitted when turning on, the stored message is kept, falling back to a default. Turning on replies with an ephemeral preview embed. Replaced the separate `/wellness away on` and `/wellness away off` commands 2026-07-28. |
 
-The `away` subgroup is nested under `wellness`. Note: a `_SettingsView` class exists in the cog but is **not wired to any command** — a dead stub from the abandoned slash surface. A proposal to revive it as the shared ephemeral menu behind a channel panel (the bank paradigm) lives in `docs/plans/wellness-discord-panel.md` (2026-07-30).
+The `away` subgroup is nested under `wellness`. The cog's dead `_SettingsView` stub (never wired to any command) was deleted 2026-08-28 along with the partners system, below. A proposal to build a shared ephemeral settings menu behind a channel panel (the bank paradigm) lives in `docs/plans/wellness-discord-panel.md` (2026-07-30) — not built.
 
 ### Enforcement engine (live)
 
-`wellness_on_message()` (`wellness_enforcement.py`) is called unconditionally from the message handler (`events_cog.py:557`) for every non-bot guild message. For opted-in, non-paused members it runs this decision tree:
+`wellness_on_message()` (`wellness_enforcement.py`) is called unconditionally from the message handler (`events_cog.py`, `on_message`) for every non-bot guild message. For opted-in, non-paused members it runs this decision tree:
 
 1. **Away-mention interception** — if the message @-mentions any opted-in member who has away mode on, the bot posts an in-channel auto-reply embed (rate-limited per channel). Fires regardless of whether the *author* is opted in; never deletes the message.
 2. **Slow-mode pre-check** — if the author has active per-user slow mode and is posting inside their rate interval, the bot deletes the message and DMs them the held content plus a countdown. **Per-user global**, not per-channel — switching channels doesn't defeat it. If the bot lacks Manage Messages, or the user's DMs are closed, the message is **not** deleted (no silent destruction).
@@ -147,7 +147,7 @@ The original doc presented this full `/wellness` command table. **Only `/wellnes
 | `/wellness resume` | Slash | Wellness role | Resume tracking |
 | `/wellness optout` | Slash | Wellness role | Remove role, deactivate tracking, lift slow mode. Settings kept 30 days |
 
-**Dashboard-equivalent coverage of the above:** caps (add/list/edit/remove), blackouts (add/template/list/toggle/remove), away (on/off/set), settings, pause, resume all exist as dashboard endpoints today. **No equivalent anywhere** for `/wellness away preview`, `/wellness score`, and `/wellness optout` (the `opt_out_user()` backend function exists but is unsurfaced).
+**Dashboard-equivalent coverage of the above:** caps (add/list/edit/remove), blackouts (add/template/list/toggle/remove), away (on/off/set), settings, pause, resume, and optout (the Overview panel's **Leave the Program** button, `POST /api/wellness/optout` — surfaced 2026-07-30) all exist as dashboard endpoints today. The Overview panel's hero card also shows the streak, personal best, and badge that `/wellness score` would have reported, though with no on-demand qualitative summary line. **No equivalent anywhere** for `/wellness away preview`.
 
 ### Admin surface
 
@@ -155,7 +155,7 @@ The original design placed all admin functionality in the **web Wellness panel**
 
 > *A short historical mapping from the retired `/wellness-admin X` commands to their dashboard equivalents lived here while admins migrated. It's now retained only in git history.*
 
-*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; pre-existing DBs keep an orphaned `crisis_resource_url` column.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
+*Built today:* defaults (enforcement), per-user pause/resume, exempt-channel management, stats tile. *(Crisis-resource URL support was removed 2026-07-30 — the setup disclaimer no longer references a crisis resource; the orphaned `crisis_resource_url` column itself was then dropped by migration 189, 2026-08-28.)* *Not built:* provisioning, and admin-side per-user cap/blackout/settings editing.
 
 ### Onboarding (`/wellness setup`) — original 3-step design
 

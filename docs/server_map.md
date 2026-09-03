@@ -68,8 +68,8 @@ pre-verification pages; this file is the internal reference and covers both.
 | 🫦│spicy-chat | Main NSFW room. Auto-deletes on a 30-day rule. |
 | 🔥│flash-channel | NSFW media and conversation. |
 | 😮‍💨│spicy-audios | Spicy audio clips. |
-| 🤷│guess-who | Guess-the-member game — `/veil optin` to enter the pool. |
-| 🎲│risky-rolls | `/roll`-driven Q&A. Safeword: Kiwi 🥝. |
+| 🤷│guess-who | Guess-the-member game — `/guess optin` to enter the pool. |
+| 🎲│risky-rolls | `/risky start`-driven Q&A. Safeword: Kiwi 🥝. |
 | 🫦│spicy-games | NSFW party games and prompts. |
 | 🤐│confessions | Anonymous posts via the bot; logged for admin review. |
 | 🤫│whisper | `/whisper` anonymous messages; recipient gets 3 guesses (dashboard dial) to unmask. |

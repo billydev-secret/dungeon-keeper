@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from bot_modules.services.economy_service import load_econ_settings
 from web_server.auth import AuthenticatedUser, DiscordOAuthAuth, SESSION_COOKIE
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
+from web_server.helpers import everyone_can_read
 from web_server.schemas import ChannelMeta, GuildInfo, MemberMeta, MeResponse, RoleMeta
 
 router = APIRouter()
@@ -534,6 +535,7 @@ async def meta_channels(
                     type=label,
                     category=parent.name if parent is not None else None,
                     nsfw=getattr(ch, "nsfw", False),
+                    everyone_can_read=everyone_can_read(guild, ch),
                 )
             )
         return out

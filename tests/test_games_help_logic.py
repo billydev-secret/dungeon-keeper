@@ -68,19 +68,21 @@ def test_other_commands_value_references_recap():
 
 
 # ── doc-count tripwires ──────────────────────────────────────────────
-# The README and web manual advertise the party-game count in prose. These
-# numbers have drifted twice (16 → 17 → 18); fail loudly when a game is
-# added to GAME_ICONS without updating the docs.
+# The feature map and web manual advertise the party-game count in prose.
+# These numbers have drifted twice (16 → 17 → 18); fail loudly when a game is
+# added to GAME_ICONS without updating the docs. The prose list used to live
+# in README.md and moved to docs/features.md 2026-09-03 when the README became
+# a pitch — the tripwire follows the list, not the filename.
 
 _PARTY_GAME_KEYS = [k for k in GAME_ICONS if k not in DUEL_GAME_KEYS]
 _DOCS_ROOT = __import__("pathlib").Path(__file__).resolve().parents[1]
 
 
-def test_readme_party_game_count_matches_code():
-    readme = (_DOCS_ROOT / "README.md").read_text(encoding="utf-8")
+def test_features_doc_party_game_count_matches_code():
+    features = (_DOCS_ROOT / "docs" / "features.md").read_text(encoding="utf-8")
     expected = f"{len(_PARTY_GAME_KEYS)}-game"
-    assert expected in readme, (
-        f"README.md should say '{expected}' (GAME_ICONS has "
+    assert expected in features, (
+        f"docs/features.md should say '{expected}' (GAME_ICONS has "
         f"{len(_PARTY_GAME_KEYS)} party games) — update the count."
     )
 

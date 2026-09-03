@@ -35,7 +35,8 @@ Two register notes up front:
   from the guild/db (an `embeds.py` module) takes the resolved color as a
   `color=`/`accent` **param** and lets the cog resolve it; a hard-coded value as
   a `color is None` fallback is fine, an *un-overridable* hard-code is not.
-  (Also: the kwarg is `color=`, not `colour=` — 551 vs 1 in the codebase.)
+  (Also: the kwarg is `color=`, not `colour=` — the codebase has fully
+  converged on `color=`.)
   This contract is enforced by `tests/test_embed_accent_contract.py` — a new
   builder adds one `case()` row there (passthrough + fallback), never
   per-file accent tests.
@@ -50,10 +51,10 @@ Two register notes up front:
 - **One canonical semantic pair** (ruling 2026-07-21): semantic green/red are
   **`COLOR_GREEN` (0x23A55A) / `COLOR_RED` (0xF23F43)** in
   `bot_modules/services/embeds.py` — Discord's own success/danger shades.
-  `MOD_SUCCESS`/`MOD_JAIL` and the games `SUCCESS_COLOR`/`ERROR_COLOR` should
-  become aliases of these, not independent shades; never introduce a **new**
-  green/red hex literal. (Today three greens and three reds coexist — collapse
-  them when touching the module.)
+  `MOD_SUCCESS` and the games `SUCCESS_COLOR`/`ERROR_COLOR` are now aliases of
+  these; `MOD_JAIL` still carries its own independent red shade — collapse it
+  (and any other literal copy) when touching the module. Never introduce a
+  **new** green/red hex literal.
 - **Games follow the accent** (ruling 2026-07-21). A game embed is themed by its
   guild accent like everything else; only true **win = green / loss = red**
   (and warning-orange for expired/abandoned) stay semantic. The old per-phase
@@ -65,13 +66,14 @@ Two register notes up front:
   color *is* information, the same test win/loss passes. Everything else in a
   game follows the accent.
 - **`/help` follows the accent** (ruling 2026-07-27, #76). Its section pages
-  carried a per-section palette (`mod_cog._SECTION_META`: Economy gold,
-  Moderation red, Voice green…). That palette is retired — the section **emoji**
-  is the wayfinding cue, the color is the guild's branding. Sections without a
-  resolvable guild (a DM) share one `_NO_ACCENT_FALLBACK`, never a spread of
-  colors. Same for the privacy deletion progress cards, which were a module-level
-  blurple constant with no accent path (`_PROGRESS_FALLBACK` is now only the
-  no-guild default); the "Deletion complete" summary stays semantic green.
+  carried a per-section palette (`mod_cog._SECTION_EMOJI`, née `_SECTION_META`:
+  Economy gold, Moderation red, Voice green…). That palette is retired — the
+  section **emoji** is the wayfinding cue, the color is the guild's branding.
+  Sections without a resolvable guild (a DM) share one `_NO_ACCENT_FALLBACK`,
+  never a spread of colors. Same for the privacy deletion progress cards,
+  which were a module-level blurple constant with no accent path
+  (`_PROGRESS_FALLBACK` is now only the no-guild default); the "Deletion
+  complete" summary stays semantic green.
 - **Per-domain identity palettes are a deliberate exception.** A few features
   carry a *fixed brand color* instead of the guild accent, as an intentional
   visual identity — centralized in **`services/embeds.py`** and always used via
@@ -279,10 +281,10 @@ Which embed slot does which job:
   not just games. `✅ ` prefixes success acks ("✅ You joined!");
   `⚠️ ` is for non-blocking warnings. These are **ephemeral plain
   `content=` strings**, not embeds.
-- **One shared no-permission string** — don't paste a new variant (the
-  codebase has one canonical sentence copied ~19× plus four mutations; converge
-  on a shared constant when touching those cogs). Role-specific denials name
-  the role: "❌ Only the host or a mod can start."
+- **One shared no-permission string** — `NO_PERMISSION` in
+  `services/replies.py`, imported at ~28 call sites; don't paste a new literal
+  copy of the sentence. Role-specific denials still write their own sentence
+  naming the role: "❌ Only the host or a mod can start."
 - **Say how to fix it** when there's a fix: "You need the Whisper role —
   use `/whisper optin` to join." / "…ask a mod to pick the notification role on
   the dashboard." A denial that just says no is a dead end.
@@ -299,8 +301,8 @@ Which embed slot does which job:
 - **Contractions** ("don't", "can't") — the uncontracted forms read robotic.
   Terse validation strings may keep "cannot" ("This cannot be undone.").
 - **"server", never "guild"** in member-facing copy ("guild" is Discord API
-  jargon; two known leaks: `xp_cog.py`, `guess_cog.py`). Dashboard/admin
-  surfaces should also prefer "server" in new copy.
+  jargon; one known leak: `guess_cog.py`'s "manage_guild permission" denial).
+  Dashboard/admin surfaces should also prefer "server" in new copy.
 - Currency, quest, and perk vocabulary route through settings/shared maps (see
   Currency vocabulary, Ledger rows) — never hard-code "coins" user-facing.
 - **DMs open with the point** — no greeting, no sign-off ("Payment for your
@@ -475,7 +477,7 @@ the next person can't accidentally omit the message id.
 - Embed construction lives in a **per-feature `embeds.py`** with **pure
   `build_*` functions**: plain dicts/primitives in, `discord.Embed` out, no
   Discord/network calls — testable offline. Name-lookup needs come in as a
-  resolver callable. Cogs stay thin; a cog building eight embeds inline
+  resolver callable. Cogs stay thin; a cog building several embeds inline
   (today's `economy_cog.py`) is the anti-pattern.
 - Colors come in as a param (see Color); a builder never resolves the accent
   itself.
@@ -506,10 +508,16 @@ what is below is what was still true afterwards.
 - Economy sentence-case titles → Title Case.
 - `·` in two casino pool titles (`cogs/casino/embeds.py`). They need a Title
   Case rewrite of the same two strings, so do both edits together.
-- Double-spaced `•` inside **field values** (`games_ama`). The footer rule is
-  clean; this is body text, which no rule covers yet — decide before sweeping.
-- "guild" in **dashboard route** errors (`web_server/routes/*`). Member-facing
-  Discord copy is clean.
+- Separator strays in **body text**, which no rule covers yet: double-spaced
+  `•` inside field values (`games_ama`), and `·` in voice control's room-type
+  legend (`voice_master/embeds.py:114`). Titles and footers are clean —
+  decide whether the rule extends to values before anyone sweeps these.
+- "guild" in **dashboard route** errors (`web_server/routes/*`), and one
+  member-facing leak the sweep argued itself out of: `guess_cog.py:2065`
+  names the Discord permission inline — "Only mods (manage_guild permission)
+  can inspect rounds." Naming the API permission to a member is still jargon;
+  say "Manage Server". (Caught by the parallel filler-text review, not by this
+  one — a reminder that "member-facing copy is clean" was too strong.)
 - Question-form and bare-noun select placeholders ("Which server?", "Theme",
   "Assistance level") → imperative "Pick …".
 - Empty-state replies that *read* like denials — "No one is in the hot seat.",
@@ -553,7 +561,8 @@ overclaimed, and review caught it:
   title as `label.upper()` from an already-Title-Case table. All three are
   recased.
 - The "~19 pasted no-permission variants". There is one shared `NO_PERMISSION`
-  in `services/replies.py` (29 uses) plus six feature-specific
+  in `services/replies.py` (28 references, matching § Errors above) plus six
+  feature-specific
   `MANAGE_DENIED_MSG` constants that each name their own action ("…to review
   quest claims", "…to award or cancel bounties"). That is the *preferred*
   form under "say how to fix it", not drift to converge.

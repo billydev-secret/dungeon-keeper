@@ -66,7 +66,6 @@ nobody has to act. The distinction is not cosmetic; see Rate limiting.
 | `raffle_closing` | **deadline** | The guild's ISO week rolls within the hour (and the raffle is enabled) | ISO week (`2026-W31`) |
 | `quest_flip` | **happened** | A new quest period going live at the ISO-week roll | ISO week (`2026-W31`) |
 | `community_tier` | **happened** | A community goal crossing a 40% / 70% / 100% tier | `quest_id:tier` |
-| `survivor_join` | **happened** | A member joining a Survivor season (fired by the join confirm; the mini-advertisement, 2026-08-18) | `season_id:user_id` |
 
 `echo_key` is the game type for party games, the sub-game for Gamebot, and
 the source name for everything else — those fire a handful of times a year,
@@ -350,7 +349,7 @@ replaced it is silent like every other one.
 - **Casino and Cat Bot.** Out of scope by decision, not by omission — both fire
   far too often to echo.
 - **Three sources are dormant in prod** (as of 2026-07-28 — **no longer true,
-  see the correction under this bullet**). `pools_enabled` is
+  see the correction under this bullet**). `casino_pools_enabled` is
   unset, so the prediction market never opens a round; `econ_bounty_channel_id`
   is `0`, so bounty cards have nowhere to post and there have been zero
   bounties ever; and the raffle has 0 draws and 0 tickets, with rollout planned
@@ -367,6 +366,14 @@ replaced it is silent like every other one.
   as a 2026-07-28 snapshot, not as current state.
 - **New auctions listed.** Only the closing echo was wanted; an "auction
   opened" echo is a `SOURCE_SPECS` row plus a query away if that changes.
+- **A tenth source came and went.** `survivor_join` — a member joining a
+  Survivor season, echoed as a mini-advertisement — was built 2026-08-18 and
+  removed 2026-08-20 once Billy saw it live ("I don't need per user join
+  messages"): the `SOURCE_SURVIVOR_JOIN` spec, the echo call and the
+  survivor-side glue are all deleted, and a join's only public trace now is
+  the channel panel's in-place player-count update. Original design kept for
+  the record in `docs/survivor_spec.md` §2.7b. Nine sources (the Sources
+  table above) are current.
 
 ### Surveyed and deliberately not added (2026-07-28)
 

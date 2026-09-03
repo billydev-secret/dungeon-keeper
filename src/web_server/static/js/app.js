@@ -53,7 +53,7 @@ const SECTIONS = [
       // NSFW by Gender moved beside Sentiment & Tone: it is content
       // analytics read with a moderation eye, not an engagement metric.
       { heading: "Moderation", items: [
-        { id: "health-sentiment",       label: "Sentiment & Tone",  module: "./panels/health-sentiment.js" },
+        { id: "health-sentiment",       label: "Flagged Messages",  module: "./panels/health-sentiment.js", keywords: "sentiment tone negative flagged triage" },
         { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js", keywords: "nsfw tags labels image guard tag mix nudity breakdown over time trend chart", related: ["nsfw-tags"] },
         { id: "mod-coverage",           label: "Mod Coverage",       module: "./panels/mod-coverage.js", keywords: "moderator presence coverage gaps overnight rota busy hours", related: ["activity"] },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },

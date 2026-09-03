@@ -4,7 +4,7 @@ A 17-mode party-games suite. Every mode is one subcommand under a single top-lev
 
 The companion 1-v-1 nickname duel **Pressure Cooker** and the dice game **Risky Rolls** appear in the shared game registry (`GAME_ICONS`/`GAME_NAMES`) but are **separate features** with their own entry points and specs — they are not part of this suite. See [[pressure-cooker-spec]].
 
-> **Command surface.** Only the `games` group is registered to the command tree (`command_groups.py`). Party games hang off the nested `games play` subgroup; meta/admin commands hang directly off `games` or its `config`/`track` subgroups. The one exception is `/recap`, which is a top-level command. There is no bare `/ffa`, `/wyr`, … — those forms are historical and no longer exist.
+> **Command surface.** Only the `games` group is registered to the command tree (`command_groups.py`). Party games hang off the nested `games play` subgroup; meta/admin commands hang directly off `games` or its `config`/`dev` subgroups (the `track` subgroup that used to sit alongside them was removed 2026-07-28 — see External Tracking below). `/recap` and `/support` are top-level commands. There is no bare `/ffa`, `/wyr`, … — those forms are historical and no longer exist.
 
 ## Current Behavior
 
@@ -104,7 +104,7 @@ Points are the inline `**+N**`, or `**+N (+M)**` where a bonus applies, in which
 
 These settings are **live and enforced** but are configured from the web dashboard (`/api/games/*`), **not** slash commands. There are no slash commands to manage them.
 
-- **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 115). Every *question-bank* game preflights `check_allowed_channel`; the six duel/group games in `dk_pvp_games_suite_spec.md` do **not** — their only channel rule is their own per-game `channel_allowlist`, and their panels say so. A channel that isn't on the allowlist refuses every question-bank game. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 115 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
+- **Channel allowlist** (`games_allowed_channels`, `guild_id`-scoped as of migration 122). Every *question-bank* game preflights `check_allowed_channel`; the six duel/group games in `dk_pvp_games_suite_spec.md` do **not** — their only channel rule is their own per-game `channel_allowlist`, and their panels say so. A channel that isn't on the allowlist refuses every question-bank game. The dashboard channels panel and the game-history/stats views are filtered to the active guild, so a host of one guild can't see or delete another guild's rows. (Legacy rows predating migration 122 carry `guild_id = 0`, treated as a wildcard by the in-Discord gate but invisible in the guild-scoped dashboard until reconciled.)
 - **Per-guild per-game enable/disable** (`games_game_config`, default enabled —
   no row means on). Checked by `check_game_enabled` at the start of every
   game's command **and** by the scheduler before each auto-launch. Set on
@@ -208,16 +208,16 @@ The nudge is driven by a 15-second poll over open lobbies rather than a per-lobb
 
 ### Meta surfaces
 
-`/recap` reads the current channel's session window — the past 30 minutes of finished games — and renders highlights based on each game's final payload: most divisive WYR question, guiltiest NHIE player, best TTL liar, hottest hot take, and so on. `/games help` shows the full catalog from the game name/icon/description registry. `/games support` posts a static support-server invite.
+`/recap` reads the current channel's session window — the past 30 minutes of finished games — and renders highlights based on each game's final payload: most divisive WYR question, guiltiest NHIE player, best TTL liar, hottest hot take, and so on. `/games help` shows the full catalog from the game name/icon/description registry. `/support` (top-level, bot-wide — not under `/games`) posts a static support-server invite; `/games support` was the same thing under a games-shaped name and was removed 2026-07-28.
 
 ### Close & archive
 
-Every game's Close/End path opens a confirm popup ("Are you sure you want to end this game?" → Yes/No). On confirm: the view disables, the game's final payload is copied into the history archive, and the live-game row is freed. `/games end` (host or mod) and `/games config game-end` (mod only) both run this teardown; AMA runs its extra view/message cleanup first so nothing is orphaned. A 24-hour sweep (`games/utils/expiry_service.py`) closes orphans.
+Every game's Close/End path opens a confirm popup ("Are you sure you want to end this game?" → Yes/No), skipped when a mod passes `force:true`. On confirm (or on a mod's `force:true`): the view disables, the game's final payload is copied into the history archive, and the live-game row is freed. `/games end`, by its host or (with `force:true`) a mod, runs this teardown; AMA runs its extra view/message cleanup first so nothing is orphaned. A 24-hour sweep (`games/utils/expiry_service.py`) closes orphans.
 
 **Which end paths pay — all of them.** The economy faucet fires when `end_game` is given `bot=` and `player_ids=`. A game's own completion site builds that roster from locals it has in hand; the two paths that end a game from *outside* it have no such locals, so they rebuild the roster from the stored payload via `games/utils/game_roster.py` (`roster_from_payload`, one extractor per game type, each mirroring its cog's completion site).
 
 - The **24-hour sweep** (`expiry_service.py`) pays. Hosts routinely never press End, so before 2026-07-29 every swept game paid nobody — all 18 Truth or Dare games in the history ended this way.
-- **`/games end` and `/games config game-end`** (`force_end_active_game`) pay. This is the normal close method for several games, not only an abort, so it credits the room the same way.
+- **`/games end`** — host confirm or mod `force:true` — (`force_end_active_game`) pays. This is the normal close method for several games, not only an abort, so it credits the room the same way.
 
 A game type with no joined roster — ffa banner posts, Photo Challenge — resolves to an empty roster and pays nobody, which is correct: they are posts, not games players sign into (Photo Challenge is paid by the economy's own `photo_post` trigger instead). An abandoned lobby lands on that same empty roster, which is the whole anti-farm gate: aborting a game that never got going costs nothing, and leaving one open all day earns what it played. A malformed payload costs its own game a roster, never the sweep it was found in.
 
@@ -255,7 +255,7 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 **User needs:**
 - Everyone can run every game command, subject to the channel allowlist and per-guild enable flag.
-- Ending a game (`/games end`) is allowed for the game's host or a Mod/Admin. `/games config game-status` and `/games config game-end` require Mod/Admin (Manage Server or Administrator).
+- Ending a game (`/games end`) is allowed for the game's host, or a Mod/Admin (who can also pass `force:true` to skip the confirm). `/games config game-status` requires Mod/Admin (Manage Server or Administrator).
 - `/games join`/`/games leave` are self-service; adding or removing *another* player requires the host, a Mod/Admin, or the configured Game-Host role.
 - External tracking (web) requires Mod.
 - Dashboard config writes need `mod`; dashboard content authoring needs Administrator OR the configured editor role.

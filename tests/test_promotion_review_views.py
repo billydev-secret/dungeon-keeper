@@ -17,8 +17,12 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.services import promotion_review_service as svc
 from bot_modules.services.promotion_review_views import (
+    GRANT_LABEL_DEFAULT,
+    Level5PromotionView,
+    ReviewCardView,
     build_review_embed,
     format_prune_lines,
+    grant_label,
     ping_send_kwargs,
     refresh_level_5_cards,
     refresh_spicy_field,
@@ -377,3 +381,44 @@ def test_build_embed_resolved_verbs():
         resolved_field = next(f for f in embed.fields if f.name == "Resolved")
         assert needle in resolved_field.value.lower()
         assert "<@99>" in resolved_field.value
+
+
+# ── the Grant button names the role it hands out ──────────────────────
+
+
+def _role(name: str) -> SimpleNamespace:
+    return SimpleNamespace(name=name)
+
+
+def test_grant_label_names_the_configured_role():
+    assert grant_label(_role("UNLOCK")) == "Grant UNLOCK"
+
+
+@pytest.mark.parametrize("role", [None])
+def test_grant_label_falls_back_when_no_role_resolves(role):
+    # No dial set, or the dial points at a role that has since been deleted.
+    assert grant_label(role) == GRANT_LABEL_DEFAULT
+
+
+def test_grant_label_truncates_past_the_discord_ceiling():
+    label = grant_label(_role("R" * 200))
+    assert len(label) == 80
+    assert label.endswith("\u2026")
+
+
+def test_grant_label_keeps_a_role_that_exactly_fits():
+    # "Grant " is six characters, so a 74-character name lands on the ceiling.
+    label = grant_label(_role("R" * 74))
+    assert len(label) == 80
+    assert "\u2026" not in label
+
+
+def test_views_carry_the_label_onto_the_button():
+    # DynamicItem wraps the real button; the label lives on the wrapped item.
+    assert ReviewCardView(1, "Grant UNLOCK").children[0].item.label == "Grant UNLOCK"
+    assert Level5PromotionView(2, "Grant UNLOCK").children[0].item.label == "Grant UNLOCK"
+
+
+def test_views_default_to_the_generic_label():
+    assert ReviewCardView(1).children[0].item.label == GRANT_LABEL_DEFAULT
+    assert Level5PromotionView(2).children[0].item.label == GRANT_LABEL_DEFAULT

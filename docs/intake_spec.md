@@ -2,7 +2,7 @@
 
 **Status:** Reference (built). Plan: [plans/intake-cards.md](plans/intake-cards.md).
 
-Two halves, both dashboard-configured (Config → Members → Intake Cards), no
+Two halves, both dashboard-configured (Config → New Members → Intake Cards), no
 slash commands:
 
 1. **Intake cards** — on join, a card posts to greeter chat tracking the
@@ -38,8 +38,9 @@ slash commands:
   `intake_verified_role_id` gained), `role_gained` (member
   gains the step's configured role — `/grant` or a manual add; `role_id 0`
   never ticks, and the dashboard refuses to store it). Step keys are
-  normalized to `[\w-]` and capped at 64 chars on save so persistent-button
-  custom_ids always fullmatch the dispatch template after a restart.
+  normalized to `[\w-]` and capped at 60 chars on save (leaving room for a
+  numeric dedupe suffix) so persistent-button custom_ids always fullmatch the
+  dispatch template's 64-char limit after a restart.
 - **Where greeting is watched** is deliberately *not* the card channel.
   Cards post to a greeter-facing noticeboard; the greeting itself happens
   where the newcomer landed. Watching `intake_channel_id` meant `greeted`
@@ -227,7 +228,7 @@ channel's history, oldest first; refuses a non-empty editor.
 | Reference blocks/render/diff/sync/import | `services/intake_reference_service.py` |
 | Hooks | `cogs/events_cog.py` (join/remove/ban/member-update/message), `dungeonkeeper/__main__.py` (warm + `add_dynamic_items` + loop) |
 | Routes | `web_server/routes/config.py`, `web_server/routes/reports.py` |
-| Panels | `static/js/panels/intake-report.js` (queue, Reports → Greeter) + `intake-settings.js` (Intake Cards config, Config → Members) — split pages since 2026-08-29 |
+| Panels | `static/js/panels/intake-report.js` (queue, Reports → Greeter) + `intake-settings.js` (Intake Cards config, Config → New Members) — split pages since 2026-08-29 |
 | Tests | `tests/test_intake_logic.py`, `test_intake_views.py`, `test_intake_reference_logic.py`, `tests/web/test_config_routes.py`, `test_reports_routes.py` |
 
 See also: [greeting_watch_spec.md](greeting_watch_spec.md),

@@ -40,7 +40,8 @@ weekly-renewing perks (role customization, private rooms) and social sinks
 ## 2. Branding Configuration (per guild)
 
 Dashboard → Economy → Settings: `currency_name`/plural, `currency_emoji`,
-`currency_icon_url`, `wallet_name`, `bank_channel_id`, `spotlight_channel_id`,
+`currency_icon_url`, `wallet_name`, `bank_channel_id`, `approvals_channel_id`,
+`spotlight_channel_id`,
 `manager_role_id`, `game_role_id`, `transfers_enabled`, `enabled`.
 Dashboard → Economy → QOTD: `qotd_ping_role_id` (§3.4).
 
@@ -262,15 +263,17 @@ to currency.
   question in front of the server. **Charged at submit** — a free queue invites
   spam — which makes decline and expiry *refund* paths (ledger kind
   `qotd_sponsor` out, `qotd_sponsor_refund` back). A mod reviews it from the
-  **todo board's 🧾 Approvals button** (see "Where paid requests are reviewed"
-  below; the buttons behind it are DynamicItems
-  `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a restart) or on the
+  **card in the approvals channel** or the **todo board's 🧾 Approvals button**
+  (see "Where paid requests are reviewed" below; the buttons on both are the
+  same DynamicItems `econ_qotd_sub:{approve,deny}:<id>`, so clicks survive a
+  restart) or on the
   dashboard queue (Economy → QOTD, `require_economy_manager`, which
   also **withdraws** an already-approved question back out of the post queue —
   the service only *resolves* pending rows, so withdrawal is its own path);
   declining opens a reason modal and the reason reaches the member by DM.
-  Resolving from the dashboard repaints the todo board (and any legacy
-  bank-channel card) and DMs the sponsor with the same copy the buttons use,
+  Resolving from the dashboard repaints the todo board and the card in the
+  approvals channel (and any legacy bank-channel one), and DMs the sponsor
+  with the same copy the buttons use,
   best-effort: a Discord failure leaves the API 200 with
   `card_updated: false`. Approved questions join a FIFO queue that `/qotd post` draws
   from when the mod supplies **no** question text; the QOTD card is bylined
@@ -294,9 +297,11 @@ to currency.
   `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
   artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
   at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
-  `pending`; a mod Approves/Declines from the todo board's **🧾 Approvals**
-  button (`PinApproveButton`/`PinDenyButton`, persistent). Pin of the Day has
-  **no dashboard queue**, so that board section is its only review surface.
+  `pending`; a mod Approves/Declines from the card in the approvals channel or
+  the todo board's **🧾 Approvals** button (`PinApproveButton`/`PinDenyButton`,
+  persistent). Pin of the Day has **no dashboard queue**, so those two are its
+  only review surfaces — and with `approvals_channel_id` unset, the board is
+  the only one.
   Approve posts + pins a
   "Pinned by @X" card in `pin_channel_id` and flips the row to `live` with a
   24h `expires_at` — the Discord post happens *before* the DB move, so a failed
@@ -317,9 +322,9 @@ to currency.
   `economy_submission_store`. `/bank theme` opens a modal (theme name +
   blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
   out / `flash_theme_refund` back) and queued `pending`; a mod
-  Approves/Declines from the todo board's **🧾 Approvals** button
-  (`ThemeApproveButton` / `ThemeDenyButton`, persistent) or from the
-  dashboard's **Approvals** page.
+  Approves/Declines from the card in the approvals channel, the todo board's
+  **🧾 Approvals** button (`ThemeApproveButton` / `ThemeDenyButton`,
+  persistent), or the dashboard's **Approvals** page.
   Two things distinguish it from Pin of the Day, which it otherwise mirrors:
   - **Approve posts nothing.** It moves the row to `approved` and that is all.
     The hourly loop's `run_theme_expiry` promotes the oldest approved row
@@ -351,24 +356,64 @@ to currency.
   finds its work by reading live rows, so deleting it would strand the pin
   permanently. See `docs/data_register.md`.
 
-  **Where paid requests are reviewed (2026-08-29).** The sponsored question,
-  the pin and the themed day are one job to a moderator, so they are one
-  section and one button on the **mods' todo board** — 🧾 Approvals — rather
-  than three cards in `bank_channel_id`. That channel is the economy's
-  member-facing explainer in the main guild (`🏦│how-it-works`), and a review
-  card names the member and quotes what they submitted, so posting one there
-  published an unreviewed request to the whole server. The queue is
-  `economy_approvals_service.pending_approvals`, a `UNION ALL` over the
-  products in `QUEUES`; the button opens an ephemeral pick-one select and a
-  pick renders **that product's own card embed and buttons**, so nothing a mod
-  reads changed. Gate is `can_manage_economy`, not the board's mod check —
-  every decision moves currency. The persistent DynamicItems stay registered,
-  so cards posted before the move remain clickable; nothing posts new ones.
-  Emoji sponsorship is deliberately excluded (its approval is an upload, not a
-  yes/no, and it has a dashboard queue), and `notify_member`'s public
-  bank-channel fallback for a member with DMs closed is a different mechanism
-  and unchanged. Full shape in `docs/todo_spec.md` § "Paid requests on the
-  board".
+  **Where paid requests are reviewed — two surfaces, one ledger
+  (2026-08-29, channel restored 2026-09-02).** The sponsored question, the pin
+  and the themed day are one job to a moderator. They are reviewed in two
+  places, and both are always live:
+
+  1. **A card in `approvals_channel_id`** (`approval_views.post_approval_card`)
+     — the primary surface, where mods actually work.
+  2. **The mods' todo board** — a 🧾 Paid requests section and one 🧾 Approvals
+     button opening an ephemeral pick-one select. The backstop, and the only
+     surface when the channel dial is unset.
+
+  `approvals_channel_id` is a **new, dedicated dial** and is deliberately not
+  `bank_channel_id`: that is the economy's member-facing explainer in the main
+  guild (`🏦│how-it-works`), and a review card names the member, shows what
+  they paid and quotes their unreviewed submission, so posting one there
+  published an unreviewed adult-register request to the whole server — which
+  is what `af6c8289` moved them off. The dial **ships dark**; with it unset
+  nothing posts, nothing errors, and the board is the whole story. The
+  dashboard warns (never refuses) when the chosen channel is readable by
+  `@everyone`; nothing in the code can tell a staff channel from a public one,
+  so the decision stays the admin's.
+
+  **One ledger.** `card_channel_id`/`card_message_id` on each submissions
+  table (written by `economy_approvals_service.set_approval_card`, read by
+  `card_location`) are what make the two surfaces one. A resolution from any
+  of the three entry points closes both: the board self-corrects because its
+  section reads the queue live, and the channel card is repainted by
+  `view_helpers.edit_stored_card` — which skips the message the resolver was
+  already looking at, so a resolution *from* the card doesn't edit it twice.
+  The dashboard's own resolution path has repainted the stored card since
+  before the move. The hourly expiry sweep now closes cards too
+  (`approval_views.close_expired_card`): before this, an expired-and-refunded
+  request left a card showing Approve/Decline for good — safe, because
+  `move_state`'s `state = from_state` guard rejects the press, but it read as
+  broken.
+
+  The queue is `economy_approvals_service.pending_approvals`, a `UNION ALL`
+  over the products in `QUEUES`; both surfaces render **that product's own
+  card embed and buttons** from one registry (`approval_views._renderers`), so
+  a mod reads an identical card either way. Cards ping `manager_role_id` — the
+  same role `can_manage_economy` gates on, so the ping reaches exactly the
+  people who can act — allow-listed by id via `core.utils.role_ping_kwargs`,
+  never a blanket `roles=True`. Gate is `can_manage_economy`, not the board's
+  mod check: every decision moves currency. Emoji sponsorship is deliberately
+  excluded (its approval is an upload, not a yes/no, and it has a dashboard
+  queue), and `notify_member`'s public bank-channel fallback for a member with
+  DMs closed is a different mechanism and unchanged. Full shape in
+  `docs/todo_spec.md` § "Paid requests on the board".
+
+  **Names in the cards.** Every paid-request embed resolves the requester and
+  the resolving mod through `services/name_resolver` (`card_name_fn` →
+  `named_or_anonymous`) rather than emitting `<@id>`. An embed mention is
+  resolved by the *reading* client from its own cache, so in a channel it
+  degrades to a bare number for any mod who has never seen that member — and a
+  paid request is often the first time they meet them. The two public
+  announcement embeds (`render_pin_live_embed`, `render_theme_live_embed`)
+  resolve the same way. A `user_id` of 0 is an erasure detaching a live
+  purchase from its buyer and renders "a member", never `<@0>`.
 
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.

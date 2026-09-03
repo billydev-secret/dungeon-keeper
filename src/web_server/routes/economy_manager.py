@@ -938,6 +938,7 @@ async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool
     import discord
 
     from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+    from bot_modules.economy.view_helpers import card_name_fn
     from bot_modules.economy.sponsor_views import (
         render_sponsor_card_embed,
         sponsor_resolution_dm_text,
@@ -963,7 +964,8 @@ async def _update_sponsor_card_and_dm(bot, ctx, guild_id, settings, row) -> bool
                 embed = render_sponsor_card_embed(
                     accent,
                     settings,
-                    sponsor_mention=f"<@{int(row['user_id'])}>",
+                    sponsor_id=int(row["user_id"]),
+                    name_fn=await card_name_fn(ctx, guild, row, guild_id=int(guild_id)),
                     question=str(row["question"]),
                     price=int(row["price"]),
                     state=str(row["state"]),
@@ -1123,6 +1125,7 @@ async def _update_theme_card_and_dm(bot, ctx, guild_id, settings, row) -> bool:
     import discord
 
     from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+    from bot_modules.economy.view_helpers import card_name_fn
     from bot_modules.economy.theme_views import (
         render_theme_review_embed,
         theme_resolution_dm_text,
@@ -1148,7 +1151,8 @@ async def _update_theme_card_and_dm(bot, ctx, guild_id, settings, row) -> bool:
                     embed=render_theme_review_embed(
                         accent,
                         settings,
-                        sponsor_mention=f"<@{int(row['user_id'])}>",
+                        sponsor_id=int(row["user_id"]),
+                        name_fn=await card_name_fn(ctx, guild, row, guild_id=int(guild_id)),
                         title=str(row["title"]),
                         blurb=str(row["blurb"]),
                         price=int(row["price"]),

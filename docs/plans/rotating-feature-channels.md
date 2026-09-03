@@ -1,7 +1,10 @@
 # Rotating feature channels — design (exploration)
 
-Status: **design, awaiting sign-off**. Nothing built. Billy's ask: rotate
-confessions / whisper / guess-who, announce the day's feature in main chat.
+Status: **Stage 1 built 2026-08-29** (rotation, announcement, quest coupling,
+dashboard panel); **Part 4 built 2026-08-30** (a room's game ends and starts
+with the flip; scheduled games skip a hidden room). Stage 3 (pausing new
+submissions while hidden) not started. Billy's ask: rotate confessions /
+whisper / guess-who, announce the day's feature in main chat.
 
 ## Decisions already taken
 

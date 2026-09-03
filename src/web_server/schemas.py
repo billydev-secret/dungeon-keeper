@@ -50,6 +50,11 @@ class ChannelMeta(BaseModel):
     type: str
     category: str | None = None
     nsfw: bool = False
+    #: Whether @everyone can read the channel. None = not known, which is the
+    #: honest answer on the DB fallback path (no gateway, so no permission
+    #: overwrites to compute from). A caller warning about exposure must treat
+    #: None as "don't know", never as "safe".
+    everyone_can_read: bool | None = None
 
 
 # ── Role growth ──────────────────────────────────────────────────────────

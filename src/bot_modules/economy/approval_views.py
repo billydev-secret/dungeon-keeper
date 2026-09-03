@@ -1,4 +1,4 @@
-"""The todo board's Approvals button — one door onto three paid queues.
+"""Paid-request review: the approvals-channel card and the board's button.
 
 A themed day, a sponsored question and a pin are three products a member pays
 for and a moderator then approves. Each used to post its own Approve/Decline
@@ -9,14 +9,25 @@ before anyone had looked at it. Pin of the Day was the worst of the three: it
 has no dashboard queue, so that public card was the *only* place it could be
 reviewed at all.
 
-They live on the mods' todo board now, exactly as the quest sign-offs do
-(``quest_views.open_signoff_picker``). The board is one sticky message and
-Discord caps the components on a message, so Approve/Decline cannot hang off
-it once per request. The Approvals button opens an ephemeral pick-one select
-across all three queues; picking a request edits that ephemeral into the
-product's own review card — the same embed builder the bank-channel card used,
-so nothing a moderator reads has changed — with the product's own buttons
-underneath.
+There are now two review surfaces, and both are always live:
+
+* **A card in ``approvals_channel_id``** (:func:`post_approval_card`) — a
+  *dedicated, staff-only* dial, not the bank channel, and dark until it is
+  set. This is where mods actually work.
+* **The mods' todo board**, exactly as the quest sign-offs do
+  (``quest_views.open_signoff_picker``). The board is one sticky message and
+  Discord caps the components on a message, so Approve/Decline cannot hang off
+  it once per request: the Approvals button opens an ephemeral pick-one select
+  across all three queues, and picking a request edits that ephemeral into the
+  product's own review card. The backstop, and the only surface when the
+  channel dial is unset.
+
+**Two surfaces, one ledger.** ``card_channel_id``/``card_message_id`` on each
+submissions table are what stop them disagreeing: a resolution anywhere closes
+both — the board because its section reads the queue live, the card because
+``view_helpers.edit_stored_card`` repaints it from those ids. The hourly
+expiry sweep closes cards through :func:`close_expired_card` for the same
+reason.
 
 Nothing here re-implements a product's review. The registry below maps a queue
 key onto the three things the picker needs from each product (read the row,
@@ -35,14 +46,18 @@ from typing import TYPE_CHECKING, Any, Callable, cast
 import discord
 
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
+from bot_modules.core.utils import role_ping_kwargs
+from bot_modules.services.name_resolver import NameFn, mention
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy import pin_views, sponsor_views, theme_views
 from bot_modules.economy.quest_views import can_manage_economy
-from bot_modules.economy.view_helpers import refresh_todo_board
+from bot_modules.economy.view_helpers import card_name_fn, refresh_todo_board
 from bot_modules.services.economy_approvals_service import (
     QUEUES_BY_KEY,
+    card_location,
     get_approval_row,
     pending_approvals,
+    set_approval_card,
 )
 from bot_modules.services.economy_service import EconSettings, load_econ_settings
 from bot_modules.todo.board_logic import approval_label
@@ -60,20 +75,30 @@ _PICKER_TIMEOUT = 180
 _safe_ephemeral = partial(_core_safe_ephemeral, log_label="econ approvals")
 
 
-def _renderers() -> dict[str, tuple[Callable[..., discord.Embed], Callable[[int], discord.ui.View]]]:
+def _renderers(
+    name_fn: NameFn = mention,
+) -> dict[str, tuple[Callable[..., discord.Embed], Callable[[int], discord.ui.View]]]:
     """Queue key → (build this row's embed, build its buttons).
 
     A registry rather than a method on ``ApprovalQueue``: the descriptor lives
     in the service layer, which must not import Discord views, and what a
     request *looks* like is the product's business either way. Everything here
     is a thin adapter onto a builder that already existed for the card.
+
+    ``name_fn`` resolves the requester (and the resolving mod) to a display
+    name. It is threaded in rather than looked up inside because resolution
+    needs an async prefetch and these adapters are called synchronously; the
+    default keeps a caller that has none rendering exactly as before. A card
+    in a *channel* must always pass a real one — see
+    :func:`post_approval_card`.
     """
 
     def theme_embed(accent, settings, row) -> discord.Embed:
         return theme_views.render_theme_review_embed(
             accent,
             settings,
-            sponsor_mention=f"<@{int(row['user_id'])}>",
+            sponsor_id=int(row["user_id"]),
+            name_fn=name_fn,
             title=str(row["title"]),
             blurb=str(row["blurb"]),
             price=int(row["price"]),
@@ -87,7 +112,8 @@ def _renderers() -> dict[str, tuple[Callable[..., discord.Embed], Callable[[int]
         return sponsor_views.render_sponsor_card_embed(
             accent,
             settings,
-            sponsor_mention=f"<@{int(row['user_id'])}>",
+            sponsor_id=int(row["user_id"]),
+            name_fn=name_fn,
             question=str(row["question"]),
             price=int(row["price"]),
             state=str(row["state"]),
@@ -99,7 +125,8 @@ def _renderers() -> dict[str, tuple[Callable[..., discord.Embed], Callable[[int]
         return pin_views.render_pin_review_embed(
             accent,
             settings,
-            sponsor_mention=f"<@{int(row['user_id'])}>",
+            sponsor_id=int(row["user_id"]),
+            name_fn=name_fn,
             message=str(row["message"]),
             price=int(row["price"]),
             state=str(row["state"]),
@@ -112,6 +139,12 @@ def _renderers() -> dict[str, tuple[Callable[..., discord.Embed], Callable[[int]
         "sponsor": (sponsor_embed, sponsor_views.SponsorReviewView),
         "pin": (pin_embed, pin_views.PinReviewView),
     }
+
+
+#: Queue keys this build can draw a card for. Read off the registry so the two
+#: can't drift, and checked before any work: a select value naming a product
+#: this build doesn't know is a shrug, not a crash.
+RENDERABLE_KINDS = frozenset(_renderers())
 
 
 def option_text(row: dict[str, Any], settings: EconSettings) -> tuple[str, str]:
@@ -166,8 +199,7 @@ class ApprovalPickSelect(discord.ui.Select):
         if guild is None:
             await _safe_ephemeral(interaction, "❌ This only works in a server.")
             return
-        renderers = _renderers()
-        if kind not in QUEUES_BY_KEY or kind not in renderers:
+        if kind not in QUEUES_BY_KEY or kind not in RENDERABLE_KINDS:
             await _safe_ephemeral(interaction, "❌ That request no longer exists.")
             return
         submission_id = int(raw_id)
@@ -195,7 +227,9 @@ class ApprovalPickSelect(discord.ui.Select):
         accent = await safe_resolve_accent(
             bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
         )
-        build_embed, review_view = renderers[kind]
+        build_embed, review_view = _renderers(
+            await card_name_fn(bot.ctx, guild, row)
+        )[kind]
         # The product's own builder, in the row's true state — so a request
         # somebody resolved while this picker was open renders as resolved,
         # with no buttons, rather than offering a decision already made.
@@ -258,3 +292,150 @@ async def open_approvals_picker(interaction: discord.Interaction) -> None:
 
 
 refresh_approvals_board = partial(refresh_todo_board, log_label="econ approvals")
+
+
+# ---------------------------------------------------------------------------
+# Posting a card into the review channel
+# ---------------------------------------------------------------------------
+
+
+async def post_approval_card(
+    bot: Bot,
+    guild: discord.Guild,
+    settings: EconSettings,
+    kind: str,
+    submission_id: int,
+) -> None:
+    """Post one paid request's review card to the approvals channel, best effort.
+
+    The channel surface the board replaced, done properly: a **dedicated,
+    staff-only** ``approvals_channel_id`` rather than the member-facing bank
+    channel these cards used to land in. Unset ⇒ this returns immediately and
+    the board stays the only surface, which is how the dial ships dark.
+
+    One poster for all three products. The embed and the buttons come from
+    the same ``_renderers()`` registry the board's picker uses, so a mod reads
+    an identical card whichever surface they are on, and neither surface owns
+    a copy of a product's review.
+
+    The member has already paid and the pending row already exists by the time
+    this runs, so **nothing here may raise back at them** — a missing channel,
+    a forbidden send or a Discord hiccup leaves the request on the board and
+    is logged, not surfaced. The card's location is recorded last: the ledger
+    is what lets a resolution on one surface repaint the other, and a card
+    with no recorded location simply behaves like one posted before the dial
+    was set.
+    """
+    channel_id = int(getattr(settings, "approvals_channel_id", 0) or 0)
+    if not channel_id:
+        return
+    if kind not in RENDERABLE_KINDS:
+        return
+    channel = guild.get_channel(channel_id)
+    if not isinstance(channel, discord.abc.Messageable):
+        log.warning(
+            "econ approvals: review channel %s missing in guild %s",
+            channel_id, guild.id,
+        )
+        return
+
+    def _read():
+        with bot.ctx.open_db() as conn:
+            return get_approval_row(conn, kind, submission_id)
+
+    try:
+        row = await asyncio.to_thread(_read)
+    except Exception:
+        log.exception("econ approvals: failed to read %s %s", kind, submission_id)
+        return
+    if row is None:
+        return
+
+    accent = await safe_resolve_accent(
+        bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
+    )
+    build_embed, review_view = _renderers(
+        await card_name_fn(bot.ctx, guild, row)
+    )[kind]
+    # The people who can actually press Approve — ``can_manage_economy`` is
+    # the gate on both surfaces — rather than a second role to keep in sync.
+    ping = role_ping_kwargs([settings.manager_role_id])
+    try:
+        posted = await channel.send(
+            embed=build_embed(accent, settings, row),
+            view=review_view(submission_id),
+            **ping,
+        )
+    except discord.HTTPException:
+        log.warning(
+            "econ approvals: failed to post the %s card for %s", kind, submission_id
+        )
+        return
+    except Exception:
+        log.exception("econ approvals: unexpected error posting %s %s", kind, submission_id)
+        return
+
+    def _record() -> None:
+        with bot.ctx.open_db() as conn:
+            set_approval_card(conn, kind, submission_id, channel.id, posted.id)
+
+    try:
+        await asyncio.to_thread(_record)
+    except Exception:
+        log.debug("econ approvals: failed to record card ids", exc_info=True)
+
+
+async def close_expired_card(
+    bot: Bot,
+    guild: discord.Guild,
+    settings: EconSettings,
+    kind: str,
+    submission_id: int,
+) -> None:
+    """Repaint an expired request's card so it stops offering a decision.
+
+    The hourly sweep refunds requests nobody reviewed in time, and until now
+    nothing told their card. That was invisible while the cards lived only on
+    the board — the board reads the queue live, so an expired row simply
+    vanishes from it — but a *channel* card is a message: left alone it sits
+    there indefinitely showing Approve and Decline for a request that has
+    already been refunded. The buttons are safe (the ``state = from_state``
+    guard rejects them) but they read as broken, and a mod pressing one has
+    reasonably concluded the queue is lying to them.
+
+    Best effort, and deliberately silent about a card that was never posted:
+    every request submitted while the channel dial was unset has no location
+    recorded, which is not an error.
+    """
+    if kind not in RENDERABLE_KINDS or not submission_id:
+        return
+
+    def _read():
+        with bot.ctx.open_db() as conn:
+            return get_approval_row(conn, kind, submission_id)
+
+    try:
+        row = await asyncio.to_thread(_read)
+    except Exception:
+        log.debug("econ approvals: failed to read expired %s", submission_id, exc_info=True)
+        return
+    if row is None:
+        return
+    channel_id, message_id = card_location(row)
+    if not channel_id or not message_id:
+        return
+
+    accent = await safe_resolve_accent(
+        bot.ctx, guild, log_label="economy", default=DEFAULT_ACCENT_COLOR
+    )
+    build_embed, _ = _renderers(await card_name_fn(bot.ctx, guild, row))[kind]
+    try:
+        channel = bot.get_channel(channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return
+        message = await channel.fetch_message(message_id)
+        await message.edit(embed=build_embed(accent, settings, row), view=None)
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+        log.debug("econ approvals: failed to close expired card", exc_info=True)
+    except Exception:  # pragma: no cover - defensive
+        log.warning("econ approvals: unexpected error closing expired card")

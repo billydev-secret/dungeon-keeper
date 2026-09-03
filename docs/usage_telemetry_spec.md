@@ -104,7 +104,10 @@ instead of people. One row per panel open is ~50–200 rows/day against
 ## Report
 
 `GET /api/reports/usage?days=<1-365>` (admin only), rendered by
-`static/js/panels/usage-telemetry.js` under **Reports → Bot Usage**.
+`static/js/panels/usage-telemetry.js` under **Dev → Command & Panel Usage**.
+(Moved here from a one-item Reports heading in the IA3 nav pass — its job,
+spotting dead commands and panels, is owner tooling rather than a report a
+moderator needs day to day.)
 
 The headline is the never-used pair, because it is the only output that tells
 you to *delete* something:

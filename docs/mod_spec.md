@@ -1,6 +1,6 @@
 # Mod — Feature Spec
 
-General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py`): the server-facing `/help` browser and the `/purge` bulk-delete tool. Distinct from `docs/tools_spec.md`, which covers the owner/utility ToolsCog (`/reload_cog`, `/support`).
+General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py`): the server-facing `/help` browser and the `/purge` bulk-delete tool. Distinct from `docs/tools_spec.md`, which covers the owner/utility commands `/reload_cog` (`DevCog`) and `/support` (`SupportCog`).
 
 ## Commands
 
@@ -15,6 +15,7 @@ General moderation and help commands (`ModCog`, `src/bot_modules/cogs/mod_cog.py
 Ephemeral embed with a section dropdown. Pages are a **hand-curated** list (not auto-generated), shown conditionally by the invoker's permissions:
 
 - **General** — always shown (public commands: XP, tickets, birthday, wellness, DMs, pen pals, whisper, etc.).
+- **Economy** — always shown (bank commands: wallet, quests, shop, pay, gift, role icon, emoji sponsorship, QOTD sponsorship, pin, mute).
 - **Role Grants** — only if the invoker can grant at least one configured grant role; one `/grant` entry per role in the guild config.
 - **XP Grant** — only if the invoker passes `can_use_xp_grant`.
 - **Moderation** — only if `ctx.is_mod` (lists `/purge`, `/rename`).
@@ -22,7 +23,7 @@ Ephemeral embed with a section dropdown. Pages are a **hand-curated** list (not 
 
 A **Browse by Module** button opens a second, auto-generated pager: one page per loaded cog, listing its registered app commands (groups flattened to `/group sub [subsub]`), sorted alphabetically. Bodies over 4000 chars are truncated with an ellipsis.
 
-Embeds use the guild accent color (`safe_resolve_accent`) when invoked in a guild; per-section decorative colors are the DM fallback. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
+Embeds use the guild accent color (`safe_resolve_accent`) when invoked in a guild; with no guild to resolve one from (a DM), every section shares one fallback color instead — per-section decorative colors were dropped 2026-07-27 (#76) in favor of the section emoji telling pages apart. Both views time out after 120 s (controls disabled); only the invoker can interact — others' clicks are silently ignored.
 
 Because the curated pages are hand-maintained, they can drift from the real command set; the module browser is always accurate.
 
@@ -30,7 +31,7 @@ Because the curated pages are hand-maintained, they can drift from the real comm
 Both arguments optional:
 
 - `count` — delete the most recent N messages (1–1000).
-- `after` — `HH:MM` or `HH:MM:SS` in **server time** (guild `tz_offset`, global fallback if unset); deletes messages from that time onward. A time later than now is interpreted as *yesterday* at that time.
+- `after` — `HH:MM` or `HH:MM:SS` in **server time** (guild `tz_offset_hours`, global fallback if unset); deletes messages from that time onward. A time later than now is interpreted as *yesterday* at that time.
 - Both — up to `count` messages since `after`.
 - Neither — purges the **entire channel**.
 
@@ -40,14 +41,14 @@ Runtime gate is `ctx.is_mod` even though Discord's default-permission gate is Mo
 
 | When | The user sees |
 |---|---|
-| Non-mod invokes `/purge` | "You don't have permission to use this command." |
-| `after` fails to parse | "Invalid time format. Use `HH:MM` or `HH:MM:SS` (server time is UTC±N), e.g. `19:35`." |
-| Invoked outside a text channel/thread | "This command only works in text channels and threads." |
-| Bot lacks Manage Messages in the channel | "I need the **Manage Messages** permission in this channel to delete messages." |
+| Non-mod invokes `/purge` | "❌ You don't have permission to use this command." |
+| `after` fails to parse | "❌ Invalid time format. Use `HH:MM` or `HH:MM:SS` (server time is UTC±N), e.g. `19:35`." |
+| Invoked outside a text channel/thread | "❌ This command only works in text channels and threads." |
+| Bot lacks Manage Messages in the channel | "❌ I need the **Manage Messages** permission in this channel to delete messages." |
 
 ## Configuration
 
-- Guild `tz_offset` (via `get_tz_offset_hours`) — interprets `/purge after:` times; falls back to the global offset when the guild has no row.
+- Guild `tz_offset_hours` (via `get_tz_offset_hours`) — interprets `/purge after:` times; falls back to the global offset when the guild has no row.
 - `AUTO_DELETE_SETTINGS.bulk_delete_pause_seconds` (1.1 s) — pause between purge batches.
 - Guild grant-role config and mod/XP-grant permission checks (`AppContext`) — decide which `/help` sections appear.
 
