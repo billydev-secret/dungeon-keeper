@@ -21,10 +21,15 @@ SQLite-backed. Tests in `tests/`.
 - **Safety & privacy defaults:** NSFW gates on `channel.is_nsfw()` (Discord's
   own age-gate), never a bot-side toggle. Store minimal data — message
   content is off by default, so derive metadata at ingest time. Sensitive
-  access is opt-in. Never ship a preference or toggle that isn't enforced.
+  access is opt-in. Never ship a preference or toggle that isn't enforced —
+  including a config value staged into prod ahead of the branch that reads it,
+  which is a normal move here only if that commit names the branch.
 - **Any surface that puts two members in contact consults the no-contact
   list** (`is_no_contact_conn` / `no_contact_partners_conn`), and refuses in a
-  way the blocked party can't distinguish from an ordinary outcome. See
+  way the blocked party can't distinguish from an ordinary outcome. Prefer
+  **suppressing the delivery to refusing the action**: `/bank pay` moves the
+  money and drops the recipient's DM; Risky Rolls gates the die, not the
+  pairing. A blanket block is usually too wide — say what it would kill. See
   `docs/no_contact_spec.md`.
 - If a feature genuinely seems to need in-Discord admin config, raise it and
   ask instead of building it.
@@ -78,7 +83,17 @@ SQLite-backed. Tests in `tests/`.
   down. See `docs/dev_sessions.md`.
 - This checkout **is production**. Never restart the bot or dashboard
   (`sudo systemctl restart dungeon-keeper`) unasked — code changes apply on
-  restart, and the user pushes that button.
+  restart, and the user pushes that button. The same goes for every other live
+  switch: a Sync/Post press that publishes to members, a write to the prod
+  `config` or `todos` tables, a backfill over live data. Prepare it, say
+  exactly what pressing it does, and stop — even when you're sure and the
+  script is already written.
+- **Ship it dark.** Anything with a live blast radius lands inert — a dial
+  defaulting off, a NULL meaning "not configured", a table with no rows — so a
+  merge and even a restart change nothing until someone turns it on. Say in the
+  commit body what the feature does the instant it is live; "nothing until an
+  admin picks a channel" is the good answer.
+  See `docs/design_guide.md` § Part 5 — After it merges.
 - Large tasks (multi-stage refactors or big features) get a plan doc in
   `docs/plans/`; commits reference their stage.
 - When touching a module with open findings in `docs/reviews/`, mention them
@@ -100,6 +115,11 @@ SQLite-backed. Tests in `tests/`.
   itself was wrong. Cog tests that re-prove service behavior through Discord
   mocks were the suite's main historical bloat (see
   docs/plans/test-suite-slim-and-remote-resilience.md).
+- **A deliberate anomaly ships with a test that fails if it's reverted**, plus
+  a line in the owning spec saying why. The Guess reveal printing a bare
+  `User <id>` for a no-contact pair, turn pings staying public, `ama` kept in
+  `VALID_GAME_TYPES` — each reads as a bug from the code alone, and the test is
+  the only thing a stranger's cleanup pass will actually run.
 - **Prefer a `pytest.param` row over a new test function** when covering
   another value variant of an existing behavior, and check whether a shared
   contract table already covers it (embed accents:
