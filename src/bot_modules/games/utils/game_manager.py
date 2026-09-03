@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import uuid
 import logging
 from collections import defaultdict
@@ -82,6 +83,110 @@ DEFAULT_LAUNCH_PERMS_HINT = (
 )
 
 
+async def sign_off_game_chore(bot, guild_id: int | None, user_id: int | None) -> None:
+    """Tick off a "run a game" chore on the todo board. Never raises.
+
+    **Moderators only.** The chore board is a mod worklist, and "run a game" is
+    a thing a mod is supposed to do for the server — so two ordinary members
+    accepting a duel is a multiplayer game being run, but it is not the mod
+    having done their chore. Without this gate the chore went green on any
+    active day with no moderator involved, which makes it a report on how busy
+    the server was rather than a checklist.
+
+    "Moderator" is ``AppContext.member_is_mod`` — the one definition the rest of
+    the bot uses (Discord's manage_guild/administrator, then the guild's
+    configured mod/admin roles). An uncached member is treated as not a mod: a
+    chore left open is recoverable with the board's own Complete button, where
+    a tick that should not have happened is not.
+
+    **This is the seam that makes the chore mean what it says.** Every party
+    game reaches its board through two doors: a member's ``/games play``, and
+    the scheduler calling the same ``launch()`` on a timer. Only the
+    interactive door passes through here, so "a scheduled game doesn't count as
+    you running one" is a property of *where* this is called from rather than a
+    flag someone has to remember to set — there is nothing for the scheduler to
+    opt out of.
+
+    It fires when the game **starts**, not when it ends, which is a deliberate
+    reading of a chore whose text is "run a game": the mod's part is done the
+    moment the room has a game in it. Waiting for the archive would also mean a
+    game that was played but never formally ended — or one that flopped with
+    nobody joining — left the board claiming the chore was skipped.
+
+    All DB work goes through ``asyncio.to_thread``, including the guild-config
+    load the mod check needs — that hits the database on a cold cache (the
+    first hand-started game after a restart), and it sits in front of
+    ``interaction.response.edit_message`` on the duel paths, where a connection
+    waiting out its 30s busy timeout would stall the heartbeat and drop the
+    gateway. The config is **warmed** in the thread and the mod check itself
+    then runs on the loop against the warm cache, so the ``Member`` never
+    crosses into the worker: reading its roles walks the guild's live role
+    cache, which another gateway event can mutate underneath a thread.
+
+    The tick opens with ``BEGIN IMMEDIATE``: it reads the wired definitions and
+    then writes the completion, and on a plain deferred transaction that
+    sequence can fail with ``SQLITE_BUSY_SNAPSHOT`` when another writer commits
+    in between — which ``busy_timeout`` does not retry. The per-definition
+    guard inside ``auto_complete_chores`` would swallow it and the chore would
+    quietly stay open, which is the failure this whole feature exists to stop.
+
+    That write lock is only taken when there is something to write. A guild
+    with no game-triggered chore — which is every guild until someone picks the
+    trigger, since the migration backfills nothing — answers on a plain read
+    instead, so the launch path of a busy evening never queues behind another
+    writer for a transaction whose only statement returns no rows. The
+    existence check being stale is harmless: the immediate transaction re-reads
+    under the lock, so it is a fast negative, never a decision.
+    """
+    try:
+        if not guild_id or not user_id:
+            return
+        ctx = getattr(bot, "ctx", None)
+        if ctx is None:
+            return
+        from bot_modules.services.todo_recurring_service import (  # noqa: PLC0415
+            auto_complete_chores,
+        )
+
+        guild = bot.get_guild(int(guild_id))
+        member = guild.get_member(int(user_id)) if guild is not None else None
+        if member is None:
+            return
+
+        # Warm the per-guild config off-loop, then ask the one shared question
+        # ("is this member staff?") on-loop against the now-cached answer.
+        await asyncio.to_thread(ctx.guild_config, int(guild_id))
+        if not ctx.member_is_mod(member):
+            return
+
+        from bot_modules.core.db_utils import open_db_immediate  # noqa: PLC0415
+
+        def _work() -> list[int]:
+            with ctx.open_db() as conn:
+                wired = conn.execute(
+                    "SELECT 1 FROM todo_recurring"
+                    " WHERE guild_id = ? AND status = 'active'"
+                    "   AND auto_complete = 'game' LIMIT 1",
+                    (int(guild_id),),
+                ).fetchone()
+            if wired is None:
+                return []
+            with open_db_immediate(ctx.db_path) as conn:
+                return auto_complete_chores(
+                    conn, int(guild_id), "game",
+                    completed_by=int(user_id), now_ts=time.time(),
+                )
+
+        if await asyncio.to_thread(_work):
+            # Only when something was actually ticked: a game started in a
+            # guild with no game chore must not cost a board edit.
+            from bot_modules.cogs.todo_cog import repaint_board  # noqa: PLC0415
+
+            await repaint_board(bot, int(guild_id))
+    except Exception:
+        log.exception("game chore auto sign-off failed")
+
+
 async def finish_launch_response(
     interaction: discord.Interaction,
     game_id: str | None,
@@ -104,6 +209,10 @@ async def finish_launch_response(
             await interaction.followup.send(perms_hint, ephemeral=True)
         except discord.HTTPException:
             pass
+        return
+    await sign_off_game_chore(
+        interaction.client, interaction.guild_id, getattr(interaction.user, "id", None)
+    )
 
 
 async def check_allowed_channel(

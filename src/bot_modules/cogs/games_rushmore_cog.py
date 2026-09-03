@@ -34,6 +34,7 @@ from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    sign_off_game_chore,
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
@@ -579,7 +580,7 @@ class RushmoreRecapView(discord.ui.View):
             pass
         self.stop()
         await interaction.response.defer()
-        await self.cog.launch(
+        game_id = await self.cog.launch(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
@@ -592,6 +593,16 @@ class RushmoreRecapView(discord.ui.View):
                 "mode": self._settings.get("mode", "snake"),
             },
         )
+        # A recap's relaunch button goes straight to the launcher, missing the
+        # shared finish_launch_response seam — but a mod restarting a round by
+        # hand has run a game. Signed off only on a launch that actually
+        # produced a game (a falsy id means it failed, e.g. no send permission),
+        # and after it, so a chore is never ticked green for a round that never
+        # started.
+        if game_id:
+            await sign_off_game_chore(
+                self.cog.bot, interaction.guild_id, interaction.user.id
+            )
 
     @discord.ui.button(label="\U0001f504 Hand Off", style=discord.ButtonStyle.secondary, custom_id="rushmore_hand_off")
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):

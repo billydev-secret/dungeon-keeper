@@ -2,7 +2,13 @@
 
 A recurring entry is a **reminder, not automation**: when it comes due the
 spawner inserts an ordinary row into ``todos`` ("Post QOTD") and a mod does the
-thing in Discord and ticks it off. The bot never performs the chore itself.
+thing in Discord. The bot never performs the chore itself.
+
+It may, however, *notice* that the chore was done. A definition can carry an
+``auto_complete`` trigger (``qotd`` / ``game``), and when the bot observes that
+event it ticks that definition's open instance off — see
+``auto_complete_chores``. The doing is still a human's; only the confirming is
+automated, which is the half a mod was forgetting.
 
 Time math is borrowed wholesale from ``scheduled_games_service.compute_next_run``
 — the schema columns were named to match so the two can't drift. Wall-clock
@@ -27,12 +33,36 @@ from bot_modules.services.scheduled_games_service import (
     _local_to_epoch,
     compute_next_run,
 )
-from bot_modules.services.todo_service import TASK_MAX_LEN, create_todo, mark_missed
+from bot_modules.services.todo_service import (
+    TASK_MAX_LEN,
+    complete_todo,
+    create_todo,
+    mark_missed,
+)
 
 log = logging.getLogger(__name__)
 
 VALID_RECURRENCE = ("daily", "weekly")
 VALID_STATUS = ("active", "paused")
+
+#: What the bot can watch for on a definition's behalf. ``None`` (stored NULL)
+#: is the default and means "a mod ticks this one by hand" — the behavior every
+#: chore had before migration 201.
+#:
+#: Deliberately a closed set with no free-text escape hatch: a trigger is a
+#: promise that some code path actually fires it, and an unrecognised string
+#: would be a chore that silently never signs itself off.
+VALID_AUTO_COMPLETE = ("qotd", "game")
+
+#: Passed to ``update_recurring`` for "leave the trigger as it is".
+#:
+#: Needed because ``None`` already means something specific here — switch the
+#: automation off — so a caller that simply doesn't mention the field cannot be
+#: told apart from one that means to clear it. Without this, any PUT that omits
+#: ``auto_complete`` (a script, a curl, a stale cached copy of the panel JS)
+#: silently un-wires a working chore, with no error and nothing visible but a
+#: missing chip.
+KEEP_AUTO_COMPLETE = "__keep__"
 
 DESCRIPTION_MAX_LEN = 1000
 
@@ -41,7 +71,8 @@ WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 _COLS = (
     "id, guild_id, task, description, recurrence, time_of_day, recur_days,"
-    " status, next_run_at, last_run_at, last_status, created_by, created_at"
+    " status, next_run_at, last_run_at, last_status, created_by, created_at,"
+    " auto_complete"
 )
 
 
@@ -60,6 +91,8 @@ class RecurringTask:
     last_status: str | None = None
     created_by: int = 0
     created_at: float = 0.0
+    #: ``None`` for the hand-ticked chores, which is most of them.
+    auto_complete: str | None = None
 
 
 def normalize_days(days: Iterable | None) -> tuple[int, ...]:
@@ -101,11 +134,38 @@ def _row_to_task(row: sqlite3.Row) -> RecurringTask:
         last_status=row["last_status"],
         created_by=row["created_by"] or 0,
         created_at=row["created_at"] or 0.0,
+        auto_complete=row["auto_complete"] or None,
     )
 
 
 class RecurringValidationError(ValueError):
     """Caller-supplied fields don't describe a schedulable cadence."""
+
+
+def normalize_auto_complete(value) -> str | None:
+    """Validate a trigger, mapping every spelling of "off" onto ``None``.
+
+    Kept out of ``validate`` on purpose: that function answers "is this a
+    schedulable cadence?", and every one of its callers needs the answer.
+    A trigger is orthogonal to the schedule, and folding it in would widen a
+    4-tuple every caller unpacks positionally.
+
+    ``""`` and ``"none"`` both arrive from the dashboard's own picker (an empty
+    ``<option>`` value, and the string a hand-written request might send), so
+    both mean off rather than being rejected as junk — but an unrecognised
+    trigger raises, because silently storing it would produce a chore that
+    claims to sign itself off and never does.
+    """
+    if value is None:
+        return None
+    trigger = str(value).strip().lower()
+    if trigger in ("", "none"):
+        return None
+    if trigger not in VALID_AUTO_COMPLETE:
+        raise RecurringValidationError(
+            "Automatic sign-off must be a QOTD post, a game, or nothing."
+        )
+    return trigger
 
 
 def validate(
@@ -180,6 +240,7 @@ def create_recurring(
     time_of_day: int,
     recur_days: Iterable | None = None,
     description: str | None = None,
+    auto_complete: str | None = None,
     created_by: int = 0,
     offset_hours: float = 0.0,
     now_ts: float,
@@ -194,6 +255,7 @@ def create_recurring(
     task, recurrence, minutes, days = validate(
         task=task, recurrence=recurrence, time_of_day=time_of_day, recur_days=recur_days
     )
+    trigger = normalize_auto_complete(auto_complete)
     next_run = compute_next_run(
         now_utc=now_ts,
         offset_hours=offset_hours,
@@ -204,8 +266,8 @@ def create_recurring(
     cur = conn.execute(
         "INSERT INTO todo_recurring"
         " (guild_id, task, description, recurrence, time_of_day, recur_days,"
-        "  status, next_run_at, created_by, created_at)"
-        " VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
+        "  status, next_run_at, created_by, created_at, auto_complete)"
+        " VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)",
         (
             guild_id,
             task,
@@ -216,6 +278,7 @@ def create_recurring(
             next_run,
             created_by,
             now_ts,
+            trigger,
         ),
     )
     recurring_id: int = cur.lastrowid  # type: ignore[assignment]
@@ -283,13 +346,20 @@ def update_recurring(
     time_of_day: int,
     recur_days: Iterable | None = None,
     description: str | None = None,
+    auto_complete: str | None = KEEP_AUTO_COMPLETE,
     offset_hours: float = 0.0,
     now_ts: float,
 ) -> bool:
-    """Rewrite a definition's schedulable fields and recompute ``next_run_at``."""
+    """Rewrite a definition's schedulable fields and recompute ``next_run_at``.
+
+    ``auto_complete`` defaults to ``KEEP_AUTO_COMPLETE``: a caller that does not
+    mention the trigger leaves it alone rather than switching it off.
+    """
     task, recurrence, minutes, days = validate(
         task=task, recurrence=recurrence, time_of_day=time_of_day, recur_days=recur_days
     )
+    keep_trigger = auto_complete == KEEP_AUTO_COMPLETE
+    trigger = None if keep_trigger else normalize_auto_complete(auto_complete)
     next_run = compute_next_run(
         now_utc=now_ts,
         offset_hours=offset_hours,
@@ -299,7 +369,8 @@ def update_recurring(
     )
     cur = conn.execute(
         "UPDATE todo_recurring SET task = ?, description = ?, recurrence = ?,"
-        " time_of_day = ?, recur_days = ?, next_run_at = ?"
+        " time_of_day = ?, recur_days = ?, next_run_at = ?,"
+        " auto_complete = CASE WHEN ? THEN auto_complete ELSE ? END"
         " WHERE id = ? AND guild_id = ?",
         (
             task,
@@ -308,6 +379,8 @@ def update_recurring(
             minutes,
             json.dumps(list(days)) if days else None,
             next_run,
+            1 if keep_trigger else 0,
+            trigger,
             recurring_id,
             guild_id,
         ),
@@ -548,6 +621,81 @@ def run_now(
         advance=False,
         reset_open=False,
     )
+
+
+# ── Automatic sign-off ──────────────────────────────────────────────────────
+
+
+def auto_complete_chores(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    trigger: str,
+    *,
+    completed_by: int,
+    now_ts: float,
+) -> list[int]:
+    """Tick off every chore in this guild wired to *trigger*. Returns their todo ids.
+
+    Called from wherever the bot observes the real event — a QOTD registered, a
+    member starting a hosted game — so the board stops recording a miss on a day
+    the thing demonstrably happened. It reports what it ticked rather than a
+    count, because the caller logs the ids and a test asserts on them.
+
+    Nearly all of the safety here is inherited rather than written, which is
+    why this reuses the two existing primitives instead of its own UPDATE:
+
+    * ``open_instance_id`` sees only rows that are neither ticked nor written
+      off, so a **second** QOTD the same day is a no-op, and a row yesterday's
+      reset marked missed is not resurrected.
+    * ``complete_todo`` re-checks that under its own guarded UPDATE, so a mod
+      pressing Complete in the same instant as the trigger fires cannot produce
+      two completions — the loser's rowcount is 0.
+    * A chore whose slot has not come round yet has no instance at all, so
+      nothing is credited early.
+
+    Only **active** definitions fire. A chore paused for the holidays is one a
+    mod has said not to track, and quietly ticking it while it is paused would
+    make the pause invisible and the streak wrong on resume.
+
+    ``guild_id`` is matched, never assumed: the trigger fires in the guild where
+    the event happened, and the second guild runs its own chores on the same
+    definitions table.
+
+    Never raises on a definition it cannot tick — a chore that fails to sign
+    itself off must not take down the QOTD registration or the game launch it
+    is hanging off. The guard is **per definition** rather than around the
+    whole loop, so one unhappy row cannot swallow the sign-off of the ones
+    behind it. Both current callers guard as well; this is here so a third one
+    can trust the sentence above rather than having to know to add its own.
+    """
+    if not trigger or trigger not in VALID_AUTO_COMPLETE:
+        return []
+    rows = conn.execute(
+        "SELECT id FROM todo_recurring"
+        " WHERE guild_id = ? AND status = 'active' AND auto_complete = ?"
+        " ORDER BY id",
+        (guild_id, trigger),
+    ).fetchall()
+
+    done: list[int] = []
+    for row in rows:
+        try:
+            todo_id = open_instance_id(conn, row["id"])
+            if todo_id is None:
+                continue
+            if complete_todo(conn, todo_id, guild_id, completed_by, now_ts=now_ts):
+                done.append(todo_id)
+        except Exception:
+            log.exception(
+                "auto sign-off failed for recurring %s in guild %s",
+                row["id"], guild_id,
+            )
+    if done:
+        log.info(
+            "Auto-completed chores %s in guild %s on trigger %s (by %s)",
+            done, guild_id, trigger, completed_by,
+        )
+    return done
 
 
 def describe_cadence(task: RecurringTask) -> str:

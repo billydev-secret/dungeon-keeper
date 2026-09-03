@@ -18,6 +18,7 @@ from bot_modules.games.constants import (
     HOW_TO_PLAY,
 )
 from bot_modules.games.utils.game_manager import (
+    sign_off_game_chore,
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
@@ -528,13 +529,22 @@ class ClapbackRecapView(discord.ui.View):
         self.stop()
         disable_all_items(self)
         await interaction.response.edit_message(view=self)
-        await self.cog._start_new_game(
+        game_id = await self.cog._start_new_game(
             channel=interaction.channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild=interaction.guild,
             config=self.config,
         )
+        # A rematch started from the recap misses the shared
+        # finish_launch_response seam, but a mod pressing it has run a game by
+        # hand. Only on a launch that produced one, and after it, so a failed
+        # rematch never ticks a chore green.
+        if game_id:
+            await sign_off_game_chore(
+                self.cog.bot, interaction.guild_id, interaction.user.id
+            )
+
 
     @discord.ui.button(label="🔀 Play Again (Shuffled)", style=discord.ButtonStyle.secondary, custom_id="ql_replay_shuffle")
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -553,13 +563,22 @@ class ClapbackRecapView(discord.ui.View):
             f"🔀 **Shuffled settings:** {shuffled['rounds']} rounds, "
             f"{shuffled['timer']}s submit, {shuffled['vote_timer']}s vote"
         )
-        await self.cog._start_new_game(
+        game_id = await self.cog._start_new_game(
             channel=channel,
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild=interaction.guild,
             config=shuffled,
         )
+        # A rematch started from the recap misses the shared
+        # finish_launch_response seam, but a mod pressing it has run a game by
+        # hand. Only on a launch that produced one, and after it, so a failed
+        # rematch never ticks a chore green.
+        if game_id:
+            await sign_off_game_chore(
+                self.cog.bot, interaction.guild_id, interaction.user.id
+            )
+
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────

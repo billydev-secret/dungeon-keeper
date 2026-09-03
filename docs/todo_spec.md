@@ -312,9 +312,11 @@ prod this never arises. Pinned in
 Definitions live on the dashboard and materialise a normal todo row when due.
 
 - **Reminders, not automation.** The bot adds "Post QOTD" to the list; a mod
-  posts the QOTD and ticks it off. The bot never performs the chore. (Photo
-  Challenge has real automation of its own — see `photo_challenge_spec.md`;
-  this is the checklist, not a second copy of it.)
+  posts the QOTD. The bot never performs the chore. (Photo Challenge has real
+  automation of its own — see `photo_challenge_spec.md`; this is the checklist,
+  not a second copy of it.) Since migration 201 the bot may, however, *notice*
+  that the chore was done and tick it off — see **Automatic sign-off** below.
+  The doing is still a human's; only the confirming is automated.
 - **Cadence.** `daily` or `weekly` only, at a `time_of_day` in minutes since
   guild-local midnight; weekly carries a JSON weekday set (Mon=0). A one-shot
   task is just a task. Column names mirror `games_scheduled` and the time math
@@ -368,6 +370,120 @@ Definitions live on the dashboard and materialise a normal todo row when due.
 - **Delete** stops the repeat but leaves any already-spawned row on the list —
   that's real outstanding work, and silently removing a task a mod is part-way
   through would be worse than orphaning it.
+
+#### Automatic sign-off (migration 201, 2026-09-02)
+
+A definition may carry an `auto_complete` trigger naming an event the bot
+already watches for. When that event happens in that guild, the definition's
+open instance is ticked off by `auto_complete_chores`.
+
+This reversed the original "reminders only" decision, on the evidence: of the 28
+instances prod's two chores spawned between 2026-08-19 and 09-01, exactly **two**
+were ever ticked and 24 aged into `missed_at` — not because the chores went
+undone, but because the bot already knew they had been done and made a human
+confirm it anyway. A scoreboard that records a miss on a day the thing
+demonstrably happened is worse than no scoreboard.
+
+- **Triggers are an explicit column, never a text match.** `'qotd'` and
+  `'game'`; `NULL` (the default, and every pre-201 row) means a mod ticks it by
+  hand. Matching a chore by its task text — "Do a QOTD" — would key automation
+  off free text a mod typed into a dashboard field, where a rename, a typo or a
+  second guild's phrasing silently stops it with no error anywhere. An
+  unrecognised trigger is **rejected at write time** rather than stored, since a
+  chore that claims to sign itself off and never does is the worst outcome.
+- **Where it fires.** `qotd` rides QOTD registration — **both** call sites: the
+  marker path in `events_cog` (already gated to once per message) and
+  `/qotd post` in `economy_cog`, which is the one that renders the card and
+  drains the sponsored queue. Wiring only the first left the chore marked missed
+  for the command a mod is most likely to use; a test now holds every
+  `create_qotd` call site to signing off.
+
+  `game` rides `sign_off_game_chore`, called from every path where a human
+  starts a multiplayer game by hand: `finish_launch_response` (the 16 party
+  games from `/games play`), `BaseDuel._handle_accept` (a challenge accepted),
+  `BaseGame._handle_lobby_start` (an N-player lobby reaching its start),
+  `risky_roll_cog._start_game`, and the recap relaunch buttons on Name Your
+  Price, Mt. Rushmore and Clapback, which go straight to a launcher and so miss
+  the shared seam.
+- **The game trigger is moderator-only** (`AppContext.member_is_mod`, the same
+  definition as every other mod gate). "Run a game" is a chore a mod owes the
+  server, so two ordinary members accepting a duel is a multiplayer game being
+  run but is not that chore being done — ungated, it went green on any active
+  day with nobody on staff involved, which made it a report on how busy the
+  server was rather than a checklist. An **uncached member is treated as not a
+  mod**: a chore left open is recoverable with the board's Complete button,
+  where a tick that should not have happened is not. The check itself runs in
+  the worker thread, not on the loop — it reads the guild config, which hits the
+  DB on a cold cache. The QOTD trigger needs no equivalent gate — registration
+  already requires the economy manager role.
+- **A scheduled game does not count**, and this is enforced by *where* the call
+  sits rather than by a flag. Party games reach the board through two doors —
+  `/games play` and the scheduler calling the same `launch()` — and only the
+  interactive door passes through `finish_launch_response`, so there is nothing
+  for the scheduler to opt out of and nothing it can forget. A tripwire in
+  `tests/test_todo_auto_signoff_wiring.py` fails if the helper ever appears in
+  the scheduler. Without this the chore would tick itself green every morning
+  off the two daily schedules already running, and stop meaning anything.
+- **The game trigger fires at the start, not the finish.** The mod's part in
+  "run a game" is done once the room has a game in it; waiting for the archive
+  would leave the board claiming a skip for a game that was played but never
+  formally ended, or one that flopped with nobody joining.
+- **Credit goes to the human**, not the bot: the QOTD's poster, the game's host
+  (a mod, per the gate above),
+  a duel's challenger (not the acceptor — they answered an invitation rather
+  than issuing one). `completed_by` is a real member id everywhere else on the
+  board and a mod reading it wants to know who did it.
+- **Safety is inherited, not rewritten.** The tick goes through the existing
+  `open_instance_id` + `complete_todo` pair, so it cannot resurrect a written-off
+  row, cannot double-credit a chore a mod already ticked, cannot fire twice for
+  a second QOTD the same day, and cannot race the board's own Complete button —
+  the loser's guarded `UPDATE` returns rowcount 0. Only `active` definitions
+  fire: a chore paused for the holidays is one a mod said to stop tracking, and
+  ticking it while paused would make the pause invisible and the streak wrong on
+  resume. A failure never propagates — a chore that can't sign itself off must
+  not take down the QOTD registration or the game launch it hangs off.
+- **The trigger can only tick what already exists**, and that is a real sharp
+  edge: a chore due at 09:00 whose event happens at 08:00 has no open instance
+  to credit, so 09:00 spawns one that nobody ticks and it ages into `missed_at`
+  — the exact failure this feature exists to fix, now silent. Fixing it in code
+  would mean either pre-crediting an instance that does not exist or teaching
+  `spawn_due` that today's slot is already accounted for, which changes the
+  reset semantics the streak is computed from. It is instead a **configuration
+  rule**, stated in the panel hint and the manual: set the chore's time at or
+  before the earliest the thing would ever be done.
+- **The board is repainted by the caller** (`todo_cog.repaint_board`), not by
+  the board loop. That loop deliberately repaints only what it spawned plus
+  failed retries — "every user-facing mutation repaints the board itself" — so
+  an unrepainted sign-off would leave the chore looking outstanding on the
+  surface a mod reads until the next daily spawn, which is indistinguishable
+  from the feature not working. The repaint is skipped when nothing was ticked,
+  and the DB work on the game paths goes through `asyncio.to_thread` like every
+  other `open_db` there — under `open_db_immediate`, since reading the wired
+  definitions and then writing the completion is exactly the read-then-write a
+  deferred transaction can fail with `SQLITE_BUSY_SNAPSHOT`, which
+  `busy_timeout` does not retry and the per-definition guard would swallow. The
+  write lock is only taken once a plain read confirms the guild *has* a
+  game-triggered chore, so a launch in a guild with none — every guild until
+  someone picks the trigger — never queues behind another writer.
+
+  Every game seam signs off **after** its interaction has been answered, never
+  before: a repaint is a REST edit that discord.py sleeps through under
+  per-channel rate limiting, which is long enough to burn the three-second
+  window and fail an accept whose game is already ACTIVE (the hazard
+  `todo_cog.add_todo` documents). The QOTD repaint likewise sits *before*
+  `events_cog`'s `result is None` return — that return fires whenever the
+  poster has already had their daily login, which is most QOTD posts.
+- **Not every hand-started game reaches the seam** automatically — a cog with
+  its own command or its own restart button has to carry the call. Risky Rolls
+  does (after its response, outside its channel lock, and outside the `try`
+  whose handler tears a live round down), as do the recap relaunch buttons on
+  Name Your Price, Mt. Rushmore and Clapback — each signing off only when the
+  relaunch actually produced a game, so a failed rematch never ticks a chore
+  green. Missing one of those is the mistake that has been made three times, so
+  a test now scans the cogs for a handler that calls a launcher directly without
+  signing off, rather than trusting a list. Mahjong is deliberately out: it is
+  closer to solo play.
+
 
 ### Web list
 
@@ -470,7 +586,8 @@ Three tables, all per-guild:
   widened the key to `(guild_id, kind)` for the second board; **migration 180
   narrowed it back** when the boards merged.
 - `todo_recurring` — definition, cadence, `next_run_at` cache, `status`,
-  `last_run_at`/`last_status`.
+  `last_run_at`/`last_status`, and `auto_complete` (migration 201) naming the
+  event that signs it off, or NULL for a hand-ticked chore. No per-user data.
 
 The sign-off and paid-request sections add **no table and no migration**: they
 read `econ_quest_claims` and the three `econ_*_submissions` tables, which the

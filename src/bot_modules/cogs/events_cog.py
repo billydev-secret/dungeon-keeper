@@ -80,6 +80,7 @@ from bot_modules.services.login_card_service import (
     record_card,
 )
 from bot_modules.services.sentiment_service import score_text
+from bot_modules.services.todo_recurring_service import auto_complete_chores
 from bot_modules.services.welcome_service import (
     build_leave_embed,
     build_welcome_embed,
@@ -1194,6 +1195,10 @@ class EventsCog(commands.Cog):
             thread_deep_id = message.channel.id
         hop_channel_id = parent_id or channel_id
 
+        #: Chore instances the QOTD registration below signed off, carried out
+        #: of the worker thread so the board can be repainted on the loop.
+        chores_ticked: list[int] = []
+
         def _econ_work() -> (
             tuple[EconSettings, LoginOutcome, int, list[dict], list[dict], str | None, str]
             | None
@@ -1240,6 +1245,27 @@ class EventsCog(commands.Cog):
                         conn, guild_id, channel_id, message_id, question,
                         user_id, today,
                     )
+                    # The chore board's "Do a QOTD" signs itself off here.
+                    # This branch is already the once-per-message registration
+                    # gate, so the tick inherits its exactly-once property, and
+                    # a second QOTD later in the day finds no open instance and
+                    # does nothing. Credited to the poster, not the bot —
+                    # ``completed_by`` is a real member everywhere else on the
+                    # board, and a mod reading it wants to know who did it.
+                    #
+                    # The repaint happens after this worker thread returns —
+                    # the board loop only repaints what it spawned itself, so
+                    # an unrepainted sign-off would leave the chore looking
+                    # outstanding on the surface a mod actually reads.
+                    try:
+                        chores_ticked.extend(
+                            auto_complete_chores(
+                                conn, guild_id, "qotd",
+                                completed_by=user_id, now_ts=time.time(),
+                            )
+                        )
+                    except Exception:
+                        log.exception("QOTD chore auto sign-off failed")
                 # Reward: a real reply to a registered question, and only while
                 # that question is still today's — old QOTD messages stay in
                 # the table forever and would otherwise be a coin farm.
@@ -1407,6 +1433,19 @@ class EventsCog(commands.Cog):
                 )
 
         result = await asyncio.to_thread(_econ_work)
+
+        # BEFORE the `result is None` return, not after. _econ_work returns
+        # None once the poster has already had their daily login for this local
+        # day — which is most QOTD posts, since a mod usually chats before
+        # posting the question. The registration (and its chore sign-off) sits
+        # above that return and still happened, so keying the repaint on a
+        # non-None result would leave the board stale in exactly the common
+        # case, which is the bug the repaint exists to fix.
+        if chores_ticked:
+            from bot_modules.cogs.todo_cog import repaint_board
+
+            await repaint_board(self.bot, guild_id)
+
         if result is None:
             return
         (

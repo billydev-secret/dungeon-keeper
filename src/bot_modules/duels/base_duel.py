@@ -21,6 +21,7 @@ from typing import Any, Awaitable, Callable
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 
@@ -280,56 +281,81 @@ class BaseDuel(BaseGame):
         )
 
     async def _handle_accept(self, interaction: discord.Interaction, game_id: int) -> None:
-        game = await self._db_get_game(game_id)
-        if not game or game.state != "PENDING":
-            await interaction.response.send_message(
-                self._stale_challenge_message(game), ephemeral=True
-            )
-            return
-
-        ante = await self._game_ante(game_id)
-        if ante > 0:
-            settings = await self._econ_settings(game.guild_id)
-            ante_text = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
-            # Both antes land at accept — no money moves while a challenge is
-            # merely pending, so a decline or a timeout needs no refund. If
-            # either side can't cover it now, the challenge is called off
-            # rather than started half-funded.
-            for uid, who in (
-                (game.target_id, "you"),
-                (game.challenger_id, "the challenger"),
-            ):
-                err = await self._take_stake(game.guild_id, game_id, uid, ante)
-                if err is None:
-                    continue
-                await self._db_set_state(game_id, "DECLINED")  # refunds + drops
-                note = err if who == "you" else (
-                    f"The challenger can no longer cover the {ante_text} wager — "
-                    "challenge called off."
-                )
-                await interaction.response.edit_message(
-                    embed=discord.Embed(
-                        title="❌ Challenge Called Off",
-                        description=note,
-                        color=COLOR_YELLOW,
-                    ),
-                    view=None,
+        #: Set once the duel is really ACTIVE, so the chore is signed off
+        #: even if a guard below returns out before the view is built.
+        started: tuple[int, int] | None = None
+        try:
+            game = await self._db_get_game(game_id)
+            if not game or game.state != "PENDING":
+                await interaction.response.send_message(
+                    self._stale_challenge_message(game), ephemeral=True
                 )
                 return
 
-        await self._db_set_state(game_id, "ACTIVE")
-        await self.on_game_start(game)
+            ante = await self._game_ante(game_id)
+            if ante > 0:
+                settings = await self._econ_settings(game.guild_id)
+                ante_text = _fmt_coins(settings, ante) if settings else f"**{ante:,}**"
+                # Both antes land at accept — no money moves while a challenge is
+                # merely pending, so a decline or a timeout needs no refund. If
+                # either side can't cover it now, the challenge is called off
+                # rather than started half-funded.
+                for uid, who in (
+                    (game.target_id, "you"),
+                    (game.challenger_id, "the challenger"),
+                ):
+                    err = await self._take_stake(game.guild_id, game_id, uid, ante)
+                    if err is None:
+                        continue
+                    await self._db_set_state(game_id, "DECLINED")  # refunds + drops
+                    note = err if who == "you" else (
+                        f"The challenger can no longer cover the {ante_text} wager — "
+                        "challenge called off."
+                    )
+                    await interaction.response.edit_message(
+                        embed=discord.Embed(
+                            title="❌ Challenge Called Off",
+                            description=note,
+                            color=COLOR_YELLOW,
+                        ),
+                        view=None,
+                    )
+                    return
 
-        # Re-fetch after on_game_start (subclass may have set additional fields)
-        game = await self._db_get_game(game_id)
-        if not game:
-            return
+            await self._db_set_state(game_id, "ACTIVE")
+            await self.on_game_start(game)
+            # Assigned only once on_game_start has returned: the row is
+            # ACTIVE either way, but a start that raised is not a game
+            # anyone ran, and crediting it would also put a REST board
+            # repaint in front of the error the player is waiting for.
+            started = (game.guild_id, game.challenger_id)
 
-        guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-        view = self.build_game_view(game.id)
-        embed = self.render_game_state(game, guild)
-        self.bot.add_view(view, message_id=game.message_id)
-        await interaction.response.edit_message(embed=embed, view=view)
+            # Re-fetch after on_game_start (subclass may have set additional fields)
+            game = await self._db_get_game(game_id)
+            if not game:
+                return
+
+            guild: discord.Guild = interaction.guild  # type: ignore[assignment]
+            view = self.build_game_view(game.id)
+            embed = self.render_game_state(game, guild)
+            self.bot.add_view(view, message_id=game.message_id)
+            await interaction.response.edit_message(embed=embed, view=view)
+
+        finally:
+            # AFTER the interaction is answered, never before, and in a
+            # finally so a vanished row can't skip a chore the game has
+            # already earned. An accepted challenge is two humans playing,
+            # which is the clearest "a multiplayer game ran" the bot ever
+            # sees — but signing off can repaint the todo board, and a
+            # repaint is a REST edit discord.py sleeps through under
+            # per-channel rate limiting, long enough to burn the
+            # three-second window and fail an accept whose game is already
+            # ACTIVE (the hazard todo_cog.add_todo documents).
+            #
+            # Credited to the challenger: they ran a game, where the
+            # acceptor answered an invitation rather than issuing one.
+            if started is not None:
+                await sign_off_game_chore(self.bot, *started)
 
     async def _handle_decline(self, interaction: discord.Interaction, game_id: int) -> None:
         game = await self._db_get_game(game_id)

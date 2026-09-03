@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db_immediate
 from bot_modules.core.utils import jump_url
 from bot_modules.services.todo_recurring_service import (
+    KEEP_AUTO_COMPLETE,
     RecurringValidationError,
     create_recurring,
     delete_recurring,
@@ -60,6 +61,14 @@ class RecurringBody(BaseModel):
     recurrence: str = "daily"
     time_of_day: int = 0
     recur_days: list[int] = []
+    #: Trigger the bot signs this chore off on: "qotd", "game", or nothing.
+    #: Validated in the service, not here, so the picker and any other caller
+    #: get the identical sentence back.
+    #:
+    #: Defaults to the "leave it alone" sentinel rather than None, so a PUT
+    #: that omits the field edits the chore's schedule without silently
+    #: switching its automation off. On create the sentinel means no trigger.
+    auto_complete: str | None = KEEP_AUTO_COMPLETE
 
 
 def _board_dict(board) -> dict:
@@ -86,6 +95,7 @@ def _recurring_dict(task) -> dict:
         "created_by": str(task.created_by),
         "created_at": task.created_at,
         "cadence": describe_cadence(task),
+        "auto_complete": task.auto_complete,
     }
 
 
@@ -328,6 +338,10 @@ async def create_recurring_endpoint(
                 recurrence=body.recurrence,
                 time_of_day=body.time_of_day,
                 recur_days=body.recur_days,
+                auto_complete=(
+                    None if body.auto_complete == KEEP_AUTO_COMPLETE
+                    else body.auto_complete
+                ),
                 created_by=user.user_id,
                 offset_hours=tz,
                 now_ts=time.time(),
@@ -363,6 +377,7 @@ async def update_recurring_endpoint(
                 recurrence=body.recurrence,
                 time_of_day=body.time_of_day,
                 recur_days=body.recur_days,
+                auto_complete=body.auto_complete,
                 offset_hours=tz,
                 now_ts=time.time(),
             )

@@ -10,7 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.role_provision import ensure_config_role
-from bot_modules.games.utils.game_manager import check_game_enabled
+from bot_modules.games.utils.game_manager import check_game_enabled, sign_off_game_chore
 from bot_modules.services.feature_roles import RISKY_PING
 from bot_modules.services.risky_roll import state as rr_state
 from bot_modules.services.risky_roll.formatters import (
@@ -207,6 +207,9 @@ class RiskyRollCog(commands.Cog):
             )
             return
 
+        #: Set once the round is really posted, so the chore sign-off happens
+        #: outside the channel lock and outside the teardown handler below.
+        opened: tuple[int, int] | None = None
         async with rr_state.get_channel_lock(interaction.channel.id):
             active_in_channel = sum(
                 1 for s in rr_state.active_games.values()
@@ -279,6 +282,8 @@ class RiskyRollCog(commands.Cog):
                     rr_state.auto_close_tasks[state.game_id] = asyncio.create_task(
                         schedule_auto_close(interaction.client, state.game_id, state.auto_close_minutes * 60)
                     )
+
+                opened = (interaction.guild.id, interaction.user.id)
             except Exception:
                 rr_state.active_games.pop(state.game_id, None)
                 if rr_state.store is not None:
@@ -303,6 +308,18 @@ class RiskyRollCog(commands.Cog):
                         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                             pass
                 raise
+
+        # Risky Rolls does not go through the party games' shared
+        # finish_launch_response, so it carries the seam itself — otherwise a
+        # mod opening a round by hand would still be marked as not having run a
+        # game. This is the interactive path only: the scheduler's daily rounds
+        # come in through launch(), which deliberately reaches nothing here.
+        #
+        # Out here rather than beside the send: signing off can repaint the todo
+        # board, which must not hold the channel lock, and must not sit inside
+        # the try whose handler tears a live round down.
+        if opened is not None:
+            await sign_off_game_chore(self.bot, *opened)
 
     async def channel_has_active_round(self, channel_id: int) -> bool:
         """Scheduler busy-check: True if an in-memory round is live in this channel.

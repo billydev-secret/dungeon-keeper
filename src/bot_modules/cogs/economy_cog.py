@@ -195,6 +195,7 @@ from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services import economy_photo_service as photo_svc
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_raffle_service as raffle_svc
+from bot_modules.services.todo_recurring_service import auto_complete_chores
 from bot_modules.services.economy_service import (
     EconSettings,
     apply_credit,
@@ -4940,7 +4941,7 @@ class EconomyCog(commands.Cog):
 
         posted_question = question
 
-        def _record() -> None:
+        def _record() -> list[int]:
             with self.bot.ctx.open_db() as conn:
                 offset = get_tz_offset_hours(conn, guild_id)
                 today = local_day_for(time.time(), offset)
@@ -4956,13 +4957,36 @@ class EconomyCog(commands.Cog):
                 )
                 if submission_id:
                     attach_qotd(conn, submission_id, qotd_id)
+                # The "Do a QOTD" chore signs itself off here as well as on the
+                # marker path in events_cog. This command is the *other* way a
+                # question gets registered — the one that renders the card and
+                # drains the sponsored queue — and wiring only the marker meant
+                # the chore was still marked missed for the path a mod is most
+                # likely to use. A test holds every create_qotd call site to
+                # this, since the two are easy to fix apart.
+                try:
+                    return auto_complete_chores(
+                        conn, guild_id, "qotd",
+                        completed_by=actor.id, now_ts=time.time(),
+                    )
+                except Exception:
+                    log.exception("QOTD chore auto sign-off failed")
+                    return []
 
-        await asyncio.to_thread(_record)
+        chores_ticked = await asyncio.to_thread(_record)
         await interaction.followup.send(
             f"Posted {sponsor_name}'s sponsored question." if sponsor_name
             else "Posted the question of the day.",
             ephemeral=True,
         )
+        # After the command has been answered, like every other seam: a repaint
+        # is a REST edit discord.py sleeps through under per-channel rate
+        # limiting, and the mod would otherwise watch the question appear in
+        # the channel while the command they ran sat on "thinking…".
+        if chores_ticked:
+            from bot_modules.cogs.todo_cog import repaint_board
+
+            await repaint_board(self.bot, guild_id)
 
     # ── how-to guide panel ───────────────────────────────────────────────
 
