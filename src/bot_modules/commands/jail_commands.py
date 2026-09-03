@@ -1244,11 +1244,16 @@ async def finalize_ballot(
     embed = await _render_ballot_embed(ctx, guild, closed, tally)
     thread = guild.get_channel_or_thread(closed["thread_id"]) if closed["thread_id"] else None
     if isinstance(thread, discord.Thread):
-        try:
-            message = await thread.fetch_message(closed["message_id"])
-            await message.edit(embed=embed, view=_ballot_view(ballot_id, closed=True))
-        except (discord.HTTPException, discord.NotFound, discord.Forbidden):
-            log.info("Ballot %s card could not be edited on close", ballot_id)
+        # message_id 0 means the card never posted (the send failed at open).
+        # There is nothing to edit; the result still goes to the thread below.
+        if closed["message_id"]:
+            try:
+                message = await thread.fetch_message(closed["message_id"])
+                await message.edit(
+                    embed=embed, view=_ballot_view(ballot_id, closed=True)
+                )
+            except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+                log.info("Ballot %s card could not be edited on close", ballot_id)
         try:
             await thread.send(
                 embed=_ballot_result_embed(closed),

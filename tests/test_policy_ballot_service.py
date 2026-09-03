@@ -349,6 +349,19 @@ def test_a_thread_with_no_ballot_finds_nothing(conn, thread_id):
     assert svc.get_open_ballot_for_thread(conn, thread_id) is None
 
 
+def test_a_ballot_whose_card_never_posted_is_still_reachable(conn):
+    """The thread id is written with the row, before the card is sent. If that
+    send fails, the ballot must still be findable and closable — a row nobody
+    can reach would sit open until somebody noticed."""
+    ballot_id = _ballot(conn)
+    svc.attach_ballot_message(conn, ballot_id, thread_id=600, message_id=0)
+
+    found = svc.get_open_ballot_for_thread(conn, 600)
+    assert found is not None and found["id"] == ballot_id
+    assert found["message_id"] == 0
+    assert svc.close_ballot(conn, ballot_id, closed_by=1, now=1500.0) is not None
+
+
 def test_list_ballots_is_guild_scoped_and_newest_first(conn):
     older = _ballot(conn, now=1000.0)
     newer = _ballot(conn, now=5000.0)

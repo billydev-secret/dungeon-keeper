@@ -238,6 +238,14 @@ class _PolicyBallotModal(discord.ui.Modal, title="Open a Community Ballot"):
                     opened_by=pb_member_id,
                     closes_at=closes_at,
                 )
+                # The thread id lands with the row, before the card is posted.
+                # If that send then fails, the ballot is still findable by
+                # thread (so `/policy close` can cancel it) and still closable
+                # by the sweep — a row nobody could reach would sit open until
+                # somebody noticed.
+                attach_ballot_message(
+                    conn, bid, thread_id=thread.id, message_id=0
+                )
                 write_audit(
                     conn,
                     guild_id=pb_guild_id,
@@ -265,11 +273,21 @@ class _PolicyBallotModal(discord.ui.Modal, title="Open a Community Ballot"):
         # line. A ballot is a broadcast to a room, and a role ping to every
         # member who can see the channel is a mass ping; a member mention would
         # be a contact edge the no-contact list would have to be consulted for.
-        message = await thread.send(
-            embed=embed,
-            view=_ballot_view(ballot_id),
-            allowed_mentions=discord.AllowedMentions.none(),
-        )
+        try:
+            message = await thread.send(
+                embed=embed,
+                view=_ballot_view(ballot_id),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("Could not post the ballot card for ballot %s", ballot_id)
+            await interaction.followup.send(
+                "❌ I opened the thread but couldn't post the ballot card — check "
+                "I have Send Messages in Threads and Embed Links here. Run "
+                "`/policy close` in the thread to cancel this ballot.",
+                ephemeral=True,
+            )
+            return
 
         def _attach():
             with ctx.open_db() as conn:
