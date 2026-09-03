@@ -38,8 +38,10 @@ _LOCAL = {
 
 
 def _declared() -> set[str]:
-    root = re.search(r"^:root\s*\{(.*?)^\}", (_STATIC / "app.css").read_text(encoding="utf-8"), re.S | re.M)
-    assert root, "could not find the :root block in app.css"
+    root = re.search(
+        r"^:root\s*\{(.*?)^\}", (_STATIC / "tokens.css").read_text(encoding="utf-8"), re.S | re.M
+    )
+    assert root, "could not find the :root block in tokens.css"
     return set(_DECL.findall(root.group(1)))
 
 
@@ -63,7 +65,7 @@ def test_every_var_reference_names_a_declared_token():
     assert not offenders, (
         f"{len(offenders)} reference(s) to undefined custom properties. Either "
         "use the token that already carries this meaning, or declare the new "
-        "one in :root in app.css:\n" + "\n".join(offenders)
+        "one in :root in tokens.css:\n" + "\n".join(offenders)
     )
 
 
@@ -71,5 +73,6 @@ def test_the_sweep_actually_reads_panel_js():
     """Guard the guard: the bug above lived in JS, so JS must be in scope."""
     names = {p.name for p in _assets()}
     assert "app.css" in names
+    assert "tokens.css" in names
     assert "config-helpers.js" in names
     assert any(p.parts[-2] == "panels" for p in _assets()), "panel JS not swept"
