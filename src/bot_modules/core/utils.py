@@ -266,6 +266,45 @@ def channel_url(guild_id: int | Literal["@me"], channel_id: int) -> str:
     return f"https://discord.com/channels/{guild_id}/{channel_id}"
 
 
+def role_ping_kwargs(role_ids) -> dict:
+    """``content``/``allowed_mentions`` for a post that should ping some roles.
+
+    Two things this gets right that a hand-rolled version keeps getting wrong,
+    which is why it is shared (see docs/embed_style_guide.md):
+
+    * The mention has to live in ``content``. A role mention rendered inside
+      an **embed** displays but never notifies anyone, so a card that pings
+      from its embed body is silently doing nothing.
+    * ``AllowedMentions``' unset fields default to *allow*. The bare
+      ``AllowedMentions(roles=[...])`` form still serializes
+      ``parse: ['everyone', 'users']``, so it allow-lists far more than the
+      caller asked for. Every field is therefore pinned explicitly.
+
+    Duplicate and non-positive ids are dropped, and an empty result gives a
+    silent post with mentions fully suppressed — the "no ping role is
+    configured" state, which is a real and wanted configuration, not a bug.
+    """
+    seen: list[int] = []
+    for raw in role_ids or ():
+        try:
+            rid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if rid > 0 and rid not in seen:
+            seen.append(rid)
+    if not seen:
+        return {"allowed_mentions": discord.AllowedMentions.none()}
+    return {
+        "content": " ".join(f"<@&{rid}>" for rid in seen),
+        "allowed_mentions": discord.AllowedMentions(
+            everyone=False,
+            users=False,
+            roles=[discord.Object(id=rid) for rid in seen],
+            replied_user=False,
+        ),
+    }
+
+
 async def resolve_reply_target(message: discord.Message) -> discord.Message | None:
     """Resolve the target message of a reply, fetching if necessary."""
     if not message.reference:

@@ -30,7 +30,7 @@ import discord
 from bot_modules.core.role_provision import ensure_config_role
 from bot_modules.services.feature_roles import PROMOTION_REVIEW_PING
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
-from bot_modules.core.utils import get_guild_channel_or_thread
+from bot_modules.core.utils import get_guild_channel_or_thread, role_ping_kwargs
 from bot_modules.inactive.apply import reactivate_member
 from bot_modules.services import promotion_review_service as svc
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
@@ -42,29 +42,16 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def ping_send_kwargs(role_id: int) -> dict:
+def ping_send_kwargs(role_ids) -> dict:
     """``content``/``allowed_mentions`` for a review-card post.
 
-    Allow-lists **exactly** the ping role — never a blanket ``roles=True`` —
-    per docs/embed_style_guide.md. Unset role ⇒ silent post, as before.
-
-    ``everyone``/``users``/``replied_user`` are pinned False on purpose:
-    ``AllowedMentions``' unset fields default to *allow*, so the bare
-    ``AllowedMentions(roles=[...])`` form still serializes
-    ``parse: ['everyone', 'users']``.
+    A thin alias for :func:`core.utils.role_ping_kwargs`, kept because this
+    module's name for the idea is the one the card paths read. Accepts a bare
+    id as well as a list, since a single role is still the common case.
     """
-    mention = svc.ping_mention(role_id)
-    if not mention:
-        return {"allowed_mentions": discord.AllowedMentions.none()}
-    return {
-        "content": mention,
-        "allowed_mentions": discord.AllowedMentions(
-            everyone=False,
-            users=False,
-            roles=[discord.Object(id=role_id)],
-            replied_user=False,
-        ),
-    }
+    if isinstance(role_ids, int):
+        role_ids = [role_ids]
+    return role_ping_kwargs(role_ids)
 
 
 _GRANT_CID = re.compile(r"promo_review:grant:(?P<cid>\d+)")
@@ -422,7 +409,7 @@ async def post_review_card(
                 svc.review_channel_id(conn, guild_id),
                 svc.pruned_roles_for(conn, guild_id, user_id),
                 svc.member_level(conn, guild_id, user_id),
-                svc.ping_role_id(conn, guild_id),
+                svc.ping_role_ids(conn, guild_id),
             )
 
     try:
@@ -437,7 +424,7 @@ async def post_review_card(
             svc.discard(guild_id, user_id)
         return
 
-    _, kind, card_id, review_ch_id, pruned_roles, level, _stored_ping = prepared
+    _, kind, card_id, review_ch_id, pruned_roles, level, fallback_ping = prepared
 
     channel = guild.get_channel(review_ch_id)
     if not isinstance(channel, discord.abc.Messageable):
@@ -455,7 +442,11 @@ async def post_review_card(
         feature=PROMOTION_REVIEW_PING.feature,
             allow_legacy_fallback=PROMOTION_REVIEW_PING.legacy_fallback,
     )
-    ping_role = provisioned.id if provisioned is not None else 0
+    # A provisioned/configured @Promotion Reviewers wins. Without one the card
+    # falls back to the guild's mod roles rather than posting to nobody — see
+    # ``svc.ping_role_ids`` for why a stored 0 here is usually a save artifact
+    # rather than a decision to stay silent.
+    ping_roles = [provisioned.id] if provisioned is not None else fallback_ping
 
     accent = await safe_resolve_accent(ctx, guild, log_label="promotion review", default=DEFAULT_ACCENT_COLOR)
     hint = (
@@ -476,7 +467,7 @@ async def post_review_card(
         posted = await channel.send(
             embed=embed,
             view=ReviewCardView(card_id),
-            **ping_send_kwargs(ping_role),
+            **ping_send_kwargs(ping_roles),
         )
     except discord.HTTPException:
         log.warning("promo review: failed to post card in guild %s", guild_id)

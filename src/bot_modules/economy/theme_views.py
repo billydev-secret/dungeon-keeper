@@ -15,10 +15,15 @@ button and onto a sweep that simply tries again next hour.
 Every handler is fail-safe: a service error becomes an ephemeral note, never a
 dead button.
 
-Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
-the ephemeral detail view behind the todo board's 🧾 Approvals button (see
-``economy/approval_views.py``); the DynamicItems below stay registered so the
-cards posted into bank channels before the move remain clickable.
+The card is reviewed in two places, and the buttons below serve both: a post in
+the economy's staff-only ``approvals_channel_id`` (``approval_views.
+post_approval_card``, dark until that dial is set), and the ephemeral detail
+behind the todo board's 🧾 Approvals button. Resolving on either closes both —
+the board reads the queue live, and the channel card is repainted through the
+ids stored on the row (``view_helpers.edit_stored_card``). Between 2026-08-29
+and 2026-09-02 the board was the only surface; before that, cards went to
+``bank_channel_id``, which in the main guild members can read. Those legacy
+cards stay clickable, since the DynamicItems never stopped being registered.
 """
 
 from __future__ import annotations
@@ -37,6 +42,8 @@ from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.quest_views import can_manage_economy
 from bot_modules.economy.view_helpers import coins as _reward_text
 from bot_modules.economy.view_helpers import (
+    card_name_fn,
+    edit_stored_card,
     edit_review_card,
     refresh_review_card,
     refresh_todo_board,
@@ -56,6 +63,12 @@ from bot_modules.services.economy_theme_service import (
     theme_window_seconds,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.services.name_resolver import (
+    NameFn,
+    build_name_fn,
+    mention,
+    named_or_anonymous,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -76,7 +89,8 @@ def render_theme_review_embed(
     accent: discord.Color,
     settings: EconSettings,
     *,
-    sponsor_mention: str,
+    sponsor_id: int,
+    name_fn: NameFn = mention,
     title: str,
     blurb: str,
     price: int,
@@ -104,7 +118,7 @@ def render_theme_review_embed(
     else:
         embed = discord.Embed(title="📋 Theme Requested", color=accent)
 
-    embed.add_field(name="👤 From", value=sponsor_mention, inline=True)
+    embed.add_field(name="👤 From", value=named_or_anonymous(sponsor_id, name_fn), inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
     embed.add_field(name="🎨 Theme", value=title[:256], inline=False)
     embed.add_field(name="📝 The idea", value=blurb[:1024], inline=False)
@@ -118,7 +132,7 @@ def render_theme_review_embed(
             inline=False,
         )
         if resolver_id:
-            embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Approved by", value=name_fn(resolver_id), inline=True)
     if state == "live":
         embed.add_field(
             name="Now",
@@ -126,7 +140,7 @@ def render_theme_review_embed(
             inline=False,
         )
         if resolver_id:
-            embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Approved by", value=name_fn(resolver_id), inline=True)
     if ended_unrefunded:
         embed.add_field(
             name="Done",
@@ -134,10 +148,10 @@ def render_theme_review_embed(
             inline=False,
         )
         if resolver_id:
-            embed.add_field(name="Ended by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Ended by", value=name_fn(resolver_id), inline=True)
     elif state in ("denied", "expired"):
         if resolver_id:
-            embed.add_field(name="Declined by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Declined by", value=name_fn(resolver_id), inline=True)
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason[:1024], inline=False)
         embed.add_field(
@@ -154,7 +168,8 @@ def render_theme_live_embed(
     accent: discord.Color,
     settings: EconSettings,
     *,
-    sponsor_mention: str,
+    sponsor_id: int,
+    name_fn: NameFn = mention,
     title: str,
     blurb: str,
 ) -> discord.Embed:
@@ -169,7 +184,7 @@ def render_theme_live_embed(
         description=blurb[:2048],
         color=accent,
     )
-    embed.add_field(name="Themed by", value=sponsor_mention, inline=False)
+    embed.add_field(name="Themed by", value=named_or_anonymous(sponsor_id, name_fn), inline=False)
     embed.set_footer(text=f"Flash Theme · running for {_hours_text(settings)}")
     embed.timestamp = discord.utils.utcnow()
     return embed
@@ -363,8 +378,10 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
         return
     accent = await safe_resolve_accent(ctx, guild, log_label="theme")
+    # One resolver for every repaint below: the buyer, and the mod acting now.
+    name_fn = await card_name_fn(ctx, guild, row, member.id)
     if str(row["state"]) != "pending":  # type: ignore[index]
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, f"Already {row['state']}.")  # type: ignore[index]
         return
 
@@ -382,7 +399,7 @@ async def _handle_resolution(
     try:
         fresh, depth = await asyncio.to_thread(_resolve)
     except ValueError as exc:
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, str(exc))
         return
     except Exception:
@@ -390,7 +407,10 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, "❌ Couldn't resolve that — try again.")
         return
 
-    await _edit_card(card, accent, settings, fresh)
+    await _edit_card(card, accent, settings, fresh, name_fn=name_fn)
+    # If they resolved this from the board's ephemeral, the card sitting in
+    # the approvals channel is still offering the decision — close it too.
+    await _edit_stored(bot, card, accent, settings, fresh, name_fn=name_fn)
     await _dm_sponsor(bot, ctx.db_path, guild, settings, fresh)
     await _refresh_board(bot, guild.id)
     if approve:
@@ -404,11 +424,12 @@ async def _handle_resolution(
 
 
 
-def _card_embed(accent, settings: EconSettings, row):
+def _card_embed(accent, settings: EconSettings, row, name_fn: NameFn = mention):
     return render_theme_review_embed(
         accent,
         settings,
-        sponsor_mention=f"<@{int(row['user_id'])}>",
+        sponsor_id=int(row["user_id"]),
+        name_fn=name_fn,
         title=str(row["title"]),
         blurb=str(row["blurb"]),
         price=int(row["price"]),
@@ -420,6 +441,7 @@ def _card_embed(accent, settings: EconSettings, row):
 
 
 _edit_card = partial(edit_review_card, build_embed=_card_embed, log_label="econ theme")
+_edit_stored = partial(edit_stored_card, build_embed=_card_embed, log_label="econ theme")
 
 _refresh_card = partial(
     refresh_review_card,
@@ -508,9 +530,17 @@ async def announce_theme(
         log.warning("econ theme: no usable theme channel in guild %d", guild.id)
         return False
 
+    # Public and pinned for the whole window, so the buyer is resolved to a
+    # name. A user_id of 0 means an erasure detached the theme from whoever
+    # bought it; the builder renders "a member" and nothing is looked up.
+    name_fn = await build_name_fn(
+        guild=guild, db_path=db_path, guild_id=guild.id,
+        user_ids=[int(row["user_id"] or 0)],
+    )
     embed = render_theme_live_embed(
         accent, settings,
-        sponsor_mention=(f"<@{int(row['user_id'])}>" if int(row["user_id"]) else "a member"),
+        sponsor_id=int(row["user_id"]),
+        name_fn=name_fn,
         title=str(row["title"]),
         blurb=str(row["blurb"]),
     )

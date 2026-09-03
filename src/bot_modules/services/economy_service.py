@@ -68,6 +68,23 @@ class EconSettings:
     # (its own toggle for a public transaction feed that should stay an opt-in,
     # not something a shared default quietly turns on).
     default_channel_id: int = 0
+    # Where the paid-submission review cards (a themed day, a sponsored
+    # question, a pin) are posted for a moderator to approve or deny. A
+    # *staff* channel: a card names the member, shows what they paid, and
+    # quotes their unreviewed submission text verbatim.
+    #
+    # It is deliberately not `bank_channel_id`. These cards used to post
+    # there, and in the main guild that channel is "how-it-works" — a
+    # member-facing explainer — so an unreviewed adult-register theme idea
+    # went up in front of the whole server (af6c8289 moved them off it). The
+    # todo board's "Paid requests" section is the other review surface and
+    # stays; this is the one mods actually work, and the two share one ledger
+    # (`card_channel_id`/`card_message_id` on each submissions table), so
+    # resolving on either closes both.
+    #
+    # 0 (default) = the channel surface is off and the board is the only
+    # place requests appear. Nothing errors and nothing is lost.
+    approvals_channel_id: int = 0
     manager_role_id: int = 0
     # Opt-in economy-notifications role, toggled by the guide panel's 🔔
     # button. It is a **DM preference only** — it gates no channel, no payout

@@ -53,7 +53,7 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services import economy_shop_items_service as shop_items_svc
 from web_server.auth import AuthenticatedUser
-from web_server.helpers import resolve_names
+from web_server.helpers import everyone_can_read, resolve_names
 from web_server.routes.panel_posting import guild_or_503
 from web_server.deps import (
     get_active_guild_id,
@@ -89,6 +89,12 @@ class EconomyConfigUpdate(BaseModel):
     flash_theme_enabled: bool | None = None
     # The bounty board channel; 0 = bounties off (the picker is the on switch).
     bounty_channel_id: int | None = Field(default=None, ge=0)
+    # Where paid-request review cards post for a mod to approve or deny. A
+    # STAFF channel: the cards name the member and quote their unreviewed
+    # submission text. 0 = the channel surface is off and the todo board is
+    # the only place requests appear. Saving a publicly-readable channel is
+    # allowed but answers with a warning — see _exposure_warning.
+    approvals_channel_id: int | None = Field(default=None, ge=0)
     manager_role_id: int | None = Field(default=None, ge=0)
     game_role_id: int | None = Field(default=None, ge=0)
     qotd_ping_role_id: int | None = Field(default=None, ge=0)
@@ -314,7 +320,44 @@ async def update_economy_config(
     # casino config PUT uses; ensure_panel re-reads everything itself).
     if ctx.bot:
         ctx.bot.dispatch("casino_config_change", guild_id)
+    warning = _exposure_warning(ctx, guild_id, values.get("approvals_channel_id"))
+    if warning:
+        result = {**result, "warning": warning}
     return result
+
+
+def _exposure_warning(ctx, guild_id: int, channel_id) -> str | None:
+    """Warn — never refuse — when the approvals channel is readable by everyone.
+
+    The cards that land there name a member, show what they paid and quote
+    their unreviewed submission, which for a themed day is an adult-register
+    idea nobody has looked at yet. Nothing in the code can tell a staff
+    channel from a public one, so the admin gets told what the bot can see
+    and keeps the decision: a guild whose whole server is staff is a real
+    configuration, and refusing the save would make the bot the arbiter of a
+    Discord permission choice.
+
+    Silent when the dial is being cleared, when the channel can't be inspected
+    (no gateway, or a channel the bot can't see), or when @everyone genuinely
+    can't read it.
+    """
+    if not channel_id:
+        return None
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(int(guild_id)) if bot is not None else None
+    if guild is None:
+        return None
+    channel = guild.get_channel(int(channel_id))
+    if channel is None:
+        return None
+    if everyone_can_read(guild, channel) is not True:
+        return None  # staff-only, or the bot genuinely cannot tell
+    return (
+        f"Heads up: everyone can read #{channel.name}. Paid-request cards name "
+        "the member, show what they paid and quote what they wrote before any "
+        "mod has reviewed it. Pick a staff-only channel unless that's what you "
+        "want."
+    )
 
 
 # ── rentable icon catalog ───────────────────────────────────────────────

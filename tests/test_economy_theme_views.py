@@ -43,7 +43,7 @@ def _card(state: str, *, refunded: bool) -> discord.Embed:
     return render_theme_review_embed(
         discord.Color.blurple(),
         _SETTINGS,
-        sponsor_mention="<@42>",
+        sponsor_id=42,
         title="Cursed Cooking",
         blurb="Post the worst thing you have ever eaten.",
         price=300,

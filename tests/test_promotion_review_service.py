@@ -86,18 +86,6 @@ def test_ping_role_is_independent_of_the_grant_role(db_path):
         assert svc.grant_role_id(conn, GUILD) == GRANT_ROLE
 
 
-@pytest.mark.parametrize(
-    ("role_id", "expected"),
-    [
-        pytest.param(PING_ROLE, f"<@&{PING_ROLE}>", id="set"),
-        pytest.param(0, "", id="unset"),
-        pytest.param(-1, "", id="negative"),
-    ],
-)
-def test_ping_mention_renders_only_when_configured(role_id, expected):
-    assert svc.ping_mention(role_id) == expected
-
-
 # ── card ledger + dedup ───────────────────────────────────────────────
 
 
@@ -317,3 +305,66 @@ def test_discard_drops_from_watch(db_path):
     svc.discard(GUILD, 10)
     assert svc.is_watched(GUILD, 10) is False
     svc.discard(GUILD, 999)  # unknown member is harmless
+
+
+# ── the mod-role ping fallback ──────────────────────────────────────────
+#
+# A stored 0 on the ping dial is usually an artifact rather than a decision:
+# XP Settings saves as one form, so touching any XP dial writes a 0 here, and
+# prod showed the main guild sitting at 0 while its cards posted to nobody.
+
+
+MOD_ROLE = 424242
+SECOND_MOD_ROLE = 424243
+
+
+def test_the_ping_dial_wins_whenever_it_is_set(db_path):
+    with open_db(db_path) as conn:
+        set_config_value(conn, "mod_role_ids", str(MOD_ROLE), GUILD)
+        set_config_value(conn, svc.PING_ROLE_KEY, str(PING_ROLE), GUILD)
+        assert svc.ping_role_ids(conn, GUILD) == [PING_ROLE]
+
+
+def test_an_unset_ping_dial_falls_back_to_the_mod_roles(db_path):
+    """So the card reaches the people who can actually action it."""
+    with open_db(db_path) as conn:
+        set_config_value(conn, "mod_role_ids", str(MOD_ROLE), GUILD)
+        assert svc.ping_role_ids(conn, GUILD) == [MOD_ROLE]
+
+
+def test_every_configured_mod_role_is_pinged(db_path):
+    with open_db(db_path) as conn:
+        set_config_value(
+            conn, "mod_role_ids", f"{MOD_ROLE},{SECOND_MOD_ROLE}", GUILD
+        )
+        assert svc.ping_role_ids(conn, GUILD) == [MOD_ROLE, SECOND_MOD_ROLE]
+
+
+def test_with_neither_configured_the_card_still_posts_silently(db_path):
+    """A guild with no mod roles at all keeps the old behaviour."""
+    with open_db(db_path) as conn:
+        assert svc.ping_role_ids(conn, GUILD) == []
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        pytest.param("", [], id="empty"),
+        pytest.param("   ", [], id="whitespace"),
+        pytest.param("nope", [], id="not-a-number"),
+        pytest.param("0", [], id="zero-is-not-a-role"),
+        pytest.param(f"{MOD_ROLE},,nope,{MOD_ROLE}", [MOD_ROLE], id="dedup-and-skip"),
+        pytest.param(f" {MOD_ROLE} ", [MOD_ROLE], id="padded"),
+    ],
+)
+def test_the_mod_role_csv_survives_anything_stored_in_it(db_path, stored, expected):
+    with open_db(db_path) as conn:
+        set_config_value(conn, "mod_role_ids", stored, GUILD)
+        assert svc.ping_role_ids(conn, GUILD) == expected
+
+
+def test_the_fallback_is_never_the_grant_role(db_path):
+    """Pinging it would notify every member who already has access."""
+    with open_db(db_path) as conn:
+        _set_grant_role(conn)
+        assert GRANT_ROLE not in svc.ping_role_ids(conn, GUILD)

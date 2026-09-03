@@ -65,12 +65,24 @@ function render(container, cfg, channels, roles, members) {
         <div class="field">
           <label>Bank Channel</label>
           <span data-picker="bank_channel_id"></span>
-          <div class="field-hint">Where the economy speaks up in public: mod review
-            cards for paid requests, the warning when the server is running out of
-            role slots, and anything the bot meant to DM a member but couldn&rsquo;t.
-            Leave unset and those go unsent. This is <em>not</em> where the economy
+          <div class="field-hint">Where the economy speaks up in public: the warning
+            when the server is running out of role slots, and anything the bot meant
+            to DM a member but couldn&rsquo;t. Leave unset and those go unsent.
+            Mod review cards are <em>not</em> sent here &mdash; they go to the
+            Paid Request Reviews channel below. This is also not where the economy
             panel lives &mdash; that channel is chosen when you post the panel, under
             Channel Panels below, and the two are often different.</div>
+        </div>
+        <div class="field">
+          <label>Paid Request Reviews</label>
+          <span data-picker="approvals_channel_id"></span>
+          <div class="field-hint"><strong>Staff only.</strong> When a member pays for
+            a themed day, a sponsored question or a pin, the approve/decline card
+            posts here &mdash; naming them, showing what they paid, and quoting what
+            they wrote <em>before</em> any mod has reviewed it. Don&rsquo;t point this
+            at a channel members can read. Leave unset and the cards go nowhere: the
+            requests still appear on the mods&rsquo; todo board under &ldquo;Paid
+            requests&rdquo;, which keeps working either way.</div>
         </div>
         <div class="field">
           <label>Register Channel</label>
@@ -424,6 +436,12 @@ function render(container, cfg, channels, roles, members) {
     }
     return picker;
   }
+  const approvalsChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="approvals_channel_id"]'),
+    channels,
+    String(cfg.approvals_channel_id),
+    { label: "Paid Request Reviews" },
+  );
   const rolePicker = mountRolePicker(
     form.querySelector('[data-picker="manager_role_id"]'),
     roles,
@@ -494,6 +512,7 @@ function render(container, cfg, channels, roles, members) {
       bank_channel_id: channelPicker.getValue() || "0",
       register_channel_id: registerChannelPicker.getValue() || "0",
       default_channel_id: defaultChannelPicker.getValue() || "0",
+      approvals_channel_id: approvalsChannelPicker.getValue() || "0",
       drops_channel_id: dropsChannelPicker.getValue() || "0",
       pin_channel_id: pinChannelPicker.getValue() || "0",
       theme_channel_id: themeChannelPicker.getValue() || "0",
@@ -521,8 +540,13 @@ function render(container, cfg, channels, roles, members) {
       payload[key] = form.querySelector(`[name=${key}]`).value;
     }
     try {
-      await apiPut("/api/economy/config", payload);
-      showStatus(status, true);
+      const res = await apiPut("/api/economy/config", payload);
+      // The save succeeded either way; a warning means the Paid Request
+      // Reviews channel it just stored is readable by @everyone. Shown as the
+      // status line rather than blocking, because whether that's acceptable
+      // is the admin's call, not the bot's.
+      if (res && res.warning) showStatus(status, false, res.warning);
+      else showStatus(status, true);
     } catch (err) {
       showStatus(status, false, err.message);
     }

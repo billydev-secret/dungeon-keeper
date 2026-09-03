@@ -24,7 +24,7 @@ def _card(state: str) -> discord.Embed:
     return render_sponsor_card_embed(
         discord.Color.blurple(),
         _SETTINGS,
-        sponsor_mention="<@1>",
+        sponsor_id=1,
         question="What's your favourite colour?",
         price=1500,
         state=state,

@@ -9,7 +9,9 @@ manager can action a return without leaving Discord — no slash commands.
 
 ## Triggers
 
-All three cards ping `promotion_review_ping_role_id` when it is set.
+All three cards ping `promotion_review_ping_role_id` when it is set, and the
+guild's `mod_role_ids` when it is not (see "The two roles are different
+settings").
 
 | Kind | Fires when | Grant button does |
 |------|-----------|-------------------|
@@ -33,23 +35,32 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
 | Key | Role it names | Used for |
 |-----|---------------|----------|
 | `promotion_review_grant_role_id` | The role handed **to** the promoted member | What the Grant button adds (`_do_grant_role`) |
-| `promotion_review_ping_role_id` | Your **role managers** | Pinged when a card posts, so a human sees it |
+| `promotion_review_ping_role_id` | Your **role managers** | Pinged when a card posts, so a human sees it. Unset ⇒ falls back to `mod_role_ids` |
 
 Neither is the approver gate — that is `_can_action`: administrator, Manage
-Roles, or a configured mod. A card pings the ping role only; leave it "(none)"
-and all three cards post silently, as they did before this shipped.
+Roles, or a configured mod.
 
 Since 2026-08-22 a guild that has **never touched** the ping dial gets a
 `@Promotion Reviewers` role created when the first card posts
-(`core/role_provision.py`). Explicitly choosing "(none)" is a different state —
-it writes a stored 0 and is respected forever; only the never-configured case
-provisions.
+(`core/role_provision.py`).
+
+**Mod-role fallback (2026-09-02).** With no provisioned or configured ping
+role, the card falls back to the guild's `mod_role_ids` rather than posting to
+nobody — `promotion_review_service.ping_role_ids`, which the dial always
+overrides when set. A stored 0 here is usually an *artifact*, not a decision:
+XP Settings saves as one form, so changing any XP dial writes a 0 over this
+one, and prod showed exactly that — the main guild sat at 0 while its cards
+posted silently. The fallback targets the roles that can actually action a
+card, matching what the economy's approval cards do with `manager_role_id`.
+Admin roles are deliberately excluded: they overlap the mod roles in every
+configured guild, so including them would only ping the same people twice.
 
 The mention goes in the message **content** (a role mention inside an embed
-renders but never notifies) and allow-lists exactly that one role via
-`ping_send_kwargs`. Note `discord.AllowedMentions`' unset fields default to
-*allow*, so `everyone`/`users`/`replied_user` are pinned `False` explicitly —
-the bare `AllowedMentions(roles=[...])` form still serializes
+renders but never notifies) and allow-lists exactly those roles by id via
+`core.utils.role_ping_kwargs`, never a blanket `roles=True`. Note
+`discord.AllowedMentions`' unset fields default to *allow*, so
+`everyone`/`users`/`replied_user` are pinned `False` explicitly — the bare
+`AllowedMentions(roles=[...])` form still serializes
 `parse: ['everyone', 'users']`.
 
 ## Mechanics

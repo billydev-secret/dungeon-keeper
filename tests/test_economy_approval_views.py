@@ -21,8 +21,15 @@ import pytest
 from bot_modules.core.db_utils import open_db
 from bot_modules.economy.approval_views import (
     ApprovalPickSelect,
+    close_expired_card,
     open_approvals_picker,
     option_text,
+    post_approval_card,
+)
+from bot_modules.services.economy_approvals_service import (
+    card_location,
+    get_approval_row,
+    set_approval_card,
 )
 from bot_modules.economy.pin_views import PinReviewView
 from bot_modules.economy.pin_views import _handle_resolution as resolve_pin
@@ -474,3 +481,322 @@ async def test_a_legacy_bank_channel_card_still_resolves(ctx, db):
 
     card.edit.assert_awaited()
     interaction.edit_original_response.assert_not_awaited()
+
+
+# ── the approvals channel: posting a card ───────────────────────────────
+#
+# The channel surface, restored 2026-09-02 on a dedicated staff-only dial.
+# What matters is that it stays dark until that dial is set, that it never
+# reaches for bank_channel_id again, and that a posted card is findable
+# afterwards — the ledger is what keeps the two surfaces in step.
+
+APPROVALS_CHANNEL = 555555
+
+
+def _channel(message_id=8888) -> MagicMock:
+    ch = MagicMock(spec=discord.TextChannel)
+    ch.id = APPROVALS_CHANNEL
+    ch.send = AsyncMock(return_value=SimpleNamespace(id=message_id))
+    return ch
+
+
+def _guild_with_channel(channel=None, *, members=()):
+    guild = FakeGuild(id=GUILD_ID, members={m.id: m for m in members})
+    guild.get_channel = MagicMock(return_value=channel)
+    guild.default_role = SimpleNamespace(id=GUILD_ID)
+    return guild
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("kind", "make", "title"),
+    [
+        pytest.param("theme", _theme, "📋 Theme Requested", id="theme"),
+        pytest.param(
+            "sponsor", _sponsor, "📋 Sponsored Question Submitted", id="sponsor"
+        ),
+        pytest.param("pin", _pin, "📋 Pin Requested", id="pin"),
+    ],
+)
+async def test_each_product_posts_its_own_card_to_the_approvals_channel(
+    ctx, db, kind, make, title
+):
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = make(db)
+    channel = _channel()
+    bot = _bot(ctx)
+
+    await post_approval_card(
+        bot, _guild_with_channel(channel), _settings(db), kind, submission_id
+    )
+
+    channel.send.assert_awaited_once()
+    assert channel.send.await_args.kwargs["embed"].title == title
+    # ...and the card is findable again, which is what lets a resolution on
+    # the board close this message too.
+    with open_db(db) as conn:
+        row = get_approval_row(conn, kind, submission_id)
+    assert card_location(row) == (APPROVALS_CHANNEL, 8888)
+
+
+@pytest.mark.asyncio
+async def test_nothing_posts_until_the_channel_dial_is_set(ctx, db):
+    """Ships dark: no channel, no posting, no error, and no card recorded."""
+    _enable(db)  # approvals_channel_id defaults to 0
+    submission_id = _theme(db)
+    guild = _guild_with_channel(_channel())
+
+    await post_approval_card(
+        _bot(ctx), guild, _settings(db), "theme", submission_id
+    )
+
+    guild.get_channel.assert_not_called()
+    with open_db(db) as conn:
+        assert card_location(get_approval_row(conn, "theme", submission_id)) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_the_card_never_goes_to_the_bank_channel(ctx, db):
+    """The original bug: bank_channel_id is member-readable in the main guild."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _pin(db)
+    guild = _guild_with_channel(_channel())
+
+    await post_approval_card(
+        _bot(ctx), guild, _settings(db), "pin", submission_id
+    )
+
+    assert guild.get_channel.call_args.args[0] == APPROVALS_CHANNEL
+    assert BANK_CHANNEL not in [c.args[0] for c in guild.get_channel.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_the_card_pings_the_manager_role_and_nobody_else(ctx, db):
+    """The people can_manage_economy gates on — allow-listed by id, never
+    a blanket roles=True, and never @everyone."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL, manager_role_id=MANAGER_ROLE)
+    submission_id = _sponsor(db)
+    channel = _channel()
+
+    await post_approval_card(
+        _bot(ctx), _guild_with_channel(channel), _settings(db), "sponsor",
+        submission_id,
+    )
+
+    kwargs = channel.send.await_args.kwargs
+    assert kwargs["content"] == f"<@&{MANAGER_ROLE}>"
+    allowed = kwargs["allowed_mentions"]
+    assert [r.id for r in allowed.roles] == [MANAGER_ROLE]
+    assert allowed.everyone is False
+    assert allowed.users is False
+
+
+@pytest.mark.asyncio
+async def test_no_manager_role_posts_the_card_silently(ctx, db):
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL, manager_role_id=0)
+    submission_id = _sponsor(db)
+    channel = _channel()
+
+    await post_approval_card(
+        _bot(ctx), _guild_with_channel(channel), _settings(db), "sponsor",
+        submission_id,
+    )
+
+    kwargs = channel.send.await_args.kwargs
+    assert "content" not in kwargs
+    # AllowedMentions.none() suppresses rather than allow-lists an empty set.
+    assert kwargs["allowed_mentions"].roles is False
+
+
+@pytest.mark.asyncio
+async def test_a_missing_channel_leaves_the_request_on_the_board(ctx, db):
+    """The member has already paid — a bad dial must never raise back at them."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _theme(db)
+
+    await post_approval_card(
+        _bot(ctx), _guild_with_channel(None), _settings(db), "theme", submission_id
+    )
+
+    with open_db(db) as conn:
+        row = get_approval_row(conn, "theme", submission_id)
+    assert row["state"] == "pending"  # still waiting, still on the board
+    assert card_location(row) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_send_does_not_raise_or_record_a_card(ctx, db):
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _pin(db)
+    channel = _channel()
+    channel.send = AsyncMock(
+        side_effect=discord.HTTPException(MagicMock(status=403), "no")
+    )
+
+    await post_approval_card(
+        _bot(ctx), _guild_with_channel(channel), _settings(db), "pin", submission_id
+    )
+
+    with open_db(db) as conn:
+        assert card_location(get_approval_row(conn, "pin", submission_id)) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_kind_this_build_does_not_know_is_a_shrug(ctx, db):
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    guild = _guild_with_channel(_channel())
+
+    await post_approval_card(_bot(ctx), guild, _settings(db), "nope", 1)
+
+    guild.get_channel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_card_names_the_requester_rather_than_a_bare_id(ctx, db):
+    """An embed mention is resolved by the reading client from its own cache,
+    so <@id> renders as a bare number to a mod who has never seen them."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _theme(db)
+    channel = _channel()
+    requester = _member(member_id=REQUESTER, name="Alex")
+
+    await post_approval_card(
+        _bot(ctx), _guild_with_channel(channel, members=[requester]),
+        _settings(db), "theme", submission_id,
+    )
+
+    embed = channel.send.await_args.kwargs["embed"]
+    who = next(f.value for f in embed.fields if f.name == "👤 From")
+    assert who == "Alex"
+    assert f"<@{REQUESTER}>" not in who
+
+
+# ── two surfaces, one ledger ────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("make", "resolve", "declined_title"),
+    [
+        pytest.param(_theme, resolve_theme, "❌ Theme Declined", id="theme"),
+        pytest.param(
+            _sponsor, resolve_sponsor, "❌ Sponsored Question Declined", id="sponsor"
+        ),
+        pytest.param(_pin, resolve_pin, "❌ Pin Declined", id="pin"),
+    ],
+)
+async def test_resolving_on_the_board_also_closes_the_channel_card(
+    ctx, db, make, resolve, declined_title
+):
+    """The direction the ledger exists for. Without this the card in the
+    approvals channel keeps offering a decision that has already been made."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = make(db)
+    posted = MagicMock()
+    posted.id = 8888
+    posted.edit = AsyncMock()
+    channel = _channel()
+    channel.fetch_message = AsyncMock(return_value=posted)
+
+    with open_db(db) as conn:
+        kind = {"_theme": "theme", "_sponsor": "sponsor", "_pin": "pin"}[make.__name__]
+        set_approval_card(conn, kind, submission_id, APPROVALS_CHANNEL, 8888)
+
+    bot = _bot(ctx)
+    bot.get_channel = MagicMock(return_value=channel)
+    interaction = _picker_interaction(
+        bot, user=_member(admin=True, member_id=999), message=_ephemeral_message()
+    )
+
+    await resolve(interaction, submission_id, approve=False, deny_reason="no")
+
+    posted.edit.assert_awaited_once()
+    assert posted.edit.await_args.kwargs["embed"].title == declined_title
+    assert posted.edit.await_args.kwargs["view"] is None  # buttons retired
+
+
+@pytest.mark.asyncio
+async def test_resolving_on_the_card_itself_does_not_edit_it_twice(ctx, db):
+    """The resolver's own surface is already repainted by edit_review_card."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _theme(db)
+    card = _legacy_card()
+    card.id = 8888
+    channel = _channel()
+    channel.fetch_message = AsyncMock()
+
+    with open_db(db) as conn:
+        set_approval_card(conn, "theme", submission_id, APPROVALS_CHANNEL, 8888)
+
+    bot = _bot(ctx)
+    bot.get_channel = MagicMock(return_value=channel)
+    interaction = _picker_interaction(
+        bot, user=_member(admin=True, member_id=999), message=card
+    )
+
+    await resolve_theme(interaction, submission_id, approve=False, deny_reason="no")
+
+    card.edit.assert_awaited_once()
+    channel.fetch_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_an_uncarded_request_resolves_without_reaching_for_a_channel(ctx, db):
+    """Every request filed while the dial was unset. Not an error."""
+    _enable(db)
+    submission_id = _sponsor(db)
+    bot = _bot(ctx)
+    bot.get_channel = MagicMock()
+    interaction = _picker_interaction(
+        bot, user=_member(admin=True, member_id=999), message=_ephemeral_message()
+    )
+
+    await resolve_sponsor(interaction, submission_id, approve=False, deny_reason="no")
+
+    bot.get_channel.assert_not_called()
+
+
+# ── expiry closes the card ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_expired_request_stops_offering_a_decision(ctx, db):
+    """Pre-existing gap, only visible once cards live in a channel: the sweep
+    refunds the member and nothing told the card, so it sat there showing
+    Approve/Decline for good."""
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _theme(db)
+    with open_db(db) as conn:
+        set_approval_card(conn, "theme", submission_id, APPROVALS_CHANNEL, 8888)
+        conn.execute(
+            "UPDATE econ_theme_submissions SET state = 'expired', "
+            "refunded_at = 1 WHERE id = ?",
+            (submission_id,),
+        )
+    posted = MagicMock()
+    posted.edit = AsyncMock()
+    channel = _channel()
+    channel.fetch_message = AsyncMock(return_value=posted)
+    bot = _bot(ctx)
+    bot.get_channel = MagicMock(return_value=channel)
+
+    await close_expired_card(
+        bot, _guild_with_channel(channel), _settings(db), "theme", submission_id
+    )
+
+    posted.edit.assert_awaited_once()
+    assert posted.edit.await_args.kwargs["view"] is None
+
+
+@pytest.mark.asyncio
+async def test_closing_an_uncarded_expired_request_is_silent(ctx, db):
+    _enable(db, approvals_channel_id=APPROVALS_CHANNEL)
+    submission_id = _pin(db)
+    bot = _bot(ctx)
+    bot.get_channel = MagicMock()
+
+    await close_expired_card(
+        bot, _guild_with_channel(None), _settings(db), "pin", submission_id
+    )
+
+    bot.get_channel.assert_not_called()

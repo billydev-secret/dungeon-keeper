@@ -22,7 +22,7 @@ from bot_modules.services.message_store import (
     init_known_users_table,
     upsert_known_user,
 )
-from bot_modules.services.name_resolver import build_name_fn, resolve_name_from
+from bot_modules.services.name_resolver import build_name_fn, resolve_name_from, named_or_anonymous
 from tests.fakes import FakeGuild, FakeMember
 
 GUILD_ID = 999
@@ -203,3 +203,34 @@ async def test_build_name_fn_skips_the_query_when_cache_covers_everyone(db_path)
     )
     assert name_fn(5) == "Pat"
     assert name_fn_no_db(6) == "Sam"
+
+
+# ── named_or_anonymous ────────────────────────────────────────────────
+#
+# A user id of 0 is not an unknown member but the *absence* of one: an erasure
+# detaching a still-running purchase from whoever bought it. Resolving it
+# would render the literal <@0>.
+
+
+def test_a_real_id_is_resolved_normally():
+    assert named_or_anonymous(5, lambda uid: f"user-{uid}") == "user-5"
+
+
+def test_a_detached_purchase_names_no_one():
+    assert named_or_anonymous(0, lambda uid: f"user-{uid}") == "a member"
+
+
+def test_the_resolver_is_never_called_for_a_detached_purchase():
+    """Otherwise the embed reads '<@0>', which links to nothing."""
+    calls = []
+
+    def _resolver(uid):
+        calls.append(uid)
+        return f"user-{uid}"
+
+    assert named_or_anonymous(0, _resolver) == "a member"
+    assert calls == []
+
+
+def test_the_fallback_wording_is_the_callers_to_choose():
+    assert named_or_anonymous(0, str, fallback="someone") == "someone"

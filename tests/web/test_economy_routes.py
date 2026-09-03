@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -597,3 +599,147 @@ def test_no_panel_parses_a_snowflake_with_parseint():
         "snowflake ids must be sent as strings, not parseInt'd:\n"
         + "\n".join(hits)
     )
+
+
+# ── the approvals channel and its exposure warning ──────────────────────
+#
+# The cards posted there name the member, show what they paid and quote their
+# unreviewed submission. Nothing in the code can tell a staff channel from a
+# public one, so the route *warns* and still saves — refusing would make the
+# bot the arbiter of a Discord permission choice.
+
+
+class _AdminMember:
+    """The live-member shape ``auth.resolve`` reads.
+
+    Attaching a bot switches auth from the session's permission bits to live
+    guild membership, so the session user has to exist on the stub guild with
+    a permissions *value* (0x8 = administrator) and a role list.
+    """
+
+    def __init__(self, member_id: int):
+        self.id = member_id
+        self.bot = False
+        self.display_name = f"member-{member_id}"
+        self.roles = ()
+        self.guild_permissions = SimpleNamespace(
+            value=0x8, administrator=True, manage_guild=True
+        )
+
+
+class _StubChannel:
+    """A channel whose @everyone permissions the route can compute."""
+
+    def __init__(self, channel_id: int, name: str, *, public: bool, parent=None):
+        self.id = channel_id
+        self.name = name
+        self.parent = parent
+        self._public = public
+
+    def permissions_for(self, _role):
+        return SimpleNamespace(read_messages=self._public, view_channel=self._public)
+
+
+def _with_channel(fake_ctx, live_guild, channel=None) -> None:
+    """Attach a live guild carrying ``channel``.
+
+    The session user has to be on it as an admin: with ``ctx.bot`` present the
+    auth layer re-derives permissions from live guild membership, so a guild
+    with no members 401s every request.
+    """
+    guild = live_guild([_AdminMember(1)])
+    if channel is not None:
+        guild.channels.append(channel)
+    guild.default_role = SimpleNamespace(id=fake_ctx.guild_id)
+    # The save pokes the casino cog on every economy config write; StubBot has
+    # no dispatch because no other test on this route attaches a bot at all.
+    fake_ctx.bot.dispatch = lambda *args, **kwargs: None
+
+
+def test_the_approvals_channel_roundtrips(authed_client, fake_ctx):
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 909090}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).approvals_channel_id == 909090
+
+
+def test_it_ships_dark(authed_client, fake_ctx):
+    """Unset means the channel surface is off, not that anything is broken."""
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).approvals_channel_id == 0
+
+
+def test_a_public_channel_saves_but_warns(authed_client, fake_ctx, live_guild):
+    _with_channel(
+        fake_ctx, live_guild, _StubChannel(4242, "general", public=True)
+    )
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 4242}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True  # saved anyway — the admin keeps the decision
+    assert "everyone can read #general" in body["warning"]
+    with open_db(fake_ctx.db_path) as conn:
+        assert load_econ_settings(conn, fake_ctx.guild_id).approvals_channel_id == 4242
+
+
+def test_a_staff_only_channel_saves_quietly(authed_client, fake_ctx, live_guild):
+    _with_channel(
+        fake_ctx, live_guild, _StubChannel(4243, "mod-review", public=False)
+    )
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 4243}
+    )
+    assert resp.status_code == 200
+    assert "warning" not in resp.json()
+
+
+def test_a_thread_is_judged_by_the_channel_it_hangs_off(
+    authed_client, fake_ctx, live_guild
+):
+    """A thread inherits its parent's audience; its own overwrites say little."""
+    parent = _StubChannel(4244, "general", public=True)
+    thread = _StubChannel(4245, "requests", public=False, parent=parent)
+    _with_channel(fake_ctx, live_guild, thread)
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 4245}
+    )
+    assert resp.status_code == 200
+    # Warned because of the parent's audience, but named for the thread the
+    # admin actually picked — that's the thing they need to go change.
+    assert "everyone can read #requests" in resp.json()["warning"]
+
+
+def test_clearing_the_dial_never_warns(authed_client, fake_ctx, live_guild):
+    _with_channel(fake_ctx, live_guild, _StubChannel(4242, "general", public=True))
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 0}
+    )
+    assert resp.status_code == 200
+    assert "warning" not in resp.json()
+
+
+def test_a_channel_the_bot_cannot_see_saves_without_a_verdict(
+    authed_client, fake_ctx, live_guild
+):
+    """"Don't know" must never be rendered as "safe" — so it says nothing."""
+    _with_channel(fake_ctx, live_guild)
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": 999999}
+    )
+    assert resp.status_code == 200
+    assert "warning" not in resp.json()
+
+
+def test_a_negative_channel_id_is_rejected(authed_client):
+    resp = authed_client.put(
+        "/api/economy/config", json={"approvals_channel_id": -1}
+    )
+    assert resp.status_code == 422
+
+
+def test_the_field_is_on_the_update_model():
+    assert "approvals_channel_id" in EconomyConfigUpdate.model_fields

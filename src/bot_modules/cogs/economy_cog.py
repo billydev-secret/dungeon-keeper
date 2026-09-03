@@ -106,7 +106,10 @@ from bot_modules.services.economy_auction_service import (
     open_auction_guild_ids,
 )
 from bot_modules.services.sticky_registry import bot_chasing_resident
-from bot_modules.economy.approval_views import refresh_approvals_board
+from bot_modules.economy.approval_views import (
+    post_approval_card,
+    refresh_approvals_board,
+)
 from bot_modules.economy.pin_views import (
     PinApproveButton,
     PinDenyButton,
@@ -2807,12 +2810,13 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # The request goes on the mods' todo board, not into the bank channel:
-        # it names the member and quotes what they wrote, and the bank channel
-        # in the main guild is a member-facing explainer. The money is already
-        # taken and the row exists, so a failed repaint must never surface as
-        # an error to the member — the board reads the queue live and the next
-        # repaint picks it up regardless.
+        # Two review surfaces, one ledger: a card in the staff-only approvals
+        # channel (dark until that dial is set), and the mods' todo board. Never
+        # the bank channel — it names the member and quotes what they wrote, and
+        # in the main guild that channel is a member-facing explainer. The money
+        # is already taken and the row exists, so neither call may surface as an
+        # error to the member; the board reads the queue live either way.
+        await post_approval_card(self.bot, guild, settings, "sponsor", outcome.submission_id)
         await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
@@ -2854,9 +2858,10 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Onto the mods' todo board, not the bank channel — see the sponsored
-        # question above. Pin of the Day has no dashboard queue at all, so
-        # that board section is now its only review surface.
+        # Approvals channel + todo board, never the bank channel — see the
+        # sponsored question above. Pin of the Day has no dashboard queue at
+        # all, so these two are its only review surfaces.
+        await post_approval_card(self.bot, guild, settings, "pin", outcome.submission_id)
         await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(
@@ -2898,8 +2903,9 @@ class EconomyCog(commands.Cog):
             await interaction.followup.send(str(exc), ephemeral=True)
             return
 
-        # Onto the mods' todo board, not the bank channel — see the sponsored
-        # question above.
+        # Approvals channel + todo board, never the bank channel — see the
+        # sponsored question above.
+        await post_approval_card(self.bot, guild, settings, "theme", outcome.submission_id)
         await refresh_approvals_board(self.bot, guild.id)
         unit = _unit(settings, outcome.price)
         await interaction.followup.send(

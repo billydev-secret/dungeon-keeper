@@ -36,8 +36,10 @@ def _ctx(row=None, *, read_raises: Exception | None = None):
     return ctx
 
 
-def _embed(accent, settings, row):
-    return discord.Embed(title=f"row {row['id']}")
+def _embed(accent, settings, row, name_fn=None):
+    """The build_embed contract: the resolver is the 4th positional argument."""
+    who = name_fn(int(row["id"])) if name_fn else "?"
+    return discord.Embed(title=f"row {row['id']}", description=who)
 
 
 # ── edit_review_card ──────────────────────────────────────────────────
