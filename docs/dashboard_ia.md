@@ -241,6 +241,29 @@ and every Confessions endpoint is admin-gated server-side.
   the static label is only the fallback, and it must keep matching the manual's
   own `ask-guide` heading so the help panel still de-duplicates the title.
 
+## Bot-global controls on a secondary guild
+
+Some controls are bot-global rather than per-guild (the AI prompts, the guard
+instructions, server file paths), and their routes 403 off the primary guild.
+Panels handle that in one of two ways, and the difference is deliberate — do
+not harmonise them:
+
+* **Explain it** when something else points the admin at the control.
+  `rules-watch-settings.js` renders a hint saying the prompt is shared by every
+  server and can only be edited from the primary server's copy of the page.
+  It has to: both `manual.html` and the AI Models page tell readers the guard's
+  instructions live on Rules Watch settings, so a secondary-guild admin who
+  found nothing there would reasonably conclude the page was broken.
+* **Omit it silently** when nothing does. `config-global.js` simply doesn't
+  render its "Server File Paths" card off-primary. No manual section, help
+  entry or sibling panel mentions that card, so a secondary-guild admin has no
+  reason to expect it, and a note explaining an absence they never noticed is
+  just noise on a page they can't act on.
+
+The test is whether a reader was *sent* to the control. If you add a pointer to
+a bot-global control from anywhere a secondary-guild admin can read, the
+destination panel needs the explanatory hint.
+
 ## Panel-local URL state
 
 Route convention: `#/<page-id>?key=val&…`. Panel state that a user would expect
