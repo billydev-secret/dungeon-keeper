@@ -53,10 +53,11 @@ When a message that owns a thread is deleted, the channel's `delete_behavior` de
 | When | The user sees |
 |---|---|
 | `/close`, `/title`, or a button used outside a thread | "This command can only be used inside a thread." / "Not in a thread." |
-| Non-owner without Manage Threads tries to close/rename | "Only the thread owner or a moderator can close/rename this thread." |
+| Non-owner without Manage Threads tries `/close` or the **Archive Thread** button | "Only the thread owner or a moderator can close this thread." / "...archive this thread." |
+| Non-owner without Manage Threads tries `/title` or the **Edit Title** button | "Only the thread owner or a moderator can rename this thread." |
 | Empty title submitted | "Title can't be empty." |
 
-Thread-creation, reaction, and welcome-message failures are logged silently — members see nothing.
+Thread-creation and welcome-message failures are logged as warnings; most reaction failures are silently ignored (only a failed default reaction is logged, at debug level). Either way, members see nothing.
 
 ## Non-goals
 

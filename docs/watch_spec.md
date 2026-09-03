@@ -69,7 +69,9 @@ the DB never sees).
 No dashboard panel and no config keys of its own — the slash commands are the
 entire management surface (mod-facing action, not admin config, per the
 working agreement). The only adjacent dashboard surface is the AI panel's
-"Watch — live rule check" prompt/model pair named above.
+"Watch — live rule check" prompt named above — there is no per-command model
+setting to go with it (one local model is loaded at a time and every AI job
+uses it).
 
 ## Stored data
 
