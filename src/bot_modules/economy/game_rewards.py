@@ -784,7 +784,7 @@ _WINNER_RESOLVERS: dict[str, Callable[[dict[str, Any]], list[int]]] = {
 async def append_payout_footer(bot: "Bot", embed: discord.Embed, guild_id: int, game_type: str) -> None:
     """Stamp a recap embed with what the game just paid out.
 
-    Adds a line like ``🪙 +20 to winners · +5 to everyone who played`` under
+    Adds a line like ``🪙 +20 to winners • +5 to everyone who played`` under
     any existing footer text, using the guild's configured amounts. Silently
     a no-op when the economy is disabled, amounts are zero, or settings can't
     load — a recap must never fail over its footer. Game types with no winner
@@ -809,7 +809,7 @@ async def append_payout_footer(bot: "Bot", embed: discord.Embed, guild_id: int, 
             return
         # Custom currency emoji render as raw text in a footer — drop it there.
         prefix = footer_emoji(settings.currency_emoji)
-        line = f"{prefix} {' · '.join(parts)}".lstrip()
+        line = f"{prefix} {' • '.join(parts)}".lstrip()
         existing = embed.footer.text if embed.footer else None
         embed.set_footer(text=f"{existing}\n{line}" if existing else line)
     except Exception:

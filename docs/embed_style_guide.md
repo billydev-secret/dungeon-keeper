@@ -489,12 +489,34 @@ what is below is what was still true afterwards.
 `❌ `, a footer separating with `·`, a select placeholder saying "Select", the
 `colour=` spelling, and a pure-stacked multi-section card that never calls
 `apply_section_spacing`. Each sweep carries a meta-test proving it can still
-see a violation. Cards mixing `inline=True` triples are deliberately outside
-the spacing sweep — that one is a layout judgement, not a mechanical rule.
+see a violation.
+
+Know what the sweeps can and cannot see — the first version of this section
+overclaimed, and review caught it:
+
+- The denial sweep follows **one** level of indirection: a literal at a
+  `send`-shaped call, or one passed to a local wrapper named in
+  `_SEND_WRAPPERS` (`_reply`, `_ephemeral`, `safe_ephemeral`). Six denials in
+  `role_menus/views.py` hid behind a local `_reply` until it did. **Write a new
+  send wrapper, add its name to that set**, or its denials go unseen.
+- The footer sweep reads `set_footer` literals **and** any function whose name
+  contains "footer", so a string-layer builder that assembles the text and
+  hands it over later is covered (`todo/board_logic.render_board_footer` and
+  `economy/game_rewards.append_payout_footer` were both invisible before).
+  Footer text assembled under some other name still slips through.
+- Cards mixing `inline=True` triples are deliberately outside the spacing
+  sweep — that one is a layout judgement, not a mechanical rule.
 
 ### Closed by the 2026-09-02 sweep (verified zero — don't go looking)
 
-- Games ALL-CAPS titles; the `colour=` kwarg; `█░`/bracket/pipe progress bars.
+- The `colour=` kwarg; `█░`/bracket/pipe progress bars.
+- Games ALL-CAPS titles — now zero, but **look for `.upper()`, not just for
+  literal shouting**. This sweep's first pass reported zero because it grepped
+  `title="[A-Z]…`; three had in fact survived it — the casino's two jackpot
+  cards (one of them `f"…{casino_name.upper()}…"`, shouting a guild's own
+  configured name back at it) and `games_traditional`, which built its card
+  title as `label.upper()` from an already-Title-Case table. All three are
+  recased.
 - The "~19 pasted no-permission variants". There is one shared `NO_PERMISSION`
   in `services/replies.py` (29 uses) plus six feature-specific
   `MANAGE_DENIED_MSG` constants that each name their own action ("…to review

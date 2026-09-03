@@ -159,11 +159,13 @@ def build_question_embed(
     inside the blockquote instead of spilling out after the first line.
     """
     emoji, color = _CARD_STYLE.get(category, _CARD_FALLBACK)
-    label = CAT_LABELS.get(category, category)
+    # An unmapped category degrades to a title-cased name rather than a raw
+    # snake_case key — the same shape register.kind_display uses.
+    label = CAT_LABELS.get(category) or category.replace("_", " ").title()
 
     quoted = "> " + question.replace("\n", "\n> ")
     embed = discord.Embed(
-        title=f"{emoji} {label.upper()}",
+        title=f"{emoji} {label}",
         description=quoted,
         color=color,
     )

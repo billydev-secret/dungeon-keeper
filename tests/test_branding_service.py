@@ -184,7 +184,7 @@ def test_casino_flavor_text_honours_a_renamed_casino():
     jackpot = casino_embeds.build_jackpot_celebration(
         econ, 42, 5000, casino_name="Neon Pines",
     )
-    assert jackpot.title == "🏆 JACKPOT AT THE NEON PINES 🏆"
+    assert jackpot.title == "🏆 Jackpot at the Neon Pines 🏆"
 
 
 def test_advisor_prompt_and_error_use_the_guild_name():

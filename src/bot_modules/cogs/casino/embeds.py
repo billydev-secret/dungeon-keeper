@@ -475,7 +475,7 @@ def build_slots_embed(
             f"and collects {_coins(econ, payout)}."
         )
         if jackpot_won:
-            title = "💥 🎰 THE JACKPOT SPILLS"
+            title = "💥 🎰 The Jackpot Spills"
             desc += "\nThe whole progressive pot — gone in one spin."
         # A big win is still a win: the celebration lives in the copy, not in a
         # third color tier (style guide: green = win, red = loss, full stop).
@@ -500,7 +500,7 @@ def build_jackpot_celebration(
 ) -> discord.Embed:
     """The standalone fanfare posted beside a jackpot result."""
     embed = discord.Embed(
-        title=f"🏆 JACKPOT AT THE {casino_name.upper()} 🏆",
+        title=f"🏆 Jackpot at the {casino_name} 🏆",
         description=(
             f"💰 7️⃣ 7️⃣ 7️⃣ 💰\n\n{name_fn(user_id)} just hit the progressive "
             f"jackpot for {_coins(econ, amount)}!\n"

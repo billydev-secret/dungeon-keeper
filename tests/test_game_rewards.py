@@ -558,7 +558,7 @@ async def test_footer_winner_game_lists_both_amounts(db_path):
     bot: Any = _Bot(db_path, [])
     embed = _embed()
     await append_payout_footer(bot, embed, GUILD, "ttl")
-    assert embed.footer.text == "🪙 +20 to winners · +5 to everyone who played"
+    assert embed.footer.text == "🪙 +20 to winners • +5 to everyone who played"
 
 
 async def test_footer_no_winner_game_lists_participation_only(db_path):
@@ -579,7 +579,7 @@ async def test_footer_appends_below_existing_footer(db_path):
     await append_payout_footer(bot, embed, GUILD, "rushmore")
     assert embed.footer.text == (
         "🗿 Mt. Rushmore Draft • Hosted by Billy\n"
-        "🪙 +20 to winners · +5 to everyone who played"
+        "🪙 +20 to winners • +5 to everyone who played"
     )
 
 
@@ -590,7 +590,7 @@ async def test_footer_drops_custom_currency_emoji(db_path):
     bot: Any = _Bot(db_path, [])
     embed = _embed()
     await append_payout_footer(bot, embed, GUILD, "ttl")
-    assert embed.footer.text == "+20 to winners · +5 to everyone who played"
+    assert embed.footer.text == "+20 to winners • +5 to everyone who played"
     assert "<:doubloon:999>" not in (embed.footer.text or "")
 
 

@@ -30,6 +30,17 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 _SEND_METHODS = {"send_message", "send", "edit_message", "respond"}
 
+#: Local helpers that forward their text straight to one of the above. A sweep
+#: that only looked at ``send``-shaped calls missed every denial routed through
+#: one of these — six in ``role_menus/views.py`` alone — so they count as sends.
+#: Add a new wrapper here when you write one.
+_SEND_WRAPPERS = {
+    "_reply",
+    "_ephemeral",
+    "safe_ephemeral",
+    "_safe_ephemeral",
+}
+
 #: Replies that open by refusing. The guide's own worked example is
 #: "❌ Only the host or a mod can start."
 _REFUSAL = re.compile(
@@ -97,21 +108,28 @@ def unprefixed_denials(tree: ast.AST) -> list[int]:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if not isinstance(node.func, ast.Attribute):
+        if isinstance(node.func, ast.Attribute) and node.func.attr in _SEND_METHODS:
+            wrapped = False
+        elif isinstance(node.func, ast.Name) and node.func.id in _SEND_WRAPPERS:
+            wrapped = True
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in _SEND_WRAPPERS:
+            wrapped = True
+        else:
             continue
-        if node.func.attr not in _SEND_METHODS:
-            continue
-        arg = _content_arg(node)
-        if arg is None:
-            continue
-        text = _leading_text(arg)
-        if not text:
-            continue
-        stripped = text.strip()
-        if stripped.startswith(_MARKERS) or _NOT_A_REFUSAL.match(stripped):
-            continue
-        if _REFUSAL.match(stripped) and _is_interaction_reply(node):
-            hits.append(arg.lineno)
+        # A wrapper takes the interaction first, so scan every literal argument
+        # rather than assuming the body is arg 0.
+        args = list(node.args) if wrapped else [_content_arg(node)]
+        for arg in args:
+            if arg is None:
+                continue
+            text = _leading_text(arg)
+            if not text:
+                continue
+            stripped = text.strip()
+            if stripped.startswith(_MARKERS) or _NOT_A_REFUSAL.match(stripped):
+                continue
+            if _REFUSAL.match(stripped) and (wrapped or _is_interaction_reply(node)):
+                hits.append(arg.lineno)
     return hits
 
 
@@ -160,25 +178,64 @@ def test_the_denial_sweep_can_actually_see_a_violation():
     assert unprefixed_denials(broadcast) == []
 
 
+def test_the_denial_sweep_follows_a_local_send_wrapper():
+    """The first version of this sweep only looked at ``send``-shaped calls,
+    so six denials in ``role_menus/views.py`` that go through a local
+    ``_reply(interaction, text)`` helper sailed past it."""
+    wrapped = ast.parse('await _reply(interaction, "Only the host can start.")')
+    wrapped_ok = ast.parse('await _reply(interaction, "❌ Only the host can start.")')
+
+    assert unprefixed_denials(wrapped) == [1]
+    assert unprefixed_denials(wrapped_ok) == []
+
+
 # ── footers separate with • ───────────────────────────────────────────
 
 
 def middot_footers(tree: ast.AST) -> list[int]:
-    """Lines where a footer literal separates clauses with ``·``."""
+    """Lines where footer text separates clauses with ``·``.
+
+    Covers both shapes: a literal handed straight to ``set_footer``, and a
+    string-layer builder that assembles the text and hands it over later
+    (``todo/board_logic.render_board_footer`` joined on ``" · "`` and was
+    invisible to a ``set_footer``-only sweep).
+    """
     hits: list[int] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Attribute):
-            continue
-        if node.func.attr != "set_footer":
-            continue
-        for candidate in list(node.args) + [k.value for k in node.keywords]:
-            for piece in ast.walk(candidate):
-                if isinstance(piece, ast.Constant) and isinstance(piece.value, str):
-                    if "·" in piece.value:
-                        hits.append(node.lineno)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "set_footer":
+                for candidate in list(node.args) + [k.value for k in node.keywords]:
+                    for piece in ast.walk(candidate):
+                        if (
+                            isinstance(piece, ast.Constant)
+                            and isinstance(piece.value, str)
+                            and "·" in piece.value
+                        ):
+                            hits.append(node.lineno)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if "footer" not in node.name.lower():
+                continue
+            docstring = node.body[0].value if _has_docstring(node) else None
+            for piece in ast.walk(node):
+                if piece is docstring:
+                    continue  # prose about the footer, not the footer itself
+                if (
+                    isinstance(piece, ast.Constant)
+                    and isinstance(piece.value, str)
+                    and "·" in piece.value
+                ):
+                    hits.append(piece.lineno)
     return sorted(set(hits))
+
+
+def _has_docstring(node: ast.AST) -> bool:
+    body = getattr(node, "body", None)
+    return bool(
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    )
 
 
 def test_footers_separate_with_a_bullet():
@@ -205,6 +262,12 @@ def test_the_footer_sweep_can_actually_see_a_violation():
     assert middot_footers(ast.parse('e.set_footer(text="Pin of the Day • 24h")')) == []
     # An f-string carries its literal pieces in the same place.
     assert middot_footers(ast.parse('e.set_footer(text=f"Page {n} · {ctx}")')) == [1]
+    # A string-layer builder never touches set_footer, and was the shape the
+    # first version of this sweep could not see.
+    built = ast.parse('def render_board_footer(p):\n    return " · ".join(p)\n')
+    built_ok = ast.parse('def render_board_footer(p):\n    return " • ".join(p)\n')
+    assert middot_footers(built) == [2]
+    assert middot_footers(built_ok) == []
 
 
 # ── selects say "Pick", not "Select" ──────────────────────────────────

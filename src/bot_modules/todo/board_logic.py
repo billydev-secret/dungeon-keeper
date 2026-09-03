@@ -803,7 +803,7 @@ def render_board_footer(
     noun = "task" if task_total == 1 else "tasks"
     parts.append(f"{task_total} {noun}")
     parts.append("updates automatically")
-    return " · ".join(parts)
+    return " • ".join(parts)
 
 
 def board_content_signature(

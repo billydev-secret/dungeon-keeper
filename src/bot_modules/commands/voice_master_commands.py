@@ -1950,7 +1950,7 @@ class _KnockResponseView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self._owner_id:
-            await _ephemeral(interaction, "Only the channel owner can answer.")
+            await _ephemeral(interaction, "❌ Only the channel owner can answer.")
             return False
         return True
 

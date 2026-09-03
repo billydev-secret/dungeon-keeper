@@ -251,7 +251,7 @@ async def handle_menu_interaction(
 
     menu, options, binding_role_id = await asyncio.to_thread(_load)
     if menu is None or menu["guild_id"] != guild.id or not options:
-        await _reply(interaction, "This menu no longer exists.")
+        await _reply(interaction, "❌ This menu no longer exists.")
         return
     try:
         await _handle_loaded(
@@ -278,7 +278,7 @@ async def _handle_loaded(
 ) -> None:
     menu_id = menu["id"]
     if not menu["enabled"]:
-        await _reply(interaction, "This menu is currently turned off.")
+        await _reply(interaction, "❌ This menu is currently turned off.")
         return
 
     if menu["required_role_id"] > 0:
@@ -291,7 +291,7 @@ async def _handle_loaded(
             return
         if req_role not in member.roles:
             await _reply(
-                interaction, f"This menu requires the **@{req_role.name}** role."
+                interaction, f"❌ This menu requires the **@{req_role.name}** role."
             )
             return
 

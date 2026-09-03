@@ -632,7 +632,7 @@ class MahjongCog(commands.Cog):
                     return
                 if state.seat_of(member.id) is None and not is_mod:
                     await self._reply(
-                        interaction, "Only the players (or a mod) can close a table."
+                        interaction, "❌ Only the players (or a mod) can close a table."
                     )
                     return
                 await self._act_simple(

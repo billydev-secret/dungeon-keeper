@@ -418,7 +418,7 @@ def test_build_lobby_embed_shows_host_name():
 
 def test_build_question_embed_includes_category_label_and_question():
     embed = build_question_embed("sfw_truth", "What's your favorite color?", "Alice")
-    assert "SFW TRUTH" in embed.title
+    assert "SFW Truth" in embed.title
     assert "What's your favorite color?" in embed.description
     assert embed.author.name == "For Alice"
 
@@ -426,7 +426,7 @@ def test_build_question_embed_includes_category_label_and_question():
 def test_build_question_embed_uses_category_label_lookup():
     """Known categories render as their friendly label, not the raw key."""
     embed = build_question_embed("nsfw_dare", "Q?")
-    assert CAT_LABELS["nsfw_dare"].upper() in embed.title
+    assert CAT_LABELS["nsfw_dare"] in embed.title
     assert "nsfw_dare" not in embed.title
 
 
@@ -454,7 +454,7 @@ def test_build_question_embed_falls_back_when_category_unknown():
     """Unknown category keys (stale payloads) shouldn't crash — they fall
     back to a neutral style and use the raw key as the label."""
     embed = build_question_embed("legacy_cat", "Q?")
-    assert "LEGACY_CAT" in embed.title
+    assert "Legacy Cat" in embed.title
 
 
 def test_build_question_embed_omits_author_without_target():

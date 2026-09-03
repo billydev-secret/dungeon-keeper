@@ -53,7 +53,7 @@ def test_big_win_is_the_same_green_not_a_third_tier():
 def test_jackpot_win_is_green_but_keeps_its_copy():
     embed = _slots(10, 500, jackpot=5000)
     assert embed.color == discord.Color(COLOR_GREEN)
-    assert embed.title is not None and "JACKPOT" in embed.title
+    assert embed.title is not None and "Jackpot" in embed.title
 
 
 def test_loss_is_red():
