@@ -386,6 +386,7 @@ async def _do_approve(
         await _refund_and_report(
             interaction, ctx, guild, settings, accent, row, card,
             "❌ No pin channel is set here — refunded. Set one on the dashboard.",
+            name_fn=name_fn,
         )
         return
 
@@ -406,6 +407,7 @@ async def _do_approve(
         await _refund_and_report(
             interaction, ctx, guild, settings, accent, row, card,
             "❌ Couldn't post or pin in the pin channel (permissions?) — refunded.",
+            name_fn=name_fn,
         )
         return
 
@@ -446,8 +448,13 @@ async def _do_approve(
 
 async def _refund_and_report(
     interaction, ctx, guild: discord.Guild, settings, accent, row, card, msg: str,
+    *, name_fn: NameFn | None = None,
 ) -> None:
-    """Refund a pin that couldn't be posted and tell the mod."""
+    """Refund a pin that couldn't be posted and tell the mod.
+
+    ``name_fn`` is the resolver the caller already built for this row; only a
+    caller without one pays for a second prefetch.
+    """
     def _refund():
         with ctx.open_db() as conn:
             refund_failed_golive(conn, row)
@@ -459,7 +466,8 @@ async def _refund_and_report(
         log.exception("econ pin: refund-on-post-failure errored for %s", row["id"])
         fresh = None
     if fresh is not None:
-        name_fn = await card_name_fn(ctx, guild, row)
+        if name_fn is None:
+            name_fn = await card_name_fn(ctx, guild, row)
         await _edit_card(card, accent, settings, fresh, name_fn=name_fn)
         await _edit_stored(
             interaction.client, card, accent, settings, fresh, name_fn=name_fn

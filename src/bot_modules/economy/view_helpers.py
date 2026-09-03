@@ -131,6 +131,13 @@ async def card_name_fn(
     bot may not currently see — in which case pass ``guild_id`` so the
     ``known_users`` lookup still has a guild to scope to. With neither, every
     id falls through to ``<@id>``, which is the old behaviour and no worse.
+
+    **Never raises.** This is called from repaint paths that run *after* the
+    money has already moved — a resolution the dashboard has committed, a card
+    the picker is about to render — and it is the only I/O those paths grew.
+    A database hiccup here must degrade to ``<@id>`` (the pre-resolver
+    rendering), not abandon the repaint, skip the member's DM, or turn a
+    committed resolution into a 500.
     """
     from bot_modules.services.name_resolver import build_name_fn  # noqa: PLC0415
 
@@ -144,9 +151,16 @@ async def card_name_fn(
         ids.append(int(resolver_id))
     ids.extend(int(i) for i in extra_ids if i)
     gid = int(guild.id) if guild is not None else int(guild_id or 0)
-    return await build_name_fn(
-        guild=guild, db_path=ctx.db_path, guild_id=gid, user_ids=ids
-    )
+    try:
+        return await build_name_fn(
+            guild=guild, db_path=ctx.db_path, guild_id=gid, user_ids=ids
+        )
+    except Exception:
+        log.warning(
+            "econ view: name resolution failed for guild %s; rendering mentions",
+            gid, exc_info=True,
+        )
+        return mention
 
 
 async def edit_review_card(

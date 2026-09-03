@@ -541,12 +541,14 @@ function render(container, cfg, channels, roles, members) {
     }
     try {
       const res = await apiPut("/api/economy/config", payload);
-      // The save succeeded either way; a warning means the Paid Request
-      // Reviews channel it just stored is readable by @everyone. Shown as the
-      // status line rather than blocking, because whether that's acceptable
-      // is the admin's call, not the bot's.
+      // The save succeeded either way, so report success FIRST — that is what
+      // disarms the unsaved-edits guard for this form. A warning (the Paid
+      // Request Reviews channel it just stored is readable by @everyone) then
+      // replaces the "Saved" line without re-arming it. It is shown rather
+      // than blocking, because whether that's acceptable is the admin's call,
+      // not the bot's.
+      showStatus(status, true);
       if (res && res.warning) showStatus(status, false, res.warning);
-      else showStatus(status, true);
     } catch (err) {
       showStatus(status, false, err.message);
     }
