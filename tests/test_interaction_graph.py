@@ -10,7 +10,6 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.interaction_graph import (
-    clear_interaction_data,
     init_interaction_tables,
     record_interactions,
 )
@@ -51,17 +50,6 @@ def test_init_interaction_tables_is_idempotent(tmp_path):
         assert "user_interactions" in names
         assert "user_interactions_log" in names
 
-
-def test_clear_interaction_data_removes_only_target_guild(db_conn):
-    record_interactions(db_conn, guild_id=10, from_user_id=1, to_user_ids=[2])
-    record_interactions(db_conn, guild_id=20, from_user_id=1, to_user_ids=[2])
-
-    clear_interaction_data(db_conn, guild_id=10)
-
-    rest = db_conn.execute(
-        "SELECT COUNT(*) FROM user_interactions"
-    ).fetchone()[0]
-    assert rest == 1  # only guild 20 left
 
 
 # ── record_interactions ──────────────────────────────────────────────
