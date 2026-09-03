@@ -68,9 +68,9 @@ function render(container, d) {
         <summary>About this report</summary>
         <div class="note">
           <strong>Moderator</strong> — anyone who can delete another member’s
-          message. That is a wider group than the Mod Workload report counts,
-          which is why the two don’t match: this one asks who is <em>present</em>,
-          not who takes action.
+          message. That is a wider group than the Mod Workload or Moderator
+          Community Engagement reports count, which is why they don’t match:
+          this one asks who is <em>present</em>, not who takes action.
           <strong>The chart</strong> — today’s messages per hour, drawn against
           what a typical ${esc(d.weekday || "day")} looks like, with the
           moderators’ own messages over the top. Bots are excluded throughout.
@@ -79,6 +79,11 @@ function render(container, d) {
           a member arriving in that hour can’t count on finding anyone.
           Hours nobody posted in at all are neither covered nor a gap — there
           was nothing there to miss.
+          <strong>By moderator</strong> — the same measure, split per person:
+          how many of the window’s days they showed up at all, and how much
+          of the busy hours above they personally covered. It’s presence, not
+          a ranking — read it as “was this person around”, not “who did the
+          most”.
         </div>
       </details>
 
@@ -118,6 +123,8 @@ function render(container, d) {
       ${hasMods ? "" : `<div class="note" style="margin-top:12px;">No members
         currently hold permission to delete messages, so there is no moderator
         side to draw. The server’s own activity is shown alone.</div>`}
+
+      ${hasMods ? '<div data-mods-table style="margin-top:22px;"></div>' : ""}
 
       <div data-hours-table style="margin-top:18px;"></div>
     </div>
@@ -173,6 +180,10 @@ function render(container, d) {
     indexLabel: "Hour of day",
   });
 
+  if (hasMods) {
+    renderModsTable(container.querySelector("[data-mods-table]"), d);
+  }
+
   renderHoursTable(container.querySelector("[data-hours-table]"), d);
 
   return {
@@ -215,4 +226,35 @@ function renderHoursTable(host, d) {
         </table>
       </div>
     </details>`;
+}
+
+// Deliberately not sorted here — the API already orders by name (see
+// health.py), and a client-side re-sort by any of these numbers would turn
+// "was this person around" back into "who did the most" one refresh later.
+function renderModsTable(host, d) {
+  const rows = (d.mods || []).map((m) => `
+    <tr>
+      <td>${esc(m.user_name || `User ${m.user_id}`)}</td>
+      <td>${m.days_active} / ${d.gap_days}</td>
+      <td>${m.busy_hours_covered} / ${d.busy_hours}</td>
+      <td>${m.peak_coverage_pct}%</td>
+    </tr>`).join("");
+
+  host.innerHTML = `
+    <h3>By moderator</h3>
+    <div class="note">Each moderator’s own presence — not a comparison
+      between them. “Active days” is how many of the last ${d.gap_days} days
+      they posted at all; “busy hours covered” is how much of the server’s
+      busiest quarter of the clock they personally covered.</div>
+    <div class="data-table-scroll">
+      <table class="data-table">
+        <thead><tr>
+          <th>Moderator</th>
+          <th>Active days</th>
+          <th>Busy hours covered</th>
+          <th>Coverage at peak</th>
+        </tr></thead>
+        <tbody>${rows || '<tr><td colspan="4" class="home-dim">No data</td></tr>'}</tbody>
+      </table>
+    </div>`;
 }

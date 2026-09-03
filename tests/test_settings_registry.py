@@ -135,9 +135,14 @@ def test_birthday_announce_hour_is_registered_and_bounded():
     f = sr.FEATURES_BY_SLUG["birthdays"]
     hour = next(s for s in f.settings if s.key == "birthday_announce_hour")
     assert (hour.minimum, hour.maximum) == (0, 23)
-    # Midnight is a real choice; the default is 09:00.
+    assert hour.required is True
+    # Migration 200 moved the per-channel fields out to birthday_channels, so
+    # this is the feature's only surviving KV field and carries the required
+    # signal alone — unlike before, saving the Timing card at its default
+    # (9 = 09:00) must count as configured, not read as untouched.
     assert hour.is_set("0") is True
-    assert hour.is_set("9") is False
+    assert hour.is_set("9") is True
+    assert hour.is_set(None) is False
 
 
 # ── lookups ─────────────────────────────────────────────────────────────────
@@ -247,10 +252,32 @@ def test_guess_inactivity_ping_hours_is_a_real_setting_again():
     "nsfw_grant_message",
     "nsfw_announce_channel_id",
     "nsfw_log_channel_id",
+    # The fixed main+second channel pair moved to the birthday_channels table
+    # (migration 200, any number of channels).
+    "birthday_channel_id",
+    "birthday_message",
+    "birthday_pin",
+    "birthday_channel_id_2",
+    "birthday_message_2",
+    "birthday_pin_2",
 ])
 def test_superseded_key_is_guarded_as_dead(key):
     assert key in sr.DEAD_KEYS
     assert sr.get_setting(key) is None
+
+
+def test_birthdays_feature_has_no_leftover_channel_fields():
+    """Regression: migration 200 moved the channel(s) — and their per-channel
+    message/pin — to birthday_channels, a table this KV-only registry can't
+    see. A leftover Setting for birthday_channel_id/_message/_pin (or their
+    `_2` twins) would describe fields nothing reads or writes any more."""
+    f = sr.FEATURES_BY_SLUG["birthdays"]
+    keys = {s.key for s in f.settings}
+    assert keys == {"birthday_announce_hour"}
+    # The hour is now the sole required setting — see
+    # test_birthday_announce_hour_is_registered_and_bounded for why it no
+    # longer treats its own default (9) as "not set".
+    assert {s.key for s in f.required_settings()} == {"birthday_announce_hour"}
 
 
 def test_rules_watch_requires_its_own_keys_only():

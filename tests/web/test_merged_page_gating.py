@@ -72,7 +72,7 @@ def test_moderator_can_read_config(fake_ctx):
         ("/api/config/xp", {"level_curve_factor": 99.0}),
         ("/api/config/prune", {"role_id": "0", "inactivity_days": 5}),
         ("/api/config/bulk-cleanup", {"enabled": True, "age_days": 1}),
-        ("/api/config/birthday", {"birthday_channel_id": "0"}),
+        ("/api/config/birthday/settings", {"birthday_announce_hour": 9}),
         ("/api/config/policy", {"vote_timeout_hours": 72}),
     ],
 )

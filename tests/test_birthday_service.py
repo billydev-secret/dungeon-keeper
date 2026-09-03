@@ -13,13 +13,16 @@ from bot_modules.services.birthday_service import (
     announce_hour,
     announced_birthday_ids,
     delete_birthday,
+    delete_channel,
     is_birthday_wish,
     list_all_birthdays,
+    list_channels,
     mark_announced,
     month_choices,
     parse_birthday_day,
     todays_unannounced,
     upsert_birthday,
+    upsert_channel,
 )
 
 GUILD = 123
@@ -292,6 +295,75 @@ def test_announce_hour_is_per_guild(db):
         assert announce_hour(conn, GUILD) == 17
         # A guild with no row of its own still gets the default.
         assert announce_hour(conn, 424242) == 9
+
+
+# ── announcement channels — any number, not a fixed main + second ──────
+
+
+def test_list_channels_is_empty_for_an_unconfigured_guild(db):
+    with open_db(db) as conn:
+        assert list_channels(conn, GUILD) == []
+
+
+def test_upsert_channel_adds_a_channel(db):
+    with open_db(db) as conn:
+        upsert_channel(conn, guild_id=GUILD, channel_id=5555, message="Hi {mention}", pin=True)
+        rows = list_channels(conn, GUILD)
+    assert len(rows) == 1
+    assert rows[0].channel_id == 5555
+    assert rows[0].message == "Hi {mention}"
+    assert rows[0].pin is True
+
+
+def test_upsert_channel_is_idempotent_and_updates_in_place(db):
+    """Adding the same channel twice edits the existing row rather than
+    creating a second one — the Add form and the per-card Save button post to
+    the same endpoint."""
+    with open_db(db) as conn:
+        upsert_channel(conn, guild_id=GUILD, channel_id=5555, message="First", pin=False)
+        upsert_channel(conn, guild_id=GUILD, channel_id=5555, message="Second", pin=True)
+        rows = list_channels(conn, GUILD)
+    assert len(rows) == 1
+    assert rows[0].message == "Second"
+    assert rows[0].pin is True
+
+
+def test_channels_list_in_the_order_they_were_added(db):
+    with open_db(db) as conn:
+        upsert_channel(conn, guild_id=GUILD, channel_id=3333, message="C", pin=False)
+        upsert_channel(conn, guild_id=GUILD, channel_id=1111, message="A", pin=False)
+        upsert_channel(conn, guild_id=GUILD, channel_id=2222, message="B", pin=False)
+        rows = list_channels(conn, GUILD)
+    assert [r.channel_id for r in rows] == [3333, 1111, 2222]
+
+
+def test_delete_channel_removes_it_and_reports_success(db):
+    with open_db(db) as conn:
+        upsert_channel(conn, guild_id=GUILD, channel_id=5555, message="Hi", pin=False)
+        assert delete_channel(conn, GUILD, 5555) is True
+        assert list_channels(conn, GUILD) == []
+
+
+def test_delete_channel_on_an_unconfigured_channel_reports_no_match(db):
+    with open_db(db) as conn:
+        assert delete_channel(conn, GUILD, 9999) is False
+
+
+def test_channels_are_scoped_per_guild(db):
+    with open_db(db) as conn:
+        upsert_channel(conn, guild_id=GUILD, channel_id=5555, message="Guild A", pin=False)
+        upsert_channel(conn, guild_id=999, channel_id=5555, message="Guild B", pin=True)
+
+        a = list_channels(conn, GUILD)
+        b = list_channels(conn, 999)
+    assert len(a) == 1 and a[0].message == "Guild A" and a[0].pin is False
+    assert len(b) == 1 and b[0].message == "Guild B" and b[0].pin is True
+
+    # And removing one guild's channel leaves the other's alone.
+    with open_db(db) as conn:
+        delete_channel(conn, GUILD, 5555)
+        assert list_channels(conn, GUILD) == []
+        assert len(list_channels(conn, 999)) == 1
 
 
 # ── the month is picked, the day is typed (ephemeral-UI audit M4) ──────

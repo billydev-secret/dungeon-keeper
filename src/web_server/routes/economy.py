@@ -72,6 +72,10 @@ class EconomyConfigUpdate(BaseModel):
 
     enabled: bool | None = None
     bank_channel_id: int | None = Field(default=None, ge=0)
+    # Fallback channel for drops/pin/theme/bounty below when their own field is
+    # 0 — see EconSettings.default_channel_id for what it deliberately does
+    # and does not stand in for.
+    default_channel_id: int | None = Field(default=None, ge=0)
     # The public transaction feed's channel; 0 = feed off (the picker is the
     # toggle). The drain cursor beside it stays bot-managed, so it is not here.
     register_channel_id: int | None = Field(default=None, ge=0)

@@ -1,7 +1,7 @@
 """Moderator coverage: is a mod around when the server is busy?
 
-Two questions, deliberately answered from two different windows, because one
-window cannot answer both honestly.
+Three questions, deliberately answered from two different windows, because
+one window cannot answer all three honestly.
 
 *Today* — the hero chart. Today's hour-by-hour message count drawn against a
 percentile band over recent same-weekdays, with the moderators' own line over
@@ -15,11 +15,20 @@ one hour has been lived. So the gap section runs its own rolling window over
 every recent day and asks, per hour of the local clock, *on what share of the
 days that this hour had traffic was a moderator also talking?*
 
+*By moderator* — the same gap-window arithmetic, split per person instead of
+merged across the group. This is presence, not a leaderboard: each row reports
+how many of the window's days that one moderator showed up at all, and how
+much of the server's busiest hours they personally covered — never a count
+that ranks one moderator against another. The caller is responsible for not
+sorting it by any of those numbers; see the dashboard panel, which orders by
+name.
+
 "Moderator" here is **anyone who can delete someone else's message** —
 Discord's Manage Messages, which Administrator grants implicitly. That is the
-practical floor of "someone is watching this channel", and it is a wider circle
-than the kick/ban/manage-guild set the Mod Workload report counts. The two
-reports answer different questions and are not expected to agree.
+practical floor of "someone is watching this channel", and it is a wider
+circle than the kick/ban/manage-guild set the Mod Workload and Moderator
+Community Engagement reports count. All three answer different questions and
+are not expected to agree.
 """
 
 from __future__ import annotations
@@ -68,6 +77,20 @@ class LongestGap(TypedDict):
     start_hour: int
     end_hour: int
     hours: int
+
+
+class ModCoverageRow(TypedDict):
+    """One moderator's own presence over the gap window — never a rank.
+
+    ``days_active`` and ``busy_hours_covered`` both describe this person
+    alone; nothing here is comparative, and the field set deliberately has no
+    "count" or "total" that would invite sorting one moderator above another.
+    """
+
+    user_id: str
+    days_active: int
+    busy_hours_covered: int
+    peak_coverage_pct: float
 
 
 def _local_bucket_exprs(utc_offset_hours: float) -> tuple[str, str]:
@@ -168,6 +191,117 @@ def _gap_rows(
     return rows
 
 
+def _per_mod_hour_days(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    mod_ids: list[int],
+    utc_offset_hours: float,
+    gap_days: int,
+    now: float,
+) -> dict[int, dict[int, int]]:
+    """Per moderator, per local hour: distinct days they posted in it.
+
+    Mirrors the numerator half of :func:`_gap_rows`'s ``mod_days`` query, but
+    keeps each moderator's count separate instead of merging the group — the
+    per-moderator breakdown reads its own presence off this, hour by hour.
+    """
+    if not mod_ids:
+        return {}
+    day_expr, hour_expr = _local_bucket_exprs(utc_offset_hours)
+    since = now - gap_days * 86400
+    ph = ",".join("?" * len(mod_ids))
+    out: dict[int, dict[int, int]] = {int(m): {} for m in mod_ids}
+    for uid, h, days in conn.execute(
+        f"""
+        SELECT user_id, h, COUNT(*) AS days FROM (
+            SELECT DISTINCT user_id, {hour_expr} AS h, {day_expr} AS d
+            FROM processed_messages
+            WHERE guild_id = ? AND created_at >= ?
+              AND user_id IN ({ph})
+        ) GROUP BY user_id, h
+        """,
+        (guild_id, since, *sorted(mod_ids)),
+    ).fetchall():
+        out[int(uid)][int(h)] = int(days)
+    return out
+
+
+def _mod_days_active(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    mod_ids: list[int],
+    utc_offset_hours: float,
+    gap_days: int,
+    now: float,
+) -> dict[int, int]:
+    """Per moderator: distinct local days they posted *anything* in.
+
+    A separate query from :func:`_per_mod_hour_days` on purpose — summing that
+    one's per-hour day-counts would double-count a day a moderator posted in
+    more than one hour of.
+    """
+    if not mod_ids:
+        return {}
+    day_expr, _ = _local_bucket_exprs(utc_offset_hours)
+    since = now - gap_days * 86400
+    ph = ",".join("?" * len(mod_ids))
+    out: dict[int, int] = {int(m): 0 for m in mod_ids}
+    for uid, days in conn.execute(
+        f"""
+        SELECT user_id, COUNT(DISTINCT {day_expr}) AS days
+        FROM processed_messages
+        WHERE guild_id = ? AND created_at >= ? AND user_id IN ({ph})
+        GROUP BY user_id
+        """,
+        (guild_id, since, *sorted(mod_ids)),
+    ).fetchall():
+        out[int(uid)] = int(days)
+    return out
+
+
+def _mod_rows(
+    rows: list[CoverageHour], mod_ids: list[int], hour_days: dict[int, dict[int, int]],
+    active_days: dict[int, int],
+) -> list[ModCoverageRow]:
+    """Assemble the per-moderator table from the shared busy-hour set.
+
+    ``busy_hours_covered`` and ``peak_coverage_pct`` are each computed only
+    against ``rows``' ``busy`` flags — the same busy-hour definition the
+    aggregate KPI cards use — so a moderator's numbers describe their own
+    share of that fixed set, never a comparison recomputed against a
+    different population per row.
+    """
+    busy_rows = [r for r in rows if r["busy"]]
+    result: list[ModCoverageRow] = []
+    for uid in mod_ids:
+        by_hour = hour_days.get(uid, {})
+        pct_by_busy_hour: list[float] = []
+        covered = 0
+        for r in busy_rows:
+            observed = r["days_observed"]
+            with_mod = min(by_hour.get(r["hour"], 0), observed)
+            pct = round(with_mod / observed * 100, 1) if observed else 0.0
+            pct_by_busy_hour.append(pct)
+            if observed and pct >= COVERED_THRESHOLD_PCT:
+                covered += 1
+        peak_pct = (
+            round(sum(pct_by_busy_hour) / len(pct_by_busy_hour), 1)
+            if pct_by_busy_hour
+            else 0.0
+        )
+        result.append(
+            ModCoverageRow(
+                user_id=str(uid),
+                days_active=active_days.get(uid, 0),
+                busy_hours_covered=covered,
+                peak_coverage_pct=peak_pct,
+            )
+        )
+    return result
+
+
 def _longest_gap(rows: list[CoverageHour]) -> LongestGap | None:
     """The longest unbroken stretch of gap hours, wrapping past midnight.
 
@@ -211,7 +345,7 @@ def compute_mod_coverage(
     gap_days: int = GAP_WINDOW_DAYS,
     now: float | None = None,
 ) -> dict:
-    """Hero overlay plus the coverage-gap summary.
+    """Hero overlay, the coverage-gap summary, and the per-moderator table.
 
     With no moderators to look at, every field still comes back in its empty
     shape rather than the payload short-circuiting: the panel draws the server
@@ -282,6 +416,28 @@ def compute_mod_coverage(
         datetime.fromtimestamp(now, timezone.utc), utc_offset_hours
     )
 
+    # Per-moderator presence, over the same gap window and the same busy-hour
+    # set as the aggregate above — never sorted or ranked here. The caller
+    # (the dashboard route) resolves names and orders the result by name, not
+    # by any of these numbers.
+    hour_days = _per_mod_hour_days(
+        conn,
+        guild_id,
+        mod_ids=mods,
+        utc_offset_hours=utc_offset_hours,
+        gap_days=gap_days,
+        now=now,
+    )
+    active_days = _mod_days_active(
+        conn,
+        guild_id,
+        mod_ids=mods,
+        utc_offset_hours=utc_offset_hours,
+        gap_days=gap_days,
+        now=now,
+    )
+    mod_rows = _mod_rows(rows, mods, hour_days, active_days)
+
     return {
         "labels": overlay_labels("day"),
         "tz_label": f"UTC{utc_offset_hours:+g}" if utc_offset_hours else "UTC",
@@ -302,4 +458,5 @@ def compute_mod_coverage(
         "peak_coverage_pct": peak_coverage_pct,
         "busy_hours": len(busy),
         "busy_hours_covered": sum(1 for r in busy if not r["gap"]),
+        "mods": mod_rows,
     }

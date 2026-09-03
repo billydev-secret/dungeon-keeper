@@ -72,6 +72,7 @@ def test_get_economy_config_returns_defaults(authed_client):
     # Snowflakes leave as strings (see test_get_config_emits_snowflakes_as_
     # strings) — including the 0 sentinel, so the picker always sees one type.
     assert data["bank_channel_id"] == "0"
+    assert data["default_channel_id"] == "0"
     assert data["price_role_color"] == 50
     # The QOTD panel reads this straight off the GET — absent means the picker
     # silently renders undefined.
@@ -117,6 +118,26 @@ def test_put_partial_update_roundtrips(authed_client, fake_ctx):
     assert cfg.reward_photo_post == 8
     # Untouched fields keep their defaults.
     assert cfg.wallet_name == "Wallet"
+
+
+def test_put_default_channel_id_roundtrips_and_leaves_others_untouched(
+    authed_client, fake_ctx
+):
+    """Setting the Default Channel is its own field — it must not silently
+    populate an already-unset per-feature channel from the route/service
+    layer. That's dashboard pre-fill behavior only; the stored config for a
+    feature nobody has configured stays at 0 until an explicit save writes it."""
+    resp = authed_client.put(
+        "/api/economy/config", json={"default_channel_id": 4242}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        cfg = load_econ_settings(conn, fake_ctx.guild_id)
+    assert cfg.default_channel_id == 4242
+    assert cfg.drops_channel_id == 0
+    assert cfg.pin_channel_id == 0
+    assert cfg.theme_channel_id == 0
+    assert cfg.bounty_channel_id == 0
 
 
 def test_put_voice_style_price_roundtrips(authed_client, fake_ctx):
@@ -492,13 +513,18 @@ def test_get_config_emits_snowflakes_as_strings(authed_client, fake_ctx):
         save_econ_settings(
             conn,
             fake_ctx.guild_id,
-            {"game_role_id": BIG_ROLE_ID, "bank_channel_id": BIG_CHANNEL_ID},
+            {
+                "game_role_id": BIG_ROLE_ID,
+                "bank_channel_id": BIG_CHANNEL_ID,
+                "default_channel_id": BIG_CHANNEL_ID,
+            },
         )
 
     data = authed_client.get("/api/economy/config").json()
 
     assert data["game_role_id"] == str(BIG_ROLE_ID)
     assert data["bank_channel_id"] == str(BIG_CHANNEL_ID)
+    assert data["default_channel_id"] == str(BIG_CHANNEL_ID)
     # No precision lost: the exact digits survive.
     assert int(data["game_role_id"]) == BIG_ROLE_ID
     # Non-id numerics stay numbers — only snowflakes are stringified.

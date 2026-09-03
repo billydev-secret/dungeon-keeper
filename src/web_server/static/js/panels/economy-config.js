@@ -11,6 +11,7 @@ import {
   mountChannelPicker,
   mountRolePicker,
   mountAsync,
+  onPickerChange,
 } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 
@@ -78,6 +79,22 @@ function render(container, cfg, channels, roles, members) {
             quest payouts, perk purchases, transfers and grants — each entry
             saying what it was for. Leave unset to turn the feed off. Switching
             it on starts from now; past transactions are not replayed.</div>
+        </div>
+        <div class="field">
+          <label>Default Channel</label>
+          <span data-picker="default_channel_id"></span>
+          <div class="field-hint">Fills in Coin Drops, Pin of the Day, Themed
+            Days and the Bounty Board channel further down whenever one of
+            those is left unset, so setting up several of them to post in the
+            same place is one channel decision instead of picking it over and
+            over. Coin Drops and the Bounty Board switch on as soon as they
+            have a channel, so setting this can turn either one on for the
+            first time — pick &ldquo;(disabled)&rdquo; on one of those below to
+            keep it off regardless. Pin of the Day and Themed Days still need
+            their own price or checkbox besides a channel, so this alone
+            won&rsquo;t switch those on. An already-configured channel below
+            keeps posting exactly where it posts today; this never touches
+            it.</div>
         </div>
         <div class="field">
           <label>Manager Role</label>
@@ -160,9 +177,10 @@ function render(container, cfg, channels, roles, members) {
           <span data-picker="drops_channel_id"></span>
           <div class="field-hint">The bot drops a pouch of coins here at random
             moments; the first member to press the drop's <em>Claim</em>
-            button collects it. Leave unset to turn drops off. Drops wait
-            for conversation — nothing lands while the channel is silent or
-            mid-game.</div>
+            button collects it. Leave unset to use the Default Channel set
+            above instead — pick &ldquo;(disabled)&rdquo; here to keep drops
+            off regardless of that. Drops wait for conversation — nothing
+            lands while the channel is silent or mid-game.</div>
         </div>
         <div class="field-row">
           <div class="field">
@@ -210,7 +228,8 @@ function render(container, cfg, channels, roles, members) {
             pins a card for 24 hours before auto-unpinning. Needs both a channel
             AND a price &gt; 0 to switch on — it's a public sink, so announce it
             before flipping it on. The bot needs Manage Messages here to pin.
-            Leave unset to keep it off.</div>
+            Leave unset to use the Default Channel set above instead — pick
+            &ldquo;(disabled)&rdquo; here to keep this dark regardless.</div>
         </div>
 
         </div>
@@ -235,7 +254,10 @@ function render(container, cfg, channels, roles, members) {
           <span data-picker="theme_channel_id"></span>
           <div class="field-hint">Where the theme is announced and pinned — one
             message, not two. The bot needs Manage Messages here to pin and unpin.
-            Themed days stay off until this is set, whatever the checkbox says.</div>
+            Themed days stay off until this is set, whatever the checkbox says.
+            Leave unset to use the Default Channel set above instead — pick
+            &ldquo;(disabled)&rdquo; here to keep themed days dark regardless of
+            the checkbox.</div>
         </div>
         </div>
 
@@ -251,7 +273,9 @@ function render(container, cfg, channels, roles, members) {
             that panel. A mod awards a bounty to whoever completed it (minus the
             bounty rake, set on the Sinks page), or cancels it to refund
             everyone. Unclaimed bounties expire and refund automatically. Leave
-            unset to turn bounties off.</div>
+            unset to use the Default Channel set above instead — pick
+            &ldquo;(disabled)&rdquo; here to keep bounties off regardless of
+            that.</div>
         </div>
         <div class="field-row">
           <div class="field">
@@ -361,6 +385,45 @@ function render(container, cfg, channels, roles, members) {
     String(cfg.register_channel_id),
     { label: "Register Channel" },
   );
+  const defaultChannelPicker = mountChannelPicker(
+    form.querySelector('[data-picker="default_channel_id"]'),
+    channels,
+    String(cfg.default_channel_id),
+    { label: "Default Channel" },
+  );
+  // A channel picker for one of the four fields below that falls back to the
+  // Default Channel above while its own saved value is unset (0) — and keeps
+  // following the Default Channel picker live as it changes, until the admin
+  // touches this one directly (including picking "(disabled)" to opt out).
+  // A field that already has a real saved value never follows: that's what
+  // keeps an existing configuration posting exactly where it posts today.
+  function mountDefaultingChannelPicker(key, label) {
+    const raw = String(cfg[key] || "0");
+    const followsDefault = raw === "0";
+    let lastFollowed = followsDefault && defaultChannelPicker.getValue() !== "0"
+      ? defaultChannelPicker.getValue()
+      : raw;
+    const picker = mountChannelPicker(
+      form.querySelector(`[data-picker="${key}"]`),
+      channels,
+      lastFollowed,
+      { label },
+    );
+    if (followsDefault) {
+      let following = true;
+      picker.el.addEventListener("focusout", () => {
+        setTimeout(() => {
+          if (following && picker.getValue() !== lastFollowed) following = false;
+        }, 200);
+      });
+      onPickerChange(defaultChannelPicker, () => {
+        if (!following) return;
+        lastFollowed = defaultChannelPicker.getValue() || "0";
+        picker.setValue(lastFollowed);
+      });
+    }
+    return picker;
+  }
   const rolePicker = mountRolePicker(
     form.querySelector('[data-picker="manager_role_id"]'),
     roles,
@@ -373,30 +436,10 @@ function render(container, cfg, channels, roles, members) {
     String(cfg.game_role_id),
     { label: "Notifications Role" },
   );
-  const dropsChannelPicker = mountChannelPicker(
-    form.querySelector('[data-picker="drops_channel_id"]'),
-    channels,
-    String(cfg.drops_channel_id),
-    { label: "Drop Channel" },
-  );
-  const pinChannelPicker = mountChannelPicker(
-    form.querySelector('[data-picker="pin_channel_id"]'),
-    channels,
-    String(cfg.pin_channel_id),
-    { label: "Pin Channel" },
-  );
-  const themeChannelPicker = mountChannelPicker(
-    form.querySelector('[data-picker="theme_channel_id"]'),
-    channels,
-    String(cfg.theme_channel_id),
-    { label: "Theme Channel" },
-  );
-  const bountyChannelPicker = mountChannelPicker(
-    form.querySelector('[data-picker="bounty_channel_id"]'),
-    channels,
-    String(cfg.bounty_channel_id),
-    { label: "Bounty Board Channel" },
-  );
+  const dropsChannelPicker = mountDefaultingChannelPicker("drops_channel_id", "Drop Channel");
+  const pinChannelPicker = mountDefaultingChannelPicker("pin_channel_id", "Pin Channel");
+  const themeChannelPicker = mountDefaultingChannelPicker("theme_channel_id", "Theme Channel");
+  const bountyChannelPicker = mountDefaultingChannelPicker("bounty_channel_id", "Bounty Board Channel");
   // mountMemberPicker rather than a bare mountPicker: /api/meta/members is a
   // bounded page now, and this field holds a saved id. The helper wires the
   // server-side search (so anyone is still pickable) and resolves a saved host
@@ -450,6 +493,7 @@ function render(container, cfg, channels, roles, members) {
       // Pydantic coerces the string to int losslessly server-side.
       bank_channel_id: channelPicker.getValue() || "0",
       register_channel_id: registerChannelPicker.getValue() || "0",
+      default_channel_id: defaultChannelPicker.getValue() || "0",
       drops_channel_id: dropsChannelPicker.getValue() || "0",
       pin_channel_id: pinChannelPicker.getValue() || "0",
       theme_channel_id: themeChannelPicker.getValue() || "0",

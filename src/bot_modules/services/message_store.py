@@ -168,6 +168,18 @@ def init_message_tables(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_messages_deleted "
         "ON messages (guild_id, ts) WHERE deleted_at IS NOT NULL"
     )
+    # Newcomer Funnel's per-joiner loop seeks "this author's messages since
+    # ts" and "who replied to one of this author's messages" — neither is
+    # served by (guild_id, ts) or (guild_id, author_id) alone. See
+    # 201_newcomer_funnel_indexes.sql for the measured before/after.
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_author_ts "
+        "ON messages (guild_id, author_id, ts)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_reply_to "
+        "ON messages (guild_id, reply_to_id)"
+    )
 
     conn.execute(
         """

@@ -23,7 +23,13 @@ PANELS = Path("src/web_server/static/js/panels")
 ROW_MARKUP = [
     ("qa-tracker.js", 'class="qa-row"'),
     ("role-menus.js", "data-menu-id="),
-    ("docs.js", "data-doc-key="),
+    # docs.js is deliberately absent: its document list was a column of
+    # click-rows, and the editor-width rework replaced it with a native
+    # <select> carrying a real <label for>. A native control is in the tab
+    # order and arrow-navigable on its own, so the hand-rolled
+    # tabindex/role/Enter-Space pair this test enforces is not just
+    # unnecessary there but impossible -- there are no rows left to carry
+    # it. Re-add a row here if the list ever goes back to custom markup.
     # The moderation queues. Each renders a list of `.ticket-item` rows whose
     # only affordance was a delegated click handler, and each drives a detail
     # pane entirely from that selection — so without keyboard activation the
@@ -55,7 +61,9 @@ def test_click_rows_are_focusable_buttons(panel: str, marker: str) -> None:
         assert 'role="button"' in tag, f"{panel}: row has no button role: {tag}"
 
 
-@pytest.mark.parametrize("panel", ["qa-tracker.js", "role-menus.js", "docs.js"])
+# docs.js dropped here for the same reason as in ROW_MARKUP above: its rows
+# became a native <select>, which needs no hand-rolled Enter/Space binding.
+@pytest.mark.parametrize("panel", ["qa-tracker.js", "role-menus.js"])
 def test_panels_bind_enter_space_activation(panel: str) -> None:
     """A keydown listener mirrors the click handler for Enter/Space."""
     src = _source(panel)

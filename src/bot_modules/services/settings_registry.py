@@ -85,6 +85,10 @@ PRIVILEGE_KEYS: frozenset[str] = frozenset({
 #   veil_*                       — Veil was renamed to Guess in migration 020
 #   ticket_panel_channel_id,     — the live panel record moved to the
 #   ticket_panel_message_id        `ticket_panels` table in migration 023
+#   birthday_channel_id[_2],     — the fixed main+second channel pair moved to
+#   birthday_message[_2],          the `birthday_channels` table (any number
+#   birthday_pin[_2]               of channels) in migration 200, which also
+#                                   deletes these rows outright
 _LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
     f"{grant}_{suffix}"
     for grant in ("nsfw", "denizen", "veteran")
@@ -96,6 +100,12 @@ DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     "veil_channel_id",
     "ticket_panel_channel_id",
     "ticket_panel_message_id",
+    "birthday_channel_id",
+    "birthday_message",
+    "birthday_pin",
+    "birthday_channel_id_2",
+    "birthday_message_2",
+    "birthday_pin_2",
 })
 
 KINDS = frozenset({"channel", "role", "bool", "int", "text"})
@@ -238,13 +248,27 @@ FEATURES: tuple[Feature, ...] = (
         label="Birthdays",
         panel="Config → Birthdays",
         blurb="Members register a birthday and the bot celebrates it on the day.",
+        # The channel(s) and their messages/pins moved to birthday_channels
+        # (migration 200, any number of channels — see DEAD_KEYS below); this
+        # registry only sees flat config KV keys, so it can't see that table
+        # at all. birthday_announce_hour is the only KV field the feature has
+        # left, so — same move needle makes with needle_default_reply, its
+        # own settings-card-only field — it's the required proxy for "has
+        # this been touched", accepting that a guild who only ever adds
+        # channels without saving the Timing card still reads as
+        # unconfigured. Unlike needle's field, this one used to special-case
+        # its own default (`default="9"`) as "not really set" — a real
+        # distinction (see git blame) when birthday_channel_id carried the
+        # required signal, but with hour now doing that job alone, treating
+        # an explicitly-saved 9 as absent would misclassify every guild that
+        # left the dropdown on its default as never having configured
+        # birthdays at all. Dropped in the same change that added `required`.
         settings=(
-            _ch("birthday_channel_id", "Birthday announcement channel", required=True),
-            _text("birthday_message", "Birthday message"),
-            _flag("birthday_pin", "Pin the birthday post"),
             _num("birthday_announce_hour", "Hour announcements go out (guild-local)",
-                 minimum=0, maximum=23, default="9",
-                 help="0–23 in the server's own time zone; 9 means 09:00."),
+                 minimum=0, maximum=23, required=True,
+                 help="0–23 in the server's own time zone; 9 means 09:00 "
+                      "(saving the Timing card at all, even left on 9, "
+                      "counts as configured)."),
         ),
     ),
     # The qa_* keys (QA Tracker, Dev → QA Tracker) are deliberately NOT here.

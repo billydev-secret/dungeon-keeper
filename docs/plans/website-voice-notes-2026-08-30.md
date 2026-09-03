@@ -13,6 +13,64 @@ Status legend: ☐ not started · ◐ in progress · ☑ shipped.
 
 ---
 
+## Where this stands (updated 2026-09-02)
+
+**Wave 1 — shipped, live** (merged `72af8da9`, visible since the 15:50 restart on
+09-01). All six cross-cutting themes (Part 1 A–F), all five defects (Part 2), and
+Part 4 items 1, 2 and 4. The tabs helper landed as `static/js/tabs.js`, extracted
+from the Bios pattern.
+
+**Wave 2 — shipped** (merged `dbe2ebd9`, awaits a restart). Part 3 #1 (Rules Watch
+bulk labelling + keyboard triage) and Part 4 #5, #10, #11. Plus a **cross-guild
+security fix** found while building it: `get_event()` selected on id alone, so any
+moderator could read *and* label another guild's event by id. `guild_id` is now a
+required argument.
+
+**Wave 3 — built** (this branch, awaits merge). Part 3 #4, #5, #7, #8, #9, #11,
+#12 and Part 4 #7, plus Part 5 #3.
+
+**Superseded, not done by us:** Part 5 #2 (Quality Score) — another session did
+exactly this research and retired the panel for **Contributors** (`quality-score`
+id kept, frozen). Nothing left to do.
+
+**Closed as not-a-defect:** Part 4 #6 (Auto-Thread's waiting / answered /
+archived-or-locked states). Billy read them as leftover question-thread scaffolding,
+but `needle_cog.py` uses every one to add and remove real Discord reactions marking
+whether a thread is open, replied to, archived or locked. Removing the controls
+would strand live behaviour. If they read as confusing, that is a **labelling**
+problem — the controls are doing something real.
+
+### Investigated, awaiting Billy's call
+
+* **Part 4 #9 — Mention Awards: keep as-is.** It works, is fail-closed, and has
+  real currency moving weekly. It is unrecognisable because it was *built* to be
+  invisible: it posts no Discord confirmation, and its one live rule sits in the
+  second guild. The fix, if any, is visibility — not code.
+* **Part 5 #1 — Sentiment & Tone: rework, don't retire.** The composite score,
+  badge, pos:neg ratio, trend and per-channel chart rest on invented thresholds
+  over a VADER signal miscalibrated for this server's register. What earns its
+  place is the flagged-messages triage queue with jump-to-Discord links, promoted
+  to *be* the panel. Same shape as Quality Score → Contributors.
+
+### Still blocked on a decision — nobody should build these until Billy rules
+
+1. **Part 3 #2 — consolidate all approvals** into one place (spending, QOTD, shop,
+   claims). A real IA change across four surfaces.
+2. **Part 3 #3 — Policy Tickets for standard users** (a veteran channel voting).
+   New member-facing surface; needs a design.
+3. **Part 3 #10 — role autocreate / opt-in roles, round 2.** Billy wants "another
+   look"; too vague to build against as written.
+4. **Part 4 #3 — a Privacy subheading** under Moderation & Safety. Sits against the
+   2026-08-29 IA decision that relabelled `config-moderation` to "Moderation &
+   Privacy" precisely to surface `message_storage_level`.
+5. **Part 4 #8 — retire Backfill Jobs.** "Not sure it's really needed anymore" is
+   not an instruction; this deletes an admin surface.
+
+**Part 3 #6 and #13** need no work: the XP level-distribution scope shipped in wave
+1, and Ping Response only wants its one-time backfill press after a restart.
+
+---
+
 ## Part 1 — cross-cutting themes
 
 These are the multipliers. Six patterns account for ~55 of the 114 notes; fixing

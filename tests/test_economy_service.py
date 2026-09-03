@@ -125,6 +125,34 @@ def test_save_rejects_unknown_key(db):
             save_econ_settings(conn, GUILD, {"not_a_field": 1})
 
 
+def test_default_channel_id_defaults_to_zero(db):
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+    assert settings.default_channel_id == 0
+
+
+def test_default_channel_id_roundtrips_and_is_independent(db):
+    """default_channel_id is a plain stored field — the loader does no
+    fallback resolution of its own onto drops/pin/theme/bounty. Those
+    features picking it up when their own channel is unset is dashboard-only
+    behavior (the picker pre-fills, and the admin explicitly saves), so an
+    unrelated per-feature channel already configured must be completely
+    untouched by it here, and one left unset must stay 0 in storage."""
+    with open_db(db) as conn:
+        save_econ_settings(conn, GUILD, {
+            "default_channel_id": 999,
+            "drops_channel_id": 111,
+        })
+    with open_db(db) as conn:
+        settings = load_econ_settings(conn, GUILD)
+    assert settings.default_channel_id == 999
+    assert settings.drops_channel_id == 111
+    # Untouched per-feature channels stay unset, not silently repointed at 999.
+    assert settings.pin_channel_id == 0
+    assert settings.theme_channel_id == 0
+    assert settings.bounty_channel_id == 0
+
+
 # ── wallet + ledger ───────────────────────────────────────────────────
 
 

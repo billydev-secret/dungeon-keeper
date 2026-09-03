@@ -93,6 +93,57 @@ def _pct(num: float, den: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _dau_sparkline(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    days: int,
+    now: float,
+    bot_clause: str,
+    bot_params: tuple,
+) -> list[int]:
+    """Daily distinct-author counts for the trailing ``days`` days, oldest first.
+
+    ``messages`` has no retention purge (see docs/data_register.md), so in
+    principle there's no upper bound on ``days`` — but a guild that only
+    started being logged N days ago has nothing before that. Zero-filling the
+    gap would draw a trend line that trails off to zero and reads as activity
+    collapsing, so the window is capped to the guild's actual message history:
+    when the requested ``days`` exceeds it, fewer buckets come back and the
+    caller compares the returned length against what was asked for.
+
+    One grouped query rather than a query-per-day loop (the previous shape)
+    — the day-per-query version doesn't scale to a year-long window, and this
+    scans the same rows either way.
+    """
+    earliest = conn.execute(
+        f"SELECT MIN(ts) FROM messages WHERE guild_id=?{bot_clause}",
+        (guild_id, *bot_params),
+    ).fetchone()[0]
+    # No message ever seen under this filter: nothing to cap against, so hand
+    # back the full requested (zero-filled) window. In practice the caller
+    # never reaches here for a guild with zero history — the deep-dive route
+    # only renders the trend chart once MAU is nonzero.
+    available_days = None if earliest is None else int((now - earliest) // _DAY) + 1
+    span = days if available_days is None else max(0, min(days, available_days))
+
+    counts = [0] * span
+    if span:
+        day_start = _ts(span, now=now)
+        now_int = int(now)
+        rows = conn.execute(
+            f"SELECT (ts - ?) / {_DAY} AS day_idx, COUNT(DISTINCT author_id) AS cnt "
+            f"FROM messages WHERE guild_id=? AND ts>=? AND ts<?{bot_clause} "
+            f"GROUP BY day_idx",
+            (day_start, guild_id, day_start, now_int, *bot_params),
+        ).fetchall()
+        for r in rows:
+            idx = r["day_idx"]
+            if 0 <= idx < span:
+                counts[idx] = r["cnt"]
+    return counts
+
+
 def compute_dau_mau(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -101,7 +152,13 @@ def compute_dau_mau(
     member_count: int = 0,
     voice_active_count: int = 0,
     include_bots: bool = False,
+    days: int = 30,
 ) -> dict:
+    """``days`` sizes only the trend chart (``sparkline``) — the dashboard's
+    range control. DAU/WAU/MAU keep their fixed 1/7/30-day definitions
+    regardless of it; scaling those with a UI range would make the tile
+    labels lie about what they show.
+    """
     now = now or time.time()
     bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
 
@@ -125,17 +182,10 @@ def compute_dau_mau(
     dau_mau = _pct(dau, mau)
     wau_mau = _pct(wau, mau)
 
-    # 30-day sparkline (daily DAU)
-    sparkline = []
-    for d in range(29, -1, -1):
-        day_start = _ts(d + 1, now=now)
-        day_end = _ts(d, now=now)
-        cnt = conn.execute(
-            f"SELECT COUNT(DISTINCT author_id) FROM messages "
-            f"WHERE guild_id=? AND ts>=? AND ts<?{bot_clause}",
-            (guild_id, day_start, day_end, *bot_params),
-        ).fetchone()[0]
-        sparkline.append(cnt)
+    # Trend sparkline — see _dau_sparkline for the history-cap behavior.
+    sparkline = _dau_sparkline(
+        conn, guild_id, days=days, now=now, bot_clause=bot_clause, bot_params=bot_params
+    )
 
     # Voice active: unique users with voice XP events in last 7 days
     voice_7d = conn.execute(
@@ -240,6 +290,11 @@ def compute_dau_mau(
         "wau_mau": wau_mau,
         "badge": badge,
         "sparkline": sparkline,
+        # The trend chart's actual window: may be shorter than `days` when
+        # the guild's message history doesn't reach back that far. The panel
+        # compares the two to tell "no activity" apart from "no data yet".
+        "trend_days": len(sparkline),
+        "trend_days_requested": days,
         "funnel": funnel,
         "composition": composition,
         "lurker_activation": lurker_activation,
@@ -1013,6 +1068,13 @@ def compute_newcomer_funnel(
     ttfm_hours = []
     response_latencies = []
 
+    # Four queries per recent joiner — there's no set-based way to express
+    # "milestones since *this user's own* join time" in one query. Each one
+    # depends on idx_messages_author_ts / idx_messages_reply_to
+    # (201_newcomer_funnel_indexes.sql); without them this loop walked a
+    # guild-wide ts range per joiner and took 37s+ for ~200 recent joiners in
+    # prod. The 15-minute cache in the route (health.py) absorbs repeat
+    # loads; it does not make a slow first-load-after-invalidation fast.
     for uid, join_ts in recent_join_ids.items():
         # First message
         first_msg = conn.execute(

@@ -802,16 +802,16 @@ def _non_primary_client(fake_ctx, *, other_guild_id: int = 999):
 
 def test_birthday_edit_from_non_primary_guild_lands_at_that_guild(fake_ctx):
     """A non-primary edit writes to the active guild's bucket, not home's."""
-    from bot_modules.core.db_utils import get_config_value
+    from bot_modules.services.birthday_service import list_channels
 
     client = _non_primary_client(fake_ctx, other_guild_id=999)
-    resp = client.put("/api/config/birthday", json={"birthday_channel_id": "8888"})
+    resp = client.put("/api/config/birthday/8888", json={"message": "Hi {mention}"})
     assert resp.status_code == 200
 
     with open_db(fake_ctx.db_path) as conn:
-        assert get_config_value(conn, "birthday_channel_id", "0", 999) == "8888"
-        # Home guild row untouched.
-        assert get_config_value(conn, "birthday_channel_id", "0", fake_ctx.guild_id) == "0"
+        assert [c.channel_id for c in list_channels(conn, 999)] == [8888]
+        # Home guild untouched.
+        assert list_channels(conn, fake_ctx.guild_id) == []
     client.close()
 
 
@@ -872,25 +872,84 @@ def test_update_starboard_rejects_empty_emoji(authed_client):
 
 
 # ── /config/birthday ─────────────────────────────────────────────────
+#
+# Any number of announcement channels (migration 200) — an add/upsert/delete
+# per-channel-id endpoint plus a settings endpoint for the one guild-wide
+# dial, same shape as Auto-Thread's /config/needle/{channel_id}.
 
 
 def test_update_birthday_persists_channel_and_message(authed_client, fake_ctx):
     resp = authed_client.put(
-        "/api/config/birthday",
-        json={"birthday_channel_id": "5050", "birthday_message": "Happy bday {name}!"},
+        "/api/config/birthday/5050",
+        json={"message": "Happy bday {name}!", "pin": True},
     )
     assert resp.status_code == 200
-    from bot_modules.core.db_utils import get_config_value
+    from bot_modules.services.birthday_service import list_channels
     with open_db(fake_ctx.db_path) as conn:
-        assert get_config_value(conn, "birthday_channel_id", "", fake_ctx.guild_id) == "5050"
-        assert get_config_value(conn, "birthday_message", "", fake_ctx.guild_id) == "Happy bday {name}!"
+        rows = list_channels(conn, fake_ctx.guild_id)
+    assert len(rows) == 1
+    assert rows[0].channel_id == 5050
+    assert rows[0].message == "Happy bday {name}!"
+    assert rows[0].pin is True
 
 
 def test_update_birthday_rejects_empty_message(authed_client):
     resp = authed_client.put(
-        "/api/config/birthday", json={"birthday_message": "   "}
+        "/api/config/birthday/5050", json={"message": "   "}
     )
     assert resp.status_code == 400
+
+
+def test_birthday_announces_to_any_number_of_channels(authed_client, fake_ctx):
+    """Billy: "could we have an arbitrary number of channels?" — not capped
+    at a fixed main + second."""
+    from bot_modules.services.birthday_service import list_channels
+
+    for channel_id in (111, 222, 333, 444):
+        resp = authed_client.put(
+            f"/api/config/birthday/{channel_id}",
+            json={"message": f"Channel {channel_id} says hi {{mention}}"},
+        )
+        assert resp.status_code == 200
+
+    with open_db(fake_ctx.db_path) as conn:
+        rows = list_channels(conn, fake_ctx.guild_id)
+    assert [r.channel_id for r in rows] == [111, 222, 333, 444]
+
+    sec = authed_client.get("/api/config").json()["birthday"]
+    assert [c["channel_id"] for c in sec["channels"]] == ["111", "222", "333", "444"]
+
+
+def test_birthday_channel_upsert_is_idempotent(authed_client, fake_ctx):
+    """Re-adding the same channel (the Add form and a card's own Save both
+    post here) edits it in place instead of duplicating the row."""
+    from bot_modules.services.birthday_service import list_channels
+
+    authed_client.put("/api/config/birthday/5050", json={"message": "First"})
+    resp = authed_client.put(
+        "/api/config/birthday/5050", json={"message": "Second", "pin": True}
+    )
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        rows = list_channels(conn, fake_ctx.guild_id)
+    assert len(rows) == 1
+    assert rows[0].message == "Second"
+    assert rows[0].pin is True
+
+
+def test_delete_birthday_channel_removes_it(authed_client, fake_ctx):
+    from bot_modules.services.birthday_service import list_channels
+
+    authed_client.put("/api/config/birthday/5050", json={"message": "Hi"})
+    resp = authed_client.delete("/api/config/birthday/5050")
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        assert list_channels(conn, fake_ctx.guild_id) == []
+
+
+def test_delete_birthday_channel_404s_when_not_configured(authed_client):
+    resp = authed_client.delete("/api/config/birthday/999999")
+    assert resp.status_code == 404
 
 
 def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
@@ -903,7 +962,7 @@ def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
     ] == 9
 
     resp = authed_client.put(
-        "/api/config/birthday", json={"birthday_announce_hour": 18}
+        "/api/config/birthday/settings", json={"birthday_announce_hour": 18}
     )
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
@@ -915,7 +974,7 @@ def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
 
     # Midnight is a real choice, not "unset".
     assert authed_client.put(
-        "/api/config/birthday", json={"birthday_announce_hour": 0}
+        "/api/config/birthday/settings", json={"birthday_announce_hour": 0}
     ).status_code == 200
     with open_db(fake_ctx.db_path) as conn:
         assert announce_hour(conn, fake_ctx.guild_id) == 0
@@ -924,7 +983,7 @@ def test_update_birthday_persists_announce_hour(authed_client, fake_ctx):
 @pytest.mark.parametrize("hour", [-1, 24, 99])
 def test_update_birthday_rejects_an_impossible_hour(authed_client, hour):
     resp = authed_client.put(
-        "/api/config/birthday", json={"birthday_announce_hour": hour}
+        "/api/config/birthday/settings", json={"birthday_announce_hour": hour}
     )
     assert resp.status_code == 400
 

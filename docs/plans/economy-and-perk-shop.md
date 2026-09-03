@@ -230,3 +230,37 @@ design.)
 
 Scheduled/auto QOTD · contributors-only community payouts · jail-fine sinks ·
 big-ticket sinks (V3 §13).
+
+## Income Sources page — parked suggestions (removed from the panel 2026-09-02)
+
+**Aspirational — none of this exists in `src/bot_modules/` yet.** The Income
+Sources dashboard page (`economy-income-sources.js`) used to end with an
+"Ideas Not Built Yet" section: static advisory copy, no toggle or input, no
+backend behind it. A settings page shouldn't carry unbuilt behaviour (an
+admin can reasonably expect anything shown there to work — CLAUDE.md), so the
+block was removed outright rather than left to imply the ideas were live
+config. The three still-open ideas, kept here so they aren't lost:
+
+- **Survey completion** — no survey feature exists anywhere in the code to
+  hook a payout onto. Blocked on a survey feature shipping at all
+  (`docs/INDEX.md` already flags `survey_spec.md` as zero-code / not started).
+- **Invite retention** — pay the invite source only once the invitee survives
+  the prune window, instead of the existing `invite` trigger kind
+  (`TRIGGER_KINDS` in `economy/quests.py`), which pays out on join today.
+  Needs a delayed/scheduled credit path (something to re-check the invitee's
+  membership after the window and *then* fire the payout) — not just a new
+  trigger kind, since the eligible moment isn't the triggering event.
+- **Streak milestones as a trigger kind** — `milestone_day7` / `_day30` /
+  `_day100` / `_per_100` are flat faucet payouts (`FAUCET_FIELDS` on the same
+  page, paid unconditionally). This would add a `TRIGGER_KINDS` entry firing
+  on those same milestone days, so a quest could hook an extra bonus onto
+  them on top of the flat payout.
+
+One of the original four suggestions, **server-bump attribution**, turned out
+to already be built when this pass checked `src/bot_modules/` against the
+copy: `bump` is a live `TRIGGER_KINDS` entry, fired by `bump_tracker_cog.py`
+on both the mod-gated `/bump log` path and the auto-detected listing-bot
+response (`message.interaction_metadata`, migration 081) — and it already
+shows as a working row in the same page's "Events Quests Can Use" table. That
+suggestion was stale, not aspirational, and was dropped rather than carried
+forward.

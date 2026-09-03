@@ -227,6 +227,11 @@ def test_compute_dau_mau_empty_db_returns_zeros(db_conn):
     assert out["dau_mau"] == 0
     assert out["badge"] == "critical"
     assert len(out["sparkline"]) == 30
+    # No message ever seen under this filter, so there's no history to cap
+    # against — the default 30-day window comes back zero-filled rather than
+    # truncated (see _dau_sparkline).
+    assert out["trend_days"] == 30
+    assert out["trend_days_requested"] == 30
     assert out["composition"] == {"returning": 0, "reactivated": 0, "new": 0}
 
 
@@ -263,6 +268,89 @@ def test_compute_dau_mau_classifies_today_users(db_conn):
     assert composition["new"] == 1  # user 1
     assert composition["returning"] == 1  # user 2
     assert composition["reactivated"] == 1  # user 3
+
+
+# ── compute_dau_mau: trend window (dashboard range control) ───────────
+
+
+def test_compute_dau_mau_days_param_sizes_the_trend(db_conn):
+    """The DAU/WAU/MAU tiles keep their fixed definitions; only the trend
+    chart scales with ``days`` — the dashboard's range control."""
+    now = 1_700_000_000.0
+    # A far-past anchor keeps history-cap truncation (see
+    # test_compute_dau_mau_caps_trend_to_available_history) from shrinking
+    # the 90-day window below — this test is about `days` sizing the array,
+    # not about the cap.
+    _seed_message(db_conn, mid=1, cid=1, aid=999, ts=int(now) - 200 * 86400)
+    _seed_message(db_conn, mid=2, cid=1, aid=1, ts=int(now) - 60)
+    db_conn.commit()
+
+    out7 = hm.compute_dau_mau(db_conn, GUILD, now=now, days=7)
+    assert len(out7["sparkline"]) == out7["trend_days"] == 7
+    assert out7["trend_days_requested"] == 7
+    assert out7["dau"] == 1  # unaffected by the trend window
+
+    out90 = hm.compute_dau_mau(db_conn, GUILD, now=now, days=90)
+    assert out90["trend_days"] == out90["trend_days_requested"] == 90
+    assert out90["dau"] == out7["dau"]  # DAU/WAU/MAU never move with `days`
+
+
+def test_compute_dau_mau_zero_days_returns_empty_sparkline(db_conn):
+    out = hm.compute_dau_mau(db_conn, GUILD, now=1_700_000_000.0, days=0)
+    assert out["sparkline"] == []
+    assert out["trend_days"] == 0
+    assert out["trend_days_requested"] == 0
+
+
+def test_compute_dau_mau_caps_trend_to_available_history(db_conn):
+    """A requested window longer than the guild's message history must come
+    back short, not zero-padded — a padded flatline reads as activity
+    collapsing rather than as data that was never collected. See
+    _dau_sparkline."""
+    now = 1_700_000_000.0
+    # Oldest message is ~4 days old; nothing before that under this filter.
+    oldest_offset = 4 * 86400 + 1000
+    _seed_message(db_conn, mid=1, cid=1, aid=1, ts=int(now) - oldest_offset)
+    _seed_message(db_conn, mid=2, cid=1, aid=2, ts=int(now) - 60)
+    db_conn.commit()
+
+    out = hm.compute_dau_mau(db_conn, GUILD, now=now, days=30)
+    assert out["trend_days_requested"] == 30
+    # available_days = floor(oldest_offset / 86400) + 1
+    assert out["trend_days"] == 5
+    assert len(out["sparkline"]) == 5
+    assert out["sparkline"][-1] == 1  # today's message, in the newest bucket
+    assert sum(out["sparkline"]) == 2  # neither message dropped by the cap
+
+
+@pytest.mark.parametrize(
+    "offset_seconds, expected_index",
+    [
+        pytest.param(1, 2, id="just-now-lands-in-todays-bucket"),
+        pytest.param(86400, 2, id="exactly-1-day-ago-still-todays-bucket"),
+        pytest.param(86401, 1, id="just-over-1-day-ago-rolls-to-yesterday"),
+        pytest.param(172800, 1, id="exactly-2-days-ago-still-yesterday"),
+        pytest.param(172801, 0, id="just-over-2-days-ago-rolls-to-oldest"),
+        pytest.param(259200, 0, id="exactly-3-days-ago-window-edge"),
+    ],
+)
+def test_compute_dau_mau_sparkline_bucket_boundaries(
+    db_conn, offset_seconds, expected_index
+):
+    """The grouped-query sparkline replaced a query-per-day loop (for a
+    year-long window that doesn't scale); this pins the bucket math at every
+    day-boundary edge against the 3-day window it's tested over."""
+    now = 1_700_000_000.0
+    # Anchor well outside the 3-day window so history-cap truncation (see
+    # test_compute_dau_mau_caps_trend_to_available_history) doesn't shrink
+    # the array this test is pinning the shape of.
+    _seed_message(db_conn, mid=1, cid=1, aid=999, ts=int(now) - 100 * 86400)
+    _seed_message(db_conn, mid=2, cid=1, aid=1, ts=int(now) - offset_seconds)
+    db_conn.commit()
+    out = hm.compute_dau_mau(db_conn, GUILD, now=now, days=3)
+    assert out["sparkline"] == [
+        1 if i == expected_index else 0 for i in range(3)
+    ]
 
 
 # ── compute_heatmap ──────────────────────────────────────────────────
