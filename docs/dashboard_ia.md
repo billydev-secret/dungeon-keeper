@@ -44,7 +44,7 @@ subsection of `manual.html` §29 Configuration Reference (help page
 
 | Section | Gate | Contents |
 |---|---|---|
-| Dashboard | everyone | Home, Quick Reference |
+| Dashboard | everyone | Home, Everyday Commands |
 | Reports | moderator | Moderation / Activity / Engagement / Social Graph / Greeter / Member Lists |
 | Moderation | moderator | Queues & Workflows / Image Guard / Audit Logs |
 | Config | moderator (most pages admin-only, shown locked) | Server / Roles / New Members / Members / Moderation & Safety / Channels & Messages / Voice / AI & Maintenance |

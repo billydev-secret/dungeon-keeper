@@ -111,7 +111,7 @@ export const HELP_GROUPS = [
 // Help pages routed from elsewhere in the nav (Home / Dev sections) — they
 // need a route mapping but must not appear twice in the sidebar.
 export const HELP_EXTRA_PAGES = [
-  { page: "help-quickref", anchor: "quickref",    label: "Quick Reference" },
+  { page: "help-quickref", anchor: "quickref",    label: "Everyday Commands" },
   { page: "help-owner",    anchor: "owner-tools", label: "Developer / Owner Tools" },
   { page: "help-qa",       anchor: "qa-tracker",  label: "QA Tracker" },
 ];

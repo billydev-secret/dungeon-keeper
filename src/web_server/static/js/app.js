@@ -42,7 +42,7 @@ const SECTIONS = [
       // "Home", not "Dashboard": the section label above it already says
       // Dashboard, and IA2 fixed this exact collision for Economy's Bank.
       { id: "home", label: "Home", module: "./panels/home.js", keywords: "dashboard overview" },
-      { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
+      { id: "help-quickref", label: "Everyday Commands", module: "./panels/help.js", keywords: "quick reference cheat sheet commands slash" },
     ],
   },
   {

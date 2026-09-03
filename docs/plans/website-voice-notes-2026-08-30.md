@@ -248,13 +248,26 @@ Ordered by Billy's evident pain, not by size.
    "waiting / answer / archived or locked" never made sense; it isn't that kind
    of thread.
 7. **Income Sources: an unbuilt feature is on the page** (`economy-income-sources`)
-   ☐ — "the idea is not built yet, doesn't need to be in the web page." Keep it
-   as notes somewhere instead.
+   ☑ — "the idea is not built yet, doesn't need to be in the web page." Keep it
+   as notes somewhere instead. *Shipped in wave 3 (`fb19d114`): the
+   "Ideas Not Built Yet" card and its `SUGGESTIONS` const were deleted, and the
+   same commit preserved every idea verbatim, with its blocker, in
+   `docs/plans/economy-and-perk-shop.md` (the "keep it as notes" half of the
+   ask). A sweep of all ~150 panels and manual.html found no other surface
+   advertising an unbuilt feature.*
 8. **Backfill Jobs may be removable** (`admin-backfill`) ☐ — "not sure it's really
    needed anymore."
 9. **Mention Awards needs a second look** (`mention-awards`) ☐ — "not totally sure
    what it is doing here."
-10. **Quick Reference still feels a bit long** (`help-quickref`) ☐ — mild.
+10. **Quick Reference still feels a bit long** (`help-quickref`) ☑ — mild.
+    *Renamed to **Everyday Commands**. Measured against the manual's other 31
+    sections it was the 5th shortest — a quarter of the median — so the length
+    complaint was never about size. It read long because the name promised a
+    complete index and delivered 16 hand-picked rows, so they felt both
+    incomplete and too many at once. Renaming resets the promise; the page
+    also lost a duplicated sign-off and two descriptions that wrapped to three
+    lines. No row was cut — the table is already curated, and the wellness
+    review has one queued to add.*
 11. **Yellow text coloring is jarring** ☐ — home/quick reference; wants an easier
     color.
 
