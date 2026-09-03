@@ -26,8 +26,36 @@ security fix** found while building it: `get_event()` selected on id alone, so a
 moderator could read *and* label another guild's event by id. `guild_id` is now a
 required argument.
 
-**Wave 3 — built** (this branch, awaits merge). Part 3 #4, #5, #7, #8, #9, #11,
-#12 and Part 4 #7, plus Part 5 #3.
+**Wave 3 — shipped** (merged `dfe908d2`, awaits a restart). Part 3 #4, #5, #7,
+#8, #9, #11, #12 and Part 4 #7, plus Part 5 #3. A follow-up commit
+(`fc367600`) rewrote `docs/birthday_spec.md`, which is classified *Reference*
+and still described the retired two-channel model after migration 200.
+
+**Wave 4 — built** (this branch, awaits merge). The three items that had a
+verdict and needed no decision from Billy:
+
+* **Part 5 #1 — Sentiment & Tone → Flagged Messages** (`50ec4d6c`). Done as the
+  investigation recommended: composite score, badge, pos:neg ratio, spike count,
+  emotion breakdown, trend line and per-channel chart all removed; the negative
+  half of the feed promoted to be the whole panel, grouped by channel with jump
+  links. `/api/health/sentiment-feed` gained a `polarity` parameter so a
+  cheerful stretch of chat can't push the negatives past the shared limit.
+* **Part 4 #6 — Auto-Thread relabel** (`a9196e91`). The labelling fix the
+  not-a-defect finding pointed at. Also caught a real mismatch on the way:
+  `archive_immediately` was labelled "Mark Answered as Soon as Someone Else
+  Replies" but only ever calls `remove_reaction` — it has never archived
+  anything. Now "Clear the Open Marker on the First Reply", with a hint saying
+  so outright.
+* **Off-primary control convention** (`412b416d`). Resolved as *no code change*:
+  Rules Watch explains the absence because two other surfaces send admins there;
+  config-global omits its card silently because nothing does. Written into
+  `dashboard_ia.md` so the mismatch isn't flattened later.
+
+**Left for Billy, not built:** the narrow composite `health-sentiment` home
+widget still renders the retired average/ratio/spikes. Removing it would drop
+it from saved home layouts, which is an owner's call rather than a cleanup —
+say the word and it goes. The wide `health-sentiment-feed` widget was
+relabelled to **Flagged Messages** to match the panel.
 
 **Superseded, not done by us:** Part 5 #2 (Quality Score) — another session did
 exactly this research and retired the panel for **Contributors** (`quality-score`
@@ -38,7 +66,7 @@ archived-or-locked states). Billy read them as leftover question-thread scaffold
 but `needle_cog.py` uses every one to add and remove real Discord reactions marking
 whether a thread is open, replied to, archived or locked. Removing the controls
 would strand live behaviour. If they read as confusing, that is a **labelling**
-problem — the controls are doing something real.
+problem — the controls are doing something real. *Relabelled in wave 4.*
 
 ### Investigated, awaiting Billy's call
 
@@ -51,6 +79,7 @@ problem — the controls are doing something real.
   over a VADER signal miscalibrated for this server's register. What earns its
   place is the flagged-messages triage queue with jump-to-Discord links, promoted
   to *be* the panel. Same shape as Quality Score → Contributors.
+  *Built in wave 4 — `50ec4d6c`.*
 
 ### Still blocked on a decision — nobody should build these until Billy rules
 

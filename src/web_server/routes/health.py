@@ -194,20 +194,32 @@ def _sentiment_feed_payload(
     *,
     limit: int,
     snippet: int | None,
+    polarity: str | None = None,
 ) -> dict:
-    """Strongly-positive/negative messages plus 24 h positive/negative counts."""
+    """Strongly-positive/negative messages plus 24 h positive/negative counts.
+
+    ``polarity`` narrows the feed to one side. ``"negative"`` is what the
+    flagged-messages triage queue asks for, so a cheerful stretch of chat
+    can't push the negatives it exists to surface out of ``limit``. ``None``
+    keeps both sides, which is what the home-page tile wants.
+    """
     # Both interpolations are ints from this module's own call sites, never
     # request input — they cannot be bound as parameters inside substr()/LIMIT
     # without SQLite re-planning per call.
     content_expr = (
         "content" if snippet is None else f"substr(content, 1, {int(snippet)})"
     )
+    # Literal SQL picked from a closed set — never interpolated request text.
+    polarity_clause = {
+        "negative": "sentiment <= -0.5",
+        "positive": "sentiment >= 0.5",
+    }.get(polarity or "", "(sentiment >= 0.5 OR sentiment <= -0.5)")
     rows = conn.execute(
         f"""SELECT message_id, channel_id, author_id,
                    {content_expr} AS content, sentiment, emotion, ts
             FROM messages
             WHERE guild_id = ?
-              AND (sentiment >= 0.5 OR sentiment <= -0.5)
+              AND {polarity_clause}
               {bot_clause}
             ORDER BY ts DESC LIMIT {int(limit)}""",
         (guild_id, *bot_params),
@@ -838,6 +850,11 @@ async def health_sentiment(
 async def health_sentiment_feed(
     request: Request,
     include_bots: bool = Query(False),
+    polarity: str | None = Query(
+        None,
+        pattern="^(positive|negative)$",
+        description="Narrow the feed to one side; omit for both",
+    ),
     _: AuthenticatedUser = Depends(require_perms({"moderator"})),
 ):
     ctx = get_ctx(request)
@@ -845,14 +862,28 @@ async def health_sentiment_feed(
     bot = getattr(ctx, "bot", None)
     guild = bot.get_guild(guild_id) if bot else None
     bot_clause, bot_params = bot_filter_clause(guild_id, include_bots=include_bots)
-    key = _deep_key("sentiment_feed", include_bots=include_bots)
+    # Polarity changes the payload, so it is part of the key — a negatives-only
+    # feed served under the both-sides key would hide every positive message.
+    # Only added when set, so the unfiltered feed keeps its existing key rather
+    # than orphaning every warm entry the moment this parameter shipped.
+    key = _deep_key(
+        "sentiment_feed",
+        include_bots=include_bots,
+        **({"polarity": polarity} if polarity else {}),
+    )
 
     def _q():
         with ctx.open_db() as conn:
             data = get_cached(conn, guild_id, key)
             if data is None:
                 data = _sentiment_feed_payload(
-                    conn, guild_id, bot_clause, bot_params, limit=50, snippet=None
+                    conn,
+                    guild_id,
+                    bot_clause,
+                    bot_params,
+                    limit=50,
+                    snippet=None,
+                    polarity=polarity,
                 )
                 set_cached(conn, guild_id, key, data)
             messages = data["messages"]

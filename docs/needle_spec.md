@@ -34,6 +34,7 @@ When *status reactions* is on for the channel:
 - The starter message gets the **unanswered** emoji when the thread is created.
 - When the thread is archived or locked, all bot status reactions are cleared and the **archived** or **locked** emoji is added (locked wins if both changed). Unarchiving just clears them.
 - If *archive immediately* is also on, the unanswered emoji is removed as soon as someone other than the message author replies in the thread. Despite the name, nothing is archived — this flag only gates the reaction removal.
+  - The stored key keeps the misleading name (`archive_immediately`), but the dashboard no longer repeats it: the control is labelled **Clear the Open Marker on the First Reply** and its hint says outright that the thread is not closed. Renaming the key would be a migration for no behavioural gain, so the honesty lives in the label.
 
 Channels can also list **default reactions** (comma-separated emojis) added to every new message regardless of status reactions.
 
@@ -69,7 +70,7 @@ Thread-creation, reaction, and welcome-message failures are logged silently — 
 All configuration is per-guild via the web dashboard (admin permission required):
 
 - **Per channel** (`PUT /config/needle/{channel_id}`, `DELETE` to remove): title style + custom title, include bots, slowmode (0–21600 s), delete behavior, reply type + custom reply, status reactions, archive immediately, default reactions.
-- **Guild-wide** (`PUT /config/needle/settings`): the three status emojis — unanswered (default 🔵), archived (default ✅), locked (default 🔒) — and the default reply template (default "Thread created by $USER in $CHANNEL").
+- **Guild-wide** (`PUT /config/needle/settings`): the three status emojis — unanswered (default 🔵), archived (default ✅), locked (default 🔒), shown on the dashboard as **Thread Open** / **Thread Archived** / **Thread Locked** under a *Thread Status Markers* heading (they were "Waiting for an Answer" / "Answered or Archived" until 2026-09, which only read correctly in a help channel — auto-threading also runs on showcase and intro channels, where nothing is being asked) — and the default reply template (default "Thread created by $USER in $CHANNEL").
 
 ## Stored data
 
