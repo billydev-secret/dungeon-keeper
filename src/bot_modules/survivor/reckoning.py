@@ -61,17 +61,38 @@ def _fill(line: str, *, name: str = "", team: str = "", week: int = 0) -> str:
     )
 
 
-def eliminate_leavers(
-    conn: sqlite3.Connection, season: dict, week: int, present_ids: set[int]
+def suspected_leavers(
+    conn: sqlite3.Connection, season: dict, present_ids: set[int]
 ) -> list[int]:
-    """§6.14: alive players no longer in the guild die at this Reckoning
-    (source 'left', streak frozen). Returns who was marked."""
+    """Alive players missing from ``present_ids`` (the gateway member
+    cache). A *suspicion* only: the cache is partial for a few seconds after
+    a re-IDENTIFY, so the poster confirms each one with the API before
+    anyone dies of it (survivor-174)."""
     rows = conn.execute(
         "SELECT user_id FROM survivor_players "
-        "WHERE season_id = ? AND status = 'alive'",
+        "WHERE season_id = ? AND status = 'alive' ORDER BY user_id",
         (season["id"],),
     ).fetchall()
-    gone = [int(r["user_id"]) for r in rows if int(r["user_id"]) not in present_ids]
+    return [int(r["user_id"]) for r in rows if int(r["user_id"]) not in present_ids]
+
+
+def eliminate_leavers(
+    conn: sqlite3.Connection,
+    season: dict,
+    week: int,
+    present_ids: set[int],
+    *,
+    confirmed: set[int] | None = None,
+) -> list[int]:
+    """§6.14: alive players no longer in the guild die at this Reckoning
+    (source 'left', streak frozen). Returns who was marked.
+
+    ``confirmed`` is the subset of suspects the caller verified with
+    ``guild.fetch_member``; only those die. ``None`` trusts ``present_ids``
+    outright (tests, and callers that built the set from the API)."""
+    gone = suspected_leavers(conn, season, present_ids)
+    if confirmed is not None:
+        gone = [user_id for user_id in gone if user_id in confirmed]
     for user_id in gone:
         eliminate_player(conn, season["id"], user_id, week, source="left")
     return gone

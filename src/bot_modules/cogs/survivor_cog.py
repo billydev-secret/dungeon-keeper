@@ -38,6 +38,7 @@ from bot_modules.survivor.views import (
     build_live_panel,
     kickoff_label,
     panel_view,
+    pick_panel_content,
     submit_pick,
 )
 
@@ -64,8 +65,8 @@ class SurvivorCog(commands.Cog):
         # bot's own posts (Reckoning, last call) are the panel's main
         # buriers in a dedicated Survivor channel; the machinery's placed
         # registry and at-bottom check stop it chasing the Wednesday
-        # repost_panel, which stays separate (it carries the ping content
-        # and the pin, which sticky placements don't).
+        # repost_panel, which stays separate (it carries the ping content,
+        # which sticky placements don't).
         self.panel = StickyPanel(
             "survivor panel",
             bot,
@@ -119,8 +120,8 @@ class SurvivorCog(commands.Cog):
         await self.panel.on_channel_delete(channel)
 
     async def cog_load(self) -> None:
-        # The Join button on the pinned announcement and the slate's pick
-        # button must survive restarts.
+        # The Join button on the channel panel and the slate's pick button
+        # must survive restarts.
         self.bot.add_dynamic_items(JoinSeasonButton)
         self.bot.add_dynamic_items(SlatePickButton)
         self.bot.add_dynamic_items(HistoryButton)
@@ -238,8 +239,7 @@ class SurvivorCog(commands.Cog):
             )
             return
         await interaction.response.send_message(
-            f"Week {week} — pick a team to **win**. Locks at that game's "
-            "kickoff; hidden until the results post.",
+            pick_panel_content(week),
             view=PickPanel(
                 self.bot, season, interaction.user.id, week, games, offset
             ),

@@ -323,7 +323,7 @@ def test_announcement_warns_beside_a_human_only_panel(
     channel.send.assert_awaited_once()
 
 
-def test_announcement_posts_pins_and_stores_message_id(
+def test_announcement_posts_unpinned_and_stores_message_id(
     authed_client, fake_ctx, monkeypatch
 ):
     # resolve_accent_color reads the bot avatar, which a MagicMock guild
@@ -348,7 +348,11 @@ def test_announcement_posts_pins_and_stores_message_id(
     resp = authed_client.post("/api/survivor/announcement", json={})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["pinned"] is True
+    # Never pinned (2026-09-02): the sticky machinery replaces this exact
+    # message on the next chat line, so a pin only ever lasted until someone
+    # spoke — and left a "pinned a message" notice behind every Wednesday.
+    message.pin.assert_not_awaited()
+    assert "pinned" not in data
     assert data["message_id"] == str(BIG_ID)  # snowflake stays a string
     # Stored in config so the Join flow can refresh the counter.
     over = authed_client.get("/api/survivor/overview").json()
@@ -493,3 +497,134 @@ def test_manual_settle_validation(authed_client, fake_ctx, web_db, body, match):
     resp = authed_client.post("/api/survivor/settle", json=body)
     assert resp.status_code == 422
     assert match in resp.json()["detail"]
+
+
+# ── weekly clock ──────────────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+from web_server.routes.survivor import (  # noqa: E402
+    next_weekly_moment,
+    weekly_clock_rows,
+)
+
+# A Thursday 10:00 in a UTC-7 guild.
+_THU_10 = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc).timestamp()
+_PT = -7.0
+
+
+def _local(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, timezone(timedelta(hours=_PT)))
+
+
+@pytest.mark.parametrize(
+    ("dow", "hour", "expected"),
+    [
+        # Next Wednesday 9am: six days on.
+        pytest.param(2, 9, (2026, 9, 16, 9), id="wed-next-week"),
+        # Saturday 6pm: still ahead this week.
+        pytest.param(5, 18, (2026, 9, 12, 18), id="sat-this-week"),
+        # Thursday 9am already passed today → next Thursday.
+        pytest.param(3, 9, (2026, 9, 17, 9), id="today-hour-passed"),
+        # Thursday 11am still ahead today.
+        pytest.param(3, 11, (2026, 9, 10, 11), id="today-hour-ahead"),
+    ],
+)
+def test_next_weekly_moment_is_guild_local_and_strictly_ahead(dow, hour, expected):
+    got = _local(next_weekly_moment(_THU_10, _PT, dow, hour))
+    assert (got.year, got.month, got.day, got.hour) == expected
+    assert got.minute == 0 and got.weekday() == dow
+
+
+def test_weekly_clock_rows_flag_spent_and_due_and_resettable():
+    config = {
+        "slate_hour": 9, "lastcall_hour": 18, "reckoning_hour": 9,
+        "last_slate_week": 1, "last_lastcall_week": 1, "last_reckoned_week": 0,
+    }
+    rows = weekly_clock_rows(
+        config, _THU_10, _PT, week=1,
+        due={"slate": None, "lastcall": None, "reckoning": 1},
+    )
+    by = {r["task"]: r for r in rows}
+    assert [r["task"] for r in rows] == ["slate", "lastcall", "reckoning"]
+    # The Week 1 shape: both posts already spent for the current pick week.
+    assert by["slate"]["spent"] and by["lastcall"]["spent"]
+    assert by["slate"]["fired_week"] == 1
+    assert not by["reckoning"]["spent"]
+    assert by["reckoning"]["due_week"] == 1
+    # Only the two idempotent posts can be re-armed; the Reckoning pays coins.
+    assert by["slate"]["resettable"] and by["lastcall"]["resettable"]
+    assert not by["reckoning"]["resettable"]
+    assert _local(by["slate"]["next_ts"]).weekday() == 2
+    assert _local(by["lastcall"]["next_ts"]).hour == 18
+
+
+def test_weekly_clock_rows_without_a_pick_week_is_never_spent():
+    rows = weekly_clock_rows(
+        {"last_slate_week": 3}, _THU_10, _PT, week=None, due={},
+    )
+    assert not any(r["spent"] for r in rows)
+    assert all(r["due_week"] is None for r in rows)
+
+
+def _seed_week1_game(fake_ctx, kickoff: datetime) -> None:
+    """A single week-1 game so pick_week resolves to 1."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+            " kickoff_utc, status) VALUES (?, 1, 'w1', 'SEA', 'NE', ?, 'scheduled')",
+            (2026, kickoff.isoformat()),
+        )
+
+
+def test_clock_route_needs_a_season(authed_client):
+    assert authed_client.get("/api/survivor/clock").status_code == 422
+
+
+def test_clock_route_shows_a_spent_week_one(authed_client, fake_ctx):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_slate_week": 1})
+
+    data = authed_client.get("/api/survivor/clock").json()
+    assert data["week"] == 1
+    by = {r["task"]: r for r in data["tasks"]}
+    assert by["slate"]["spent"] is True and by["slate"]["fired_week"] == 1
+    assert by["lastcall"]["spent"] is False
+    assert by["slate"]["next_ts"] > 0
+
+
+def test_reset_rearms_the_slate_and_audits(authed_client, fake_ctx, web_db):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_slate_week": 1})
+
+    resp = authed_client.post("/api/survivor/tasks/slate/reset", json={})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True, "task": "slate", "week": 1, "fired_week": 0,
+    }
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["last_slate_week"] == 0
+    with open_db(web_db) as conn:
+        row = conn.execute(
+            "SELECT extra FROM audit_log WHERE action = 'survivor_task_reset'"
+        ).fetchone()
+    assert row is not None and '"task": "slate"' in row["extra"]
+    # Nothing left to reset now.
+    again = authed_client.post("/api/survivor/tasks/slate/reset", json={})
+    assert again.status_code == 422
+    assert "nothing to reset" in again.json()["detail"]
+
+
+@pytest.mark.parametrize("task", ["reckoning", "bogus"])
+def test_reset_refuses_the_reckoning_and_unknown_tasks(
+    authed_client, fake_ctx, task
+):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_reckoned_week": 1})
+    resp = authed_client.post(f"/api/survivor/tasks/{task}/reset", json={})
+    assert resp.status_code == 422
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["last_reckoned_week"] == 1

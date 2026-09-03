@@ -17,6 +17,7 @@ from bot_modules.games_help.logic import (
     GAME_DESCRIPTIONS,
     OTHER_COMMANDS_VALUE,
     SUPPORT_INVITE_URL,
+    survivor_help_line,
 )
 
 
@@ -178,3 +179,89 @@ def test_build_support_embed_uses_golden_meadow_color():
     embed = build_support_embed()
     assert embed.color is not None
     assert embed.color.value == BRAND_COLOR
+
+
+# ── channel-native games: the Survivor pointer ───────────────────────
+
+
+def test_build_help_embed_stays_under_the_field_ceiling_with_extra_lines():
+    """Survivor's line is folded into Other Commands, not a field of its
+    own: the registry plus that block already sit at Discord's 25-field
+    ceiling, and a 26th field is a 400 from Discord."""
+    embed = build_help_embed(extra_lines=["🏈 **Survivor** — open in <#5>"])
+    assert len(embed.fields) <= 25
+    by_name = {f.name: f.value or "" for f in embed.fields}
+    other = by_name["⚙️ Other Commands"]
+    assert other.startswith(OTHER_COMMANDS_VALUE)
+    assert other.rstrip().endswith("🏈 **Survivor** — open in <#5>")
+    assert "Survivor" not in (build_help_embed().fields[-1].value or "")
+
+
+_GID = 100
+_NOW = 1_800_000_000.0
+
+
+@pytest.fixture
+def survivor_db(tmp_path):
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "help.db"
+    migrated_db(db_path)
+    return db_path
+
+
+def _season(conn, **config):
+    from bot_modules.services.survivor_service import create_season
+
+    return create_season(conn, _GID, "S", 2026, overrides=config or None)
+
+
+def _elapse_week_one(conn) -> None:
+    from datetime import datetime, timezone
+
+    kicked = datetime.fromtimestamp(_NOW - 86400 * 3, timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+        " kickoff_utc, status, winner) VALUES (2026, 1, 'g1', 'SEA', 'NE', ?,"
+        " 'final', 'SEA')",
+        (kicked,),
+    )
+
+
+def test_survivor_help_line_is_absent_without_a_season(survivor_db):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(survivor_db) as conn:
+        assert survivor_help_line(conn, _GID, _NOW) is None
+
+
+def test_survivor_help_line_needs_a_wired_channel(survivor_db):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(survivor_db) as conn:
+        _season(conn)
+        assert survivor_help_line(conn, _GID, _NOW) is None
+
+
+@pytest.mark.parametrize(
+    ("late_entry", "elapsed", "shown"),
+    [
+        pytest.param("gauntlet", False, True, id="enrolling"),
+        pytest.param("gauntlet", True, True, id="gauntlet-door-stays-open"),
+        pytest.param("ghost_only", True, True, id="ghost-only-door-stays-open"),
+        pytest.param("closed", False, True, id="closed-before-kickoff"),
+        pytest.param("closed", True, False, id="closed-after-kickoff"),
+    ],
+)
+def test_survivor_help_line_follows_the_door(survivor_db, late_entry, elapsed, shown):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(survivor_db) as conn:
+        _season(conn, channel_id=5551, late_entry=late_entry)
+        if elapsed:
+            _elapse_week_one(conn)
+        line = survivor_help_line(conn, _GID, _NOW)
+    if shown:
+        assert line is not None and "<#5551>" in line and "Survivor" in line
+    else:
+        assert line is None

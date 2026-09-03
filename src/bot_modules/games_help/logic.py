@@ -14,6 +14,8 @@ description — silent UX rot. The test in
 
 from __future__ import annotations
 
+import sqlite3
+
 SUPPORT_INVITE_URL = "https://discord.gg/7gfbYYkH"
 
 # Slash command name for each game. The party games launch under the
@@ -85,3 +87,33 @@ OTHER_COMMANDS_VALUE: str = (
     "`/games end` — End the game running in this channel\n"
     "`/games join` · `/games leave` — Hop into or out of a running game"
 )
+
+
+def survivor_help_line(
+    conn: sqlite3.Connection, guild_id: int, now: float
+) -> str | None:
+    """One pointer at the Survivor channel while its door is open.
+
+    Survivor is channel-native — no ``/games play`` entry, and its main-chat
+    echo was removed on purpose (2026-08-20: the panel is the advertisement)
+    — so ``/games help`` was the one place a member could look and not find
+    it (2026-09-02 review). Returns None with no live season, no wired
+    channel, or a ``closed`` late-entry season past Week 1 kickoff.
+    """
+    from bot_modules.services.survivor_service import get_active_season
+    from bot_modules.survivor.logic import elapsed_weeks
+
+    season = get_active_season(conn, guild_id)
+    if season is None:
+        return None
+    channel_id = int(season["config"].get("channel_id") or 0)
+    if not channel_id:
+        return None
+    if season["config"]["late_entry"] == "closed" and elapsed_weeks(
+        conn, season["season_year"], now
+    ):
+        return None
+    return (
+        f"🏈 **Survivor** — the NFL pick'em season is open in <#{channel_id}>: "
+        "join from the panel there, one team a week, no team twice"
+    )

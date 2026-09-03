@@ -58,7 +58,11 @@ def compute_fate(conn: sqlite3.Connection, season: dict, now: float) -> Gauntlet
     elapsed = elapsed_weeks(conn, season["season_year"], now)
     allowed = int(config["strikes"])
     losing = {"loss", "tie"} if config["tie_rule"] == "loss" else {"loss"}
-    dp_start = int(config["double_pick_start_week"])
+    # ``double_pick_start_week`` is deliberately NOT read here (2026-09-02):
+    # the double-pick era (stage 6c) is unbuilt, so live members only ever
+    # place slot 1 — replaying top-two chalk would grade a late joiner on a
+    # rule nobody else plays, burning two teams and doubling the exposure per
+    # week. When 6c ships, this replays two slots from that week (§6.9).
 
     used: set[str] = set()
     weeks: list[ReplayWeek] = []
@@ -84,9 +88,7 @@ def compute_fate(conn: sqlite3.Connection, season: dict, now: float) -> Gauntlet
                 r["favorite"],
             ),
         )
-        # §6.9: double-pick era replays top-two chalk; one fate per week.
-        slots = 2 if dp_start and week >= dp_start else 1
-        chosen = candidates[:slots]
+        chosen = candidates[:1]
         if not chosen:
             # §6.10: no legal chalk — the week is voided. Survive, no burn.
             weeks.append(ReplayWeek(week, None, None, "void", strikes, False))
