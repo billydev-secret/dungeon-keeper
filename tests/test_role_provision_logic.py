@@ -16,6 +16,7 @@ import pytest
 
 from bot_modules.core.role_provision import (
     RoleSpec,
+    adoptable_role_ids,
     choose_role_action,
     ensure_feature_role,
     recreate_notice,
@@ -415,3 +416,116 @@ async def test_respect_opt_out_false_provisions_over_a_stored_zero():
 
     assert role is not None
     assert stored == role.id
+
+
+# ── adopt-by-name only adopts a role the bot could actually use ───────
+#
+# Round 2. `named` used to be every role whose name matched, with no `managed`
+# filter and no position check, so a guild that already had a role called
+# "Jailed" sitting above Dungeon Keeper's own role got it adopted and stored —
+# after which every jail failed at add_roles with a hierarchy error about a
+# role nobody had chosen.
+
+
+class PositionedRole(FakeRole):
+    def __init__(self, role_id, name, *, position=0, managed=False):
+        super().__init__(role_id, name)
+        self.position = position
+        self.managed = managed
+
+
+def test_adoptable_ids_skip_integration_managed_roles():
+    """A bot's own role or the booster role can never be granted to anybody, so
+    adopting one stores an id that can never work."""
+    roles = [
+        PositionedRole(1, "Jailed", position=2, managed=True),
+        PositionedRole(2, "Jailed", position=3),
+    ]
+    assert adoptable_role_ids(roles, "Jailed") == [2]
+
+
+def test_adoptable_ids_skip_roles_above_the_bot_when_it_hands_them_out():
+    roles = [
+        PositionedRole(1, "Jailed", position=40),
+        PositionedRole(2, "Jailed", position=3),
+    ]
+    assert adoptable_role_ids(roles, "Jailed", bot_top_position=10) == [2]
+
+
+def test_adoptable_ids_ignore_position_for_a_role_only_mentioned():
+    """Mentioning needs no hierarchy, so skipping a perfectly good role there
+    would make a needless twin."""
+    roles = [PositionedRole(1, "QOTD", position=40)]
+    assert adoptable_role_ids(roles, "QOTD") == [1]
+
+
+def test_adoptable_ids_keep_guild_order():
+    roles = [
+        PositionedRole(1, "QOTD", position=2),
+        PositionedRole(2, "QOTD", position=9),
+    ]
+    assert adoptable_role_ids(roles, "QOTD") == [1, 2]
+
+
+class _Me:
+    def __init__(self, top_role):
+        self.top_role = top_role
+
+
+class FakeGuildWithMe(FakeGuild):
+    def __init__(self, roles=(), *, top_position=10):
+        super().__init__(roles)
+        self.me = _Me(PositionedRole(9999, "Dungeon Keeper", position=top_position))
+
+
+@pytest.mark.asyncio
+async def test_assigns_makes_a_usable_twin_rather_than_adopting_out_of_reach():
+    """The live hazard, end to end.
+
+    Adopting the unreachable role is the silent failure; making a working one
+    lower down is the lesser evil, and the roster page names the duplicate so
+    the admin can tidy it up.
+    """
+    guild = FakeGuildWithMe([PositionedRole(1, "Jailed", position=40)])
+    role, stored = await _ensure(guild, 0, assigns=True)
+
+    assert role is not None and role.id != 1, "adopted a role it can't grant"
+    assert stored == role.id
+    assert guild.created, "should have made one it can actually use"
+
+
+@pytest.mark.asyncio
+async def test_a_mention_only_role_still_adopts_one_above_the_bot():
+    guild = FakeGuildWithMe([PositionedRole(1, "QOTD", position=40)])
+    role, stored = await _ensure(
+        guild, 0, spec=RoleSpec(name="QOTD", reason="test"),
+    )
+
+    assert role is not None and role.id == 1
+    assert stored == 1
+    assert not guild.created
+
+
+# ── provenance is recorded on the acts that change what we point at ──
+
+
+@pytest.mark.asyncio
+async def test_on_provision_fires_for_create_and_adopt_but_not_for_use():
+    seen: list[tuple[str, int]] = []
+
+    async def record(origin, role_id):
+        seen.append((origin, role_id))
+
+    made = FakeGuild()
+    await _ensure(made, 0, on_provision=record)
+    assert [o for o, _ in seen] == ["created"]
+
+    seen.clear()
+    adopted = FakeGuild([FakeRole(11, "Jailed")])
+    await _ensure(adopted, 0, on_provision=record)
+    assert seen == [("adopted", 11)]
+
+    seen.clear()
+    steady = FakeGuild([FakeRole(11, "Jailed")])
+    await _ensure(steady, 11, on_provision=record)
+    assert seen == [], "a role we were already using is not a new act"

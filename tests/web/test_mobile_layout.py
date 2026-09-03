@@ -365,6 +365,98 @@ def test_inactive_sweep_preview_fits_on_phone(dashboard, browser):
     _assert_fits(res, "Inactive sweep preview")
 
 
+# The Bot-Managed Roles roster. Every card is a stacked block that lays out on
+# its own, but two states a plain load never reaches need checking: the action
+# row with every button present (it must WRAP, not scroll — no fixed widths
+# anywhere on the page), and the "Use a different role" picker expanded beneath
+# it, which is layout behind a click and therefore invisible to the sweep.
+#
+# The endpoint needs a connected bot, so the response is stubbed. Names are
+# deliberately long: a role name is admin-supplied and the card has to survive
+# one that doesn't wrap.
+_BOT_ROLES_STUB = {
+    "summary": (
+        "Dungeon Keeper is using 3 roles in this server. @QOTD needs your "
+        "attention."
+    ),
+    "can_manage_roles": True,
+    "bot_top_role_position": 40,
+    "roles": [
+        {
+            "key": "jailed_role_id", "name": "Jailed", "emoji": "🔒",
+            "feature": "the jail", "state": "out_of_reach",
+            "headline": (
+                "@Jailed sits above my own role, so I can't add or remove it. "
+                "Move Dungeon Keeper above it in Server Settings → Roles."
+            ),
+            "role_id": "1469491362444480666", "current_name": "Jailed",
+            "member_count": 2, "group": "handed_out",
+            "panel": "config-moderation", "panel_label": "Moderation & Privacy",
+            "dial_label": "Jailed Role", "origin": "created",
+            "can_create": False, "can_adopt": True, "can_stop": False,
+            "notes": ["Set on Moderation & Privacy → Jailed Role"],
+        },
+        {
+            "key": "welcome_ping_role_id",
+            "name": "Absolutely Enormous Welcome Ping Role Name",
+            "emoji": "👋", "feature": "welcome messages", "state": "in_use",
+            "headline": "12 members have it.",
+            "role_id": "1469491362444480667",
+            "current_name": "Absolutely Enormous Welcome Ping Role Name",
+            "member_count": 12, "group": "pointed_at",
+            "panel": "config-welcome", "panel_label": "Welcome & Leave",
+            "dial_label": "Welcome Ping Role", "origin": "adopted",
+            "can_create": False, "can_adopt": True, "can_stop": True,
+            "notes": [
+                "Set on Welcome & Leave → Welcome Ping Role",
+                "This was already your role — I adopted it rather than making "
+                "a second one.",
+            ],
+        },
+        {
+            "key": "econ_qotd_ping_role_id", "name": "QOTD", "emoji": "💬",
+            "feature": "the question of the day", "state": "deleted",
+            "headline": (
+                "The role I made is gone. I'll make a replacement the next time "
+                "a question of the day is posted, and it will start empty."
+            ),
+            "role_id": "", "current_name": "", "member_count": 0,
+            "group": "pointed_at", "panel": "economy-qotd-submissions",
+            "panel_label": "QOTD", "dial_label": "Ping Role",
+            "origin": "created",
+            "can_create": True, "can_adopt": True, "can_stop": True,
+            "notes": [],
+        },
+    ],
+}
+
+
+def test_bot_roles_cards_and_role_picker_fit_on_phone(dashboard, browser):
+    """The roster's action row wraps, and the adopt picker fits under it."""
+    import json
+
+    context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
+    try:
+        page = context.new_page()
+        page.route(
+            "**/api/bot-roles",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(_BOT_ROLES_STUB),
+            ),
+        )
+        _goto_panel(page, f"{dashboard.base}/#/bot-roles")
+        page.wait_for_selector('[data-card="econ_qotd_ping_role_id"]')
+        # Layout behind a click: the picker only exists once expanded.
+        page.click('[data-card="econ_qotd_ping_role_id"] [data-act="adopt-open"]')
+        _settle(page)
+        res = page.evaluate(AUDIT_JS, CLIP_SLOP)
+    finally:
+        context.close()
+    _assert_fits(res, "Bot-Managed Roles")
+
+
 # Shape taken from prod (guild 1469491362444480666, read-only) and anonymised:
 # display names there run 1–37 chars (p50 8, p90 15) and the busiest author
 # posted ~11.9k messages in 30 days, so these names/volumes sit at or above the

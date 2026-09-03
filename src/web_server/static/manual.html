@@ -1846,14 +1846,24 @@
     <h3 id="jail">Jail &amp; Release</h3>
     <p>The jail system moves a member to a private channel, strips all their roles, and logs everything. Jail transcripts are saved automatically for later review.</p>
 
-    <p class="note">Dungeon Keeper makes a handful of other roles for itself the first time it needs them, all of them ping-only (holding one grants nothing): <code>@Welcome Ping</code>, <code>@QOTD</code>, <code>@Risky Rolls</code>, <code>@Promotion Reviewers</code> and <code>@Economy Notifications</code>. It only ever does this where the setting has never been touched — pick "(none)" on the dashboard and it stays off for good. (The one exception is <code>@Economy Notifications</code>, which is what the 🔔 button hands out: with no role there is nothing to opt in to, so it gets made either way.) Repoint any of them at a role of your own from the same dropdown.</p>
+    <p class="note">Dungeon Keeper makes up to <strong>sixteen</strong> named roles for itself, plus one for every member who buys a personal role in the shop. Five are ping roles it creates the first time it needs them, all of them ping-only (holding one grants nothing): <code>@Welcome Ping</code>, <code>@QOTD</code>, <code>@Risky Rolls</code>, <code>@Promotion Reviewers</code> and <code>@Economy Notifications</code>. Nine more are made by the features that use them — <code>@Jailed</code>, <code>@Inactive</code>, the three DM-mode roles, Survivor's three and the Wellness role. Two, <code>@Guess Who</code> and <code>@Voice Spectator</code>, are only ever made <em>while you are offering them to members</em> on the Discord Onboarding page, because a role nobody holds would leave those features switched on and refusing everybody.</p>
+
+    <p class="note">A role only gets created where the setting has never been touched — pick "(none)" on the dashboard and it stays off for good, <code>@Economy Notifications</code> included: with no role set, the 🔔 button now tells members notifications aren't set up in this server rather than quietly making one. (That changed on 3 September 2026; before it, the button made the role regardless of what the dropdown said.) Repoint any of them at a role of your own from the same dropdown.</p>
+
+    <p class="note"><strong>Config → Bot-Managed Roles</strong> is the whole list on one page — the only place that shows all sixteen together, since nine of them have no dropdown anywhere. Each one says what state it's in and what happens next: in use (and how many members hold it), not made yet (and what will make it), deleted, sitting above Dungeon Keeper's own role so it can't be handed out, renamed, duplicated, or inherited from another server's settings. Where it makes sense you can <em>Make it now</em>, point the setting at a role of your own, or <em>stop managing</em> one. <strong>Stop managing never deletes a role</strong> — it only stops the bot pointing at it, and everybody holding it keeps it.</p>
 
     <p class="note"><strong>Getting those roles to members.</strong> A ping role nobody holds does nothing, so <strong>Config → Discord Onboarding</strong> puts them on Discord's own <strong>Channels &amp; Roles</strong> screen — the one new members walk through and anyone can reopen from the server menu. The page lists each role with its status (already offered, ready to add, will be created, or turned off), lets you pick which onboarding question to add them to (or start a new one), and asks you to confirm before it changes anything. It never edits onboarding on its own, and it leaves every other question exactly as it was.</p>
 
+    <p class="note">Editing that screen is the one thing Dungeon Keeper needs <strong>Manage Server</strong> for, and its invite link deliberately doesn't ask for it. If the permission is missing, the Onboarding page says so at the top and walks you through granting it in Server Settings → Roles — you can still read the page meanwhile. If your server isn't a Community server, Discord has no Channels &amp; Roles screen at all, and the page says that too.</p>
+
     <p class="note">The <code>@Jailed</code> role is made for you the first time it's needed —
-      or adopted, if your server already has a role named exactly <code>Jailed</code>. Delete
-      it and the bot rebuilds it on the next jail and posts a note in your mod channel, since
-      the new role is empty and anyone currently jailed is no longer marked by it.</p>
+      or adopted, if your server already has a role named exactly <code>Jailed</code> and it
+      sits <em>below</em> Dungeon Keeper in your role list. (One sitting above can't be handed
+      out, so a working one is made instead, and Bot-Managed Roles points out the duplicate.)
+      Delete it and the bot rebuilds it on the next jail and posts a note in your mod channel,
+      since the new role is empty and anyone currently jailed is no longer marked by it. That
+      note is only posted where a role really was deleted <em>in this server</em> — a second
+      server picking up the setting from your main one is told nothing.</p>
 
     <div class="cmd-block">
       <span class="cmd-name">/jail user:@user duration:24h reason:Repeated rule 3 violations</span>

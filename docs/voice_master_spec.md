@@ -188,7 +188,7 @@ Setup:
 - Control text channel (`voice_master_control_channel_id`) — hosts the persistent panel and knock requests
 - Panel message id (`voice_master_panel_message_id`) — written automatically by `post-panel`
 - Inline panel toggle (`voice_master_post_inline_panel`, default on) — post the panel into each new channel's side chat
-- Spectator gate role (`voice_master_spectator_gate_role_id`, default unset) — when set, spectate mode admits only role-holders as the audience
+- Spectator gate role (`voice_master_spectator_gate_role_id`, default unset) — when set, spectate mode admits only role-holders as the audience. **Unset is a live exposure**, not a neutral default: with no gate role, an ungated spectate room's audience is `@everyone`. The dial was excluded from role auto-creation for a year because an *empty* gate role is a room nobody can enter; since 2026-09-03 it is provisioned **create-on-offer** — the `@Voice Spectator` role is made only in the same action that offers it to members on Config → Discord Onboarding, so it can never exist empty. Nothing else may create it (`docs/role_provisioning_spec.md`)
 
 Defaults applied to fresh channels:
 

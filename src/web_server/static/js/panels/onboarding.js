@@ -13,7 +13,9 @@ const STATE_LABEL = {
   offered: { text: "In onboarding", cls: "badge-success" },
   ready: { text: "Ready to add", cls: "" },
   uncreated: { text: "Will be created", cls: "" },
-  off: { text: "Turned off", cls: "badge-muted" },
+  // "badge-muted" doesn't exist in app.css — the pill rendered unstyled
+  // from the day this panel shipped. The dim variant is the one that does.
+  off: { text: "Turned off", cls: "badge-dim" },
 };
 
 function roleRow(role) {
@@ -23,7 +25,10 @@ function roleRow(role) {
     ? "Set to (none) on this feature's own page — nothing will be created."
     : role.state === "offered"
       ? "Members can already pick this up in onboarding."
-      : role.blurb;
+      : role.state === "uncreated" && role.create_on_offer
+        ? role.blurb + " This role only gets made here — offering it is what "
+          + "creates it, so it never sits empty."
+        : role.blurb;
   return `
     <tr>
       <td style="width:32px">
@@ -35,6 +40,39 @@ function roleRow(role) {
           <div class="field-hint">${esc(why)}</div></td>
       <td><span class="badge ${meta.cls}">${esc(meta.text)}</span></td>
     </tr>`;
+}
+
+// A read-only page with a greyed-out button and no explanation is the failure
+// this replaces. The invite link asks for a deliberately narrow permission set
+// and is staying that way (Billy, 2026-09-03), so on a fresh install this page
+// CANNOT save until an admin grants Manage Server by hand — which means the
+// page owes them the steps rather than a disabled button.
+function permissionNotice(data) {
+  if (data.can_edit) return "";
+  const missing = [];
+  if (!data.can_manage_guild) missing.push("Manage Server");
+  if (!data.can_manage_roles) missing.push("Manage Roles");
+  const named = missing.map((m) => "<strong>" + esc(m) + "</strong>").join(" and ");
+  return `
+    <div class="card" style="border-color:var(--red); margin:10px 0">
+      <strong>I can read this page, but I can&rsquo;t change it.</strong>
+      <div class="field-hint" style="margin-top:6px">
+        Discord requires ${named} to edit Channels &amp; Roles, and I don&rsquo;t
+        have ${missing.length === 1 ? "it" : "them"}. My invite link asks only
+        for what I need day to day, so this one is granted by hand:
+      </div>
+      <ol class="field-hint" style="margin:6px 0 0 18px">
+        <li>Open <strong>Server Settings</strong> &rarr; <strong>Roles</strong>
+            in Discord.</li>
+        <li>Pick my role (the one with my name on it).</li>
+        <li>Turn on ${named}, and save.</li>
+        <li>Come back here and reload.</li>
+      </ol>
+      <div class="field-hint" style="margin-top:6px">
+        Nothing else on the dashboard needs this &mdash; it is only for editing
+        Discord&rsquo;s own Channels &amp; Roles screen.
+      </div>
+    </div>`;
 }
 
 function promptCard(prompt) {
@@ -87,10 +125,12 @@ function render(root, data) {
         new members walk through, and the one anybody can reopen from the server
         menu. Roles offered here are the ones members actually end up with.
       </p>
-      ${data.can_edit ? "" : `<p class="error">The bot needs <strong>Manage Server</strong>
-        and <strong>Manage Roles</strong> to change onboarding. You can look, but not save.</p>`}
+      ${permissionNotice(data)}
 
       <h3>Opt-in roles Dungeon Keeper manages</h3>
+      <p class="field-hint">Every role I make for myself &mdash; including the nine
+        that never appear here &mdash; is listed on
+        <a href="#/bot-roles">Bot-Managed Roles</a>, with its live state.</p>
       <table class="table">
         <thead><tr><th></th><th>Role</th><th>Status</th></tr></thead>
         <tbody>${roles.map(roleRow).join("")}</tbody>
@@ -103,6 +143,10 @@ function render(root, data) {
       ` : `<p class="field-hint">Every managed role is either already offered or switched off.</p>`}
 
       <h3 style="margin-top:18px">What onboarding asks today</h3>
+      ${data.is_community === false ? `<p class="field-hint">This server isn&rsquo;t a
+        <strong>Community server</strong>, so Discord doesn&rsquo;t offer the
+        Channels &amp; Roles screen here at all. Switch Community on in Server
+        Settings first.</p>` : ""}
       ${prompts.length ? prompts.map(promptCard).join("") : renderEmpty("This server has no onboarding questions yet.")}
     </div>`;
 

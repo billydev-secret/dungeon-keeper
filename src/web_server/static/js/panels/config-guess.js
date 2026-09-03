@@ -11,6 +11,7 @@ import {
   mountAsync,
 } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 
 const DIFFICULTIES = [
   ["easy", "Easy — a generous crop, most people get it"],
@@ -62,6 +63,11 @@ export function mount(container) {
               <span data-picker="role_id"></span>
               <div class="field-hint">Only members holding this role may submit
                 images. "(none)" lets anyone who can see the channel submit.</div>
+              <div class="field-hint">Haven't got one? Offer <strong>Guess Who</strong>
+                on Discord Onboarding and I'll make the role as part of offering
+                it — I won't make one on its own, because a role nobody holds
+                would leave the game switched on and refusing everybody.</div>
+              <div data-role-state="guess_role_id"></div>
             </div>
           </div>
 
@@ -135,6 +141,7 @@ export function mount(container) {
     );
 
     guardForm(form);
+    mountRoleDialStates(container);
 
     // Blank or out-of-range numbers used to post NaN and come back as a raw
     // 422 naming no field — validate here and say which field is wrong.

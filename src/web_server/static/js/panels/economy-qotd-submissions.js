@@ -13,6 +13,7 @@
 import { api, apiPost, apiPut, esc, fmtAge } from "../api.js";
 import { showStatus, loadMembers, loadRoles, mountRolePicker, mountAsync } from "../config-helpers.js";
 import { promptDialog } from "../ui.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 import { makeFilterStrip } from "../tab-strip.js";
 
 // History states only — pending and approved get their own tables above.
@@ -66,6 +67,7 @@ function settingsMarkup(cfg) {
             Discord's role settings — otherwise the mention posts as plain text and
             nobody is notified. (Granting the bot “Mention @everyone, @here, and All
             Roles” also works.)</div>
+          <div data-role-state="econ_qotd_ping_role_id"></div>
         </div>
         <div style="display:flex; gap:8px; align-items:center; margin-top:16px;">
           <button type="submit" class="btn btn-primary">Save</button>
@@ -98,6 +100,9 @@ function wireSettings(container, cfg, roles) {
     roles,
     String(cfg.qotd_ping_role_id),
   );
+  // Whether that "(none)" is a decision, a blank, or a role that's been
+  // deleted — same source as the Bot-Managed Roles page.
+  mountRoleDialStates(container);
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     try {

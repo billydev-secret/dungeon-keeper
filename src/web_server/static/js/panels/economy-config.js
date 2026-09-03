@@ -14,6 +14,7 @@ import {
   onPickerChange,
 } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 
 // Faucet rates are edited on the Income Sources page and perk-shop prices on the
 // Sinks page — this page keeps the wiring and branding.
@@ -123,8 +124,11 @@ function render(container, cfg, channels, roles, members) {
             completions and streak milestones in their DMs instead of an
             in-channel reply, and are the only ones sent recurring economy
             notices. It gates no channel and no payout, so don't use it for
-            channel permissions. Leave unset to reply in-channel for everyone and
-            send no recurring DMs.</div>
+            channel permissions. Leave it as <em>(none)</em> and the 🔔 button
+            tells members notifications aren't set up here — nothing is created
+            behind your back. Pick a role, or leave it blank and I'll make one
+            the first time somebody presses 🔔.</div>
+          <div data-role-state="econ_game_role_id"></div>
         </div>
         <div class="field">
           <label style="display:flex; gap:6px; align-items:center;">
@@ -474,6 +478,9 @@ function render(container, cfg, channels, roles, members) {
   );
 
   guardForm(form);
+  // "(none)" on this dial is now honoured (2026-09-03), so the admin has to be
+  // able to see which "(none)" they are looking at.
+  mountRoleDialStates(container);
 
   // [name, visible label, min, max] — a blank box used to post NaN and come
   // back as a raw 422 naming no field (W-C5).

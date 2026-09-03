@@ -1,4 +1,5 @@
 import { mountGamePanel } from "./games-panel-shared.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 import {
   loadConfig,
   loadRoles,
@@ -35,7 +36,8 @@ export function mount(container) {
               <span data-picker="ping_role_id"></span>
               <div class="field-hint">This role is mentioned whenever a new round
                 opens, so its holders get a notification. "(none)" starts rounds
-                quietly.</div>
+                quietly, and I won't make one.</div>
+              <div data-role-state="risky_ping_role_id"></div>
             </div>
           </div>
 
@@ -89,6 +91,7 @@ export function mount(container) {
     );
 
     guardForm(form);
+    mountRoleDialStates(container);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
