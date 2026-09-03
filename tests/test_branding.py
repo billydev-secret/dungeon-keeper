@@ -85,6 +85,27 @@ def test_a_card_of_only_inline_fields_is_untouched():
     assert [f.value for f in embed.fields] == ["3", "1", "0"]
 
 
+def test_a_field_at_the_value_cap_is_left_alone():
+    """``fit_lines`` and a raw ``value[:1024]`` slice both fill a field right up
+    to Discord's cap. Two more characters there make Discord reject the whole
+    embed — losing the card entirely to buy two pixels of air."""
+    embed = discord.Embed(title="t")
+    embed.add_field(name="Recent Activity", value="x" * 1024, inline=False)
+    embed.add_field(name="Wallet", value="y", inline=False)
+
+    apply_section_spacing(embed)
+
+    assert embed.fields[0].value == "x" * 1024
+    # One char of headroom is still not enough for the two-char spacer.
+    embed.set_field_at(0, name="Recent Activity", value="x" * 1023, inline=False)
+    apply_section_spacing(embed)
+    assert embed.fields[0].value == "x" * 1023
+    # With room for it, the spacer lands as usual.
+    embed.set_field_at(0, name="Recent Activity", value="x" * 1022, inline=False)
+    apply_section_spacing(embed)
+    assert embed.fields[0].value == "x" * 1022 + SECTION_SPACER
+
+
 def test_single_field_is_untouched():
     embed = apply_section_spacing(_embed("only"))
     assert embed.fields[0].value == "only"

@@ -208,6 +208,10 @@ def invalidate_accent_cache(guild_id: int) -> None:
 # line — used to widen the gap before the *next* stacked field's heading.
 SECTION_SPACER = "\n​"
 
+#: Discord's hard cap on a single embed field's value. A send that breaches it
+#: is rejected whole, so the spacer never pushes a field over it.
+FIELD_VALUE_LIMIT = 1024
+
 
 def apply_section_spacing(embed: discord.Embed) -> discord.Embed:
     """Give a multi-section embed an even vertical rhythm, in place.
@@ -231,12 +235,19 @@ def apply_section_spacing(embed: discord.Embed) -> discord.Embed:
     on a three-across row that is dead height on every card. This is what let
     the helper be applied to every builder rather than only the ones whose
     fields all stack (ruling 2026-09-03).
+
+    A field already at Discord's 1024-char value cap is **left alone**. Plenty
+    of builders fill a field right up to that line (``fit_lines``, a raw
+    ``value[:1024]`` slice), and two more characters there would 400 the whole
+    embed — losing the card entirely to buy two pixels of air.
     """
     for i in range(len(embed.fields) - 1):
         field = embed.fields[i]
         if field.inline:
             continue
         value = field.value or ""
+        if len(value) + len(SECTION_SPACER) > FIELD_VALUE_LIMIT:
+            continue
         if not value.endswith(SECTION_SPACER):
             embed.set_field_at(
                 i, name=field.name, value=value + SECTION_SPACER, inline=field.inline

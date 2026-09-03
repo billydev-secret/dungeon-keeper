@@ -246,6 +246,52 @@ def test_build_bio_embed_skips_empty_fields():
     assert [f.name for f in embed.fields] == ["Name"]
 
 
+def test_build_bio_embed_escapes_member_text_in_fields_and_answers():
+    """A bio can't reformat its own card — both halves are member-typed."""
+    payload = BioRenderPayload(
+        display_name="Iris",
+        avatar_url="",
+        headline_value="Iris",
+        fields=(
+            FieldSnapshot(
+                label="Bio", value="**loud**", field_type="paragraph", skipped=False
+            ),
+        ),
+        questions=(
+            QuestionSnapshot(question_text="Tree?", answer="_oak_", skipped=False),
+        ),
+        embed_color=0xC8763E,
+        created_at_iso="",
+    )
+    embed = build_bio_embed(payload)
+    assert embed.fields[0].value.startswith("\\*\\*loud\\*\\*")
+    assert embed.fields[1].value == "\\_oak\\_"
+
+
+def test_escaping_happens_before_the_field_cap():
+    """Escaping a value already trimmed to 1024 would push it past Discord's
+    field cap and 400 the whole card. The escape has to run first so the cap
+    measures what actually gets sent."""
+    payload = BioRenderPayload(
+        display_name="Iris",
+        avatar_url="",
+        headline_value="Iris",
+        fields=(
+            FieldSnapshot(
+                label="Bio", value="*" * 2000, field_type="paragraph", skipped=False
+            ),
+        ),
+        questions=(
+            QuestionSnapshot(question_text="Tree?", answer="_" * 2000, skipped=False),
+        ),
+        embed_color=0xC8763E,
+        created_at_iso="",
+    )
+    embed = build_bio_embed(payload)
+    for field in embed.fields:
+        assert len(field.value or "") <= 1024, len(field.value or "")
+
+
 # ── WizardState transitions ───────────────────────────────────────────
 
 

@@ -362,3 +362,8 @@ async def test_post_audit_allow_lists_exactly_the_roles_it_pings(tmp_path):
     kwargs = channel.send.await_args.kwargs
     assert kwargs["content"] == "<@&100> <@&200>"
     assert [r.id for r in kwargs["allowed_mentions"].roles] == [100, 200]
+    # AllowedMentions' unset fields default to *permitted*, so naming only
+    # `roles` would widen every audit card that pings from "pings nobody" to
+    # "pings whoever the text happens to name".
+    assert kwargs["allowed_mentions"].everyone is False
+    assert kwargs["allowed_mentions"].users is False
