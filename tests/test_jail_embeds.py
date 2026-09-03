@@ -18,6 +18,7 @@ from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
     build_jail_audit_embed,
     build_modinfo_embed,
+    build_policy_ballot_embed,
     build_policy_close_embed,
     build_policy_list_embed,
     build_policy_proposal_embed,
@@ -547,3 +548,108 @@ def test_adopted_policies_embed_truncates_long_descriptions():
     long_desc = "x" * 2000
     embed = build_adopted_policies_embed([{"title": "P", "description": long_desc}])
     assert len(_fv(embed, "P")) == 1024
+
+
+# ── Community ballot card ─────────────────────────────────────────────
+
+
+def _names(uid: int) -> str:
+    return {1: "Ada", 2: "Grace", 3: "Alan"}.get(uid, f"Member {uid}")
+
+
+def test_ballot_embed_names_every_voter_and_counts_them():
+    embed = build_policy_ballot_embed(
+        question="Quiet hours?",
+        yes_ids=[1, 2],
+        no_ids=[3],
+        name_fn=_names,
+    )
+
+    assert _fv(embed, "✅ Yes (2)") == "Ada, Grace"
+    assert _fv(embed, "❌ No (1)") == "Alan"
+    assert _fv(embed, "➖ Abstain (0)") == "—"
+    assert _fv(embed, "Votes Cast") == "3"
+
+
+def test_ballot_embed_never_emits_a_raw_mention():
+    """An ``<@id>`` inside an embed is resolved by the *reading* client from
+    its own cache, so in a public roster it degrades to a bare number for most
+    readers. Every id goes through the resolver."""
+    embed = build_policy_ballot_embed(
+        question="Quiet hours? <@999>",
+        yes_ids=[1],
+        no_ids=[2],
+        abstain_ids=[3],
+        name_fn=_names,
+        closes_at=1_700_000_000,
+    )
+
+    rendered = "\n".join(
+        [embed.title or "", *(f"{f.name}\n{f.value}" for f in embed.fields)]
+    )
+    # The question is a moderator's own text and is reproduced verbatim; every
+    # *voter* is a name.
+    assert "<@1>" not in rendered
+    assert "<@2>" not in rendered
+    assert "<@3>" not in rendered
+
+
+def test_ballot_embed_says_what_the_rules_are():
+    """The footer is the member-facing statement of the three things people
+    get wrong: who may vote, what abstaining does, and that a vote is public."""
+    footer = (build_policy_ballot_embed(question="q").footer.text or "").lower()
+
+    assert "anyone who can see this thread" in footer
+    assert "abstain" in footer
+    assert "ties fail" in footer
+    assert "public" in footer
+    # "Anonymous" must never appear: `policy_ballot_votes` stores the voter,
+    # and the card names them in the channel.
+    assert "anonym" not in footer
+
+
+@pytest.mark.parametrize(
+    ("outcome", "status"),
+    [
+        pytest.param(None, "🗳️ Open", id="open"),
+        pytest.param("passed", "✅ Passed", id="passed"),
+        pytest.param("failed", "❌ Failed", id="failed"),
+        pytest.param("cancelled", "🚫 Cancelled", id="cancelled"),
+    ],
+)
+def test_ballot_embed_status_tracks_the_outcome(outcome, status):
+    embed = build_policy_ballot_embed(question="q", outcome=outcome)
+
+    assert _fv(embed, "Status") == status
+
+
+def test_ballot_embed_shows_a_deadline_only_while_open():
+    open_embed = build_policy_ballot_embed(question="q", closes_at=1_700_000_000)
+    closed_embed = build_policy_ballot_embed(
+        question="q", closes_at=1_700_000_000, outcome="passed"
+    )
+
+    assert _fv(open_embed, "Closes") == "<t:1700000000:R>"
+    assert "Closes" not in [f.name for f in closed_embed.fields]
+
+
+def test_ballot_embed_has_no_deadline_field_when_there_is_no_deadline():
+    """`closes_at = 0` is the guild's voting-deadline dial turned off."""
+    embed = build_policy_ballot_embed(question="q", closes_at=0)
+
+    assert "Closes" not in [f.name for f in embed.fields]
+
+
+def test_ballot_voter_lists_are_capped_by_characters():
+    """Discord fields stop at 1024 chars and display names vary wildly in
+    length, so the mod vote's fixed 25-mention cap does not transfer."""
+    long_names = {uid: "N" * 60 for uid in range(200)}
+    embed = build_policy_ballot_embed(
+        question="q",
+        yes_ids=list(range(200)),
+        name_fn=lambda uid: long_names[uid],
+    )
+
+    value = _fv(embed, "✅ Yes (200)")
+    assert len(value) <= 1024
+    assert "more" in value

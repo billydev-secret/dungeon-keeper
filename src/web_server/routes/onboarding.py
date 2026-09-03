@@ -105,9 +105,17 @@ def _role_states(ctx, guild: discord.Guild, prompts) -> list[dict]:
     out: list[dict] = []
     with ctx.open_db() as conn:
         for entry in fr.CONFIG_ROLES:
-            opted_out = entry.none_means_off and role_dial_opted_out(
-                conn, entry.key, guild.id,
-                allow_legacy_fallback=entry.legacy_fallback,
+            # A create-on-offer dial is never "off": offering it here IS the
+            # decision that makes it exist, and its panel writes a "0" on every
+            # unrelated save, so reading that 0 as a preference would leave the
+            # admin unable to offer a role they are explicitly asking for.
+            opted_out = (
+                entry.none_means_off
+                and not entry.create_on_offer
+                and role_dial_opted_out(
+                    conn, entry.key, guild.id,
+                    allow_legacy_fallback=entry.legacy_fallback,
+                )
             )
             raw = get_config_value(
                 conn, entry.key, "0", guild.id,
@@ -134,6 +142,10 @@ def _role_states(ctx, guild: discord.Guild, prompts) -> list[dict]:
                 "feature": entry.feature,
                 "role_id": str(role.id) if role is not None else "",
                 "state": state,
+                # The two dials round 2 reopened: they exist only once offered,
+                # so the panel says so rather than implying the feature is
+                # already usable.
+                "create_on_offer": entry.create_on_offer,
             })
     return out
 
@@ -146,13 +158,24 @@ async def get_onboarding(request: Request, user: AuthenticatedUser = _ADMIN):
     prompts = await _read_prompts(guild)
     states = await run_query(lambda: _role_states(ctx, guild, prompts))
     me = guild.me
+    manage_guild = bool(me and me.guild_permissions.manage_guild)
+    manage_roles = bool(me and me.guild_permissions.manage_roles)
     return {
         "prompts": [_prompt_json(p) for p in prompts],
         "roles": states,
         # Surfaced rather than discovered on failure: without Manage Server the
         # write 403s, and the panel should say so before the admin composes one.
-        "can_edit": bool(me and me.guild_permissions.manage_guild
-                         and me.guild_permissions.manage_roles),
+        "can_edit": manage_guild and manage_roles,
+        # Reported apart so the panel can name the missing bit and the steps to
+        # grant it. `/invite` deliberately does NOT ask for Manage Server
+        # (Billy, 2026-09-03: keep the invite narrow), so on a fresh
+        # least-privilege install this page is read-only until an admin grants
+        # it by hand — a visible limitation beats a silently disabled Save.
+        "can_manage_guild": manage_guild,
+        "can_manage_roles": manage_roles,
+        # A server that isn't a Community server has no onboarding at all, and
+        # "no questions yet" is a misleading way to say so.
+        "is_community": "COMMUNITY" in set(getattr(guild, "features", []) or []),
     }
 
 
@@ -200,7 +223,11 @@ async def add_roles(
             ctx, guild, entry.key, entry.spec,
             feature=entry.feature,
             allow_legacy_fallback=entry.legacy_fallback,
-            respect_opt_out=entry.none_means_off,
+            # This is the create-on-offer action: for the two dials that may
+            # only be made while being offered, the admin ticking the box here
+            # IS the explicit request, so an old stored "0" does not veto it.
+            respect_opt_out=entry.none_means_off and not entry.create_on_offer,
+            assigns=entry.assigns,
         )
         if role is None:
             unavailable.append(entry.spec.name)

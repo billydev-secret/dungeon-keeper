@@ -296,13 +296,42 @@ def test_a_successful_add_writes_an_audit_row(authed_client, fake_ctx):
     assert any(r["action"] == "onboarding_roles_added" for r in rows)
 
 
-def test_the_economy_dial_is_addable_despite_a_stored_zero(authed_client, fake_ctx):
-    """Economy Settings writes "0" for an untouched picker on every save, so a 0
-    there records a save rather than a decision — and an opt-in role with no
-    role is just a broken button. It stays addable."""
+def test_the_economy_dial_now_honours_a_stored_none(authed_client, fake_ctx):
+    """Reversed 2026-09-03 (Billy). This test used to assert the opposite.
+
+    Economy Settings writes "0" for an untouched picker on every save, and that
+    was the argument for overriding a stored 0 on this one dial. But the panel
+    told admins "(none)" turned economy notifications off while the 🔔 button
+    made the role anyway — a preference the code did not enforce. The dial is
+    now real, and the ambiguity it was covering for is answered on the panel
+    instead, by the state line under the picker.
+    """
     with open_db(fake_ctx.db_path) as conn:
         set_config_value(conn, "econ_game_role_id", "0", fake_ctx.guild_id)
         set_config_value(conn, "risky_ping_role_id", "0", fake_ctx.guild_id)
+        conn.commit()
+    _attach(fake_ctx, prompts=[_prompt(111, "P")])
+
+    states = {
+        r["key"]: r["state"]
+        for r in authed_client.get("/api/onboarding").json()["roles"]
+    }
+    assert states["econ_game_role_id"] == "off"
+    assert states["risky_ping_role_id"] == "off", "and it always did"
+
+
+def test_a_create_on_offer_dial_is_addable_despite_a_stored_zero(
+    authed_client, fake_ctx
+):
+    """Offering it here IS the decision that makes it exist.
+
+    Guess Who's panel writes a "0" on every unrelated save like every other
+    config panel, so reading that as "the admin said no" would leave them
+    unable to offer a role they are explicitly ticking a box to offer — and
+    onboarding is the only place these two dials may ever be created.
+    """
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "guess_role_id", "0", fake_ctx.guild_id)
         conn.commit()
     guild = _attach(fake_ctx, prompts=[_prompt(111, "P")])
 
@@ -310,13 +339,24 @@ def test_the_economy_dial_is_addable_despite_a_stored_zero(authed_client, fake_c
         r["key"]: r["state"]
         for r in authed_client.get("/api/onboarding").json()["roles"]
     }
-    assert states["econ_game_role_id"] == "uncreated"
-    assert states["risky_ping_role_id"] == "off", "the exception is scoped to one dial"
+    assert states["guess_role_id"] == "uncreated"
 
     resp = authed_client.post(
         "/api/onboarding/add-roles",
-        json={"keys": ["econ_game_role_id"], "prompt_id": "111"},
+        json={"keys": ["guess_role_id"], "prompt_id": "111"},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["added"] == ["Economy Notifications"]
+    assert resp.json()["added"] == ["Guess Who"]
     guild.edit_onboarding.assert_awaited_once()
+
+
+def test_the_panel_is_told_which_permission_is_missing(authed_client, fake_ctx):
+    """A disabled Save with no explanation was the failure. The invite link
+    stays narrow, so the page owes the admin the steps."""
+    guild = _attach(fake_ctx)
+    guild.me.guild_permissions = MagicMock(manage_guild=False, manage_roles=True)
+
+    body = authed_client.get("/api/onboarding").json()
+    assert body["can_edit"] is False
+    assert body["can_manage_guild"] is False
+    assert body["can_manage_roles"] is True

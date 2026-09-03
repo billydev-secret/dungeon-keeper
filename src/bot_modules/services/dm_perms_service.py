@@ -11,7 +11,7 @@ from typing import Any, Optional
 import discord
 
 from bot_modules.core.branding import apply_section_spacing
-from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
+from bot_modules.core.role_provision import ensure_feature_role
 from bot_modules.core.db_utils import get_config_value, open_db, set_config_value
 
 ROLE_DM_OPEN = "DMs: Open"
@@ -683,12 +683,21 @@ async def ensure_dm_roles(
     existing guild role uses that role. Otherwise it falls back to the
     default-named role, creating it if absent.
     """
+    from bot_modules.services.feature_roles import dm_mode_role
+
     role_ids = role_ids or {}
     roles: dict[str, discord.Role] = {}
-    for mode, name in DM_MODE_ROLE_NAMES.items():
+    for mode in DM_MODE_ROLE_NAMES:
+        entry = dm_mode_role(mode)
         role = await ensure_feature_role(
             guild,
-            RoleSpec(name=name, reason="DM permission system"),
+            # The spec comes from the registry rather than being built here, so
+            # the roster page and the provisioner can never disagree about what
+            # these three roles are called.
+            entry.spec,
+            # The bot swaps these three on a member, so a same-named role above
+            # its own top role must not be adopted — it could never be granted.
+            assigns=entry.assigns,
             load=lambda mode=mode: role_ids.get(mode) or 0,
             # Nothing to store: this function is reached from
             # ``set_member_dm_mode``, which holds neither an AppContext nor a

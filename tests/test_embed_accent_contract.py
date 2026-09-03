@@ -43,6 +43,7 @@ from bot_modules.games.mahjong import game_logic as mahjong_game
 from bot_modules.games.mahjong.card_logic import load_first_light
 from bot_modules.games.mahjong.mahjong_service import MahjongSettings
 from bot_modules.games.mahjong.tiles import Tile as MahjongTile
+from bot_modules.jail import embeds as jail_embeds
 from bot_modules.member_info import embeds as member_info_embeds
 from bot_modules.member_info import logic as member_info_logic
 from bot_modules.music_playlist import embeds as music_playlist_embeds
@@ -790,6 +791,13 @@ CASES = [
         "mahjong.my_stats",
         lambda **kw: mahjong_embeds.build_my_stats([], accent=kw.get("color")),
         branding.DEFAULT_ACCENT_COLOR,
+    ),
+    case(
+        "jail.policy_ballot",
+        lambda **kw: jail_embeds.build_policy_ballot_embed(
+            question="Quiet hours?", yes_ids=[1], no_ids=[2], **kw
+        ),
+        discord.Color(services_embeds.MOD_POLICY),
     ),
     case(
         "mahjong.how_to_play",

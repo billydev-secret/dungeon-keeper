@@ -70,7 +70,7 @@ that used to set them was removed.
 | Key | Default | Meaning |
 |---|---|---|
 | `inactive_channel_id` | unset (0) | The shared inactive channel; required before mark/sweep work |
-| `inactive_role_id` | unset (0) | The `@Inactive` role; auto-created on demand |
+| `inactive_role_id` | unset (0) | The `@Inactive` role; auto-created on demand through `ensure_config_role` (2026-09-03) — a stored 0 means "not set up yet", never "off", and an id inherited from the legacy `guild_id = 0` row is not read as a deletion. Listed with its live state on Config → Bot-Managed Roles |
 | `inactive_threshold_days` | 30 | Days idle before a member qualifies for a sweep (1–3650) |
 | `inactive_auto_sweep` | off | Enables the 6-hourly background sweep |
 | `inactive_sweep_cap` | 25 | Max members moved per sweep run (1–200) |

@@ -22,11 +22,8 @@ import discord
 
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import get_config_value
-from bot_modules.core.role_provision import (
-    RoleSpec,
-    ensure_feature_role,
-    mod_log_announcer,
-)
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import JAILED_ROLE
 from bot_modules.services.moderation import (
     compute_roles_to_snapshot,
     create_jail,
@@ -293,16 +290,6 @@ async def apply_jail(
     # ── Step 1: ensure @Jailed role ──────────────────────────────────
     guild_id = guild.id
 
-    def _get_jailed_role_id() -> int:
-        with ctx.open_db() as conn:
-            raw = get_config_value(conn, "jailed_role_id", "0", guild_id)
-        try:
-            return int(raw or "0")
-        except ValueError:
-            return 0
-
-    jailed_role_id = await asyncio.to_thread(_get_jailed_role_id)
-
     async def _lock_down(role: discord.Role) -> None:
         """Deny view + send on every channel so jailed members see nothing.
 
@@ -318,14 +305,22 @@ async def apply_jail(
             except discord.Forbidden:
                 pass
 
-    jailed_role = await ensure_feature_role(
+    # Through ensure_config_role, not ensure_feature_role: it is the only path
+    # that knows whether the stored id is *this guild's own row* or one
+    # inherited from the legacy guild_id=0 fallback. Reading the key here and
+    # provisioning directly defaulted stored_is_own to True, so a second guild
+    # with no row of its own was told, on its first jail, that a role it never
+    # had had been deleted — in its mod channel and its audit log.
+    jailed_role = await ensure_config_role(
+        ctx,
         guild,
-        RoleSpec(name="Jailed", reason="Dungeon Keeper jail system setup"),
-        load=lambda: jailed_role_id,
-        store=lambda rid: ctx.set_config_value("jailed_role_id", str(rid), guild.id),
+        JAILED_ROLE.key,
+        JAILED_ROLE.spec,
+        feature=JAILED_ROLE.feature,
+        # A jail needs a role, so a stored 0 is "not set up yet", never "off".
+        respect_opt_out=JAILED_ROLE.none_means_off,
+        assigns=JAILED_ROLE.assigns,
         on_create=_lock_down,
-        announce=mod_log_announcer(ctx, guild),
-        feature="the jail",
     )
     if jailed_role is None:
         return JailOutcome(

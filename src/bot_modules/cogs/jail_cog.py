@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
@@ -13,8 +14,15 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.services.policy_ballot_service import (
+    TICKET_STATUS_BALLOT,
+    attach_ballot_message,
+    get_open_ballot_for_thread,
+    open_ballot,
+)
 from bot_modules.jail.embeds import (
     build_adopted_policies_embed,
+    build_policy_ballot_embed,
     build_modinfo_embed,
     build_policy_close_embed,
     build_policy_list_embed,
@@ -32,9 +40,17 @@ from bot_modules.jail.logic import sanitize_channel_name
 from bot_modules.commands.jail_commands import (
     CLR_JAIL,
     CLR_POLICY,
+    PolicyBallotAbstainButton,
+    PolicyBallotCloseButton,
+    PolicyBallotNoButton,
+    PolicyBallotYesButton,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
+    BALLOT_THREAD_AUTO_ARCHIVE_MINUTES,
+    _ballot_view,
+    _policy_vote_timeout_seconds,
+    finalize_ballot,
     TICKET_STATUS_CLOSED,
     TICKET_STATUS_ESCALATED,
     TICKET_STATUS_OPEN,
@@ -54,6 +70,7 @@ from bot_modules.commands.jail_commands import (
     _add_ticket_panel,
     _get_config,
     _get_mod_role_ids,
+    guild_eligible_voters,
     _is_admin,
     _is_mod,
     _post_audit,
@@ -121,6 +138,185 @@ def _read_warning_threshold(ctx: "AppContext", guild_id: int) -> int:
         return int(get_config_value(conn, "warning_threshold", "3", guild_id))
 
 
+class _PolicyBallotModal(discord.ui.Modal, title="Open a Community Ballot"):
+    """Takes the one string that becomes a public ballot.
+
+    Only the question crosses into the room. Nothing from a private policy
+    channel — no description, no transcript, no "as discussed" quote — is
+    copied here, which is what keeps "let members vote" from also meaning "let
+    members read the mod team's deliberation".
+    """
+
+    question: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
+        label="The question members vote on",
+        style=discord.TextStyle.paragraph,
+        placeholder="Should we add quiet hours to the voice rooms?",
+        required=True,
+        max_length=1000,
+    )
+
+    def __init__(self, ctx: AppContext) -> None:
+        super().__init__()
+        self._ctx = ctx
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        ctx = self._ctx
+        guild = interaction.guild
+        member = interaction.user
+        channel = interaction.channel
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
+            return
+        # Re-checked on submit, not just before the modal opened: a modal can be
+        # left sitting open, and `/policy`'s permission decorators are inert
+        # (discord.py only emits default_member_permissions for top-level
+        # commands), so a runtime check is the only gate there is.
+        if not _is_admin(member, ctx):
+            await interaction.response.send_message(
+                "❌ Only admins can open a community ballot.", ephemeral=True
+            )
+            return
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ Run this in a normal text channel — a ballot opens a thread, "
+                "and threads and forum posts can't hold one.",
+                ephemeral=True,
+            )
+            return
+
+        question_text = self.question.value.strip()
+        await interaction.response.defer(ephemeral=True)
+
+        hours = _policy_vote_timeout_seconds(ctx, guild.id) / 3600.0
+        closes_at = time.time() + hours * 3600.0 if hours > 0 else 0.0
+
+        try:
+            thread = await channel.create_thread(
+                name=f"ballot-{sanitize_channel_name(question_text[:40], fallback='vote')}"[:100],
+                type=discord.ChannelType.public_thread,
+                auto_archive_duration=BALLOT_THREAD_AUTO_ARCHIVE_MINUTES,
+                reason=f"Community ballot opened by {member}",
+            )
+        except discord.HTTPException:
+            log.exception("Could not open a ballot thread in %s", channel.id)
+            await interaction.followup.send(
+                "❌ I couldn't open a thread here — check I have Create Public "
+                "Threads and Send Messages in Threads in this channel.",
+                ephemeral=True,
+            )
+            return
+
+        pb_guild_id = guild.id
+        pb_member_id = member.id
+        pb_channel_id = channel.id
+
+        def _create_ballot():
+            with ctx.open_db() as conn:
+                policy_id = create_policy_ticket(
+                    conn,
+                    guild_id=pb_guild_id,
+                    creator_id=pb_member_id,
+                    channel_id=thread.id,
+                    title=question_text[:_POLICY_TITLE_MAX],
+                    description="",
+                )
+                # 'ballot', deliberately outside the ('open','voting') pair
+                # `get_policy_ticket_by_channel` matches: a mod running
+                # `/policy vote` inside a ballot thread must not be able to
+                # start the mod team's unanimity vote on it, because that
+                # vote's finalizer archives and deletes the channel it runs in.
+                conn.execute(
+                    "UPDATE policy_tickets SET status = ? WHERE id = ?",
+                    (TICKET_STATUS_BALLOT, policy_id),
+                )
+                bid = open_ballot(
+                    conn,
+                    guild_id=pb_guild_id,
+                    policy_id=policy_id,
+                    channel_id=pb_channel_id,
+                    question=question_text,
+                    opened_by=pb_member_id,
+                    closes_at=closes_at,
+                )
+                # The thread id lands with the row, before the card is posted.
+                # If that send then fails, the ballot is still findable by
+                # thread (so `/policy close` can cancel it) and still closable
+                # by the sweep — a row nobody could reach would sit open until
+                # somebody noticed.
+                attach_ballot_message(
+                    conn, bid, thread_id=thread.id, message_id=0
+                )
+                write_audit(
+                    conn,
+                    guild_id=pb_guild_id,
+                    action="policy_ballot_opened",
+                    actor_id=pb_member_id,
+                    extra={
+                        "ballot_id": bid,
+                        "policy_id": policy_id,
+                        "question": question_text,
+                        "channel_id": pb_channel_id,
+                        "thread_id": thread.id,
+                    },
+                )
+                return bid, policy_id
+
+        ballot_id, _policy_id = await asyncio.to_thread(_create_ballot)
+
+        accent = await safe_resolve_accent(ctx, guild, log_label="jail")
+        embed = build_policy_ballot_embed(
+            question=question_text,
+            closes_at=closes_at or None,
+            color=accent,
+        )
+        # No ping and no mention, ever — not on the card, not in the opening
+        # line. A ballot is a broadcast to a room, and a role ping to every
+        # member who can see the channel is a mass ping; a member mention would
+        # be a contact edge the no-contact list would have to be consulted for.
+        try:
+            message = await thread.send(
+                embed=embed,
+                view=_ballot_view(ballot_id),
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("Could not post the ballot card for ballot %s", ballot_id)
+            await interaction.followup.send(
+                "❌ I opened the thread but couldn't post the ballot card — check "
+                "I have Send Messages in Threads and Embed Links here. Run "
+                "`/policy close` in the thread to cancel this ballot.",
+                ephemeral=True,
+            )
+            return
+
+        def _attach():
+            with ctx.open_db() as conn:
+                attach_ballot_message(
+                    conn, ballot_id, thread_id=thread.id, message_id=message.id
+                )
+
+        await asyncio.to_thread(_attach)
+
+        await interaction.followup.send(
+            f"Ballot opened → {thread.mention}", ephemeral=True
+        )
+
+        audit_embed = discord.Embed(
+            title="🗳️ Community Ballot Opened",
+            description=(
+                # A resolved name, not a `<@id>`: an embed mention is resolved
+                # by the reading client from its own cache, so it degrades to a
+                # bare number for anyone who hasn't seen that member. The
+                # channel mention is fine — those always resolve.
+                f"**{question_text}**\n"
+                f"Opened by {discord.utils.escape_markdown(member.display_name)} "
+                f"in {channel.mention}"
+            ),
+            color=accent,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+
 class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
     vote_text: discord.ui.TextInput = discord.ui.TextInput(  # type: ignore[assignment]
         label="Exact policy text to vote on",
@@ -163,15 +359,7 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
         mod_role_ids = _get_mod_role_ids(ctx, guild.id)
         admin_role_ids = _get_admin_role_ids(ctx, guild.id)
         all_role_ids = mod_role_ids | admin_role_ids
-        eligible: set[int] = set()
-        for m in guild.members:
-            if m.bot:
-                continue
-            if m.guild_permissions.administrator:
-                eligible.add(m.id)
-                continue
-            if all_role_ids & {r.id for r in m.roles}:
-                eligible.add(m.id)
+        eligible = guild_eligible_voters(ctx, guild)
 
         embed = build_policy_vote_initial_embed(
             channel_name=interaction.channel.name,  # type: ignore[union-attr]
@@ -222,6 +410,13 @@ class JailCog(commands.Cog):
         bot.add_dynamic_items(PolicyVoteYesButton)
         bot.add_dynamic_items(PolicyVoteNoButton)
         bot.add_dynamic_items(PolicyVoteAbstainButton)
+        # A ballot runs for days in a public thread and has to survive every
+        # restart in between. Its custom-id prefix is `policy_ballot:`, which
+        # cannot collide with `policy_vote:` above.
+        bot.add_dynamic_items(PolicyBallotYesButton)
+        bot.add_dynamic_items(PolicyBallotNoButton)
+        bot.add_dynamic_items(PolicyBallotAbstainButton)
+        bot.add_dynamic_items(PolicyBallotCloseButton)
 
         # Context menus — add to tree; stored for removal in cog_unload
         async def _jail_ctx_cb(
@@ -1095,6 +1290,42 @@ class JailCog(commands.Cog):
         await interaction.response.send_modal(_PolicyVoteModal(policy["id"], ctx))
 
     @policy.command(
+        name="ballot",
+        description="Open a community ballot in this channel (admin only).",
+    )
+    @app_commands.default_permissions(administrator=True)
+    async def policy_ballot_cmd(self, interaction: discord.Interaction) -> None:
+        """Put a question to everyone who can see this channel.
+
+        Admin-only, matching ``/policy open``, and enforced **here at runtime**:
+        the ``default_permissions`` decorator above is inert on a subcommand
+        (discord.py emits ``default_member_permissions`` only when
+        ``self.parent is None``, and the ``/policy`` group carries none), so
+        every member already sees this command in the picker. It is decoration
+        for the day the group gains its own gate, never the gate itself.
+        """
+        ctx = self.bot.ctx
+        guild = interaction.guild
+        member = interaction.user
+        if guild is None or not isinstance(member, discord.Member):
+            await interaction.response.send_message("❌ Server-only.", ephemeral=True)
+            return
+        if not _is_admin(member, ctx):
+            await interaction.response.send_message(
+                "❌ Only admins can open a community ballot.", ephemeral=True
+            )
+            return
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ Run this in a normal text channel — a ballot opens a thread, "
+                "and threads and forum posts can't hold one.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(_PolicyBallotModal(ctx))
+
+    @policy.command(
         name="close",
         description="Close a policy proposal without voting (admin only).",
     )
@@ -1112,6 +1343,33 @@ class JailCog(commands.Cog):
         if not _is_admin(member, ctx):
             await interaction.response.send_message(
                 "❌ Only admins can close policy proposals.", ephemeral=True
+            )
+            return
+
+        # Run inside a community ballot's thread, this cancels the ballot: the
+        # counts are frozen so the record says what the room had said, but no
+        # result is claimed from a vote that was stopped early. It is the only
+        # way to call one off without recording a pass or a fail, and it is
+        # here rather than on a fourth button because calling off a ballot
+        # should be a deliberate act, not a neighbour of the Close everyone can
+        # see. A ballot's own ticket wears status 'ballot', so the proposal
+        # lookup below can never reach it.
+        def _fetch_thread_ballot():
+            with ctx.open_db() as conn:
+                return get_open_ballot_for_thread(conn, interaction.channel_id or 0)
+
+        thread_ballot = await asyncio.to_thread(_fetch_thread_ballot)
+        if thread_ballot is not None:
+            await interaction.response.defer(ephemeral=True)
+            closed = await finalize_ballot(
+                ctx, guild, thread_ballot["id"], closed_by=member.id, cancelled=True
+            )
+            await interaction.followup.send(
+                "Ballot cancelled — the votes cast so far are recorded, but no "
+                "result was declared."
+                if closed is not None
+                else "❌ That ballot has already closed.",
+                ephemeral=True,
             )
             return
 

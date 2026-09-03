@@ -26,6 +26,12 @@ from bot_modules.services.moderation import (
     revoke_warning,
     write_audit,
 )
+from bot_modules.services.policy_ballot_service import (
+    frozen_counts,
+    get_ballot_votes,
+    list_ballots,
+    tally_choices,
+)
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_perms, run_query
 from bot_modules.services.anon_audit_service import (
@@ -49,6 +55,7 @@ from web_server.schemas import (
     ModerationStatsResponse,
     NsfwBlocksResponse,
     NsfwTagsResponse,
+    PolicyBallotsResponse,
     PolicyTicketsResponse,
     SimpleActionResult,
     TicketActionResult,
@@ -1111,6 +1118,93 @@ async def list_policy_tickets(
 
     result = await run_query(_q)
     await _resolve_names(ctx, guild, result["policy_tickets"], ("creator_id", "creator_name"))
+    return result
+
+
+@router.get("/moderation/policy-ballots", response_model=PolicyBallotsResponse)
+async def list_policy_ballots(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
+):
+    """This guild's community ballots, with who voted how.
+
+    Per-voter rows are returned for open ballots as well as closed ones, and
+    that is not a leak: a ballot's tally card names every voter in the channel
+    while it runs. Billy's 2026-09-03 decision made ballots fully public, so
+    this page shows moderators exactly what the room can already see — it is
+    the readable version, not a privileged one.
+
+    The counts come off the ballot row once it has closed, never re-derived
+    from the vote rows: a member erased after a ballot closed must not be able
+    to move a result that was announced. While a ballot is open there is
+    nothing frozen yet, so the live rows are counted instead.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+
+    def _q():
+        with ctx.open_db() as conn:
+            rows = list_ballots(conn, guild_id)
+            ballots = []
+            for r in rows:
+                votes = get_ballot_votes(conn, r["id"])
+                closed = r["closed_at"] is not None
+                if closed:
+                    yes, no, abstain = frozen_counts(r)
+                else:
+                    tally = tally_choices(votes)
+                    yes, no, abstain = (
+                        len(tally["yes"]), len(tally["no"]), len(tally["abstain"])
+                    )
+                ballots.append(
+                    {
+                        "id": r["id"],
+                        "policy_id": r["policy_id"],
+                        "question": r["question"],
+                        # Snowflakes as strings: a channel or message id is
+                        # bigger than JavaScript's safe integer range.
+                        "channel_id": str(r["channel_id"]) if r["channel_id"] else "",
+                        "thread_id": str(r["thread_id"]) if r["thread_id"] else "",
+                        "opened_by": str(r["opened_by"]),
+                        "opened_at": r["opened_at"],
+                        "closes_at": r["closes_at"],
+                        "closed_at": r["closed_at"],
+                        "closed_by": str(r["closed_by"]) if r["closed_by"] else "",
+                        "outcome": r["outcome"] or "",
+                        "yes_count": yes,
+                        "no_count": no,
+                        "abstain_count": abstain,
+                        "votes": [
+                            {"user_id": str(v["user_id"]), "choice": v["choice"]}
+                            for v in votes
+                        ],
+                    }
+                )
+            return {
+                "open_count": sum(1 for b in ballots if not b["closed_at"]),
+                "total_count": len(ballots),
+                "ballots": ballots,
+            }
+
+    result = await run_query(_q)
+    await _resolve_names(
+        ctx,
+        guild,
+        result["ballots"],
+        ("opened_by", "opened_by_name"),
+        ("closed_by", "closed_by_name"),
+    )
+    # One flat pass over every ballot's voters rather than a call per ballot:
+    # the helper batches its database fallback, so resolving per ballot would
+    # be a query per ballot for the members who have left.
+    await _resolve_names(
+        ctx,
+        guild,
+        [v for b in result["ballots"] for v in b["votes"]],
+        ("user_id", "user_name"),
+    )
     return result
 
 

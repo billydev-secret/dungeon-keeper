@@ -255,13 +255,25 @@ class GuideNotifyButton(discord.ui.Button):
         # A member pressing 🔔 on a guild that never set an opt-in role used to
         # hit a dead end telling them to find an admin. Make the role instead —
         # this is the one place in the feature where "first use" is a member
-        # actually asking for it. An admin who stored "(none)" still gets None
-        # back, and the dead end with it.
+        # actually asking for it.
+        #
+        # An admin who stored "(none)" gets None back, and the dead end with it.
+        # That is a 2026-09-03 change: `none_means_off` was False here until
+        # then, so the role was made regardless of the dial, while Economy
+        # Settings told the admin "(none)" turned notifications off. A
+        # preference the code doesn't enforce is the one thing CLAUDE.md rules
+        # out flatly, and the ambiguity it was covering for — panels writing 0
+        # on every save — is now answered on the panel, by the state line under
+        # the picker.
         role = await ensure_config_role(
             bot.ctx, guild, ECONOMY_NOTIFY.key, ECONOMY_NOTIFY.spec,
             feature=ECONOMY_NOTIFY.feature,
             allow_legacy_fallback=ECONOMY_NOTIFY.legacy_fallback,
             respect_opt_out=ECONOMY_NOTIFY.none_means_off,
+            # The one ping the bot actually hands out, so a same-named role
+            # above its own top role must not be adopted: it could never be
+            # granted, and every 🔔 press after would fail at add_roles.
+            assigns=ECONOMY_NOTIFY.assigns,
         )
         if role is None:
             # Opted out, or the role couldn't be made (no Manage Roles). Reads

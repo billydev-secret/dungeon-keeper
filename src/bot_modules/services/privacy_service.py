@@ -634,6 +634,16 @@ def purge_user_data(
         ("legitlibs_templates", "author_id"),
         # Auto-react bookkeeping naming whose message was reacted to.
         ("auto_react_placements", "author_id"),
+        # How the member voted in a community policy ballot. An activity
+        # record with no Art 17(3) ground, the same call `policy_votes` gets
+        # one block below — and safe to take because a closed ballot's result
+        # is frozen onto `policy_ballots` at close, so removing a vote cannot
+        # move a decision that was already announced. Removing one from an
+        # *open* ballot does change the live tally, which is correct: the
+        # member is no longer a participant. `policy_ballots` itself is
+        # preserved — it is a record about the server's governance, and it
+        # names no voter.
+        ("policy_ballot_votes", "user_id"),
     ):
         _delete(
             conn,
@@ -804,7 +814,8 @@ SUBJECT_ID_COLUMNS = frozenset(
         "holder_id", "host_id",
         "invitee_id", "inviter_id", "labeled_by", "last_winner_id", "loser_id",
         "lowest_user",
-        "member_id", "mod_id", "moderator_id", "opener_id", "original_author_id",
+        "member_id", "mod_id", "moderator_id", "opened_by", "opener_id",
+        "original_author_id",
         "owner_id", "partner_id", "player_a", "player_b", "player_id",
         "posted_by", "poster_id", "protected_user_id",
         "quoted_id", "quoted_user_id", "quoter_id", "reactor_id", "recipient_id",

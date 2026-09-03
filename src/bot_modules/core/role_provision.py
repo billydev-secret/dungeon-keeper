@@ -30,7 +30,11 @@ Resolution order, given the id the feature has stored:
 2. It doesn't, but a role named exactly ``spec.name`` exists → **adopt** it and
    store its id. This is what stops a fresh install from twinning a role the
    guild already has. Exact match only: ``@jailed`` is not ``@Jailed``, and
-   grabbing the wrong role is worse than making a new one.
+   grabbing the wrong role is worse than making a new one. A candidate the bot
+   could not *use* is not a candidate: an integration-managed role can never be
+   granted by anyone, and — for a role the bot hands out — neither can one
+   sitting above the bot's own top role. Adopting either stored an id every
+   later ``add_roles`` would 403 on.
 3. Nothing stored and no name match → **create**, silently.
 4. Something *was* stored and now resolves to nothing → the admin deleted the
    role. Still create, but this is a **recreate**: the new role is empty, every
@@ -132,6 +136,49 @@ def choose_role_action(
     return ("recreate", None) if (stored_id and stored_is_own) else ("create", None)
 
 
+def adoptable_role_ids(
+    roles: Sequence[Any],
+    name: str,
+    *,
+    bot_top_position: int | None = None,
+) -> list[int]:
+    """The ids of roles named exactly ``name`` that the bot could really use.
+
+    Two filters, and both exist because adopting the wrong role is silent:
+
+    * **``managed`` is always excluded.** An integration owns those (a bot's own
+      role, the booster role); Discord refuses to grant one to anybody, so
+      adopting it stores an id that can never work.
+    * **Above the bot's top role is excluded when the bot hands the role out**
+      — pass ``bot_top_position``. A guild that already has a ``@Jailed``
+      sitting above Dungeon Keeper's own role used to get it adopted and stored,
+      after which every jail failed at ``add_roles`` with a hierarchy error
+      about a role nobody chose. Making a working twin lower down is the lesser
+      evil, and the roster page names the duplicate.
+
+    Mentioning a role needs no hierarchy at all, so a mention-only ping dial
+    passes ``bot_top_position=None`` and a role above the bot is fine to adopt.
+
+    Order is preserved (``guild.roles`` runs lowest position first), which is
+    what makes the choice stable run to run.
+    """
+    out: list[int] = []
+    for role in roles:
+        if getattr(role, "name", None) != name:
+            continue
+        if getattr(role, "managed", False):
+            continue
+        position = getattr(role, "position", None)
+        if (
+            bot_top_position is not None
+            and isinstance(position, int)
+            and position >= bot_top_position
+        ):
+            continue
+        out.append(role.id)
+    return out
+
+
 def recreate_notice(spec_name: str, feature: str) -> str:
     """The mod-log line for a role that had to be remade after a deletion."""
     return (
@@ -163,8 +210,10 @@ async def ensure_feature_role(
     store: Callable[[int], Any],
     announce: Callable[[str], Awaitable[None]] | None = None,
     on_create: Callable[[discord.Role], Awaitable[None]] | None = None,
+    on_provision: Callable[[str, int], Any] | None = None,
     opted_out: bool = False,
     stored_is_own: bool = True,
+    assigns: bool = False,
     feature: str = "",
 ) -> discord.Role | None:
     """Return the feature's role, adopting or creating it if need be.
@@ -187,6 +236,19 @@ async def ensure_feature_role(
     are the feature's business and are set per channel, explicitly, because
     category grants do not cascade.
 
+    ``on_provision`` is called with ``("created" | "adopted", role_id)`` the
+    moment the bot starts pointing at a role it wasn't pointing at before —
+    never on a plain ``use``. It is how ``bot_managed_roles`` (migration 203)
+    learns which roles are the bot's doing, so the dashboard can state that as a
+    fact instead of inferring it. Optional: a call site with no database handle
+    (``ensure_dm_roles``) passes nothing and the roster degrades to inference.
+
+    ``assigns`` says the bot adds and removes this role from members, so a
+    same-named role above the bot's own top role is no use and must not be
+    adopted — see :func:`adoptable_role_ids`. Leave it False for a role the bot
+    only ever *mentions*: hierarchy is irrelevant there and skipping a
+    perfectly good role would make a needless twin.
+
     ``opted_out`` short-circuits everything: an admin said "no role here", so
     nothing is created, adopted or written and ``None`` comes straight back.
 
@@ -198,7 +260,15 @@ async def ensure_feature_role(
         return None
     stored_id = int(await _resolve(load()) or 0)
     stored_role = guild.get_role(stored_id) if stored_id else None
-    named = [r.id for r in guild.roles if r.name == spec.name]
+    bot_member = getattr(guild, "me", None)
+    top_role = getattr(bot_member, "top_role", None) if bot_member else None
+    top_position = getattr(top_role, "position", None) if top_role else None
+    named = adoptable_role_ids(
+        guild.roles,
+        spec.name,
+        bot_top_position=top_position if (assigns and isinstance(top_position, int))
+        else None,
+    )
 
     action, role_id = choose_role_action(
         stored_id, stored_role is not None, named,
@@ -212,6 +282,8 @@ async def ensure_feature_role(
         role = guild.get_role(int(role_id or 0))
         if role is not None:
             await _resolve(store(role.id))
+            if on_provision is not None:
+                await _resolve(on_provision("adopted", role.id))
             log.info(
                 "role_provision: adopted existing @%s (%s) for %s in guild %s",
                 role.name, role.id, feature or spec.name, guild.id,
@@ -245,6 +317,8 @@ async def ensure_feature_role(
         return None
 
     await _resolve(store(role.id))
+    if on_provision is not None:
+        await _resolve(on_provision("created", role.id))
 
     if on_create is not None:
         await on_create(role)
@@ -301,6 +375,9 @@ async def ensure_config_role(
     feature: str = "",
     allow_legacy_fallback: bool = True,
     respect_opt_out: bool = True,
+    on_create: Callable[[discord.Role], Awaitable[None]] | None = None,
+    announce: Callable[[str], Awaitable[None]] | None = None,
+    assigns: bool = False,
 ) -> discord.Role | None:
     """:func:`ensure_feature_role` for a role dial living in the ``config`` KV.
 
@@ -309,11 +386,24 @@ async def ensure_config_role(
     write ``role = await ensure_config_role(...)`` / ``if role is not None:``
     and keep exactly the "unset means don't" behaviour it had before.
 
+    **Every ``config``-KV role dial should come through here**, not through
+    :func:`ensure_feature_role` with a hand-rolled read. This is the only place
+    that answers "is the stored id *this guild's own*", and a caller that reads
+    its key with the legacy ``guild_id = 0`` fallback and then provisions
+    directly gets ``stored_is_own=True`` by default — which is how a second
+    guild inheriting the home guild's ``jailed_role_id`` was told, on its first
+    jail, that a role it never had had been deleted. Jail and Inactive did
+    exactly that until 2026-09-03.
+
+    ``on_create`` and ``announce`` are passed straight through (``announce``
+    defaults to :func:`mod_log_announcer`), so a feature that lays down channel
+    overwrites for a brand-new role does not have to leave this path to do it.
+
     ``respect_opt_out=False`` provisions even over a stored ``0``. Only for a
-    dial where 0 cannot mean "off" — the dashboard panels save as whole forms
-    and write ``"0"`` for any untouched picker, so on those dials a 0 records a
-    save, not a decision. ``feature_roles.none_means_off`` carries the per-dial
-    answer and the reasoning; don't set it from a call site.
+    dial where 0 cannot mean "off" — a jail with no role is not a jail, so the
+    two moderation dials pass it. It is *not* for working around a panel that
+    writes 0 on every save: ``feature_roles.none_means_off`` carries the
+    per-dial answer and the reasoning; don't set it from a call site.
     """
     import asyncio
 
@@ -343,11 +433,53 @@ async def ensure_config_role(
         spec,
         load=lambda: stored_id,
         store=lambda rid: ctx.set_config_value(key, str(rid), guild.id),
-        announce=mod_log_announcer(ctx, guild),
+        announce=announce if announce is not None else mod_log_announcer(ctx, guild),
+        on_create=on_create,
+        on_provision=provenance_recorder(ctx, guild.id, key),
         opted_out=opted_out,
         stored_is_own=stored_is_own,
+        assigns=assigns,
         feature=feature or spec.name,
     )
+
+
+def provenance_recorder(
+    ctx: "AppContext", guild_id: int, key: str
+) -> Callable[[str, int], Awaitable[None]]:
+    """An ``on_provision`` that writes one ``bot_managed_roles`` row.
+
+    Hand this to :func:`ensure_feature_role` from any call site that holds an
+    AppContext. It is what lets the roster page say "I made this role" as a
+    fact rather than inferring it from a resolving id; a call site that can't
+    (``ensure_dm_roles`` holds no database handle) simply passes nothing and
+    the roster falls back to inference for those roles.
+
+    Never raises into the provisioner: a record that fails to write must not
+    cost a member their role.
+    """
+
+    async def _record(origin: str, role_id: int) -> None:
+        import asyncio
+
+        from bot_modules.services.role_provenance import record_role_provenance
+
+        def _write() -> None:
+            with ctx.open_db() as conn:
+                record_role_provenance(
+                    conn, guild_id, key, role_id,
+                    "adopted" if origin == "adopted" else "created",
+                )
+                conn.commit()
+
+        try:
+            await asyncio.to_thread(_write)
+        except Exception:  # noqa: BLE001 — provenance is a record, not a gate
+            log.warning(
+                "role_provision: could not record provenance for %s in guild %s",
+                key, guild_id, exc_info=True,
+            )
+
+    return _record
 
 
 def mod_log_announcer(

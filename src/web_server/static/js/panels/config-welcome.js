@@ -1,3 +1,4 @@
+import { mountRoleDialStates } from "../role-dial-state.js";
 import {
   loadConfig,
   loadChannels,
@@ -122,7 +123,8 @@ export function mount(container) {
             <div class="field">
               <label>Welcome Ping Role</label>
               <span data-picker="welcome_ping_role_id"></span>
-              <div class="field-hint">This role is mentioned above the welcome embed so its holders get notified of every new arrival. "(none)" pings nobody.</div>
+              <div class="field-hint">This role is mentioned above the welcome embed so its holders get notified of every new arrival. "(none)" pings nobody, and I won't make one.</div>
+              <div data-role-state="welcome_ping_role_id"></div>
             </div>
             <div class="field">
               <label><input type="checkbox" name="welcome_ping_member" ${w.welcome_ping_member ? "checked" : ""} /> Ping the new member</label>
@@ -216,6 +218,11 @@ export function mount(container) {
     }
 
     guardForm(form);
+
+    // The one line that tells "(none) because nobody touched it" apart from
+    // "(none) because you chose it" apart from "(none) because an unrelated
+    // save wrote a 0 here". Fire and forget — the dial saves either way.
+    mountRoleDialStates(container);
 
     // Show/hide the unverified role selector based on trigger selection.
     const triggerSelect = form.querySelector("select[name='welcome_trigger']");

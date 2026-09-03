@@ -338,3 +338,55 @@ def test_store_lifecycle(tmp_path):
         assert get_active_inactive(conn, 100, 5) is None
         # Second reactivate is a no-op (already not active).
         assert reactivate_inactive(conn, iid, reason="again") is False
+
+
+async def test_ensure_role_does_not_announce_a_deletion_for_an_inherited_id(
+    tmp_path,
+):
+    """An id inherited from the legacy ``guild_id = 0`` row is not a deletion.
+
+    Same defect the jail had: the dial was read *with* the legacy fallback and
+    then provisioned directly, so a guild that has no row of its own resolved
+    the home guild's role id, found nothing, and got told a role it never had
+    had been deleted — in its mod channel and its audit log.
+    """
+    from bot_modules.core.db_utils import open_db
+
+    ctx = _make_ctx(tmp_path / "inherit.db")
+    guild = _guild()
+    guild.get_role = MagicMock(return_value=None)
+    guild.channels = []
+    new_role = _role(INACTIVE_ROLE_ID)
+    guild.create_role = AsyncMock(return_value=new_role)
+    with open_db(ctx.db_path) as conn:
+        from bot_modules.core.db_utils import set_config_value
+
+        set_config_value(conn, "inactive_role_id", "424242", 0)
+        conn.commit()
+
+    role = await ensure_inactive_role(ctx, guild)
+
+    assert role is new_role
+    with open_db(ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT action FROM audit_log WHERE action = ?",
+            ("feature_role_recreated",),
+        ).fetchall()
+    assert rows == []
+
+
+async def test_ensure_role_records_provenance(tmp_path):
+    from bot_modules.core.db_utils import open_db
+    from bot_modules.services.role_provenance import read_role_provenance
+
+    ctx = _make_ctx(tmp_path / "prov.db")
+    guild = _guild()
+    guild.get_role = MagicMock(return_value=None)
+    guild.channels = []
+    guild.create_role = AsyncMock(return_value=_role(INACTIVE_ROLE_ID))
+
+    await ensure_inactive_role(ctx, guild)
+
+    with open_db(ctx.db_path) as conn:
+        prov = read_role_provenance(conn, guild.id)
+    assert prov["inactive_role_id"].origin == "created"

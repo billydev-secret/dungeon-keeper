@@ -1,9 +1,38 @@
 # Role autocreate, round 2 — a design drill-down with a front-end lens
 
-**Status:** Design document. **Nothing here is built.** Round 1 (`ac44ec4b`,
-2026-08-26) shipped the provisioner and the onboarding panel; stages 3 and 4 of
-`docs/plans/role-autocreate.md` were never started, and this document is what
-should replace them.
+**Status: BUILT 2026-09-03**, to the decisions table at the bottom. Round 1
+(`ac44ec4b`, 2026-08-26) shipped the provisioner and the onboarding panel;
+stages 3 and 4 of `docs/plans/role-autocreate.md` were never started, and this
+document replaced them.
+
+What shipped, and where the current behaviour is now documented —
+**`docs/role_provisioning_spec.md` (Reference) is authoritative from here**;
+this document is kept as the reasoning behind it:
+
+* **Provenance first** — migration 203 `bot_managed_roles`, written by
+  `core/role_provision` and nothing else. No personal data, so no
+  `data_register.md` row (§7 anticipated this; the actor id is not stored).
+* **The roster** — route id `bot-roles`, "Bot-Managed Roles" under Config →
+  Roles, over a widened `feature_roles.MANAGED_ROLES` covering all sixteen
+  roles. Nine states, not the four of round 1.
+* **Per-dial state lines** on the eight panels that own a role dial (§4f).
+* **"(none)" is honoured on `econ_game_role_id`** — the §3b violation, fixed
+  the way the decisions table chose rather than the way §4f recommended.
+* **Both R4 dials reopened create-on-offer** — `guess_role_id` and the
+  spectate gate are in the registry, offerable in onboarding, and refused by
+  every other creation path.
+* **The §3d false deletion** — Jail and Inactive now provision through
+  `ensure_config_role`, the only path that knows whether a stored id is this
+  guild's own. Tests written to fail first.
+* **The §3c adoption hazard** — `adoptable_role_ids` filters `managed` always,
+  and above-the-bot for roles the bot hands out.
+* **§3g** — the Onboarding panel detects and explains a missing Manage Server
+  (the invite stays narrow), surfaces `guild.features`, and the `badge-muted`
+  class that never existed is now `badge-dim`.
+
+**Not built, on purpose:** any button that deletes a role (§8 q4 — "stop
+managing" means stop pointing at it); direction (b)'s setup wizard; direction
+(c)'s config export/import, deferred.
 
 **Billy's ask, verbatim:** he "likes what's there, wants another look at how
 roles get added; could drive server setup via Discord's community features / a

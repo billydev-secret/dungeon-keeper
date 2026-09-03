@@ -612,3 +612,73 @@ async def test_apply_jail_indefinite_when_duration_none(tmp_path):
             "SELECT expires_at FROM jails WHERE id = ?", (result.jail_id,),
         ).fetchone()
     assert row["expires_at"] is None  # indefinite → no expiry
+
+
+# ── the role a second guild never had ────────────────────────────────
+
+
+async def test_apply_jail_does_not_accuse_a_guild_of_deleting_an_inherited_role(
+    tmp_path,
+):
+    """An inherited ``guild_id = 0`` role id is not a deletion.
+
+    Live shape, read off production 2026-09-03: ``jailed_role_id`` is set at
+    ``guild_id = 0`` and two of the five guilds have no row of their own. The
+    legacy fallback hands those guilds the home guild's role id, which can
+    never resolve there — and the first jail told the mods
+    "⚠️ **Jailed** was deleted, so I made a new one" about a role that server
+    never had. Nothing was deleted; the recreate notice is a false accusation
+    and it lands in the mod channel and the audit log.
+    """
+    ctx = _make_ctx(tmp_path / "inherit.db")
+    guild = _guild(guild_id=ctx.guild_id)
+
+    # The home guild's row, inherited by every guild without one of its own.
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "jailed_role_id", "5000", guild_id=0)
+        conn.commit()
+
+    new_role = MagicMock(spec=discord.Role)
+    new_role.id = 9999
+    guild.create_role = AsyncMock(return_value=new_role)
+    jail_channel = MagicMock(spec=discord.TextChannel)
+    jail_channel.id = 6000
+    jail_channel.send = AsyncMock()
+    guild.create_text_channel = AsyncMock(return_value=jail_channel)
+
+    result = await apply_jail(
+        ctx, guild, _member(42), _member(1),
+        reason="", duration_seconds=None,
+    )
+
+    assert result.ok is True
+    with open_db(ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT action FROM audit_log WHERE guild_id = ? AND action = ?",
+            (ctx.guild_id, "feature_role_recreated"),
+        ).fetchall()
+    assert rows == [], "told the mods a role they never had was deleted"
+
+
+async def test_apply_jail_records_that_it_made_the_role(tmp_path):
+    """Provenance: the roster can state "I made this" rather than infer it."""
+    from bot_modules.services.role_provenance import read_role_provenance
+
+    ctx = _make_ctx(tmp_path / "prov.db")
+    guild = _guild(guild_id=ctx.guild_id)
+    new_role = MagicMock(spec=discord.Role)
+    new_role.id = 9999
+    guild.create_role = AsyncMock(return_value=new_role)
+    jail_channel = MagicMock(spec=discord.TextChannel)
+    jail_channel.id = 6000
+    jail_channel.send = AsyncMock()
+    guild.create_text_channel = AsyncMock(return_value=jail_channel)
+
+    await apply_jail(
+        ctx, guild, _member(42), _member(1), reason="", duration_seconds=None,
+    )
+
+    with open_db(ctx.db_path) as conn:
+        prov = read_role_provenance(conn, ctx.guild_id)
+    assert prov["jailed_role_id"].origin == "created"
+    assert prov["jailed_role_id"].role_id == 9999
