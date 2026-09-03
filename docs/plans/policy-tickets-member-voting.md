@@ -688,3 +688,61 @@ ballot still be there.
    leaves `/policy open` admin-only. "Members can raise a proposal" is a separate,
    larger feature (an intake queue with mod triage) and is out of scope here unless
    you want it.
+
+---
+
+## Decisions — Billy, 2026-09-03
+
+These supersede the "Open questions" section below wherever they overlap. The
+plan above was written before them; where the two disagree, this section wins.
+
+| Question | Decision |
+|---|---|
+| Venue | A **thread in the channel the ballot was launched in**. Not the private mod channel — the mod channel is not involved in a community ballot at all. |
+| Recorded as | A **policy ticket**, carrying its own tally. |
+| On passing | **Result recorded only.** Nothing is written to `policies` automatically; a mod turns a passed ballot into a policy later if they choose. |
+| Anonymity | **Fully public** — the running tally names every Yes / No / Abstain, the same way the mod vote does today. |
+| Electorate | **Anyone who can see the thread.** No role gate, no eligibility dial. A veteran-only vote is a ballot launched in a veteran-only channel. |
+| Who may open | **Admins only**, matching `/policy open`. |
+| Pass rule | **Simple majority**, abstentions don't count, **ties fail**. No minimum turnout — a ballot always resolves. |
+
+### What these decisions remove from the plan
+
+- **No `config_ids` role bucket and no `mountRoleMultiPicker`.** §3's eligibility
+  design is dropped entirely: the channel's own permissions are the electorate.
+  The frozen `mod-policy-tickets` page gains no voting dial.
+- **No tallies-only or secret-ballot construction.** §5's counter-table design and
+  its salted-hash critique are moot. Votes are attributed and rendered with names,
+  so a ballot vote row can reuse the shape `policy_votes` already has.
+- **No `policies` write path from a ballot**, and therefore no binding/veto
+  states, no cooling-off timer, and no ordering question against the mod vote.
+
+### Consequences that must be carried into the build
+
+- **No-contact cannot be honoured in a public tally, and that is accepted.** Two
+  members who have blocked each other will be named in the same list. This was put
+  to Billy explicitly as a cost of the fully-public option and taken deliberately.
+  It is defensible on the same ground as any public channel message — a ballot is
+  a one-to-many broadcast, not a pairing, and both members can already post in the
+  channel. **Do not** add a DM, a mention, or any per-pair surface to a ballot;
+  those would create a contact edge and reopen the gate for real.
+- **The finalizer hazard in §2 becomes load-bearing.** `_handle_policy_vote` hands
+  the finalizer `interaction.channel` while the sweeper hands it
+  `policy["channel_id"]`. Today those are the same channel so nothing breaks; a
+  ballot living in a *different* channel makes the finalizer delete the channel the
+  vote was posted in. This must be fixed before a ballot can exist, and it needs a
+  test that would fail on today's code.
+- **A ballot must outlive the mod ticket.** Resolution deletes the private channel;
+  a community ballot's thread and its recorded result are in a different channel
+  and must be unaffected.
+- `/policy`'s `default_permissions` are inert (§2) — every member already sees
+  `/policy open`. Since ballot-opening is admins-only, the runtime `_is_admin`
+  check is what enforces it, and that must be true of the ballot command too.
+
+### Still open, deliberately deferred
+
+- **A DK config export/import** ("duplicable template") was not decided and is out
+  of scope here — see the role-autocreate round 2 doc, which concludes it is a
+  larger piece of work than either round.
+- **Ballot duration** was not asked: reuse the existing admin-gated voting-deadline
+  dial on `mod-policy-tickets` rather than adding a second one.

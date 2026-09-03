@@ -892,3 +892,49 @@ under another name.
    is what "duplicable template" actually means once Discord's own template API
    is ruled out. It is a bigger piece of work than all of round 2 and shouldn't
    be smuggled into it.
+
+---
+
+## Decisions — Billy, 2026-09-03
+
+These supersede the "Open questions" section above wherever they overlap.
+
+| Question | Decision |
+|---|---|
+| §3b `@Economy Notifications` unenforced preference | **Honour "(none)".** The dial becomes real: with no role set the 🔔 button tells the member notifications aren't set up on this server. This **reverses the 2026-08-22 call** that the button should always work — taken knowingly. |
+| §4c roster page | **Build it — with provenance** (direction (d)). The full option: per-dial truth, the roster page, and the table recording which roles the bot created versus which were adopted. |
+| Deleting a bot-made role | **Not built.** "Stop managing" means *stop pointing at it*; the role is left in the server. Provenance makes a delete button *safe* to offer, which is not the same as wanting one. Ask before adding it. |
+| R4 dials (`guess_role_id`, Voice Control spectate gate) | **Reopen both**, create-on-offer — the role is only ever created in the same action that offers it to members, so it never exists empty. This closes the live exposure where an unset spectate gate leaves the room readable by @everyone. |
+| §3g `/invite` and Manage Server | **Leave the invite narrow.** The Onboarding panel must detect the missing permission and say so, with the steps to grant it — a visible limitation rather than a silent read-only page. |
+| §6 config export/import | **Deferred**, not folded into round 2. Scope it separately if wanted. |
+
+### Corrections to this document from a production read
+
+§8 question 2 asks whether `econ_game_role_id = 0` "in the two other guilds" is a
+decision or a save artifact. A read-only query of the production database on
+2026-09-03 shows it is **one guild, not two**:
+
+| Guild | `econ_game_role_id` | Messages |
+|---|---|---|
+| 1469491362444480666 | `1526051848518373608` | 606,233 |
+| 1476525656115515484 | `1544611624143552573` | 77,582 |
+| 1358148226850492618 | `0` | 96,359 |
+
+The two large guilds both hold real role ids. Only 1358148226850492618 sits at
+`0`, and it is not dormant — 96k messages. So its 🔔 button is dead while the
+other two work. Clearing that row would re-enable it, but that is a **production
+config write** and was not taken here; raise it with Billy as its own decision.
+
+### Consequences that must be carried into the build
+
+- Honouring "(none)" is a **behaviour change in production**, not just copy: any
+  guild currently relying on the role being created on demand will stop getting
+  it. Check what each guild has set before shipping, and say in the commit which
+  guilds are affected.
+- The §3d false-deletion bug (a second guild inheriting a `guild_id=0` id gets
+  "⚠️ **Jailed** was deleted" posted to its mod channel) and the §3e hierarchy
+  hazard in `jail/apply.py` are **not** covered by any decision above. They are
+  live defects; fold them in or raise them, don't leave them silently.
+- Provenance dissolves R3 (storage), so the roster's states become facts rather
+  than inferences. Build the provenance table first — the roster's honesty
+  depends on it.

@@ -81,7 +81,51 @@ problem — the controls are doing something real. *Relabelled in wave 4.*
   to *be* the panel. Same shape as Quality Score → Contributors.
   *Built in wave 4 — `50ec4d6c`.*
 
-### Still blocked on a decision — nobody should build these until Billy rules
+### Decided 2026-09-03 — no longer blocked
+
+Billy worked through these question by question. Full decision tables live in
+the two design docs; the short form:
+
+* **Part 3 #2 — consolidate approvals.** Build one unified queue with a `type`
+  column on the frozen `shop-approvals` id, extending the union
+  `economy_approvals_service.QUEUES` already does in Discord. Custom-item orders
+  are **widened from admin to economy manager, refund included** — they sit on a
+  manager-visible page and currently render a 403 error box there, so that was
+  a live defect either way. `dashboard_ia.md`'s "a feature that spans pages
+  stays whole" rule must be amended in the same commit: this is exactly the
+  queues-only group it argued against, and Billy has overridden it.
+* **Part 3 #3 — Policy Tickets for members.** A ballot is a **thread in the
+  channel it was launched in**, recorded as a policy ticket, with the mod
+  channel uninvolved. Fully public names; anyone who can see the thread may
+  vote; admins only may open; simple majority, ties fail, no turnout floor. A
+  pass **records a result only** — adoption stays a separate mod action. See
+  [policy-tickets-member-voting.md](policy-tickets-member-voting.md).
+* **Part 3 #10 — role autocreate round 2.** Roster page **plus provenance**;
+  "(none)" on the economy notification dial becomes real (reversing the
+  2026-08-22 call); both R4 dials reopen create-on-offer, closing the spectate
+  room's @everyone exposure; the invite stays narrow and the Onboarding panel
+  explains the missing permission instead. No role-delete button. See
+  [role-autocreate-round-2.md](role-autocreate-round-2.md).
+* **Part 4 #6 — Auto-Thread states: "not sure".** Left alone; the wave-4
+  relabel already addressed the confusion without removing behaviour.
+* **Part 4 #8 — Backfill Jobs: dropped** (`81b88193`), with the ping job ported
+  to `scripts/backfill_ping_events.py` first so the outstanding recovery of
+  5,774 historical pings was not stranded.
+* **Part 4 #9 — Mention Awards: keep.** No action.
+
+### Raised, awaiting a separate call
+
+* **`econ_game_role_id = 0` in guild 1358148226850492618** (96k messages, live).
+  The other two guilds hold real role ids, so only this one's 🔔 button is dead.
+  Clearing the row re-enables it, but that is a production config write.
+* **A DK config export/import.** What "duplicable server template" actually
+  means once Discord's template API is ruled out — bigger than all of round 2,
+  deliberately not smuggled into it.
+* **Porting the role backfill to a script.** `role_events` has a measured 15x
+  production undercount and two dashboard surfaces read it; it is the one job
+  from the retired panel worth reconsidering.
+
+### Previously blocked (all now decided above)
 
 1. **Part 3 #2 — consolidate all approvals** into one place (spending, QOTD, shop,
    claims). A real IA change across four surfaces.
