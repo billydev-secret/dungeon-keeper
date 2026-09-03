@@ -52,6 +52,18 @@ def mention(user_id: int) -> str:
     return f"<@{user_id}>"
 
 
+def named_or_anonymous(user_id: int, name_fn: NameFn, *, fallback: str = "a member") -> str:
+    """``name_fn(user_id)``, or ``fallback`` when there is no user to name.
+
+    A user id of 0 is not an unknown member — it is the absence of one, which
+    is how an erasure detaches a still-running purchase from the person who
+    bought it (``economy_theme_service.anonymise_live_theme``). Feeding that 0
+    to a resolver would render the literal ``<@0>``, so every embed that can
+    outlive its buyer routes through here instead of repeating the check.
+    """
+    return name_fn(user_id) if user_id else fallback
+
+
 def resolve_name_from(
     user_id: int,
     *,

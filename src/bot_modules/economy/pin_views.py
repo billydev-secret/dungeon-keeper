@@ -14,10 +14,15 @@ for a pin nobody saw. Decline opens a reason modal and refunds.
 Every handler is fail-safe — a service error becomes an ephemeral note, never a
 dead button.
 
-Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
-the ephemeral detail view behind the todo board's 🧾 Approvals button (see
-``economy/approval_views.py``); the DynamicItems below stay registered so the
-cards posted into bank channels before the move remain clickable.
+The card is reviewed in two places, and the buttons below serve both: a post in
+the economy's staff-only ``approvals_channel_id`` (``approval_views.
+post_approval_card``, dark until that dial is set), and the ephemeral detail
+behind the todo board's 🧾 Approvals button. Resolving on either closes both —
+the board reads the queue live, and the channel card is repainted through the
+ids stored on the row (``view_helpers.edit_stored_card``). Between 2026-08-29
+and 2026-09-02 the board was the only surface; before that, cards went to
+``bank_channel_id``, which in the main guild members can read. Those legacy
+cards stay clickable, since the DynamicItems never stopped being registered.
 """
 
 from __future__ import annotations
@@ -45,9 +50,16 @@ from bot_modules.services.economy_service import (
     notify_member,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.services.name_resolver import (
+    NameFn,
+    mention,
+    named_or_anonymous,
+)
 from bot_modules.core.utils import jump_url
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.view_helpers import (
+    card_name_fn,
+    edit_stored_card,
     edit_review_card,
     refresh_review_card,
     refresh_todo_board,
@@ -66,7 +78,8 @@ def render_pin_review_embed(
     accent: discord.Color,
     settings: EconSettings,
     *,
-    sponsor_mention: str,
+    sponsor_id: int,
+    name_fn: NameFn = mention,
     message: str,
     price: int,
     state: str,
@@ -81,7 +94,7 @@ def render_pin_review_embed(
     else:
         embed = discord.Embed(title="📋 Pin Requested", color=accent)
 
-    embed.add_field(name="👤 From", value=sponsor_mention, inline=True)
+    embed.add_field(name="👤 From", value=named_or_anonymous(sponsor_id, name_fn), inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
     embed.add_field(name="✏️ Message", value=message[:1024], inline=False)
     if state == "live":
@@ -91,10 +104,10 @@ def render_pin_review_embed(
             inline=False,
         )
         if resolver_id:
-            embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Approved by", value=name_fn(resolver_id), inline=True)
     if state in ("denied", "expired", "superseded"):
         if resolver_id:
-            embed.add_field(name="Declined by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Declined by", value=name_fn(resolver_id), inline=True)
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason[:1024], inline=False)
         embed.add_field(
@@ -110,7 +123,8 @@ def render_pin_review_embed(
 def render_pin_live_embed(
     accent: discord.Color,
     *,
-    sponsor_mention: str,
+    sponsor_id: int,
+    name_fn: NameFn = mention,
     message: str,
 ) -> discord.Embed:
     """The card that actually gets pinned in the pin channel."""
@@ -119,7 +133,7 @@ def render_pin_live_embed(
         description=message[:2048],
         color=accent,
     )
-    embed.add_field(name="Paid to pin this", value=sponsor_mention, inline=False)
+    embed.add_field(name="Paid to pin this", value=named_or_anonymous(sponsor_id, name_fn), inline=False)
     embed.set_footer(text="Pin of the Day · up for 24 hours")
     embed.timestamp = discord.utils.utcnow()
     return embed
@@ -309,9 +323,11 @@ async def _handle_resolution(
     if not can_manage_economy(member, settings):
         await _safe_ephemeral(interaction, MANAGE_DENIED_MSG)
         return
+    # One resolver for every repaint below: the requester, and the mod acting now.
+    name_fn = await card_name_fn(ctx, guild, row, member.id)
     if str(row["state"]) != "pending":  # type: ignore[index]
         accent = await safe_resolve_accent(ctx, guild, log_label="pin")
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, f"Already {row['state']}.")  # type: ignore[index]
         return
 
@@ -319,10 +335,10 @@ async def _handle_resolution(
 
     if not approve:
         await _do_deny(interaction, ctx, guild, settings, accent, submission_id,
-                       card, deny_reason or "", member.id)
+                       card, deny_reason or "", member.id, name_fn)
     else:
         await _do_approve(interaction, bot, ctx, guild, settings, accent,
-                          submission_id, row, card, member.id)
+                          submission_id, row, card, member.id, name_fn)
     # Whatever it resolved to, it is off the queue the board renders. Both
     # branches above swallow their own failures, so this always runs.
     await _refresh_board(bot, guild.id)
@@ -330,7 +346,7 @@ async def _handle_resolution(
 
 async def _do_deny(
     interaction, ctx, guild: discord.Guild, settings, accent, submission_id, card,
-    deny_reason: str, resolver_id: int,
+    deny_reason: str, resolver_id: int, name_fn: NameFn = mention,
 ) -> None:
     def _resolve():
         with ctx.open_db() as conn:
@@ -341,21 +357,24 @@ async def _do_deny(
     try:
         fresh = await asyncio.to_thread(_resolve)
     except ValueError as exc:
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, str(exc))
         return
     except Exception:
         log.exception("econ pin: failed to deny %s", submission_id)
         await _safe_ephemeral(interaction, "❌ Couldn't resolve that — try again.")
         return
-    await _edit_card(card, accent, settings, fresh)
+    await _edit_card(card, accent, settings, fresh, name_fn=name_fn)
+    # A resolution from the board's ephemeral leaves the approvals-channel
+    # card still offering the decision — close that one too.
+    await _edit_stored(interaction.client, card, accent, settings, fresh, name_fn=name_fn)
     await _dm_sponsor(interaction.client, ctx, guild, settings, fresh)
     await _safe_ephemeral(interaction, "Declined and refunded.")
 
 
 async def _do_approve(
     interaction, bot, ctx, guild: discord.Guild, settings, accent, submission_id,
-    row, card, resolver_id: int,
+    row, card, resolver_id: int, name_fn: NameFn = mention,
 ) -> None:
     """Post + pin the live card, then flip the row to live (superseding any prior).
 
@@ -367,11 +386,18 @@ async def _do_approve(
         await _refund_and_report(
             interaction, ctx, guild, settings, accent, row, card,
             "❌ No pin channel is set here — refunded. Set one on the dashboard.",
+            name_fn=name_fn,
         )
         return
 
+    # The pinned card is public and long-lived, so the buyer must be named
+    # rather than left as a <@id> that renders as a bare number to anyone
+    # whose client hasn't cached them.
     live_embed = render_pin_live_embed(
-        accent, sponsor_mention=f"<@{int(row['user_id'])}>", message=str(row["message"])
+        accent,
+        sponsor_id=int(row["user_id"]),
+        name_fn=name_fn,
+        message=str(row["message"]),
     )
     try:
         posted = await channel.send(embed=live_embed)
@@ -381,6 +407,7 @@ async def _do_approve(
         await _refund_and_report(
             interaction, ctx, guild, settings, accent, row, card,
             "❌ Couldn't post or pin in the pin channel (permissions?) — refunded.",
+            name_fn=name_fn,
         )
         return
 
@@ -396,7 +423,7 @@ async def _do_approve(
     except ValueError as exc:
         # Raced (declined/resolved between load and now) — undo the orphan pin.
         await unpin_and_delete(bot, channel.id, posted.id)
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, str(exc))
         return
     except Exception:
@@ -413,15 +440,21 @@ async def _do_approve(
             int(result.superseded["pin_message_id"]),
         )
 
-    await _edit_card(card, accent, settings, result.live)
+    await _edit_card(card, accent, settings, result.live, name_fn=name_fn)
+    await _edit_stored(bot, card, accent, settings, result.live, name_fn=name_fn)
     await _dm_sponsor(bot, ctx, guild, settings, result.live)
     await _safe_ephemeral(interaction, "Approved — pinned for 24 hours.")
 
 
 async def _refund_and_report(
     interaction, ctx, guild: discord.Guild, settings, accent, row, card, msg: str,
+    *, name_fn: NameFn | None = None,
 ) -> None:
-    """Refund a pin that couldn't be posted and tell the mod."""
+    """Refund a pin that couldn't be posted and tell the mod.
+
+    ``name_fn`` is the resolver the caller already built for this row; only a
+    caller without one pays for a second prefetch.
+    """
     def _refund():
         with ctx.open_db() as conn:
             refund_failed_golive(conn, row)
@@ -433,16 +466,22 @@ async def _refund_and_report(
         log.exception("econ pin: refund-on-post-failure errored for %s", row["id"])
         fresh = None
     if fresh is not None:
-        await _edit_card(card, accent, settings, fresh)
+        if name_fn is None:
+            name_fn = await card_name_fn(ctx, guild, row)
+        await _edit_card(card, accent, settings, fresh, name_fn=name_fn)
+        await _edit_stored(
+            interaction.client, card, accent, settings, fresh, name_fn=name_fn
+        )
         await _dm_sponsor(interaction.client, ctx, guild, settings, fresh)
     await _safe_ephemeral(interaction, msg)
 
 
-def _card_embed(accent, settings: EconSettings, row) -> discord.Embed:
+def _card_embed(accent, settings: EconSettings, row, name_fn: NameFn = mention) -> discord.Embed:
     return render_pin_review_embed(
         accent,
         settings,
-        sponsor_mention=f"<@{int(row['user_id'])}>",
+        sponsor_id=int(row["user_id"]),
+        name_fn=name_fn,
         message=str(row["message"]),
         price=int(row["price"]),
         state=str(row["state"]),
@@ -453,6 +492,9 @@ def _card_embed(accent, settings: EconSettings, row) -> discord.Embed:
 
 _edit_card = partial(
     edit_review_card, build_embed=_card_embed, log_label="econ pin"
+)
+_edit_stored = partial(
+    edit_stored_card, build_embed=_card_embed, log_label="econ pin"
 )
 
 

@@ -16,9 +16,11 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_approvals_service import (
     QUEUES,
     QUEUES_BY_KEY,
+    card_location,
     get_approval_row,
     pending_approval_count,
     pending_approvals,
+    set_approval_card,
 )
 from bot_modules.services.economy_pin_service import submit_pin
 from bot_modules.services.economy_qotd_sponsor_service import submit_sponsor
@@ -164,3 +166,72 @@ def test_an_unknown_kind_or_id_reads_as_nothing(conn):
     sid = _sponsor(conn, 7)
     assert get_approval_row(conn, "nope", sid) is None
     assert get_approval_row(conn, "sponsor", sid + 999) is None
+
+
+# ── the card ledger ─────────────────────────────────────────────────────
+#
+# The two columns that make the approvals channel and the todo board one
+# surface rather than two: whoever resolves a request has to be able to find
+# and close the card the other surface is showing.
+
+
+@pytest.mark.parametrize(
+    ("kind", "make"),
+    [
+        pytest.param("theme", _theme, id="theme"),
+        pytest.param("sponsor", _sponsor, id="sponsor"),
+        pytest.param("pin", _pin, id="pin"),
+    ],
+)
+def test_a_cards_location_round_trips_for_every_product(conn, kind, make):
+    sid = make(conn, 11)
+    assert set_approval_card(conn, kind, sid, 4242, 9999) is True
+    row = get_approval_row(conn, kind, sid)
+    assert row is not None
+    assert card_location(row) == (4242, 9999)
+
+
+def test_an_uncarded_request_reports_no_location(conn):
+    """Every request submitted while the channel dial was unset looks like this."""
+    sid = _pin(conn, 12)
+    row = get_approval_row(conn, "pin", sid)
+    assert row is not None
+    assert card_location(row) == (0, 0)
+
+
+def test_an_unknown_kind_records_nothing_rather_than_raising(conn):
+    """A stale kind is a shrug, exactly as get_approval_row treats one."""
+    assert set_approval_card(conn, "nope", 1, 4242, 9999) is False
+
+
+def test_recording_a_card_does_not_disturb_the_pending_queue(conn):
+    """Posting a card is not a resolution — the board must still show the row."""
+    sid = _theme(conn, 13)
+    set_approval_card(conn, "theme", sid, 4242, 9999)
+    rows = pending_approvals(conn, GUILD)
+    assert [r["id"] for r in rows] == [sid]
+    assert pending_approval_count(conn, GUILD) == 1
+
+
+def test_a_second_post_repoints_the_location(conn):
+    """An admin can move the review channel; the newest card is the live one."""
+    sid = _sponsor(conn, 14)
+    set_approval_card(conn, "sponsor", sid, 1, 2)
+    set_approval_card(conn, "sponsor", sid, 3, 4)
+    row = get_approval_row(conn, "sponsor", sid)
+    assert row is not None
+    assert card_location(row) == (3, 4)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        pytest.param(None, id="no-row"),
+        pytest.param({}, id="empty-mapping"),
+        pytest.param({"card_channel_id": None, "card_message_id": None}, id="nulls"),
+        pytest.param({"card_channel_id": "x", "card_message_id": "y"}, id="garbage"),
+    ],
+)
+def test_card_location_reads_anything_unusable_as_uncarded(row):
+    """"Don't know" and "not carded" collapse to the same do-nothing answer."""
+    assert card_location(row) == (0, 0)

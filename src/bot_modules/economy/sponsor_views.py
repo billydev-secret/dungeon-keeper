@@ -11,10 +11,15 @@ Every handler is fail-safe — a service error becomes an ephemeral note, never 
 dead button. Two mods clicking at once is resolved in the service (the state
 guard), and the loser gets the card refreshed rather than a second refund.
 
-Since 2026-08-29 the card is **not posted to a channel**. It is rendered into
-the ephemeral detail view behind the todo board's 🧾 Approvals button (see
-``economy/approval_views.py``); the DynamicItems below stay registered so the
-cards posted into bank channels before the move remain clickable.
+The card is reviewed in two places, and the buttons below serve both: a post in
+the economy's staff-only ``approvals_channel_id`` (``approval_views.
+post_approval_card``, dark until that dial is set), and the ephemeral detail
+behind the todo board's 🧾 Approvals button. Resolving on either closes both —
+the board reads the queue live, and the channel card is repainted through the
+ids stored on the row (``view_helpers.edit_stored_card``). Between 2026-08-29
+and 2026-09-02 the board was the only surface; before that, cards went to
+``bank_channel_id``, which in the main guild members can read. Those legacy
+cards stay clickable, since the DynamicItems never stopped being registered.
 """
 
 from __future__ import annotations
@@ -39,8 +44,15 @@ from bot_modules.services.economy_service import (
     notify_member,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.services.name_resolver import (
+    NameFn,
+    mention,
+    named_or_anonymous,
+)
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.view_helpers import (
+    card_name_fn,
+    edit_stored_card,
     edit_review_card,
     refresh_review_card,
     refresh_todo_board,
@@ -70,7 +82,8 @@ def render_sponsor_card_embed(
     accent: discord.Color,
     settings: EconSettings,
     *,
-    sponsor_mention: str,
+    sponsor_id: int,
+    name_fn: NameFn = mention,
     question: str,
     price: int,
     state: str,
@@ -98,7 +111,7 @@ def render_sponsor_card_embed(
     else:
         embed = discord.Embed(title="📋 Sponsored Question Submitted", color=accent)
 
-    embed.add_field(name="👤 Sponsor", value=sponsor_mention, inline=True)
+    embed.add_field(name="👤 Sponsor", value=named_or_anonymous(sponsor_id, name_fn), inline=True)
     embed.add_field(name="💰 Paid", value=_reward_text(settings, price), inline=True)
     embed.add_field(name="❓ Question", value=question[:1024], inline=False)
     if state == "approved":
@@ -108,10 +121,10 @@ def render_sponsor_card_embed(
             inline=False,
         )
     if state == "approved" and resolver_id:
-        embed.add_field(name="Approved by", value=f"<@{resolver_id}>", inline=True)
+        embed.add_field(name="Approved by", value=name_fn(resolver_id), inline=True)
     if state in ("denied", "expired"):
         if resolver_id:
-            embed.add_field(name="Declined by", value=f"<@{resolver_id}>", inline=True)
+            embed.add_field(name="Declined by", value=name_fn(resolver_id), inline=True)
         if deny_reason:
             embed.add_field(name="Reason", value=deny_reason[:1024], inline=False)
         embed.add_field(
@@ -287,6 +300,8 @@ async def _handle_resolution(
         return
 
     accent = await safe_resolve_accent(ctx, guild, log_label="sponsor")
+    # One resolver for every repaint below: the sponsor, and the mod acting now.
+    name_fn = await card_name_fn(ctx, guild, row, member.id)
 
     def _resolve():
         with ctx.open_db() as conn:
@@ -303,7 +318,7 @@ async def _handle_resolution(
     except ValueError as exc:
         # Already resolved (dashboard, or another mod) — refresh the card to
         # the true state instead of pretending it worked.
-        await _refresh_card(card, ctx, accent, settings, submission_id)
+        await _refresh_card(card, ctx, accent, settings, submission_id, name_fn=name_fn)
         await _safe_ephemeral(interaction, str(exc))
         return
     except Exception:
@@ -311,7 +326,10 @@ async def _handle_resolution(
         await _safe_ephemeral(interaction, "❌ Couldn't resolve that — try again.")
         return
 
-    await _edit_card(card, accent, settings, fresh)
+    await _edit_card(card, accent, settings, fresh, name_fn=name_fn)
+    # If they resolved this from the board's ephemeral, the card sitting in
+    # the approvals channel is still offering the decision — close it too.
+    await _edit_stored(bot, card, accent, settings, fresh, name_fn=name_fn)
     await _dm_sponsor(bot, ctx, guild, settings, fresh)
     await _refresh_board(bot, guild.id)
     await _safe_ephemeral(
@@ -321,11 +339,12 @@ async def _handle_resolution(
     )
 
 
-def _card_embed(accent, settings: EconSettings, row) -> discord.Embed:
+def _card_embed(accent, settings: EconSettings, row, name_fn: NameFn = mention) -> discord.Embed:
     return render_sponsor_card_embed(
         accent,
         settings,
-        sponsor_mention=f"<@{int(row['user_id'])}>",
+        sponsor_id=int(row["user_id"]),
+        name_fn=name_fn,
         question=str(row["question"]),
         price=int(row["price"]),
         state=str(row["state"]),
@@ -336,6 +355,9 @@ def _card_embed(accent, settings: EconSettings, row) -> discord.Embed:
 
 _edit_card = partial(
     edit_review_card, build_embed=_card_embed, log_label="econ sponsor"
+)
+_edit_stored = partial(
+    edit_stored_card, build_embed=_card_embed, log_label="econ sponsor"
 )
 
 

@@ -18,8 +18,11 @@ Both new triggers ship **dark** until the Level 5 Log Channel is configured;
 the pruned-return trigger additionally needs ``promotion_review_grant_role_id``.
 
 All three cards ping ``promotion_review_ping_role_id`` — the role managers who
-*review* promotions — when it is set. That is a different role from
-``promotion_review_grant_role_id``, which is what the Grant button *hands out*.
+*review* promotions — when it is set, and fall back to the guild's
+``mod_role_ids`` when it is not, so a card never posts to nobody (see
+:func:`ping_role_ids`). Both are a different role from
+``promotion_review_grant_role_id``, which is what the Grant button *hands out*;
+pinging *that* would notify everyone who already has access.
 
 This module owns the durable card ledger (``promotion_review_cards``, migration
 112) and the pure gating logic. The Discord embed + persistent buttons live in
@@ -69,21 +72,58 @@ def grant_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
 
 
 def ping_role_id(conn: sqlite3.Connection, guild_id: int) -> int:
-    """Role pinged when a review card posts, so role managers see it.
+    """The explicitly configured review-ping role, or 0.
 
     Distinct from :func:`grant_role_id`, which is the role *handed to* the
-    member when someone presses Grant. 0 when unset — cards then post silent.
+    member when someone presses Grant — pinging that one would notify every
+    member who already has access, which is the opposite of the intent.
+
+    Prefer :func:`ping_role_ids`, which adds the mod-role fallback. This stays
+    as the reader for the dial alone.
     """
     return _int_config(conn, PING_ROLE_KEY, guild_id)
 
 
-def ping_mention(role_id: int) -> str:
-    """``<@&id>`` for the card's message content, or "" when unset.
+def ping_role_ids(conn: sqlite3.Connection, guild_id: int) -> list[int]:
+    """Roles to ping when a review card posts — the dial, else the mod roles.
 
-    The mention has to live in ``content``: a role mention inside an embed
-    renders but never notifies.
+    The dial wins whenever it is set, so a guild that wants a narrower or
+    wider circle than its moderators simply names one.
+
+    The fallback exists because a stored 0 here is usually an artifact, not a
+    decision: XP Settings saves as one form, so changing any XP dial writes a
+    0 over this one, and prod shows exactly that — the main guild has held 0
+    while its promotion cards posted silent to nobody. Falling back to the
+    roles that can actually *action* a card (``_can_action`` gates on the
+    guild's configured mod/admin roles) means the card reaches the people it
+    is for, and matches what the economy's approval cards do with their
+    manager role.
+
+    Admin roles are deliberately not included: they overlap the mod roles in
+    every configured guild and adding them would only ping the same people
+    twice under a second name.
     """
-    return f"<@&{role_id}>" if role_id > 0 else ""
+    explicit = ping_role_id(conn, guild_id)
+    if explicit > 0:
+        return [explicit]
+    return _csv_ids(conn, "mod_role_ids", guild_id)
+
+
+def _csv_ids(conn: sqlite3.Connection, key: str, guild_id: int) -> list[int]:
+    """Parse a comma-separated id config value, skipping anything unparseable."""
+    raw = get_config_value(conn, key, "", guild_id) or ""
+    out: list[int] = []
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            value = int(part)
+        except ValueError:
+            continue
+        if value > 0 and value not in out:
+            out.append(value)
+    return out
 
 
 def sleeper_channel_id(conn: sqlite3.Connection, guild_id: int) -> int:

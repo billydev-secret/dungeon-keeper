@@ -12,6 +12,27 @@ from bot_modules.services.embeds import build_admin_mirror_embed
 from bot_modules.services.message_store import get_known_users_bulk
 
 
+def everyone_can_read(guild, channel) -> bool | None:
+    """Can @everyone read this channel? None when it can't be determined.
+
+    Backs the exposure warnings on dials that receive member names and
+    unreviewed member-written text (the economy's approvals channel). It
+    reports what Discord itself computes — category overwrites included —
+    rather than guessing from the channel's own overwrites, because a category
+    grant is exactly the case an admin forgets.
+
+    A thread inherits its parent's audience, so it is judged through the
+    parent. Anything that raises, or has no permission model at all, answers
+    None: "don't know" must never be rendered as "safe".
+    """
+    try:
+        target = getattr(channel, "parent", None) or channel
+        perms = target.permissions_for(guild.default_role)
+        return bool(perms.read_messages and perms.view_channel)
+    except Exception:  # noqa: BLE001 — an advisory check never fails its caller
+        return None
+
+
 def channel_in_guild(ctx, guild_id: int, channel_id: int) -> bool:
     """Can the live bot see this channel in the active guild?
 

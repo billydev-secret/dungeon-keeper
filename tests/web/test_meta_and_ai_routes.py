@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -426,6 +428,72 @@ def test_meta_channels_returns_empty_without_text_in_filter(authed_client):
     """No bot + non-text filter → empty (no fallback for voice/category/thread)."""
     resp = authed_client.get("/api/meta/channels?types=voice")
     assert resp.json() == []
+
+
+def test_meta_channels_cannot_judge_exposure_without_a_gateway(
+    authed_client, fake_ctx
+):
+    """The DB fallback has no permission overwrites to compute from, so it
+    reports None. A caller warning about exposure must read that as "don't
+    know", never as "safe"."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO processed_messages (message_id, guild_id, channel_id, "
+            "user_id, created_at, processed_at) VALUES (?, ?, ?, ?, 0, 0)",
+            (3, fake_ctx.guild_id, 777, 1),
+        )
+
+    body = authed_client.get("/api/meta/channels?types=text").json()
+    assert [c["everyone_can_read"] for c in body] == [None]
+
+
+def test_meta_channels_reports_what_everyone_can_read(authed_client, fake_ctx):
+    """Backs the approvals-channel exposure warning on the economy panel."""
+    public = _PermChannel(1, "general", public=True)
+    private = _PermChannel(2, "mod-room", public=False)
+    # The session user has to be on the guild: with a bot attached, auth
+    # re-derives permissions from live membership instead of the cookie.
+    admin = SimpleNamespace(
+        id=1, bot=False, display_name="tester", roles=(),
+        guild_permissions=SimpleNamespace(value=0x8),
+    )
+    guild = _PermGuild(fake_ctx.guild_id, [public, private], [admin])
+    fake_ctx.bot = SimpleNamespace(get_guild=lambda gid: guild)
+
+    body = authed_client.get("/api/meta/channels?types=text").json()
+    by_id = {c["id"]: c["everyone_can_read"] for c in body}
+    assert by_id == {"1": True, "2": False}
+
+
+def _PermChannel(channel_id, name, *, public):
+    """A TextChannel stand-in whose @everyone perms are computable.
+
+    Spec'd to the real class because the route selects channels by isinstance.
+    """
+    import discord
+    from unittest.mock import MagicMock
+
+    ch = MagicMock(spec=discord.TextChannel)
+    ch.id = channel_id
+    ch.name = name
+    ch.nsfw = False
+    ch.category = None
+    ch.parent = None
+    ch.permissions_for = lambda _role: SimpleNamespace(
+        read_messages=public, view_channel=public
+    )
+    return ch
+
+
+class _PermGuild:
+    def __init__(self, guild_id, channels, members=None):
+        self.id = guild_id
+        self.channels = channels
+        self.default_role = SimpleNamespace(id=guild_id)
+        self.members = members or []
+
+    def get_member(self, member_id):
+        return next((m for m in self.members if m.id == member_id), None)
 
 
 # ── /api/system/stats ─────────────────────────────────────────────────

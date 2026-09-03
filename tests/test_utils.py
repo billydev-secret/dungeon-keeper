@@ -13,6 +13,7 @@ from bot_modules.core.utils import (
     is_host_or_mod,
     is_mod_or_admin,
     resolve_postable_channel_in_guild,
+    role_ping_kwargs,
     safe_ephemeral,
     resolve_guild_for_log,
     resolve_user_for_log,
@@ -425,3 +426,60 @@ async def test_no_guild_skips_the_ownership_check():
     """Paths acting on an already-stored placement vetted it when it was set."""
     ch = _channel(discord.TextChannel, _guild(999))
     assert await resolve_postable_channel_in_guild(_bot(cached=ch), 55, None) is ch
+
+
+# ── role_ping_kwargs ──────────────────────────────────────────────────
+#
+# Two mistakes this is shared to stop repeating: a role mention inside an
+# *embed* renders but never notifies (so it has to go in content), and
+# AllowedMentions' unset fields default to allow (so the bare
+# AllowedMentions(roles=[...]) form still permits @everyone and @user).
+
+
+def test_a_single_role_is_mentioned_in_content():
+    kwargs = role_ping_kwargs([42])
+    assert kwargs["content"] == "<@&42>"
+
+
+def test_only_the_named_roles_are_allow_listed():
+    kwargs = role_ping_kwargs([42])
+    allowed = kwargs["allowed_mentions"]
+    assert [r.id for r in allowed.roles] == [42]
+    # The whole point: these default to *allow* when left unset.
+    assert allowed.everyone is False
+    assert allowed.users is False
+    assert allowed.replied_user is False
+
+
+def test_several_roles_are_all_mentioned_and_all_allow_listed():
+    kwargs = role_ping_kwargs([42, 43])
+    assert kwargs["content"] == "<@&42> <@&43>"
+    assert [r.id for r in kwargs["allowed_mentions"].roles] == [42, 43]
+
+
+@pytest.mark.parametrize(
+    "role_ids",
+    [
+        pytest.param([], id="empty"),
+        pytest.param(None, id="none"),
+        pytest.param([0], id="zero"),
+        pytest.param(["nope"], id="not-a-number"),
+        pytest.param([-1], id="negative"),
+    ],
+)
+def test_nothing_to_ping_posts_silently(role_ids):
+    """A guild with no ping role configured is a real, wanted state."""
+    kwargs = role_ping_kwargs(role_ids)
+    assert "content" not in kwargs
+    assert kwargs["allowed_mentions"].roles is False
+
+
+def test_duplicates_are_pinged_once():
+    kwargs = role_ping_kwargs([42, 42, "42"])
+    assert kwargs["content"] == "<@&42>"
+    assert [r.id for r in kwargs["allowed_mentions"].roles] == [42]
+
+
+def test_unusable_ids_are_dropped_without_losing_the_usable_ones():
+    kwargs = role_ping_kwargs([0, "nope", 42, None])
+    assert kwargs["content"] == "<@&42>"

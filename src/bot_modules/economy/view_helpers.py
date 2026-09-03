@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.services.name_resolver import NameFn, mention
 
 if TYPE_CHECKING:
     from bot_modules.services.economy_service import EconSettings
@@ -111,6 +112,57 @@ async def refresh_todo_board(
         )
 
 
+async def card_name_fn(
+    ctx, guild, row, *extra_ids: int, guild_id: int | None = None
+) -> NameFn:
+    """A resolver covering everyone a paid-request card names.
+
+    That is the requester (``row['user_id']``) plus whichever mod resolved it,
+    prefetched in one batch. Embed mentions are resolved by the *reading*
+    client from its own cache, so a card that emits ``<@id>`` shows a bare
+    number to any mod who has never seen that member — and a paid request is
+    often the first time they meet them. A member who has since left is still
+    named, from ``known_users``.
+
+    Cheap to call: ``build_name_fn`` queries only for ids the live member
+    cache misses, so the usual case costs no I/O at all.
+
+    ``guild`` may be None — the dashboard resolves a submission for a guild the
+    bot may not currently see — in which case pass ``guild_id`` so the
+    ``known_users`` lookup still has a guild to scope to. With neither, every
+    id falls through to ``<@id>``, which is the old behaviour and no worse.
+
+    **Never raises.** This is called from repaint paths that run *after* the
+    money has already moved — a resolution the dashboard has committed, a card
+    the picker is about to render — and it is the only I/O those paths grew.
+    A database hiccup here must degrade to ``<@id>`` (the pre-resolver
+    rendering), not abandon the repaint, skip the member's DM, or turn a
+    committed resolution into a 500.
+    """
+    from bot_modules.services.name_resolver import build_name_fn  # noqa: PLC0415
+
+    ids = [int(row["user_id"] or 0)] if row is not None else []
+    resolver_id = None
+    try:
+        resolver_id = row["resolver_id"] if row is not None else None
+    except (IndexError, KeyError, TypeError):
+        resolver_id = None
+    if resolver_id:
+        ids.append(int(resolver_id))
+    ids.extend(int(i) for i in extra_ids if i)
+    gid = int(guild.id) if guild is not None else int(guild_id or 0)
+    try:
+        return await build_name_fn(
+            guild=guild, db_path=ctx.db_path, guild_id=gid, user_ids=ids
+        )
+    except Exception:
+        log.warning(
+            "econ view: name resolution failed for guild %s; rendering mentions",
+            gid, exc_info=True,
+        )
+        return mention
+
+
 async def edit_review_card(
     card: "discord.Message | EphemeralCard | None",
     accent,
@@ -119,6 +171,7 @@ async def edit_review_card(
     *,
     build_embed,
     log_label: str,
+    name_fn: NameFn = mention,
 ) -> None:
     """Re-render a paid-submission review card in place, best effort.
 
@@ -127,13 +180,75 @@ async def edit_review_card(
     belongs with the product it speaks for — only the edit-and-swallow
     mechanics are shared. Losing the card is not worth raising over: the row
     is already resolved and the member has already been told.
+
+    ``name_fn`` is handed to ``build_embed`` so the requester and the
+    resolving mod render as names rather than ``<@id>``, which an embed
+    leaves as a bare number for any reader whose client hasn't cached them.
+    The default preserves the pre-resolver rendering for a caller that has no
+    resolver to give.
     """
     if card is None:
         return
     try:
-        await card.edit(embed=build_embed(accent, settings, row), view=None)
+        await card.edit(embed=build_embed(accent, settings, row, name_fn), view=None)
     except discord.HTTPException:
         log.debug("%s: failed to edit card", log_label, exc_info=True)
+
+
+async def edit_stored_card(
+    bot: "discord.Client",
+    card: "discord.Message | EphemeralCard | None",
+    accent,
+    settings: "EconSettings",
+    row,
+    *,
+    build_embed,
+    log_label: str,
+    name_fn: NameFn = mention,
+) -> None:
+    """Repaint the request's card in the approvals channel, wherever it was resolved.
+
+    The other half of "two surfaces, one ledger". A mod can resolve a paid
+    request from the card itself, from the todo board's ephemeral Approvals
+    detail, or from the dashboard — and the two they were *not* looking at
+    must stop offering a decision that has already been made. The board is
+    read live off the submission tables so it self-corrects; the channel card
+    is a message, and only ``card_channel_id``/``card_message_id`` can find it
+    again.
+
+    Skipped when the caller already repainted that very message: ``card`` is
+    the surface they were on, so a resolution from the channel card itself
+    must not fetch and edit it a second time. An ephemeral surface never
+    matches, which is exactly the case this exists for.
+
+    Best effort throughout — the row is resolved and the member already told,
+    so a deleted card or a lost permission is cosmetic, never an error.
+    """
+    # Deferred: the service imports the economy machinery, this module is
+    # imported by it.
+    from bot_modules.services.economy_approvals_service import (  # noqa: PLC0415
+        card_location,
+    )
+
+    channel_id, message_id = card_location(row)
+    if not channel_id or not message_id:
+        return
+    # Compared by id rather than by type: an EphemeralCard has no ``id`` and so
+    # can never match, which is exactly the case this function exists for, and
+    # a real card matches without depending on it being a ``discord.Message``
+    # instance.
+    if int(getattr(card, "id", 0) or 0) == message_id:
+        return
+    try:
+        channel = bot.get_channel(channel_id)
+        if not isinstance(channel, discord.abc.Messageable):
+            return
+        message = await channel.fetch_message(message_id)
+        await message.edit(embed=build_embed(accent, settings, row, name_fn), view=None)
+    except (discord.HTTPException, discord.NotFound, discord.Forbidden):
+        log.debug("%s: failed to edit the stored card", log_label, exc_info=True)
+    except Exception:  # pragma: no cover - defensive
+        log.warning("%s: unexpected error editing the stored card", log_label)
 
 
 async def refresh_review_card(
@@ -146,6 +261,7 @@ async def refresh_review_card(
     read_row,
     build_embed,
     log_label: str,
+    name_fn: NameFn = mention,
 ) -> None:
     """Reload a row that moved underneath its card and re-render it.
 
@@ -169,5 +285,6 @@ async def refresh_review_card(
         return
     if row is not None:
         await edit_review_card(
-            card, accent, settings, row, build_embed=build_embed, log_label=log_label
+            card, accent, settings, row,
+            build_embed=build_embed, log_label=log_label, name_fn=name_fn,
         )

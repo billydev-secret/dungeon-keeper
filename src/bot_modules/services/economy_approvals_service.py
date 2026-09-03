@@ -118,3 +118,43 @@ def get_approval_row(
     if queue is None:
         return None
     return store.get(conn, queue.product, submission_id)
+
+
+def set_approval_card(
+    conn: sqlite3.Connection,
+    kind: str,
+    submission_id: int,
+    channel_id: int,
+    message_id: int,
+) -> bool:
+    """Record where a request's review card was posted. False on unknown kind.
+
+    The mirror of :func:`get_approval_row`, and the reason the channel card
+    and the todo board can be two views of one ledger rather than two
+    ledgers: whoever resolves a request — the card's own buttons, the board's
+    Approvals picker, or the dashboard — can find and repaint the other
+    surface from these two columns.
+
+    Each product already has its own ``set_submission_card`` wrapper over the
+    same store call. This exists so the shared poster doesn't have to import
+    three of them and branch on which one to use, exactly as the queue merge
+    above spares the board three pending queries.
+    """
+    queue = QUEUES_BY_KEY.get(kind)
+    if queue is None:
+        return False
+    store.set_card(conn, queue.product, submission_id, channel_id, message_id)
+    return True
+
+
+def card_location(row: Any) -> tuple[int, int]:
+    """``(channel_id, message_id)`` for a submission row, ``(0, 0)`` if uncarded.
+
+    A row predating the channel surface — or one submitted while the dial was
+    unset — carries 0s, which every caller reads as "there is no second
+    surface to repaint".
+    """
+    try:
+        return int(row["card_channel_id"] or 0), int(row["card_message_id"] or 0)
+    except (IndexError, KeyError, TypeError, ValueError):
+        return 0, 0

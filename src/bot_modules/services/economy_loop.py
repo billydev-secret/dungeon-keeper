@@ -71,11 +71,15 @@ import asyncio
 import logging
 import sqlite3
 import time
+from typing import TYPE_CHECKING, cast
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import discord
+
+if TYPE_CHECKING:
+    from bot_modules.core.app_context import Bot
 
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.sticky import StickyPanel
@@ -1005,6 +1009,8 @@ class ExpiredSponsorNotice:
     question: str
     refund: int
     unit: str
+    #: So the caller can close this request's card in the approvals channel.
+    submission_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -1027,6 +1033,10 @@ class ExpiredPinNotice:
     message: str
     refund: int
     unit: str
+    #: So the caller can close this request's card in the approvals channel.
+    #: An expired request whose card still showed Approve/Decline was a live
+    #: defect the moment cards went back into a channel.
+    submission_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -1061,6 +1071,7 @@ def run_pin_expiry(
             message=str(row["message"]),
             refund=int(row["price"]),
             unit=settings.currency_plural or "coins",
+            submission_id=int(row["id"]),
         )
         for row in pin_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
     ]
@@ -1076,6 +1087,8 @@ class ExpiredThemeNotice:
     title: str
     refund: int
     unit: str
+    #: So the caller can close this request's card in the approvals channel.
+    submission_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -1123,6 +1136,7 @@ def run_theme_expiry(
             title=str(row["title"]),
             refund=int(row["price"]),
             unit=settings.currency_plural or "coins",
+            submission_id=int(row["id"]),
         )
         for row in theme_svc.expire_stale_pending(conn, settings, guild_id, now=now_ts)
     ]
@@ -1227,6 +1241,7 @@ def run_sponsor_expiry(
             question=str(row["question"]),
             refund=int(row["price"]),
             unit=settings.currency_plural or "coins",
+            submission_id=int(row["id"]),
         )
         for row in expire_stale_submissions(conn, settings, guild_id, now=now_ts)
     ]
@@ -2048,6 +2063,47 @@ async def run_tick(bot: discord.Client, db_path: Path, now_ts: float) -> None:
                         "Economy loop: failed to repaint the todo board for %s "
                         "after %d expiry(ies).",
                         guild.id, stale_board,
+                    )
+
+        # The board self-corrects (it reads the queue live), but a card in the
+        # approvals channel is a message: without this it keeps showing
+        # Approve/Decline for a request that has already expired and refunded.
+        # Each call is individually best-effort and no-ops when the request was
+        # never carded, which is every request submitted with the dial unset.
+        from bot_modules.economy.approval_views import (  # noqa: PLC0415
+            close_expired_card,
+        )
+
+        expired_cards = (
+            [("pin", n.submission_id) for n in pin_sweep.refunds]
+            + [("theme", n.submission_id) for n in theme_sweep.refunds]
+            + [("sponsor", n.submission_id) for n in sponsor_notices]
+        )
+        if expired_cards:
+            # theme_sweep carries settings out of its own transaction when it
+            # ran; otherwise read them once for the whole batch rather than
+            # per card.
+            def _econ_settings(gid: int = guild.id):
+                with open_db(db_path) as conn:
+                    return load_econ_settings(conn, gid)
+
+            econ_settings = theme_sweep.settings or await asyncio.to_thread(
+                _econ_settings
+            )
+            for kind, submission_id in expired_cards:
+                try:
+                    # ``bot`` is typed as the bare Client throughout this
+                    # loop; the runtime one is always the commands.Bot that
+                    # carries ctx, same as the todo-board repaint above.
+                    await close_expired_card(
+                        cast("Bot", bot), guild, econ_settings, kind, submission_id
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    log.warning(
+                        "Economy loop: failed to close the expired %s card for %s.",
+                        kind, submission_id,
                     )
 
         for notice in sponsor_notices:

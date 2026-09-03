@@ -37,7 +37,7 @@ def _pin(state: str) -> discord.Embed:
     return render_pin_review_embed(
         _ACCENT,
         _SETTINGS,
-        sponsor_mention="<@1>",
+        sponsor_id=1,
         message="Raid at 8pm.",
         price=300,
         state=state,

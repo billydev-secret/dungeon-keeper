@@ -626,7 +626,7 @@ CASES = [
         lambda **kw: economy_pin_views.render_pin_review_embed(
             kw["color"],
             _econ_settings(),
-            sponsor_mention="<@1>",
+            sponsor_id=1,
             message="Raid at 8pm.",
             price=300,
             state="pending",
