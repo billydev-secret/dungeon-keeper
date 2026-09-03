@@ -120,7 +120,7 @@ def render_pin_live_embed(
         color=accent,
     )
     embed.add_field(name="Paid to pin this", value=sponsor_mention, inline=False)
-    embed.set_footer(text="Pin of the Day · up for 24 hours")
+    embed.set_footer(text="Pin of the Day • up for 24 hours")
     embed.timestamp = discord.utils.utcnow()
     return embed
 

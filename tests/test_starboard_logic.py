@@ -270,3 +270,21 @@ def test_updated_starboard_embed_supports_emoji_swap():
     original = build_starboard_embed(msg, star_count=3, emoji="⭐")
     updated = updated_starboard_embed(original, star_count=3, emoji="🔥")
     assert updated.footer.text == "🔥 3"
+
+
+def test_updated_starboard_embed_drops_a_custom_emoji_like_the_initial_card():
+    """A refreshed footer must fall back to ⭐ exactly as the first card does.
+
+    Footers render as plain text, so a custom ``<:name:id>`` shows as its raw
+    tag there. ``build_starboard_embed`` already routes through
+    ``footer_emoji``; the refresh path has to agree, or a guild with a custom
+    star emoji sees the tag the moment a count changes.
+    → docs/embed_style_guide.md § Footers
+    """
+    msg = _make_message()
+    custom = "<:sparkle:123456789012345678>"
+    original = build_starboard_embed(msg, star_count=3, emoji=custom)
+    assert original.footer.text == "⭐ 3"
+
+    updated = updated_starboard_embed(original, star_count=4, emoji=custom)
+    assert updated.footer.text == "⭐ 4"

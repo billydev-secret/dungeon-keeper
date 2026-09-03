@@ -30,6 +30,7 @@ from bot_modules.whisper.logic import (
     preview,
     status_pill,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 # Every builder takes a ``name_fn`` so the cog can inject a resolver backed by
@@ -74,6 +75,7 @@ def build_reply_audit_embed(
         inline=False,
     )
     embed.add_field(name="Whisper ID", value=str(whisper_id), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -108,6 +110,7 @@ def build_report_audit_embed(
     )
     embed.add_field(name="Reason", value=reason, inline=False)
     embed.add_field(name="Whisper ID", value=str(whisper.id), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -143,6 +146,7 @@ def build_reply_report_audit_embed(
     embed.add_field(name="Reason", value=reason, inline=False)
     embed.add_field(name="Reply ID", value=str(reply.id), inline=False)
     embed.add_field(name="Whisper ID", value=str(reply.whisper_id), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

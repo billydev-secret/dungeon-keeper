@@ -58,7 +58,7 @@ class ChallengeView(discord.ui.View):
         log.info("%s accepted challenge (game %d)", interaction.user.display_name, self.game_id)
         if interaction.user.id != self.target_id:
             await interaction.response.send_message(
-                "Only the challenged player can accept.", ephemeral=True
+                "❌ Only the challenged player can accept.", ephemeral=True
             )
             return
         self.stop()
@@ -69,7 +69,7 @@ class ChallengeView(discord.ui.View):
         log.info("%s declined challenge (game %d)", interaction.user.display_name, self.game_id)
         if interaction.user.id != self.target_id:
             await interaction.response.send_message(
-                "Only the challenged player can decline.", ephemeral=True
+                "❌ Only the challenged player can decline.", ephemeral=True
             )
             return
         self.stop()
@@ -118,7 +118,7 @@ class ResultView(discord.ui.View):
         )
         if interaction.user.id != self.winner_id:
             await interaction.response.send_message(
-                "Only the winner can name the loser.", ephemeral=True
+                "❌ Only the winner can name the loser.", ephemeral=True
             )
             return
         await self._on_set_nick(interaction, self.game_id)

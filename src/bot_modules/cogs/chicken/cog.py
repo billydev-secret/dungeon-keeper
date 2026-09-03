@@ -21,6 +21,7 @@ from bot_modules.duels.base_game import BaseGame
 from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
+from bot_modules.core.branding import apply_section_spacing
 
 from . import db as chdb
 from .game import ChickenGame, bravest_bailer, meter_pct, resolve_crash
@@ -319,6 +320,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         )
         stakes = game.stakes_text or "Whoever's still holding at the crash surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
+        apply_section_spacing(embed)
         return embed
 
     def render_result_state(
@@ -379,6 +381,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                     ),
                     inline=False,
                 )
+            apply_section_spacing(embed)
             return embed
 
         # cosmetic: everyone bailed, or total wipeout

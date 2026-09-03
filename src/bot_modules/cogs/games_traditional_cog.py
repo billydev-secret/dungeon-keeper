@@ -193,7 +193,7 @@ class TraditionalHostView(discord.ui.View):
     async def ask_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can ask questions.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can ask questions.", ephemeral=True)
             return
         payload = await self._get_payload()
         prefs = payload.get("prefs", {})
@@ -233,7 +233,7 @@ class TraditionalHostView(discord.ui.View):
         """
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can run a bank round.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can run a bank round.", ephemeral=True)
             return
 
         payload = await self._get_payload()
@@ -308,7 +308,7 @@ class TraditionalHostView(discord.ui.View):
         """
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can end the game.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can end the game.", ephemeral=True)
             return
 
         channel = interaction.channel

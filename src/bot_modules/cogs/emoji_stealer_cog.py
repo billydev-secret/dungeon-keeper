@@ -144,7 +144,7 @@ class _ConfirmDupeView(discord.ui.View):
 
     async def _on_add(self, interaction: discord.Interaction) -> None:
         self.stop()
-        await interaction.response.edit_message(content="Adding emoji...", view=None)
+        await interaction.response.edit_message(content="Adding emoji…", view=None)
         await self._cog._upload_and_report(interaction, self._guild, self._name, self._data)
 
     async def _on_cancel(self, interaction: discord.Interaction) -> None:
@@ -205,7 +205,7 @@ class _GuildPickView(discord.ui.View):
 
     async def _on_steal(self, interaction: discord.Interaction) -> None:
         self.stop()
-        await interaction.response.edit_message(content="Downloading emoji...", view=None)
+        await interaction.response.edit_message(content="Downloading emoji…", view=None)
         await self._cog._do_steal(interaction, self._sel_guild, self._name, self._url)
 
 
@@ -294,7 +294,7 @@ class _StealView(discord.ui.View):
     async def _on_steal(self, interaction: discord.Interaction) -> None:
         self.stop()
         animated, name, emoji_id = self._sel_emoji
-        await interaction.response.edit_message(content="Downloading emoji...", view=None)
+        await interaction.response.edit_message(content="Downloading emoji…", view=None)
         await self._cog._do_steal(
             interaction, self._sel_guild, name, emoji_cdn_url(emoji_id, animated)
         )
@@ -304,7 +304,7 @@ class _StealView(discord.ui.View):
         guild = self._sel_guild
         all_emojis = list(self._emoji_map.values())
         await interaction.response.edit_message(
-            content=f"Stealing {len(all_emojis)} emojis...", view=None
+            content=f"Stealing {len(all_emojis)} emojis…", view=None
         )
         added: list[discord.Emoji] = []
         failed: list[tuple[str, str]] = []

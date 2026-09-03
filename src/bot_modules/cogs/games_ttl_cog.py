@@ -169,7 +169,7 @@ class TTLSubmitView(discord.ui.View):
     async def start_guessing(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start guessing.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start guessing.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
         submissions = payload.get("submissions", {})
@@ -290,7 +290,7 @@ class TTLGuessView(discord.ui.View):
             await interaction.response.send_message("This round is over.", ephemeral=True)
             return
         if interaction.user.id == self.subject_id:
-            await interaction.response.send_message("You can't vote on your own statements!", ephemeral=True)
+            await interaction.response.send_message("❌ You can't vote on your own statements!", ephemeral=True)
             return
         prev = self.votes.get(interaction.user.id)
         self.votes[interaction.user.id] = idx
@@ -309,7 +309,7 @@ class TTLGuessView(discord.ui.View):
     async def advance_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)

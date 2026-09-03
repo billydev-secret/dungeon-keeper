@@ -119,7 +119,7 @@ def _build_help_pages(
                         "Pick a window: hour, day, week, month, year, or alltime.",
                     ),
                     (
-                        "/ticket open description:...",
+                        "/ticket open description:…",
                         "Open a private ticket with the mod team. "
                         "Only you and mods can see the channel.",
                     ),
@@ -144,7 +144,7 @@ def _build_help_pages(
                     ("/penpals end", "End your current pen pal chat early."),
                     ("/bio", "Create or update your member profile bio (guided wizard)."),
                     ("/recap", "Recap the current game-night session in this channel."),
-                    ("/todo task:...", "Add a task to the server's shared todo list."),
+                    ("/todo task:…", "Add a task to the server's shared todo list."),
                     ("/support", "Get a link to the support Discord server."),
                     ("/invite", "Get a bot invite link to add DungeonKeeper to another server."),
                     ("/delete_me", "Delete your messages from Discord — your XP and profile stay."),
@@ -163,11 +163,11 @@ def _build_help_pages(
                     ("/bank wallet", "Your balance, recent ledger activity, and active rentals."),
                     ("/bank quests", "Your personal quest board — view progress and claim rewards."),
                     ("/bank shop", "Browse and rent perks (role color, name, icon, gradient, and more); cancel & refund from here too."),
-                    ("/bank pay member:@user amount:...", "Send coins to another member."),
-                    ("/bank gift member:@user perk:...", "Pay to rent a friend any shop perk."),
-                    ("/bank role icon image:...", "Upload an image for your rented role icon."),
-                    ("/bank emoji image:... name:...", "Sponsor a custom emoji (weekly rent, mod-reviewed)."),
-                    ("/bank sponsor question:...", "Pay to put your question forward as a QOTD (mod-approved)."),
+                    ("/bank pay member:@user amount:…", "Send coins to another member."),
+                    ("/bank gift member:@user perk:…", "Pay to rent a friend any shop perk."),
+                    ("/bank role icon image:…", "Upload an image for your rented role icon."),
+                    ("/bank emoji image:… name:…", "Sponsor a custom emoji (weekly rent, mod-reviewed)."),
+                    ("/bank sponsor question:…", "Pay to put your question forward as a QOTD (mod-approved)."),
                     ("/bank pin", "Pay to pin a short message for a day (mod-approved)."),
                     ("Bounty Board panel", "Post a bounty or chip into one — in the bounty board channel."),
                     ("/bank mute", "Toggle the economy's DM notifications for yourself."),
@@ -208,8 +208,8 @@ def _build_help_pages(
                 "Moderator-only tools.\n\n"
                 + _fmt(
                     [
-                        ("/purge count:... after:...", "Bulk-delete messages in this channel by count and/or time."),
-                        ("/rename target:@user new_name:...", "Change a member's nickname (leave blank to reset to their username). Requires Manage Nicknames."),
+                        ("/purge count:… after:…", "Bulk-delete messages in this channel by count and/or time."),
+                        ("/rename target:@user new_name:…", "Change a member's nickname (leave blank to reset to their username). Requires Manage Nicknames."),
                     ]
                 ),
             )
@@ -222,13 +222,13 @@ def _build_help_pages(
             "**Channel Owner**\n"
             + _fmt(
                 [
-                    ("/voice access state:...", "One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are marked NSFW)."),
-                    ("/voice rename name:...", "Set a custom channel name."),
-                    ("/voice limit n:...", "Set user capacity (0 = unlimited)."),
+                    ("/voice access state:…", "One dial for who gets in: Open / NSFW / NSFW locked / Spectator (all but Open are marked NSFW)."),
+                    ("/voice rename name:…", "Set a custom channel name."),
+                    ("/voice limit n:…", "Set user capacity (0 = unlimited)."),
                     ("/voice invite @user", "Add a member to your allow-list and invite them."),
                     ("/voice kick @user", "Remove a member (remember:true also blocks them)."),
-                    ("/voice knock channel:...", "Ask the owner of a locked channel to let you in."),
-                    ("/voice sleepkick hours:...", "Self-disconnect timer — drop yourself after N hours (0 cancels)."),
+                    ("/voice knock channel:…", "Ask the owner of a locked channel to let you in."),
+                    ("/voice sleepkick hours:…", "Self-disconnect timer — drop yourself after N hours (0 cancels)."),
                     ("/voice transfer @user", "Give ownership to another member in your channel."),
                     ("/voice claim", "Claim an abandoned channel (original owner left)."),
                     ("/voice owner", "Show who owns the channel you're in."),
@@ -247,7 +247,7 @@ def _build_help_pages(
             "YouTube / Spotify playback. Join a voice channel, then `/play` to start.\n\n"
             + _fmt(
                 [
-                    ("/play query:...", "Play a YouTube URL, Spotify URL, or free-text search. Joins your VC automatically."),
+                    ("/play query:…", "Play a YouTube URL, Spotify URL, or free-text search. Joins your VC automatically."),
                     ("/skip", "Skip the current track."),
                     ("/pause / /resume", "Pause or resume playback."),
                     ("/stop", "Clear the queue. Disconnects unless 24/7 mode is on."),
@@ -270,7 +270,7 @@ def _build_help_pages(
                 [
                     ("/whisper optin", "Opt in to send and receive anonymous whispers."),
                     ("/whisper optout", "Stop receiving whispers; you disappear from others' autocomplete."),
-                    ("/whisper send target:@user message:...", "Send an anonymous whisper to an opted-in member. Cooldown: 30 s between sends."),
+                    ("/whisper send target:@user message:…", "Send an anonymous whisper to an opted-in member. Cooldown: 30 s between sends."),
                     ("/whisper forget-me", "Permanently delete all your whisper data from this server."),
                 ]
             ),
@@ -287,7 +287,7 @@ def _build_help_pages(
                 [
                     ("/guess submit image:<attachment>", "Open the Guess crop editor — position the reveal, then post."),
                     ("/guess optin", "Join the Guess pool so you appear in submitter / guesser autocomplete."),
-                    ("/guess confess text:...", "Drop an anonymous text confession into the Guess channel."),
+                    ("/guess confess text:…", "Drop an anonymous text confession into the Guess channel."),
                     ("/guess leaderboard", "Top submitters and top guessers in this server."),
                 ]
             ),

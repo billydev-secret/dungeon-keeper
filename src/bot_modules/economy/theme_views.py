@@ -170,7 +170,7 @@ def render_theme_live_embed(
         color=accent,
     )
     embed.add_field(name="Themed by", value=sponsor_mention, inline=False)
-    embed.set_footer(text=f"Flash Theme · running for {_hours_text(settings)}")
+    embed.set_footer(text=f"Flash Theme • running for {_hours_text(settings)}")
     embed.timestamp = discord.utils.utcnow()
     return embed
 

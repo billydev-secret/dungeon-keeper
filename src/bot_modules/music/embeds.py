@@ -8,6 +8,7 @@ unit-test through Discord.
 """
 
 from __future__ import annotations
+from bot_modules.core.branding import apply_section_spacing
 
 from collections.abc import Sequence
 
@@ -65,5 +66,6 @@ def build_queue_embed(
     else:
         embed.add_field(name="Up next", value="(empty)", inline=False)
 
-    embed.set_footer(text=f"Page {page}/{total_pages} · loop: {loop_mode_value}")
+    embed.set_footer(text=f"Page {page}/{total_pages} • loop: {loop_mode_value}")
+    apply_section_spacing(embed)
     return embed

@@ -82,7 +82,7 @@ def build_welcome_embed(
     if member.guild.icon:
         embed.set_thumbnail(url=member.guild.icon.url)
     member_count = member.guild.member_count or 0
-    embed.set_footer(text=f"Member #{member_count} · {member.guild.name}")
+    embed.set_footer(text=f"Member #{member_count} • {member.guild.name}")
     return embed
 
 
@@ -111,7 +111,7 @@ def build_leave_embed(
         name=f"{member.display_name} left", icon_url=member.display_avatar.url
     )
     member_count = member.guild.member_count or 0
-    embed.set_footer(text=f"{member.guild.name} · {member_count} members remaining")
+    embed.set_footer(text=f"{member.guild.name} • {member_count} members remaining")
     return embed
 
 

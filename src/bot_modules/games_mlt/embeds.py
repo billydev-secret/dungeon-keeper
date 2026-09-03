@@ -36,6 +36,7 @@ from bot_modules.games.constants import (
     PHASE_RESULTS,
 )
 from bot_modules.games.utils.game_manager import resolve_name
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_join_embed(
@@ -89,7 +90,7 @@ def build_round_embed(
     falls back to the phase colors (playing blue / results green) so the
     active vs. closed states stay visually distinct with no guild.
     """
-    title = f"{GAME_ICONS['mlt']} Most Likely To..."
+    title = f"{GAME_ICONS['mlt']} Most Likely To…"
     if closed:
         title += " — Round Over"
     fallback = PHASE_RESULTS if closed else PHASE_PLAYING
@@ -107,6 +108,7 @@ def build_round_embed(
     embed.set_footer(
         text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num}"
     )
+    apply_section_spacing(embed)
     return embed
 
 

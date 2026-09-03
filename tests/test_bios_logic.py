@@ -32,6 +32,19 @@ from bot_modules.bios.logic import (
     shrink_to_embed_total,
     truncate,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 def _field(
@@ -482,7 +495,7 @@ def _question_prompt(existing):
 
 
 def _field_values(embed):
-    return {f.name: f.value for f in embed.fields}
+    return {f.name: _unspaced(f.value) for f in embed.fields}
 
 
 def test_question_prompt_warns_that_a_reply_overwrites():

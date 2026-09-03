@@ -39,6 +39,7 @@ from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
 from bot_modules.services.name_resolver import NameFn, mention
+from bot_modules.core.branding import apply_section_spacing
 
 
 def casino_title(casino_name: str = DEFAULT_CASINO_NAME) -> str:
@@ -236,6 +237,7 @@ def build_hub_embed(
             f"{econ.currency_plural} staked per player"
         )
     embed.add_field(name="House rules", value=" · ".join(limits), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -397,6 +399,7 @@ def build_help_embed(
             ),
             inline=False,
         )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -632,6 +635,7 @@ def build_blackjack_reveal_embed(
         value=_hand_line(dealer_first_two) + "\n*The dealer turns the hole card…*",
         inline=False,
     )
+    apply_section_spacing(embed)
     return embed
 
 
@@ -713,6 +717,7 @@ def build_blackjack_embed(
         if outcome != "refunded":
             line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -1271,6 +1276,7 @@ def build_war_embed(
         if outcome != "refunded":
             line = _with_streak(line, econ, streak)
         embed.add_field(name="Result", value=line, inline=False)
+    apply_section_spacing(embed)
     return embed
 
 
@@ -1473,6 +1479,7 @@ def build_pools_result_embed(
         )
     if chart:
         embed.set_image(url=f"attachment://{pools_charts.INSTRUMENT_FILENAME}")
+    apply_section_spacing(embed)
     return embed
 
 
@@ -1620,4 +1627,5 @@ def build_mines_embed(
         if step.outcome != "refunded":
             line = _with_streak(line, econ, step.streak)
         embed.add_field(name="Result", value=line, inline=False)
+    apply_section_spacing(embed)
     return embed

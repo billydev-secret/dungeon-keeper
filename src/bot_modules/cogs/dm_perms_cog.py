@@ -383,7 +383,7 @@ class DmRequestLookupView(discord.ui.View):
         self._selected_user: Optional[discord.Member | discord.User] = None
         self._request_type: str = "dm"
 
-    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Select a user", min_values=1, max_values=1)
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick a user…", min_values=1, max_values=1)
     async def user_select(self, interaction: discord.Interaction, select: discord.ui.UserSelect) -> None:
         self._selected_user = select.values[0]
         # Pin the pick as the select's default value. A UserSelect carries its

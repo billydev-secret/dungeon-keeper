@@ -236,7 +236,7 @@ class ModStatsCog(commands.Cog):
             color=accent,
         )
         embed.set_image(url=image.attachment_url)
-        embed.set_footer(text="Bots excluded · updates every hour")
+        embed.set_footer(text="Bots excluded • updates every hour")
         return PanelContent(
             embed=embed,
             signature=data.signature,

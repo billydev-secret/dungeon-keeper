@@ -17,6 +17,7 @@ from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
+from bot_modules.core.branding import apply_section_spacing
 
 from . import db as pdb
 from .game import PressureGame, apply_pump
@@ -144,6 +145,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
             turn = active.mention if active else str(game.active_player)
             embed.add_field(name="▶️ Turn", value=turn, inline=False)
 
+        apply_section_spacing(embed)
         return embed
 
     def render_result_state(

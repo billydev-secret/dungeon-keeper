@@ -465,13 +465,41 @@ the next person can't accidentally omit the message id.
 
 ## Known drift (converge when touching, don't mass-fix)
 
-- Games ALL-CAPS titles and economy sentence-case titles → Title Case.
-- Three green/red constant families → alias to `COLOR_GREEN`/`COLOR_RED`.
-- Non-game error strings missing the `❌ ` prefix; ~19 pasted no-permission
-  variants → shared constant.
-- "guild" in member-facing errors (`xp_cog.py:209`, `guess_cog.py:1805`).
-- `█░`/bracket/pipe progress bars → `▰▱`.
-- Separator strays: `·` in titles (voice control), double-spaced `•` footers.
-- `footer_emoji()` adoption outside economy/starboard.
-- Pagination wording variants; ASCII `...` placeholders; "Select" placeholders.
-- One `colour=` kwarg; one "You do not have permission…" uncontracted string.
+Re-measured 2026-09-02 against all 364 embed call sites. What the sweep closed
+has been removed from this list rather than left to mislead the next reader;
+what is below is what was still true afterwards.
+
+- Economy sentence-case titles → Title Case.
+- `·` in two casino pool titles (`cogs/casino/embeds.py`). They need a Title
+  Case rewrite of the same two strings, so do both edits together.
+- Double-spaced `•` inside **field values** (`games_ama`). The footer rule is
+  clean; this is body text, which no rule covers yet — decide before sweeping.
+- "guild" in **dashboard route** errors (`web_server/routes/*`). Member-facing
+  Discord copy is clean.
+- Question-form and bare-noun select placeholders ("Which server?", "Theme",
+  "Assistance level") → imperative "Pick …".
+- Empty-state replies that *read* like denials — "No one is in the hot seat.",
+  "There's no active game in this channel.", "Nobody submitted a price this
+  round." These deliberately do **not** take the `❌ ` prefix: they are empty
+  states, not refusals. Listed here so the next sweep doesn't "fix" them.
+
+### Now gated, not honour-system
+
+`tests/test_embed_style_contract.py` fails the suite on: a denial reply missing
+`❌ `, a footer separating with `·`, a select placeholder saying "Select", the
+`colour=` spelling, and a pure-stacked multi-section card that never calls
+`apply_section_spacing`. Each sweep carries a meta-test proving it can still
+see a violation. Cards mixing `inline=True` triples are deliberately outside
+the spacing sweep — that one is a layout judgement, not a mechanical rule.
+
+### Closed by the 2026-09-02 sweep (verified zero — don't go looking)
+
+- Games ALL-CAPS titles; the `colour=` kwarg; `█░`/bracket/pipe progress bars.
+- The "~19 pasted no-permission variants". There is one shared `NO_PERMISSION`
+  in `services/replies.py` (29 uses) plus six feature-specific
+  `MANAGE_DENIED_MSG` constants that each name their own action ("…to review
+  quest claims", "…to award or cancel bounties"). That is the *preferred*
+  form under "say how to fix it", not drift to converge.
+- Independent green/red constant families: `SUCCESS_COLOR` / `ERROR_COLOR` /
+  `MOD_SUCCESS` are aliases of `COLOR_GREEN` / `COLOR_RED` now. `MOD_JAIL`
+  keeps its own red as part of the sanctioned moderation identity palette.

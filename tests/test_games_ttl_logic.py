@@ -31,6 +31,19 @@ from bot_modules.games_ttl.logic import (
     tally_votes,
     update_scores,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── parse_lie_index ──────────────────────────────────────────────────
@@ -307,7 +320,7 @@ def test_build_lobby_embed_default_no_prompt():
     assert "Two Truths and a Lie" in embed.title
     assert embed.description is not None
     assert "Prompt" not in embed.description
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     # Initial player count field
     assert "Players (0)" in by_name
     assert by_name["Players (0)"] == "—"
@@ -396,7 +409,7 @@ def test_build_reveal_embed_uses_name_resolver():
         fooled_voters=[2, 3],
         name_resolver=lambda uid: resolver(uid) or uid,
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     correct_val = next(v for n, v in by_name.items() if "Correct" in n)
     fooled_val = next(v for n, v in by_name.items() if "Fooled" in n)
     assert "Alice" in correct_val
@@ -413,7 +426,7 @@ def test_build_reveal_embed_renders_dash_when_no_voters():
         fooled_voters=[],
         name_resolver=str,
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     correct_val = next(v for n, v in by_name.items() if "Correct" in n)
     assert correct_val == "—"
 
@@ -437,7 +450,7 @@ def test_build_recap_embed_with_typical_stats():
         name_resolver=lambda u: name_map[u],
         mention_resolver=lambda u: mention_map.get(u),
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert "🤥 Best Liar" in by_name
     assert "Alice" in by_name["🤥 Best Liar"]
     assert "(3 fooled)" in by_name["🤥 Best Liar"]
@@ -481,7 +494,7 @@ def test_build_recap_embed_mention_resolver_none_for_left_user_drops_from_pings(
         name_resolver=lambda u: u,  # fallback bare uid
         mention_resolver=lambda u: None,  # user left the guild
     )
-    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert "🤥 Best Liar" in by_name
     assert "1" in by_name["🤥 Best Liar"]
     assert mentions == set()

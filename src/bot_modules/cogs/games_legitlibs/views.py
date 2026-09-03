@@ -59,7 +59,7 @@ class JoinView(discord.ui.View):
     async def start(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start the round.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start the round.", ephemeral=True)
             return
         await self._on_start(interaction, action="start")
 
@@ -67,7 +67,7 @@ class JoinView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
             "Cancel this round? The lobby will close.",
@@ -102,7 +102,7 @@ class QuiplashFillView(discord.ui.View):
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can cancel.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can cancel.", ephemeral=True)
             return
         await interaction.response.send_message(
             "Cancel this round? Players' in-progress fills will be lost.",
@@ -143,7 +143,7 @@ class ClassicFillView(discord.ui.View):
                  channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
-                "Only the host or a mod can cancel.", ephemeral=True)
+                "❌ Only the host or a mod can cancel.", ephemeral=True)
             return
         await self._on_cancel(interaction)
 
@@ -183,7 +183,7 @@ class ClassicRescueView(discord.ui.View):
                  channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
-                "Only the host or a mod can cancel.", ephemeral=True)
+                "❌ Only the host or a mod can cancel.", ephemeral=True)
             return
         await self._on_cancel(interaction)
 
@@ -215,7 +215,7 @@ class ClassicRescueFillView(discord.ui.View):
                  channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
-                "Only the host or a mod can cancel.", ephemeral=True)
+                "❌ Only the host or a mod can cancel.", ephemeral=True)
             return
         await self._on_cancel(interaction)
 

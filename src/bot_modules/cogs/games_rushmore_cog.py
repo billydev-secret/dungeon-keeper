@@ -182,7 +182,7 @@ class RushmoreVoteSelect(discord.ui.Select):
         uid = interaction.user.id
         target = int(self.values[0])
         if target == uid:
-            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            await interaction.response.send_message("❌ You can't vote for yourself!", ephemeral=True)
             return
         changed = uid in view.votes
         view.votes[uid] = target
@@ -274,7 +274,7 @@ class RushmoreJoinView(discord.ui.View):
     async def start_draft(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
         floor = int(payload.get("settings", {}).get("min_players") or MIN_PLAYERS)
@@ -570,7 +570,7 @@ class RushmoreRecapView(discord.ui.View):
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can restart.", ephemeral=True)
             return
         disable_all_items(self)
         assert interaction.message
@@ -608,7 +608,7 @@ class RushmoreRecapView(discord.ui.View):
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(
             "Type **/games play rushmore** to start a new game as the new host!",

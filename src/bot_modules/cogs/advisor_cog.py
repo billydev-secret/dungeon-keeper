@@ -208,7 +208,7 @@ class _ApplyConfigView(discord.ui.View):
                 isinstance(member, discord.Member) and can_see_config(member)
             ):
                 await interaction.response.send_message(
-                    "Only server admins can apply settings changes.", ephemeral=True
+                    "❌ Only server admins can apply settings changes.", ephemeral=True
                 )
                 return
             try:

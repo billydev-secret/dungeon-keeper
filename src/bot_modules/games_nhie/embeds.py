@@ -33,6 +33,7 @@ from bot_modules.games.constants import (
 from bot_modules.games.utils.game_manager import resolve_name
 from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.games_nhie.logic import DEFAULT_LIVES
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_round_embed(
@@ -117,6 +118,7 @@ def build_round_embed(
     embed.set_footer(
         text=f"{GAME_ICONS['nhie']} Never Have I Ever • Round {round_num}"
     )
+    apply_section_spacing(embed)
     return embed
 
 

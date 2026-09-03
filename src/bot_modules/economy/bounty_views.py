@@ -54,6 +54,7 @@ from bot_modules.services.economy_service import (
     notify_member,
 )
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import AppContext, Bot
@@ -184,6 +185,7 @@ def build_bounty_hub_embed(
             value="Nothing on the board yet — post the first one.",
             inline=False,
         )
+        apply_section_spacing(embed)
         return embed
 
     lines: list[str] = []
@@ -213,6 +215,7 @@ def build_bounty_hub_embed(
     if hidden > 0:
         lines.append(f"…and **{hidden}** more further up the channel.")
     embed.add_field(name="📋 Open bounties", value="\n".join(lines), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

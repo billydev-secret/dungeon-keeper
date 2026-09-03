@@ -572,7 +572,7 @@ def build_grant_audit_embed(
 
     embed.set_footer(
         text=(
-            "Auto-updates hourly & stays at the bottom · "
+            "Auto-updates hourly & stays at the bottom • "
             "delete this message to retire the card"
         )
     )

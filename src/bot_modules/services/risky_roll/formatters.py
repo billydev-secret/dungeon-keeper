@@ -14,6 +14,7 @@ from bot_modules.services.name_resolver import (
     mention as _mention,
     resolve_name_from,
 )
+from bot_modules.core.branding import apply_section_spacing
 from . import state as app_state
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
@@ -262,6 +263,7 @@ def build_embed(
 
         embed.add_field(name="Result", value=result, inline=False)
 
+    apply_section_spacing(embed)
     return embed
 
 
@@ -340,6 +342,7 @@ def build_rolloff_embed(
 
     winner_label = "☠️ Selected Lowest" if pick_lowest else "🏆 Rolloff Winner"
     embed.add_field(name=winner_label, value=f"<@{winner_id}>", inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

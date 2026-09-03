@@ -338,7 +338,7 @@ class FFAEmbedView(discord.ui.View):
         log.info("%s pressed Next in #%s", interaction.user.display_name, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message(
-                "Only the host or a mod can pull the next prompt.", ephemeral=True
+                "❌ Only the host or a mod can pull the next prompt.", ephemeral=True
             )
             return
         if not await self._guard_active(interaction):

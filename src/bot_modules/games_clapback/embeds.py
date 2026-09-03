@@ -20,6 +20,7 @@ from bot_modules.games_clapback.logic import (
     sort_scores,
 )
 from bot_modules.services.embeds import COLOR_BLURPLE, COLOR_GREEN
+from bot_modules.core.branding import apply_section_spacing
 
 ICON = GAME_ICONS["clapback"]
 
@@ -297,6 +298,7 @@ def build_reveal_embed(
         reveal.description = f'💬 *"{discord.utils.escape_markdown(prompt)}"*'
 
     reveal.set_footer(text=f"{ICON} Clapback")
+    apply_section_spacing(reveal)
     return reveal
 
 
@@ -371,6 +373,7 @@ def build_scoreboard_embed(
     # `final` kept in signature for parity with the cog's pre-extraction
     # signature even though it didn't change rendering.
     _ = final
+    apply_section_spacing(embed)
     return embed
 
 

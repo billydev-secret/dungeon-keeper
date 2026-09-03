@@ -344,7 +344,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
                 title="🤠 Quickdraw",
                 description=(
                     f"**{p1_name}** vs **{p2_name}**\n\n"
-                    "⏳ Waiting for the draw signal... **Don't fire early!**"
+                    "⏳ Waiting for the draw signal… **Don't fire early!**"
                 ),
                 color=accent or COLOR_GOLD,
             )
@@ -502,7 +502,7 @@ class QuickdrawDuel(BaseDuel, name="QuickdrawCog"):
             reaction = now - game.fired_at if game.fired_at is not None else 0.0
             await interaction.followup.send(
                 f"🔫 You drew in **{reaction:.3f}s**! "
-                "Hang on — seeing if they can beat it...",
+                "Hang on — seeing if they can beat it…",
                 ephemeral=True,
             )
             # "continue" keeps the FIRE button live (blind) for the opponent.

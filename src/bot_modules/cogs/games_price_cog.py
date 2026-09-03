@@ -197,7 +197,7 @@ class ReasonableSelect(discord.ui.Select):
         uid = interaction.user.id
         target = int(self.values[0])
         if uid == target:
-            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            await interaction.response.send_message("❌ You can't vote for yourself!", ephemeral=True)
             return
         changed = uid in view.reasonable_votes
         view.reasonable_votes[uid] = target
@@ -225,7 +225,7 @@ class UnhingedSelect(discord.ui.Select):
         uid = interaction.user.id
         target = int(self.values[0])
         if uid == target:
-            await interaction.response.send_message("You can't vote for yourself!", ephemeral=True)
+            await interaction.response.send_message("❌ You can't vote for yourself!", ephemeral=True)
             return
         changed = uid in view.unhinged_votes
         view.unhinged_votes[uid] = target
@@ -353,7 +353,7 @@ class PriceGameView(discord.ui.View):
     async def skip_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can skip.", ephemeral=True)
             return
         await interaction.response.defer()
         self.skip_timer()
@@ -362,7 +362,7 @@ class PriceGameView(discord.ui.View):
     async def add_rounds(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can add rounds.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can add rounds.", ephemeral=True)
             return
         await interaction.response.send_modal(AddRoundsModal(self.cog, self.game_id))
 
@@ -445,7 +445,7 @@ class PriceRecapView(discord.ui.View):
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can restart.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can restart.", ephemeral=True)
             return
         # Disable buttons on old recap
         disable_all_items(self)
@@ -483,7 +483,7 @@ class PriceRecapView(discord.ui.View):
     async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can hand off.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can hand off.", ephemeral=True)
             return
         await interaction.response.send_message(
             "Type **/games play price** to start a new game as the new host!",
@@ -867,7 +867,7 @@ class PriceCog(commands.Cog):
         # ── Handle 0 or 1 submissions ──
         if len(prices) == 0:
             try:
-                await channel.send("Nobody submitted a price this round. Moving on...")
+                await channel.send("Nobody submitted a price this round. Moving on…")
             except discord.HTTPException:
                 pass
             await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3, accent=accent)

@@ -44,7 +44,7 @@ from typing import Any, Callable
 
 import discord
 
-DEFAULT_STARTER: str = "Once upon a time, in a place no one quite remembered..."
+DEFAULT_STARTER: str = "Once upon a time, in a place no one quite remembered…"
 
 # Discord embed description hard limit is 4096; cog historically uses 4090
 # with a 3-char ellipsis budget (truncates to 4087 + "…").

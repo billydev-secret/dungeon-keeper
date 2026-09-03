@@ -52,6 +52,19 @@ from bot_modules.whisper.logic import (
     recompute_inbox_after_delete,
     status_pill,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── Test fixtures ─────────────────────────────────────────────────────
@@ -477,7 +490,7 @@ def test_reply_audit_embed_basic_fields():
     assert emb.fields[1].value is not None
     assert "200" in emb.fields[1].value
     assert emb.fields[2].name == "Whisper ID"
-    assert emb.fields[2].value == "7"
+    assert _unspaced(emb.fields[2].value) == "7"
 
 
 def test_reply_audit_embed_escapes_codefence():
@@ -514,8 +527,8 @@ def test_report_audit_embed_basic_fields():
     assert emb.fields[1].name == "Reporter (Target)"
     assert emb.fields[1].value is not None
     assert "20" in emb.fields[1].value
-    assert emb.fields[2].value == "spam"
-    assert emb.fields[3].value == "9"
+    assert _unspaced(emb.fields[2].value) == "spam"
+    assert _unspaced(emb.fields[3].value) == "9"
 
 
 def test_report_audit_embed_pins_timestamp():
@@ -559,11 +572,11 @@ def test_reply_report_audit_embed_basic_fields():
     assert emb.fields[1].name == "Reporter (recipient)"
     assert emb.fields[1].value is not None
     assert "200" in emb.fields[1].value
-    assert emb.fields[2].value == "harassment"
+    assert _unspaced(emb.fields[2].value) == "harassment"
     assert emb.fields[3].name == "Reply ID"
-    assert emb.fields[3].value == "55"
+    assert _unspaced(emb.fields[3].value) == "55"
     assert emb.fields[4].name == "Whisper ID"
-    assert emb.fields[4].value == "7"
+    assert _unspaced(emb.fields[4].value) == "7"
 
 
 def test_reply_report_audit_embed_pins_timestamp():
@@ -942,7 +955,7 @@ def test_reply_audit_embed_names_both_parties_and_keeps_ids():
         whisper_id=7, from_user_id=100, to_user_id=200, content="hi",
         name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
     )
-    fields = {f.name: f.value for f in emb.fields}
+    fields = {f.name: _unspaced(f.value) for f in emb.fields}
     # The mod-facing embeds keep the copyable raw id alongside the name.
     assert fields["From"] == "Sender Sam (`100`)"
     assert fields["To"] == "Target Tina (`200`)"
@@ -954,7 +967,7 @@ def test_report_audit_embed_names_both_parties_and_keeps_ids():
         whisper=w, reason="spam",
         name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
     )
-    fields = {f.name: f.value for f in emb.fields}
+    fields = {f.name: _unspaced(f.value) for f in emb.fields}
     assert fields["Sender"] == "Sender Sam (`100`)"
     assert fields["Reporter (Target)"] == "Target Tina (`200`)"
 
@@ -964,7 +977,7 @@ def test_reply_report_audit_embed_names_both_parties_and_keeps_ids():
         reply=_reply(), reporter_id=200, reason="harassment",
         name_fn=_names({100: "Sender Sam", 200: "Target Tina"}),
     )
-    fields = {f.name: f.value for f in emb.fields}
+    fields = {f.name: _unspaced(f.value) for f in emb.fields}
     assert fields["Sender (anonymous)"] == "Sender Sam (`100`)"
     assert fields["Reporter (recipient)"] == "Target Tina (`200`)"
 
@@ -975,7 +988,7 @@ def test_audit_embed_still_shows_the_id_when_the_name_is_unknown():
         whisper_id=7, from_user_id=100, to_user_id=200, content="hi",
         name_fn=_names({}),
     )
-    fields = {f.name: f.value for f in emb.fields}
+    fields = {f.name: _unspaced(f.value) for f in emb.fields}
     assert fields["From"] == "<@100> (`100`)"
 
 

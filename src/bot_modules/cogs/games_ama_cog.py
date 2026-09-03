@@ -454,7 +454,7 @@ class ScreenedQuestionView(discord.ui.View):
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.ama_view.host_id:
-            await interaction.response.send_message("Only the host can approve questions.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host can approve questions.", ephemeral=True)
             return
         # No-contact gate on approval, not just on asking. A screened question
         # sits in the host's DMs for as long as the view lives, and the pair
@@ -527,7 +527,7 @@ class ScreenedQuestionView(discord.ui.View):
     async def reject(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.ama_view.host_id:
-            await interaction.response.send_message("Only the host can reject questions.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host can reject questions.", ephemeral=True)
             return
         self.stop()
         await interaction.response.edit_message(content="❌ Question rejected.", view=None)
@@ -566,7 +566,7 @@ class QuestionView(discord.ui.View):
     async def reply_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.hot_seat_id:
-            await interaction.response.send_message("Only the hot seat player can reply.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the hot seat player can reply.", ephemeral=True)
             return
         modal = ReplyModal(self.game_id, self.db, self.question_idx, self.asker_id, self.ama_view, self.question_text)
         await interaction.response.send_modal(modal)
@@ -575,7 +575,7 @@ class QuestionView(discord.ui.View):
     async def pass_question(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if interaction.user.id != self.hot_seat_id:
-            await interaction.response.send_message("Only the hot seat player can pass.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the hot seat player can pass.", ephemeral=True)
             return
         assert interaction.message
         embed = interaction.message.embeds[0] if interaction.message.embeds else None
@@ -822,7 +822,7 @@ class AMAView(discord.ui.View):
                 # true, and it makes no claim the channel contradicts.
                 if had_candidates and not candidates:
                     await interaction.response.send_message(
-                        "You can't ask a question in this round.", ephemeral=True
+                        "❌ You can't ask a question in this round.", ephemeral=True
                     )
                     return
             if not candidates:
@@ -950,7 +950,7 @@ class AMAView(discord.ui.View):
     async def skip_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can skip.", ephemeral=True)
             return
         if self.hot_seat_id is None:
             await interaction.response.send_message("No one is in the hot seat.", ephemeral=True)
@@ -975,7 +975,7 @@ class AMAView(discord.ui.View):
     async def new_hot_seat(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can select the hot seat.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can select the hot seat.", ephemeral=True)
             return
         # Only members who volunteered (are in the queue) may be promoted —
         # nobody gets forced into the public hot seat without opting in.

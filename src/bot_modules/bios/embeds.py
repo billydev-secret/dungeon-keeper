@@ -28,6 +28,7 @@ from bot_modules.bios.logic import (
     question_field_name,
     shrink_to_embed_total,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 #: Discord caps a single embed field value at 1024 characters.
 _FIELD_VALUE_LIMIT = 1024
@@ -150,6 +151,7 @@ def build_field_prompt_embed(
             inline=False,
         )
     e.set_footer(text=f"Step {step_index + 1} / {total_steps}")
+    apply_section_spacing(e)
     return e
 
 

@@ -97,7 +97,7 @@ def build_embed(
     if queue.loop_mode != LoopMode.OFF:
         state_bits.append(f"Loop: {queue.loop_mode.value}")
     if state_bits:
-        embed.set_footer(text=" · ".join(state_bits))
+        embed.set_footer(text=" • ".join(state_bits))
 
     return embed
 
@@ -147,7 +147,7 @@ class NowPlayingView(discord.ui.View):
             or member.voice.channel.id != bot_channel.id
         ):
             await interaction.response.send_message(
-                f"You need to be in {bot_channel.mention} to use these controls.",
+                f"❌ You need to be in {bot_channel.mention} to use these controls.",
                 ephemeral=True,
             )
             return False

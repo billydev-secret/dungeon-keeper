@@ -25,6 +25,19 @@ from bot_modules.games_nhie.logic import (
     find_winner,
     payload_to_round_state,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── apply_vote ───────────────────────────────────────────────────────
@@ -311,7 +324,7 @@ def test_build_round_embed_renders_round_and_statement_fields():
         innocent=[3],
         round_num=7,
     )
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Round"] == "7"
     assert by_name["Statement"] == "gone skydiving"
     votes = by_name["Votes"] or ""
@@ -330,7 +343,7 @@ def test_build_round_embed_escapes_markdown_in_statement():
         innocent=[],
         round_num=1,
     )
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     statement = by_name["Statement"] or ""
     assert "\\*sneaky\\*" in statement
 

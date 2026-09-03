@@ -23,6 +23,7 @@ from bot_modules.games_hottakes.logic import (
     VOTE_LABELS,
     compute_recap_summary,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_lobby_embed(
@@ -94,6 +95,7 @@ def build_vote_embed(
         inline=False,
     )
     embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
+    apply_section_spacing(embed)
     return embed
 
 

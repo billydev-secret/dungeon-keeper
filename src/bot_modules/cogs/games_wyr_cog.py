@@ -228,7 +228,7 @@ class WYRRoundView(discord.ui.View):
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:
             await interaction.response.send_message("This round is already over.", ephemeral=True)
@@ -240,7 +240,7 @@ class WYRRoundView(discord.ui.View):
     async def reveal_voters(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can reveal voters.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can reveal voters.", ephemeral=True)
             return
         self.revealed = True
         button.disabled = True

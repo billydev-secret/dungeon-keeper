@@ -85,14 +85,14 @@ class GamesConfigCog(commands.Cog):
         )
         if not (is_host or is_mod):
             await interaction.response.send_message(
-                "Only the game's host or a moderator can end it.", ephemeral=True,
+                "❌ Only the game's host or a moderator can end it.", ephemeral=True,
             )
             return
         # The old command was mod-gated; a host skipping their own confirmation
         # would be a new capability, so force stays mod-only.
         if force and not is_mod:
             await interaction.response.send_message(
-                "Only a moderator can force-close without confirming.", ephemeral=True,
+                "❌ Only a moderator can force-close without confirming.", ephemeral=True,
             )
             return
 
@@ -158,7 +158,7 @@ class GamesConfigCog(commands.Cog):
         # Adding or removing someone else requires elevation; self-service is open.
         if target.id != interaction.user.id and not await self._can_manage_others(interaction, row["host_id"]):
             await interaction.response.send_message(
-                "Only the game's host, a moderator, or a Game-Host-role holder "
+                "❌ Only the game's host, a moderator, or a Game-Host-role holder "
                 "can add or remove other players.",
                 ephemeral=True,
             )
@@ -176,7 +176,7 @@ class GamesConfigCog(commands.Cog):
                 )
             else:
                 await interaction.response.send_message(
-                    f"You can't {verb} **{game_type}** mid-game.", ephemeral=True,
+                    f"❌ You can't {verb} **{game_type}** mid-game.", ephemeral=True,
                 )
             return
 

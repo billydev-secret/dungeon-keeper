@@ -57,5 +57,7 @@ def updated_starboard_embed(
     the original message on every reaction.
     """
     new_embed = old_embed.copy()
-    new_embed.set_footer(text=f"{emoji} {star_count}")
+    # Same custom-emoji fallback as the initial card: a footer renders as plain
+    # text, so a raw <:name:id> would surface the moment the count changed.
+    new_embed.set_footer(text=f"{footer_emoji(emoji, '⭐')} {star_count}")
     return new_embed

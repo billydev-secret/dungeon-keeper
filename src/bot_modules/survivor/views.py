@@ -750,7 +750,7 @@ async def repost_panel(
     """
     built = await build_live_panel(bot, db_path, season_id)
     if built is None:
-        raise PanelError("Bot offline or the season/guild is gone.")
+        raise PanelError("Bot offline or the season/server is gone.")
     season, embed, join_open = built
     config = season["config"]
     guild = bot.get_guild(season["guild_id"])

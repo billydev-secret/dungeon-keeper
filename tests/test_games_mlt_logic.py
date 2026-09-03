@@ -37,6 +37,19 @@ from bot_modules.games_mlt.logic import (
     remove_player,
     tally_votes,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── add_player / remove_player ───────────────────────────────────────
@@ -402,7 +415,7 @@ def test_build_join_embed_title_contains_game_name():
 
 def test_build_join_embed_renders_host_and_players():
     embed = build_join_embed("Alice", ["Bob", "Charlie"])
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Host"] == "Alice"
     assert "Players (2)" in by_name
     assert "Bob, Charlie" == by_name["Players (2)"]
@@ -410,7 +423,7 @@ def test_build_join_embed_renders_host_and_players():
 
 def test_build_join_embed_dash_when_no_players():
     embed = build_join_embed("Alice", [])
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Players (0)"] == "—"
 
 
@@ -440,7 +453,7 @@ def test_build_round_embed_closed_title_has_suffix():
 
 def test_build_round_embed_renders_prompt_and_round_fields():
     embed = build_round_embed("staring contest", round_num=7, vote_count=3)
-    by_name = {f.name: (f.value or "") for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Prompt"] == "staring contest"
     assert "7" in by_name["Round"]
     assert "3 votes" in by_name["Round"]
@@ -448,7 +461,7 @@ def test_build_round_embed_renders_prompt_and_round_fields():
 
 def test_build_round_embed_escapes_markdown_in_prompt():
     embed = build_round_embed("*sneaky* prompt", round_num=1, vote_count=0)
-    by_name = {f.name: (f.value or "") for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert "\\*sneaky\\*" in by_name["Prompt"]
 
 
@@ -481,7 +494,7 @@ def test_build_closed_embed_color_differs_from_round_over():
 
 def test_build_closed_embed_preserves_prompt_and_round():
     embed = build_closed_embed("staring contest", round_num=2, vote_count=5)
-    by_name = {f.name: (f.value or "") for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Prompt"] == "staring contest"
     assert "5 votes" in by_name["Round"]
 

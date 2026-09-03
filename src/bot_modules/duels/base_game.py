@@ -35,6 +35,7 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.games.utils.game_manager import check_game_enabled, sign_off_game_chore
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
+from bot_modules.core.branding import apply_section_spacing
 
 from . import db as duels_db
 from .filters import (
@@ -522,7 +523,7 @@ class BaseGame(commands.Cog):
             return
         if interaction.user.id != game.winner_id:
             await interaction.response.send_message(
-                "Only the winner can set the nickname.", ephemeral=True
+                "❌ Only the winner can set the nickname.", ephemeral=True
             )
             return
 
@@ -648,7 +649,7 @@ class BaseGame(commands.Cog):
             )
         except discord.Forbidden:
             await interaction.response.send_message(
-                "I don't have permission to rename that user.", ephemeral=True
+                "❌ I don't have permission to rename that user.", ephemeral=True
             )
             return
         except discord.HTTPException as e:
@@ -748,6 +749,7 @@ class BaseGame(commands.Cog):
                 inline=False,
             )
         embed.set_footer(text=f"Host: {host_name} • Need {min_players}+ players to start.")
+        apply_section_spacing(embed)
         return embed
 
     async def _lobby_embed(
@@ -873,7 +875,7 @@ class BaseGame(commands.Cog):
             if cd is not None:
                 hours, mins = int(cd // 3600), int((cd % 3600) // 60)
                 await interaction.response.send_message(
-                    f"You need to wait **{hours}h {mins}m** before playing again.",
+                    f"❌ You need to wait **{hours}h {mins}m** before playing again.",
                     ephemeral=True,
                 )
                 return
@@ -1036,7 +1038,7 @@ class BaseGame(commands.Cog):
                 return
             if interaction.user.id != game.host_id:
                 await interaction.response.send_message(
-                    "Only the host can cancel the lobby.", ephemeral=True
+                    "❌ Only the host can cancel the lobby.", ephemeral=True
                 )
                 return
             await self._db_set_state(game_id, "EXPIRED_LOBBY")
@@ -1064,13 +1066,13 @@ class BaseGame(commands.Cog):
                     return
                 if interaction.user.id != game.host_id:
                     await interaction.response.send_message(
-                        "Only the host can start the game.", ephemeral=True
+                        "❌ Only the host can start the game.", ephemeral=True
                     )
                     return
                 min_players, _max_players = await self.get_lobby_params(game.guild_id)
                 if len(game.roster) < min_players:
                     await interaction.response.send_message(
-                        f"You need at least **{min_players}** players to start "
+                        f"❌ You need at least **{min_players}** players to start "
                         f"(currently {len(game.roster)}).",
                         ephemeral=True,
                     )

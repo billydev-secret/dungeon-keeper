@@ -256,7 +256,7 @@ class _BirthdayModal(discord.ui.Modal, title="Set Birthday"):
         super().__init__()
         self._ctx = ctx
         self.month: discord.ui.Select = discord.ui.Select(
-            placeholder="Pick your birth month",
+            placeholder="Pick your birth month…",
             options=[
                 discord.SelectOption(label=name, value=str(number))
                 for name, number in _month_choices()

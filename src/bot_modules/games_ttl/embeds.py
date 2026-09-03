@@ -24,6 +24,7 @@ from bot_modules.games.constants import (
     PHASE_RESULTS,
 )
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.core.branding import apply_section_spacing
 
 # Number emoji for statement 1/2/3 (shared between guess + reveal embeds).
 _NUM_EMOJI: tuple[str, str, str] = ("1️⃣", "2️⃣", "3️⃣")
@@ -147,6 +148,7 @@ def build_reveal_embed(
     fooled_list = list(fooled_voters)
     embed.add_field(name=f"🎯 Correct ({len(correct_list)})", value=_names(correct_list), inline=False)
     embed.add_field(name=f"❌ Fooled ({len(fooled_list)})", value=_names(fooled_list), inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

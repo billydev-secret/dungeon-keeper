@@ -66,7 +66,7 @@ async def _execute_grant(
 
     if actor is not None and member.id == actor.id and not ctx.is_mod(interaction):
         await interaction.response.send_message(
-            "You can't grant this role to yourself.", ephemeral=True
+            "❌ You can't grant this role to yourself.", ephemeral=True
         )
         return
 
@@ -136,13 +136,13 @@ async def _execute_grant(
 
     if not bot_member.guild_permissions.manage_roles:
         await interaction.response.send_message(
-            "I need the Manage Roles permission to do that.", ephemeral=True
+            "❌ I need the Manage Roles permission to do that.", ephemeral=True
         )
         return
 
     if role >= bot_member.top_role:
         await interaction.response.send_message(
-            f"I can't grant {role.mention} because it is above my highest role.",
+            f"❌ I can't grant {role.mention} because it is above my highest role.",
             ephemeral=True,
         )
         return

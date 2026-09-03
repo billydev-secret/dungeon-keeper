@@ -32,6 +32,7 @@ from bot_modules.games_price.logic import (
     ladder_stats,
     price_label,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 def _footer(host_name: str) -> str:
@@ -61,7 +62,7 @@ def build_start_embed(
     )
     embed.add_field(
         name="Status",
-        value="Starting up — first scenario incoming...",
+        value="Starting up — first scenario incoming…",
         inline=False,
     )
     embed.set_footer(text=_footer(host_name))
@@ -106,6 +107,7 @@ def build_scenario_embed(
         sub_text += f"/{total_players}"
     embed.add_field(name="Submissions", value=sub_text, inline=False)
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -164,6 +166,7 @@ def build_reveal_embed(
         )
 
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -199,6 +202,7 @@ def build_vote_embed(
         inline=False,
     )
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -244,6 +248,7 @@ def build_round_results_embed(
         inline=False,
     )
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -285,6 +290,7 @@ def build_recap_embed(
     if highlight:
         embed.add_field(name="💡 Highlight", value=highlight, inline=False)
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 

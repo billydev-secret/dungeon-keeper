@@ -129,7 +129,7 @@ def create_season(
     if not 2020 <= season_year <= 2100:
         raise SeasonError("Season year looks wrong.")
     if get_active_season(conn, guild_id) is not None:
-        raise SeasonError("This guild already has a live season — end it first.")
+        raise SeasonError("This server already has a live season — end it first.")
     config = validate_config(overrides or {})
     try:
         cur = conn.execute(
@@ -141,7 +141,7 @@ def create_season(
         # The schema backstop (partial unique index on live seasons): two
         # concurrent creates both pass the check above; the loser lands here.
         raise SeasonError(
-            "This guild already has a live season — end it first."
+            "This server already has a live season — end it first."
         ) from exc
     return int(cur.lastrowid or 0)
 

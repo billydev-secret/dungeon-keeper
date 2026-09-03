@@ -1480,7 +1480,7 @@ class _TransferPickerView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.select(placeholder="Pick a member in the channel")
+    @discord.ui.select(placeholder="Pick a member in the channel…")
     async def member_select(
         self,
         interaction: discord.Interaction,
@@ -1538,7 +1538,7 @@ class _UserPickerView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick a member")
+    @discord.ui.select(cls=discord.ui.UserSelect, placeholder="Pick a member…")
     async def user_select(
         self,
         interaction: discord.Interaction,

@@ -290,7 +290,7 @@ def page_captions(pages: list[tuple[str, int]], total_items: int = 0) -> list[st
 
 
 def page_note(pages: list[tuple[str, int]], page: int) -> str:
-    """The "Page 2 of 4 · " prefix, or "" for a one-page shop.
+    """The "Page 2/4 • " footer prefix, or "" for a one-page shop.
 
     Numbered over the whole book, not within a section: the arrows cross every
     seam, so a counter that restarted at one would read as the shop losing its
@@ -299,7 +299,7 @@ def page_note(pages: list[tuple[str, int]], page: int) -> str:
     """
     if len(pages) < 2:
         return ""
-    return f"Page {page + 1} of {len(pages)} · "
+    return f"Page {page + 1}/{len(pages)} • "
 
 
 def store_page_count(items: list[ItemView]) -> int:

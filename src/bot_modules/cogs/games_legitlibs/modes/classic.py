@@ -477,7 +477,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
             return
         if outcome["value"] == "not_player":
             await vol_interaction.response.send_message(
-                "Only players in this round can volunteer.", ephemeral=True)
+                "❌ Only players in this round can volunteer.", ephemeral=True)
             return
         if outcome["value"] == "already":
             await vol_interaction.response.send_message(

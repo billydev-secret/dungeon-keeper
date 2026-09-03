@@ -22,6 +22,7 @@ from bot_modules.games_help.logic import (
     OTHER_COMMANDS_VALUE,
     SUPPORT_INVITE_URL,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
@@ -60,6 +61,7 @@ def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
     )
 
     embed.set_footer(text="Community Games • /games help")
+    apply_section_spacing(embed)
     return embed
 
 

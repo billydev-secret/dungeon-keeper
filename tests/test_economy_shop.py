@@ -455,8 +455,8 @@ def test_the_page_counter_runs_over_the_whole_book(db):
 
     _enable(db, price_qotd_sponsor=0)
     pages = shop_pages(_settings(db), items=_items(20))
-    assert page_note(pages, 0) == "Page 1 of 4 · "
-    assert page_note(pages, 3) == "Page 4 of 4 · "
+    assert page_note(pages, 0) == "Page 1/4 • "
+    assert page_note(pages, 3) == "Page 4/4 • "
     # One page is not a book: no counter at all.
     assert page_note([("cosmetics", 0)], 0) == ""
 

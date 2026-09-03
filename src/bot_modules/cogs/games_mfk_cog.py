@@ -96,7 +96,7 @@ class MFKView(discord.ui.View):
     async def close_assign(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can assign roles.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can assign roles.", ephemeral=True)
             return
 
         payload = await get_game_payload(self.db, self.game_id)

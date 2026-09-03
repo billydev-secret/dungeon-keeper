@@ -100,7 +100,7 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         key="economy-panel",
         label="Economy Panel",
         description=(
-            "The guild's economy panel — today's pulse, top earners, quest and "
+            "The server's economy panel — today's pulse, top earners, quest and "
             "community-goal progress, repainting itself after economy activity. "
             "Its buttons carry the rest: a member's own quests and wallet, the "
             "how-it-works guide, and the 🔔 opt-in for economy DMs. Sticks to "

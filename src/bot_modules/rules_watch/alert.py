@@ -11,6 +11,7 @@ from bot_modules.core.utils import disable_all_items
 
 from bot_modules.rules_watch import service
 from bot_modules.rules_watch.scorer import PriorityResult, Signals, TargetResult
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.services.ai_moderation_service import RulesWatchGuardResult
@@ -87,7 +88,8 @@ def _build_embed(
         value=" | ".join(sig_parts),
         inline=False,
     )
-    embed.set_footer(text=f"Event #{event_id} · target confidence: {target.confidence}")
+    embed.set_footer(text=f"Event #{event_id} • target confidence: {target.confidence}")
+    apply_section_spacing(embed)
     return embed
 
 

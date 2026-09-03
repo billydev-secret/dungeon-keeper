@@ -416,7 +416,7 @@ class RiskyRollView(BaseRiskyRollView):
             is_admin = isinstance(interaction.user, discord.Member) and interaction.user.guild_permissions.administrator
             if interaction.user.id != state.opener_id and not is_admin:
                 await interaction.response.send_message(
-                    "Only the round opener can close this round.",
+                    "❌ Only the round opener can close this round.",
                     ephemeral=True,
                 )
                 return
@@ -499,7 +499,7 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
 
             if asker_id not in state.allowed_questioners():
                 await interaction.response.send_message(
-                    "Only the eligible players can send a question.",
+                    "❌ Only the eligible players can send a question.",
                     ephemeral=True,
                 )
                 return
@@ -684,7 +684,7 @@ class SixtyNineQuestionView(BaseRiskyRollView):
 
             if interaction.user.id not in state.allowed_questioners():
                 await interaction.response.send_message(
-                    "Only the eligible players can send a question.",
+                    "❌ Only the eligible players can send a question.",
                     ephemeral=True,
                 )
                 return
@@ -720,7 +720,7 @@ class QuestionReplyModal(discord.ui.Modal, title="Reply"):
                 return
             if interaction.user.id not in state.allowed_replier_ids:
                 await interaction.response.send_message(
-                    "Only the question's recipient can reply.", ephemeral=True
+                    "❌ Only the question's recipient can reply.", ephemeral=True
                 )
                 return
 
@@ -792,7 +792,7 @@ class QuestionReplyView(BaseRiskyRollView):
             return
         if interaction.user.id not in state.allowed_replier_ids:
             await interaction.response.send_message(
-                "Only the question's recipient can reply.", ephemeral=True
+                "❌ Only the question's recipient can reply.", ephemeral=True
             )
             return
         await interaction.response.send_modal(QuestionReplyModal(message_id=interaction.message.id))

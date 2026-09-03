@@ -176,6 +176,7 @@ def build_draft_embed(
     board_text = render_draft_board(players, boards, active_player_id)
     embed.add_field(name="​", value=board_text, inline=False)
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -238,6 +239,7 @@ def build_vote_embed(
         name="Vote", value="Who built the best Mt. Rushmore?", inline=False,
     )
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 
@@ -304,6 +306,7 @@ def build_winner_embed(
         inline=False,
     )
     embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
     return embed
 
 

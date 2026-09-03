@@ -113,7 +113,7 @@ def build_game_highlight(
             hottest = max(results, key=lambda x: x.get("avg", 0))
             text = hottest.get("text", "")
             avg = hottest.get("avg", 0)
-            highlight += f': Hottest — "{text[:40]}..." (avg {avg:.1f}/4)'
+            highlight += f': Hottest — "{text[:40]}…" (avg {avg:.1f}/4)'
 
     return highlight
 

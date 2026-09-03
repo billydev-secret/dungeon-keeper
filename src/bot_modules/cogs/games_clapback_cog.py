@@ -232,7 +232,7 @@ class ClapbackJoinView(discord.ui.View):
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start.", ephemeral=True)
             return
 
         payload = await get_game_payload(self.db, self.game_id)
@@ -463,7 +463,7 @@ class ClapbackVoteView(discord.ui.View):
         uid = interaction.user.id
         if uid in (self.player_a, self.player_b):
             await interaction.response.send_message(
-                "You can't vote on your own matchup! 😎",
+                "❌ You can't vote on your own matchup! 😎",
                 ephemeral=True,
             )
             return
@@ -502,7 +502,7 @@ class ClapbackRoundSummaryView(discord.ui.View):
     async def next_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         self.stop()
         disable_all_items(self)
@@ -524,7 +524,7 @@ class ClapbackRecapView(discord.ui.View):
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
         self.stop()
         disable_all_items(self)
@@ -550,7 +550,7 @@ class ClapbackRecapView(discord.ui.View):
     async def play_again_shuffled(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host can start a rematch.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
         channel = interaction.channel
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))

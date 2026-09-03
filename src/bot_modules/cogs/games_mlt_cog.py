@@ -139,7 +139,7 @@ class MLTJoinView(discord.ui.View):
     async def start_game(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
@@ -266,7 +266,7 @@ class MLTVoteView(discord.ui.View):
             name = member.display_name if member else str(uid)
             options.append(discord.SelectOption(label=name, value=str(uid)))
         self.select = discord.ui.Select(
-            placeholder="🗳️ Vote: Select a player",
+            placeholder="🗳️ Vote: Pick a player…",
             options=options,
             custom_id="mlt_vote_select",
         )
@@ -329,7 +329,7 @@ class MLTVoteView(discord.ui.View):
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         if self._closed:
             await interaction.response.send_message("This round is already over.", ephemeral=True)

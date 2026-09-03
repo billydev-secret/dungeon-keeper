@@ -118,7 +118,7 @@ class FantasiesMainView(discord.ui.View):
     async def start_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start rounds.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start rounds.", ephemeral=True)
             return
 
         self.round_num += 1
@@ -167,7 +167,7 @@ class SubmitRoundView(discord.ui.View):
     async def close_submissions(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can close submissions.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can close submissions.", ephemeral=True)
             return
         self._closed = True
         self.stop()
@@ -229,7 +229,7 @@ class FantasiesVoteView(discord.ui.View):
             return
         if interaction.user.id == self.entry_author_id:
             await interaction.response.send_message(
-                "You can't vote on your own entry!", ephemeral=True
+                "❌ You can't vote on your own entry!", ephemeral=True
             )
             return
         changed = apply_vote(
@@ -247,7 +247,7 @@ class FantasiesVoteView(discord.ui.View):
             return
         if interaction.user.id == self.entry_author_id:
             await interaction.response.send_message(
-                "You can't vote on your own entry!", ephemeral=True
+                "❌ You can't vote on your own entry!", ephemeral=True
             )
             return
         changed = apply_vote(
@@ -261,7 +261,7 @@ class FantasiesVoteView(discord.ui.View):
     async def next_entry(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)

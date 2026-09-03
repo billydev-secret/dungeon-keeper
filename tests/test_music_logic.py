@@ -30,6 +30,19 @@ from bot_modules.music.logic import (
     track_summary_from_object,
 )
 from bot_modules.services.music_queue import GuildQueue
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 # ── is_search_url ────────────────────────────────────────────────────
@@ -313,12 +326,12 @@ def test_build_queue_embed_with_current_and_items():
         loop_mode_value="off",
     )
     assert embed.title == "🎶 Music queue"
-    fields = {f.name: f.value or "" for f in embed.fields}
+    fields = {f.name: _unspaced(f.value) for f in embed.fields}
     assert fields["Now playing"] == "Now: X"
     assert "Up next (2 total)" in fields
     assert " 1." in fields["Up next (2 total)"]
     assert " 2." in fields["Up next (2 total)"]
-    assert embed.footer.text == "Page 1/1 · loop: off"
+    assert embed.footer.text == "Page 1/1 • loop: off"
 
 
 def test_build_queue_embed_without_current_skips_now_playing_field():
@@ -345,7 +358,7 @@ def test_build_queue_embed_empty_queue_says_empty():
         total_pages=1,
         loop_mode_value="off",
     )
-    fields = {f.name: f.value for f in embed.fields}
+    fields = {f.name: _unspaced(f.value) for f in embed.fields}
     assert fields["Up next"] == "(empty)"
 
 
@@ -360,7 +373,7 @@ def test_build_queue_embed_numbers_continue_across_pages():
         total_pages=2,
         loop_mode_value="queue",
     )
-    fields = {f.name: f.value or "" for f in embed.fields}
+    fields = {f.name: _unspaced(f.value) for f in embed.fields}
     body = fields["Up next (13 total)"]
     assert "11." in body
     assert "12." in body
@@ -377,7 +390,7 @@ def test_build_queue_embed_footer_reflects_loop_mode():
         total_pages=3,
         loop_mode_value="track",
     )
-    assert embed.footer.text == "Page 2/3 · loop: track"
+    assert embed.footer.text == "Page 2/3 • loop: track"
 
 
 # ── describe_track_failure ───────────────────────────────────────────

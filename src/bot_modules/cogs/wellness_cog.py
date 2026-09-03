@@ -93,7 +93,7 @@ class _SetupWizardView(discord.ui.View):
         self._step: int = 1
 
         self._tz_select: discord.ui.Select[discord.ui.View] = discord.ui.Select(
-            placeholder="Select your timezone…",
+            placeholder="Pick your timezone…",
             min_values=1,
             max_values=1,
             options=[
@@ -105,7 +105,7 @@ class _SetupWizardView(discord.ui.View):
         self.add_item(self._tz_select)
 
         self._enf_select: discord.ui.Select[discord.ui.View] = discord.ui.Select(
-            placeholder="Select your enforcement level…",
+            placeholder="Pick your enforcement level…",
             min_values=1,
             max_values=1,
             options=[

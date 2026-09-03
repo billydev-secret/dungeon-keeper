@@ -59,6 +59,7 @@ from bot_modules.services.economy_service import (
     load_econ_settings,
 )
 from bot_modules.services.wellness_service import login_digest_value
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -198,6 +199,7 @@ def build_login_embed(
         quests_out, gains, include_done=True
     ):
         embed.add_field(name=name, value=value, inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

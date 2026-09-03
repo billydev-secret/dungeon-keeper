@@ -26,6 +26,7 @@ from bot_modules.economy.perks import PERK_LABELS
 from bot_modules.economy.view_helpers import unit
 from bot_modules.services.embeds import fit_lines
 from bot_modules.services.economy_service import EconSettings
+from bot_modules.core.branding import apply_section_spacing
 
 # Memos are shortened in the one-line wallet render.
 WALLET_MEMO_LEN = 40
@@ -143,4 +144,5 @@ def build_wallet_embed(
             lines.append(f"🧊 {abs(streak)} losses running — walk away?")
         embed.add_field(name="🎰 At the Tables", value="\n".join(lines), inline=False)
 
+    apply_section_spacing(embed)
     return embed

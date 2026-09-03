@@ -36,6 +36,7 @@ from bot_modules.core.role_provision import ensure_config_role
 from bot_modules.services.feature_roles import ECONOMY_NOTIFY
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
+from bot_modules.core.branding import apply_section_spacing
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -176,6 +177,7 @@ def build_guide_embed(
         "Rentals renew weekly — a short grace period covers a missed renewal."
     )
     embed.set_footer(text=" ".join(footer_bits))
+    apply_section_spacing(embed)
     return embed
 
 

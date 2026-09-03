@@ -19,6 +19,7 @@ import discord
 
 from bot_modules.services.guess_models import GuessRound
 from bot_modules.services.name_resolver import NameFn, mention
+from bot_modules.core.branding import apply_section_spacing
 
 #: Rows are ``(user_id, posted, solved)`` for posters, ``(user_id, solved)``
 #: for guessers — straight from the repo's leaderboard queries.
@@ -112,6 +113,7 @@ def leaderboard_embed(
     embed = discord.Embed(title="🏆 Guess Leaderboard", color=color)
     embed.add_field(name="Top Posters", value=poster_text, inline=False)
     embed.add_field(name="Top Guessers", value=guesser_text, inline=False)
+    apply_section_spacing(embed)
     return embed
 
 

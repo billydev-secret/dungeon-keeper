@@ -24,6 +24,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
+from bot_modules.core.branding import apply_section_spacing
 
 
 from . import db as duels_db
@@ -72,12 +73,12 @@ class BaseDuel(BaseGame):
 
         if target.id == challenger.id:
             await interaction.response.send_message(
-                "You can't challenge yourself.", ephemeral=True
+                "❌ You can't challenge yourself.", ephemeral=True
             )
             return
         if target.bot:
             await interaction.response.send_message(
-                "You can't challenge a bot.", ephemeral=True
+                "❌ You can't challenge a bot.", ephemeral=True
             )
             return
 
@@ -254,6 +255,7 @@ class BaseDuel(BaseGame):
             value=f"<t:{now_plus(CHALLENGE_RESPONSE_SECONDS)}:R>",
             inline=False,
         )
+        apply_section_spacing(embed)
         return embed
 
     # ── View callbacks ────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ from bot_modules.services.embeds import (
     DM_PENDING,
     DM_PRIMARY,
 )
+from bot_modules.core.branding import apply_section_spacing
 
 
 def build_stale_request_embed() -> discord.Embed:
@@ -290,6 +291,7 @@ def build_dm_settings_embed(
         inline=False,
     )
     embed.set_footer(text="DM relationships are logged for audit transparency.")
+    apply_section_spacing(embed)
     return embed
 
 

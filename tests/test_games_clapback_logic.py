@@ -47,6 +47,19 @@ from bot_modules.games_clapback.logic import (
     sort_scores,
     vote_button_label,
 )
+from bot_modules.core.branding import SECTION_SPACER
+
+
+def _unspaced(value: str | None) -> str:
+    """A field value without the trailing spacer ``apply_section_spacing`` adds.
+
+    Every field but the last carries ``SECTION_SPACER`` for breathing room
+    (docs/embed_style_guide.md § Section spacing). These tests assert content,
+    not spacing, so they compare against the value with it removed.
+    """
+    text = value or ""
+    return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
+
 
 
 def _name_resolver(uid: int) -> str:
@@ -595,7 +608,7 @@ def test_shuffled_replay_config_deterministic_with_pinned_rng():
 def test_build_lobby_embed_empty_players_shows_nobody():
     cfg = {"rounds": 5}
     embed = build_lobby_embed("Alice", cfg, [], _name_resolver)
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Players (0)"] == "(nobody yet)"
 
 
@@ -610,7 +623,7 @@ def test_build_lobby_embed_shows_host_and_round_count_in_description():
 def test_build_lobby_embed_with_under_ten_lists_all_players():
     cfg = {"rounds": 5}
     embed = build_lobby_embed("Alice", cfg, [1, 2, 3], _name_resolver)
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     field_value = by_name["Players (3)"]
     assert field_value is not None
     assert "User1" in field_value
@@ -622,7 +635,7 @@ def test_build_lobby_embed_with_over_ten_truncates_with_more_suffix():
     cfg = {"rounds": 5}
     players = list(range(1, 13))  # 12 players
     embed = build_lobby_embed("Alice", cfg, players, _name_resolver)
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     field_value = by_name["Players (12)"]
     assert field_value is not None
     assert "(+2 more)" in field_value
@@ -644,7 +657,7 @@ def test_build_submit_embed_renders_prompt_and_counts():
     assert embed.title is not None
     assert "Round 2/5" in embed.title
     assert embed.description is not None and "A weird prompt" in embed.description
-    by_name = {f.name: f.value for f in embed.fields}
+    by_name = {f.name: _unspaced(f.value) for f in embed.fields}
     assert by_name["Timer"] == "<t:123:R>"
     assert by_name["Answers In"] == "1/4"
 
@@ -934,7 +947,7 @@ def test_build_scoreboard_embed_with_remaining_rounds_shows_count():
 def test_build_scoreboard_embed_empty_scores_shows_placeholder():
     embed = build_scoreboard_embed({"scores": {}}, 1, 5, bye_players=None)
     sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
-    assert sb_field.value == "No scores yet"
+    assert _unspaced(sb_field.value) == "No scores yet"
 
 
 # ── build_recap_embed ───────────────────────────────────────────────

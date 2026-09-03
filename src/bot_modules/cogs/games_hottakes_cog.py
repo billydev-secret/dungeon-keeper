@@ -128,7 +128,7 @@ class HotTakesSubmitView(discord.ui.View):
     async def start_voting(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start voting.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start voting.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
         takes = payload.get("takes", [])
@@ -266,7 +266,7 @@ class HotTakeVoteView(discord.ui.View):
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can advance.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)

@@ -20,6 +20,7 @@ from bot_modules.duels.base_game import BaseGame
 from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
+from bot_modules.core.branding import apply_section_spacing
 
 from . import db as hpgdb
 from .game import (
@@ -263,6 +264,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         )
         stakes = game.stakes_text or "Final loser surrenders their nickname for 24h."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
+        apply_section_spacing(embed)
         return embed
 
     def render_result_state(

@@ -125,7 +125,7 @@ class StoryTurnView(discord.ui.View):
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can skip.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can skip.", ephemeral=True)
             return
         self._skipped = True
         self._submitted_event.set()
@@ -184,7 +184,7 @@ class StoryJoinView(discord.ui.View):
     async def start_story(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("Only the host or a mod can start.", ephemeral=True)
+            await interaction.response.send_message("❌ Only the host or a mod can start.", ephemeral=True)
             return
         payload = await get_game_payload(self.db, self.game_id)
         players = payload.get("players", [])
