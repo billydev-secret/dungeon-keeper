@@ -28,7 +28,7 @@ const WIDGETS = [
   { id: "health-newcomer-funnel",  label: "Newcomer Funnel",     category: "Health", perms: ["admin"], source: "health", tileKey: "newcomer_funnel",  wide: false, nav: "health-newcomer-funnel", needsNames: false },
   { id: "health-cohort-retention", label: "Cohort Retention",    category: "Health", perms: ["admin"], source: "health", tileKey: "cohort_retention", wide: false, nav: "health-cohort-retention",needsNames: false },
   { id: "health-mod-workload",     label: "Mod Workload",        category: "Health", perms: ["admin"], source: "health", tileKey: "mod_workload",     wide: false, nav: "health-mod-workload",    needsNames: true  },
-  { id: "health-sentiment-feed",  label: "Sentiment Feed",      category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment",      needsNames: true,  maxRows: 4 },
+  { id: "health-sentiment-feed",  label: "Flagged Messages",    category: "Health", perms: ["admin"], source: "health", tileKey: "sentiment_feed",   wide: true,  nav: "health-sentiment",      needsNames: true,  maxRows: 4 },
 
   // ── Economy tiles ────────────────────────────────────────────────
   { id: "economy-metrics",       label: "Economy",             category: "Health", perms: ["admin"], source: "economy", wide: false, nav: "economy-config" },

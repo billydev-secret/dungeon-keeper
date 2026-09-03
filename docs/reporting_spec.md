@@ -54,6 +54,42 @@ Tiles group into a few areas:
 - **Contributors** — the five contributor views (described below).
 - **One-Sided Attention** — lopsided, unreciprocated attention between member pairs, for moderator review (described below).
 
+### Flagged Messages (`health-sentiment`)
+
+Renamed from **Sentiment & Tone** in 2026-09. The route id is unchanged and
+frozen; only the nav label, the panel and the home widget's label moved.
+
+What was removed, and why: the panel led with a composite emotional
+temperature — average sentiment, a positive:negative ratio against a 3:1
+target, a 7-day negative-spike count, an emotion breakdown, a 30-day trend
+line and a per-channel bar chart. An average over every message in an active
+guild is dominated by ordinary chat, so it barely moves day to day; the
+number read the same every time and no action followed from 0.21 versus
+0.18. The spike log and per-channel chart inherited the same problem one
+level down.
+
+What the panel is now: the negative half of the sentiment feed, promoted from
+a footnote to the whole page. Messages scoring `<= -0.5`, newest first,
+grouped by channel, each with a jump link. A header line gives
+`negative_24h` and the total scored count — a queue depth, deliberately not a
+score. `/api/health/sentiment-feed` gained a `polarity` parameter
+(`positive` | `negative`, omitted for both) so a cheerful stretch of chat
+cannot push the negatives out of the shared `limit`. Polarity is part of the
+deep-dive cache key, but only when set, so the unfiltered feed keeps its
+existing `deep:sentiment_feed` key rather than orphaning every warm entry.
+
+The feed fetch is deliberately **not** wrapped in a fallback. It used to
+degrade to an empty list, which was survivable while it was one table among
+six cards; now that it is the panel, a failed fetch rendering as "nothing
+flagged" would be a lie in the one direction that matters, so the rejection
+reaches `mountReloadable` and the user gets an error with a retry.
+
+`compute_sentiment` still returns the composite fields and the home page's
+narrow `health-sentiment` widget still renders them — that widget was left
+in place because removing it would drop it from saved home layouts, which is
+an owner's call, not a cleanup. The wide `health-sentiment-feed` widget was
+relabelled to **Flagged Messages** to match.
+
 ### Message Review
 
 A mod investigation panel in the dashboard's Moderation section. Filter past messages by:

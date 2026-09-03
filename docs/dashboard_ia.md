@@ -60,7 +60,7 @@ decided in `docs/plans/dashboard-config-ia.md`:
 
 * Reports: "General" → **Activity** (the one heading that named nothing) and
   DAU/MAU joined its volume-metric siblings there; NSFW by Gender moved to
-  the Moderation heading beside Sentiment & Tone (content analytics, not an
+  the Moderation heading beside Flagged Messages (content analytics, not an
   engagement metric). The one-item adminOnly "Bot Usage" heading retired —
   Command & Panel Usage now lives under **Dev**, its actual audience.
 * Moderation: the eight bare items gained the **Queues & Workflows** heading

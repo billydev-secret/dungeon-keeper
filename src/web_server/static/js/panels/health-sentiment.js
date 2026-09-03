@@ -1,203 +1,125 @@
 import { api, esc } from "../api.js";
 import { renderEmpty, renderError } from "../states.js";
 import { mountBotToggle, mountReloadable } from "../report-helpers.js";
-import { makeLineChart, makeHorizontalBarChart, renderChartTable, CHART_BAR } from "../charts.js";
+import { jumpLink } from "../audit-helpers.js";
 
+// This panel used to lead with a composite "emotional temperature": an average
+// sentiment score, a positive:negative ratio against a 3:1 target, a spike
+// count, a 30-day trend line and a per-channel bar chart. None of it was
+// actionable — an average over every message in a busy server barely moves, so
+// the number said the same thing every day, and no one could say what they
+// would *do* differently at 0.21 versus 0.18. What people actually opened the
+// page for was the one table at the bottom: the negative messages, so they
+// could go read them. That table is now the whole panel.
 
 function fmtTime(ts) {
-  return new Date(ts * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return new Date(ts * 1000).toLocaleString([], {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
 }
 
 export function mount(container) {
   let includeBots = false;
-  container.innerHTML = '<div class="panel"><div class="panel-loading">Loading sentiment data…</div></div>';
-  const charts = [];
+  container.innerHTML =
+    '<div class="panel"><div class="panel-loading">Loading flagged messages…</div></div>';
 
   async function load() {
+    const botParam = includeBots ? { include_bots: "true" } : {};
+    // The feed's rejection is deliberately NOT caught here. It used to fall
+    // back to an empty message list, which was survivable when the feed was a
+    // footnote under the scorecards — but now that it *is* the panel, a failed
+    // fetch would render as "nothing flagged", which is a lie in the one
+    // direction that matters. Letting it reject hands mountReloadable a real
+    // error with a retry.
     const [d, feed] = await Promise.all([
-      api("/api/health/sentiment", includeBots ? { include_bots: "true" } : undefined),
-      api("/api/health/sentiment-feed", includeBots ? { include_bots: "true" } : undefined).catch(() => ({ messages: [] })),
+      api("/api/health/sentiment", includeBots ? botParam : undefined),
+      api("/api/health/sentiment-feed", { polarity: "negative", ...botParam }),
     ]);
     const panel = container.querySelector(".panel");
 
+    const header = `
+      <header>
+        <h2>Flagged Messages</h2>
+        <div class="subtitle">Recent messages the scorer rated strongly negative</div>
+      </header>`;
 
     if (!d.scored_count) {
-      panel.innerHTML = `<header><h2>Sentiment &amp; Tone</h2><div class="subtitle">Emotional temperature of the community</div></header>` +
-        renderEmpty("No messages have been scored for sentiment yet. Scoring runs on new messages, so this fills in after a few days of conversation.");
+      panel.innerHTML = header + renderEmpty(
+        "No messages have been scored yet. Scoring runs on new messages, so this "
+        + "fills in after a few days of conversation.",
+      );
       return;
     }
 
-    const emotions = d.emotions || {};
-    const emotionHTML = Object.entries(emotions)
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, pct]) => `<span class="emotion-tag">${name}: ${pct}%</span>`)
-      .join(" ");
+    const msgs = feed.messages || [];
 
-    // Top / bottom scored messages from the feed
-    const feedMsgs = feed.messages || [];
-    const topMsgs = [...feedMsgs].sort((a, b) => b.sentiment - a.sentiment).slice(0, 5);
-    const bottomMsgs = [...feedMsgs].sort((a, b) => a.sentiment - b.sentiment).slice(0, 5);
-
-    function msgRow(m) {
-      const score = (m.sentiment > 0 ? "+" : "") + m.sentiment.toFixed(2);
-      const scoreColor = m.sentiment >= 0 ? "var(--green-text)" : "var(--red-text)";
-      const channel = m.channel_name ? "#" + esc(m.channel_name) : "";
-      const content = esc((m.content || "").slice(0, 100));
-      return `<tr>
-        <td style="color:${scoreColor};font-weight:600;white-space:nowrap;">${score}</td>
-        <td class="sf-panel-author">${esc(m.author_name || m.author_id || "")}</td>
-        <td class="sf-panel-channel">${channel}</td>
-        <td class="sf-panel-content" title="${esc(m.content || "")}">${content}</td>
-        <td style="white-space:nowrap;color:var(--ink-dim);font-size:12px;">${fmtTime(m.ts)}</td>
-      </tr>`;
-    }
-
-    const topRows = topMsgs.map(msgRow).join("");
-    const bottomRows = bottomMsgs.map(msgRow).join("");
-    const msgTableHead = `<thead><tr><th>Score</th><th>Author</th><th>Channel</th><th>Content</th><th>Time</th></tr></thead>`;
-
-    const spikeRows = (d.spike_log || []).map(s => `
-      <tr>
-        <td>${fmtTime(s.timestamp)}</td>
-        <td>${s.avg_sentiment}</td>
-        <td>${s.msg_count} msgs</td>
-      </tr>
-    `).join("");
-
-    panel.innerHTML = `
-      <header>
-        <h2>Sentiment & Tone</h2>
-        <div class="subtitle">Emotional temperature of the community</div>
-      </header>
-
+    const about = `
       <details class="panel-about">
         <summary>About this report</summary>
         <div class="note">
-          Messages are scored from &minus;1 (very negative) to +1 (very positive) using automated sentiment analysis.
-          The <strong>positive-to-negative ratio</strong> is a quick health check — above 3:1 is a good sign.
-          <strong>Negative spikes</strong> flag time windows where the average tone dropped sharply, which often correlates with drama or conflict.
+          Every message is scored from &minus;1 to +1 by an automated sentiment
+          model. Anything at &minus;0.5 or below is listed here, newest first, so
+          you can go and read it in context. <strong>A flag is not a verdict</strong>
+          — the model has no idea who is joking, who is venting about their day,
+          or who is quoting someone else, and all three score negative. Most of
+          what lands here needs nothing doing. It is a reading queue, not a
+          moderation queue: rule-breaking is <a href="/#/rules-watch">Rules Watch</a>'s
+          job. To search by author, channel, date or a narrower score range, use
+          <a href="/#/message-search">Message Search</a>.
         </div>
-      </details>
+      </details>`;
 
-      <div class="home-grid">
-        <div class="home-card">
-          <div class="home-card-label">Average Sentiment</div>
-          <div class="home-card-big">${d.avg_sentiment > 0 ? "+" : ""}${d.avg_sentiment}</div>
-          <div class="home-card-sub">${d.scored_count} messages scored</div>
-        </div>
-        <div class="home-card">
-          <div class="home-card-label">Positive : Negative</div>
-          <div class="home-card-big">${d.pos_neg_ratio}:1</div>
-          <div class="home-card-sub">Target: &gt;3:1</div>
-        </div>
-        <div class="home-card">
-          <div class="home-card-label">Negative Spikes (7d)</div>
-          <div class="home-card-big">${d.spikes_7d}</div>
-          <div class="home-card-sub">Sudden drops in average tone</div>
-        </div>
-        <div class="home-card">
-          <div class="home-card-label">Emotion Categories</div>
-          <div class="home-card-sub">${emotionHTML}</div>
-        </div>
-      </div>
+    // Deliberately a count of the queue, not a score out of it — "how much is
+    // there to read" is answerable and useful; "how happy is the server" was
+    // the thing nobody could act on.
+    const context = `
+      <div class="home-dim" style="margin-bottom:12px;">
+        <strong>${feed.negative_24h}</strong> flagged in the last 24 hours ·
+        showing the ${msgs.length} most recent ·
+        ${d.scored_count.toLocaleString()} messages scored in total
+      </div>`;
 
-      <div class="home-card home-card-wide" style="margin-top:14px;">
-        <div class="home-card-label">30-Day Sentiment Trend</div>
-        <div class="chart-caption" data-caption="trend"></div>
-        <div class="chart-wrap" style="height:280px"><canvas id="sentiment-trend"></canvas></div>
-        <div data-chart-table="trend"></div>
-      </div>
-
-      <div class="home-grid" style="margin-top:14px;">
-        <div class="home-card">
-          <div class="home-card-label">Per-Channel Sentiment</div>
-          <div class="chart-caption" data-caption="channel"></div>
-          <div class="chart-wrap" style="min-height:280px"><canvas id="ch-sentiment"></canvas></div>
-          <div data-chart-table="channel"></div>
-        </div>
-        <div class="home-card">
-          <div class="home-card-label">Negative Spike Log</div>
-          ${spikeRows ? `<div class="data-table-scroll"><table class="data-table">
-            <thead><tr><th>Time</th><th>Sentiment</th><th>Volume</th></tr></thead>
-            <tbody>${spikeRows}</tbody>
-          </table></div>` : '<div class="home-dim">No spikes this week</div>'}
-        </div>
-      </div>
-
-      <div class="home-grid" style="margin-top:14px;">
-        <div class="home-card">
-          <div class="home-card-label">Most Positive Messages</div>
-          <div class="home-card-sub" style="margin-bottom:6px;">Highest sentiment scores</div>
-          ${topRows ? `<div class="data-table-scroll"><table class="data-table">${msgTableHead}<tbody>${topRows}</tbody></table></div>`
-            : '<div class="home-dim">No scored messages yet</div>'}
-        </div>
-        <div class="home-card">
-          <div class="home-card-label">Most Negative Messages</div>
-          <div class="home-card-sub" style="margin-bottom:6px;">Lowest sentiment scores</div>
-          ${bottomRows ? `<div class="data-table-scroll"><table class="data-table">${msgTableHead}<tbody>${bottomRows}</tbody></table></div>`
-            : '<div class="home-dim">No scored messages yet</div>'}
-        </div>
-      </div>
-    `;
-
-    // Trend chart
-    const trendCanvas = panel.querySelector("#sentiment-trend");
-    const trendCaptionEl = panel.querySelector('[data-caption="trend"]');
-    const trendTableEl = panel.querySelector('[data-chart-table="trend"]');
-    if (trendCanvas && d.sparkline) {
-      const labels = d.sparkline.map((_, i) => i === d.sparkline.length - 1 ? "today" : `${d.sparkline.length - 1 - i}d`);
-      const trendTitle = "Daily Average Sentiment";
-      charts.push(makeLineChart(trendCanvas, {
-        labels,
-        series: [{ label: "Avg Sentiment", counts: d.sparkline, color: CHART_BAR }],
-        title: trendTitle,
-      }));
-      // The caption lives in HTML so it wears the page's type and is
-      // selectable/screen-readable, unlike canvas-drawn text.
-      if (trendCaptionEl) trendCaptionEl.textContent = trendTitle;
-      // One series: the caption above already names it, so no legend ("none
-      // for one" — see renderChartLegend's doc comment in charts.js). A
-      // tooltip must never be the only way to read a value, hence the table.
-      renderChartTable(trendTableEl, {
-        labels,
-        datasets: [{ label: "Avg Sentiment", data: d.sparkline }],
-        indexLabel: "Day",
-      });
-    } else if (trendCaptionEl) {
-      trendCaptionEl.textContent = "";
-      if (trendTableEl) trendTableEl.replaceChildren();
+    if (!msgs.length) {
+      panel.innerHTML = header + about + context + renderEmpty(
+        "Nothing is currently flagged. Messages appear here when the scorer rates "
+        + "them −0.5 or lower.",
+      );
+      return;
     }
 
-    // Per-channel sentiment
-    const chCanvas = panel.querySelector("#ch-sentiment");
-    const chCaptionEl = panel.querySelector('[data-caption="channel"]');
-    const chTableEl = panel.querySelector('[data-chart-table="channel"]');
-    if (chCanvas && d.per_channel) {
-      const sorted = [...d.per_channel].sort((a, b) => b.avg_sentiment - a.avg_sentiment).slice(0, 15);
-      const chTitle = "Sentiment by Channel";
-      const chLabels = sorted.map(c => "#" + (c.channel_name || c.channel_id));
-      const chData = sorted.map(c => c.avg_sentiment);
-      charts.push(makeHorizontalBarChart(chCanvas, {
-        labels: chLabels,
-        data: chData,
-        title: chTitle,
-        xLabel: "Avg Sentiment",
-        // Two fixed hues keyed by the value's sign (positive/negative) — a
-        // semantic status color, not a per-bar rank/value ramp — see notes.
-        colors: sorted.map(c => c.avg_sentiment >= 0 ? "#7F8F3A" : "#9E3B2E"),
-      }));
-      if (chCaptionEl) chCaptionEl.textContent = chTitle;
-      // One dataset — the per-bar colors above are a semantic overlay on a
-      // single series, not separate series — so no legend, same as above.
-      renderChartTable(chTableEl, {
-        labels: chLabels,
-        datasets: [{ label: "Avg Sentiment", data: chData }],
-        indexLabel: "Channel",
-      });
-    } else if (chCaptionEl) {
-      chCaptionEl.textContent = "";
-      if (chTableEl) chTableEl.replaceChildren();
+    // Grouped by channel because that is how you'd act on it — you go and read
+    // one room, rather than hopping between five of them in timestamp order.
+    const byChannel = new Map();
+    for (const m of msgs) {
+      const name = m.channel_name ? "#" + m.channel_name : "(unknown channel)";
+      if (!byChannel.has(name)) byChannel.set(name, []);
+      byChannel.get(name).push(m);
     }
+    const groups = [...byChannel.entries()].sort((a, b) => b[1].length - a[1].length);
+
+    function msgRow(m) {
+      const score = m.sentiment.toFixed(2);
+      const content = esc((m.content || "").slice(0, 160));
+      return `<tr>
+        <td style="color:var(--red-text);font-weight:600;white-space:nowrap;">${score}</td>
+        <td class="sf-panel-author">${esc(m.author_name || m.author_id || "")}</td>
+        <td class="sf-panel-content" title="${esc(m.content || "")}">${content}</td>
+        <td style="white-space:nowrap;color:var(--ink-dim);font-size:12px;">${fmtTime(m.ts)}</td>
+        <td style="white-space:nowrap;"><a href="${esc(jumpLink(m.channel_id, m.message_id))}"
+          target="_blank" rel="noopener noreferrer">Jump</a></td>
+      </tr>`;
+    }
+
+    const groupHTML = groups.map(([name, rows]) => `
+      <div class="home-card" style="margin-top:14px;">
+        <div class="home-card-label">${esc(name)} <span class="home-card-sub">(${rows.length})</span></div>
+        <div class="data-table-scroll"><table class="data-table">
+          <thead><tr><th>Score</th><th>Author</th><th>Message</th><th>Time</th><th></th></tr></thead>
+          <tbody>${rows.map(msgRow).join("")}</tbody>
+        </table></div>
+      </div>`).join("");
+
+    panel.innerHTML = header + about + context + groupHTML;
   }
 
   // Bots are excluded from every metric by default; this is the per-report
@@ -211,8 +133,9 @@ export function mount(container) {
 
   // Every pass is guarded, not just the first — see mountReloadable.
   const reload = mountReloadable(container, {
-    load, decorate, renderError, describe: "sentiment",
+    load, decorate, renderError, describe: "flagged messages",
   });
 
-  return { unmount() { charts.forEach(c => c.destroy()); } };
+  // No charts and no timers any more, so there is nothing to tear down; the
+  // dev unmount tripwire only counts setInterval/ResizeObserver registrations.
 }

@@ -741,3 +741,82 @@ async def test_avatar_fetch_does_not_resolve_dns_on_the_event_loop(monkeypatch):
 # ``open_db`` and ``sqlite3`` are imported for the trace helper's typing and to
 # keep the module importable without the fixtures pulling them in implicitly.
 assert open_db is not None and sqlite3 is not None
+
+
+# ── Flagged Messages triage queue — sentiment-feed polarity filter ────────
+
+
+def _seed_mixed_sentiment(fake_ctx) -> None:
+    """Three cheerful messages newer than the one negative message.
+
+    The ordering is the point: the feed takes the most RECENT rows, so with a
+    shared limit the positives would push the negative out. That is exactly
+    the case the Flagged Messages panel has to survive — a good day in chat
+    must not empty the queue it exists to fill.
+    """
+    with fake_ctx.open_db() as conn:
+        conn.execute(
+            "INSERT INTO messages (message_id, guild_id, channel_id, author_id,"
+            " content, ts, sentiment, emotion) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (8000, fake_ctx.guild_id, 77, 501, "this is awful", 1785000000, -0.8,
+             "anger"),
+        )
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO messages (message_id, guild_id, channel_id, author_id,"
+                " content, ts, sentiment, emotion) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (8100 + i, fake_ctx.guild_id, 77, 502, f"lovely {i}",
+                 1785000100 + i, 0.9, "joy"),
+            )
+
+
+def test_sentiment_feed_negative_polarity_returns_only_negatives(
+    open_client, fake_ctx
+):
+    _seed_mixed_sentiment(fake_ctx)
+    body = open_client.get("/api/health/sentiment-feed?polarity=negative").json()
+    assert [m["message_id"] for m in body["messages"]] == ["8000"]
+    assert all(m["sentiment"] <= -0.5 for m in body["messages"])
+
+
+def test_sentiment_feed_positive_polarity_returns_only_positives(
+    open_client, fake_ctx
+):
+    _seed_mixed_sentiment(fake_ctx)
+    body = open_client.get("/api/health/sentiment-feed?polarity=positive").json()
+    assert [m["message_id"] for m in body["messages"]] == ["8102", "8101", "8100"]
+
+
+def test_sentiment_feed_without_polarity_still_returns_both_sides(
+    open_client, fake_ctx
+):
+    _seed_mixed_sentiment(fake_ctx)
+    body = open_client.get("/api/health/sentiment-feed").json()
+    assert {m["message_id"] for m in body["messages"]} == {
+        "8000", "8100", "8101", "8102",
+    }
+
+
+def test_sentiment_feed_polarities_do_not_share_a_cache_entry(
+    open_client, fake_ctx
+):
+    """A negatives-only payload served under the shared key would hide every
+    positive message from the home tile, and vice versa."""
+    _seed_mixed_sentiment(fake_ctx)
+    open_client.get("/api/health/sentiment-feed?polarity=negative")
+    open_client.get("/api/health/sentiment-feed?polarity=positive")
+    open_client.get("/api/health/sentiment-feed")
+    deep = {k for k in _cache_keys(fake_ctx) if k.startswith("deep:sentiment_feed")}
+    assert deep == {
+        "deep:sentiment_feed",
+        "deep:sentiment_feed|polarity=negative",
+        "deep:sentiment_feed|polarity=positive",
+    }
+
+
+def test_sentiment_feed_rejects_an_unknown_polarity(open_client, fake_ctx):
+    """The value reaches a SQL fragment lookup, so the route must not accept
+    arbitrary text — a closed set is enforced at the edge as well."""
+    assert open_client.get(
+        "/api/health/sentiment-feed?polarity=' OR 1=1 --"
+    ).status_code == 422
