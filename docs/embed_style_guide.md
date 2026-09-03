@@ -97,6 +97,16 @@ Which embed slot does which job:
   person cards, guild icon on guild-level panels. **`set_image`** is reserved
   for real content renders (`attachment://` images — quote cards, guess
   puzzles), not decoration.
+- **A masked link never renders in a `title` or a field `name`** (ruling
+  2026-09-03). `[text](url)` resolves in a **description** or a **field value**
+  and nowhere else, so a title written that way shows the reader the literal
+  `[Song Name](https://…)` — which is exactly how the music now-playing card
+  shipped. The slot that makes a title clickable is **`embed.url`**; set the
+  title as plain text and hand the link to that. The Footers rule below is the
+  sibling of this one: footer and author text render as plain text *entirely*,
+  markdown included. (Text formatting like `**bold**` behaves differently again
+  per slot — it works in a field name, not in a footer. If a card's meaning
+  depends on formatting rendering in a title, don't: put it in the description.)
 - **Separators**: **em-dash `" — "` in titles** ("Grant Audit — {label}"),
   **middot `" • "` (single-spaced) in footers**. Don't mix in `·` vs `•` or
   double-spaced variants; recase strays when touching the module.
@@ -146,14 +156,31 @@ Which embed slot does which job:
   through the **`footer_emoji()`** helper in `services/embeds.py` (it drops
   custom emoji rather than showing a raw tag); adopt it rather than re-checking
   inline.
-- A footer does **one** of these jobs — pick one, don't stack:
+- A footer does **one** of these jobs — pick one, don't stack. "One job" is
+  about not cramming two unrelated purposes into a footer; a single thought
+  carried in two `" • "`-joined clauses is still one job (ruling 2026-09-03),
+  which is why "Host: {host} • Need {n}+ players to start." and the game
+  signature's `• extra` form are both fine. Three separate reviews declined to
+  file footer findings because the rule read as banning its own examples:
   - **Next-step hint**: "Use /policy vote to start the formal vote when ready."
   - **Attribution**: "Granted by {actor}", "Sponsored by {sponsor}",
     "Host: {host} • Need {n}+ players to start."
   - **Freshness / live status**: "⚡ Live — updates within ~2 min of activity"
-  - **Game signature** (games only): `{GAME_ICON} Game Name • extra` — every
-    game card signs itself so screenshots stay attributable.
+  - **Game signature** (games only): `{GAME_ICON} Game Name • extra`. This is a
+    **requirement, not an option** (ruling 2026-09-03): a public game card
+    carries its signature unless its footer is genuinely doing one of the other
+    jobs, so screenshots stay attributable. It previously read as a description
+    of one of five things a footer *may* do, which meant an unsigned card broke
+    no rule — and most casino, quickdraw, chicken, musical-chairs, hot-potato
+    and duels cards carry no footer at all. Those are a known backlog, not a
+    licence: sign a card when you touch it.
   - **Pagination** (see Empty states & pagination).
+  - **Privacy / retention notice** (ruling 2026-09-03) — telling a member what
+    happens to what they just wrote ("When this ticket is closed, the
+    conversation is archived to the moderator transcript channel."). It is the
+    one job that may sit under a footer already doing another, because a
+    data-handling notice outranks tidiness. Don't let a mechanical sweep
+    "converge" one of these away.
 
 ## Timestamps
 
