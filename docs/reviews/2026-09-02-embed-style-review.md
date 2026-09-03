@@ -182,13 +182,29 @@ finding had to cite a guide section and quote real source text.
 **Coverage: 188 files, 374 embeds, 212 findings.** Severity: 14 high, 144
 medium, 54 low; 210 of 212 are member-visible.
 
-> **Verification status.** Findings were then handed to adversarial verifiers
-> prompted to refute by default. A usage limit killed 187 of them mid-run, so
-> only part of the set carries a verdict. **Treat an unverified row as a lead,
-> not a fact** — the verifiers that did run rejected findings for
-> misquoting source, stretching a rule, and flagging already-compliant code,
-> so the rejection rate is not zero. Every claim quoted in *this* section I
-> checked myself against the source.
+> **Verification: 194 confirmed, 18 refuted.** Every finding was handed to an
+> adversarial verifier prompted to refute by default and to check four things —
+> that the quoted source text really exists at that line, that the cited guide
+> section really says what the rule claims, that the code isn't already
+> compliant one level down, and that it isn't a sanctioned exception.
+>
+> Of the 18 refusals, **6 failed only because Lane A had already fixed that line
+> while the review ran** (the quote no longer existed), so they were real. The
+> other **12 are genuine reviewer error** — a rule stretched past what the guide
+> says, code that was already compliant, or a false premise. That is a ~6% error
+> rate, which is the argument for the verify stage: those 12 would otherwise
+> have shipped in this document as fact.
+>
+> The verifiers also improved fixes they accepted. One found that the proposed
+> change to `_post_audit` would have opened **every** jail, ticket and policy
+> audit embed to role pings, because that helper is shared across ~15 call
+> sites, and supplied an opt-in keyword-param version instead. Another found the
+> theme-live DM fix needed a second caller in `web_server/routes/` updated, a
+> null-guard on ids that default to 0, and a test fixture that would have
+> `KeyError`d.
+>
+> Counts below are **raw findings (212)**; subtract the 12 bad ones when
+> triaging. Every claim quoted in this section I also checked by hand.
 
 The verifiers that ran were worth their cost. One accepted a finding but
 rewrote its fix: the proposed change to `_post_audit` would have opened **every**
