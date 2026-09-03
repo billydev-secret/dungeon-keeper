@@ -86,14 +86,27 @@ problem — the controls are doing something real. *Relabelled in wave 4.*
 Billy worked through these question by question. Full decision tables live in
 the two design docs; the short form:
 
-* **Part 3 #2 — consolidate approvals.** Build one unified queue with a `type`
-  column on the frozen `shop-approvals` id, extending the union
-  `economy_approvals_service.QUEUES` already does in Discord. Custom-item orders
-  are **widened from admin to economy manager, refund included** — they sit on a
-  manager-visible page and currently render a 403 error box there, so that was
-  a live defect either way. `dashboard_ia.md`'s "a feature that spans pages
-  stays whole" rule must be amended in the same commit: this is exactly the
-  queues-only group it argued against, and Billy has overridden it.
+* **Part 3 #2 — consolidate approvals** ☑ — shipped. One unified list on the
+  frozen `shop-approvals` id, unioning **six** queues (themed day, sponsored
+  question, pin, sponsored emoji, quest sign-off, custom-item order) — two more
+  than the plan assumed, because Pin of the Day and custom-item orders had no
+  working web surface at all. Custom-item orders **widened from admin to
+  economy manager, refund included**; the admin gate had been rendering a
+  permissions error box on a manager-visible page, so it was a live defect
+  either way.
+
+  **The shape came out better than planned.** It is a *finder*, not a move:
+  every row links to where that product is already handled, and nothing that
+  resolves a request changed. That means none of the costs the investigation
+  priced actually had to be paid — `economy-claims` and
+  `economy-qotd-submissions` keep their route ids and their telemetry, QOTD's
+  ping-role dial stays where it is, and `tests/web/test_shop_split.py` passes
+  untouched. That last one matters: the split existed because
+  `config-helpers`' unsaved-edit flag is a module global, so putting QOTD's
+  settings form on a page with a queue re-creates a real bug. Not moving the
+  form avoids it entirely. `dashboard_ia.md` still gained a stated exception,
+  because a queue is found by asking "is anyone waiting?" rather than by
+  knowing which feature you want.
 * **Part 3 #3 — Policy Tickets for members.** A ballot is a **thread in the
   channel it was launched in**, recorded as a policy ticket, with the mod
   channel uninvolved. Fully public names; anyone who can see the thread may

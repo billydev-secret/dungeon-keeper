@@ -743,3 +743,106 @@ def test_a_negative_channel_id_is_rejected(authed_client):
 
 def test_the_field_is_on_the_update_model():
     assert "approvals_channel_id" in EconomyConfigUpdate.model_fields
+
+
+# ── GET /api/economy/approvals — the unified queue ─────────────────────
+
+
+def _pending_theme(fake_ctx, user_id=501, title="Cursed Cooking"):
+    with fake_ctx.open_db() as conn:
+        conn.execute(
+            "INSERT INTO econ_theme_submissions (guild_id, user_id, title, blurb,"
+            " state, price, created_at) VALUES (?, ?, ?, 'x', 'pending', 300, 1000.0)",
+            (fake_ctx.guild_id, user_id, title),
+        )
+
+
+def _pending_claim(fake_ctx, user_id=502, title="Host a hangout", reward=75):
+    with fake_ctx.open_db() as conn:
+        conn.execute(
+            "INSERT INTO econ_quests (guild_id, title, qtype, reward, signoff,"
+            " active, created_at) VALUES (?, ?, 'daily', ?, 1, 1, 1000.0)",
+            (fake_ctx.guild_id, title, reward),
+        )
+        quest_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO econ_quest_claims (quest_id, guild_id, user_id, period,"
+            " state, created_at) VALUES (?, ?, ?, '2026-09-03', 'pending', 900.0)",
+            (quest_id, fake_ctx.guild_id, user_id),
+        )
+
+
+def test_unified_approvals_is_empty_when_nothing_waits(authed_client):
+    body = authed_client.get("/api/economy/approvals").json()
+    assert body["approvals"] == []
+
+
+def test_unified_approvals_merges_products_from_different_tables(
+    authed_client, fake_ctx
+):
+    """The whole point: one request answers "is anyone waiting on us?"."""
+    _pending_theme(fake_ctx)
+    _pending_claim(fake_ctx)
+    rows = authed_client.get("/api/economy/approvals").json()["approvals"]
+    assert {r["kind"] for r in rows} == {"theme", "claim"}
+
+
+def test_unified_approvals_is_oldest_first(authed_client, fake_ctx):
+    """A work list: the longest wait is handled next."""
+    _pending_theme(fake_ctx)           # created_at 1000.0
+    _pending_claim(fake_ctx)           # created_at  900.0
+    rows = authed_client.get("/api/economy/approvals").json()["approvals"]
+    assert [r["kind"] for r in rows] == ["claim", "theme"]
+
+
+def test_unified_approvals_returns_user_ids_as_strings(authed_client, fake_ctx):
+    """A Discord id is larger than a JS number holds exactly."""
+    _pending_theme(fake_ctx, user_id=1526051848518373608)
+    row = authed_client.get("/api/economy/approvals").json()["approvals"][0]
+    assert row["user_id"] == "1526051848518373608"
+
+
+def test_unified_approvals_never_renders_a_bare_id_as_the_name(
+    authed_client, fake_ctx
+):
+    """resolve_names falls back to "User <id>" so the panel can't print a raw int."""
+    _pending_theme(fake_ctx, user_id=777)
+    row = authed_client.get("/api/economy/approvals").json()["approvals"][0]
+    assert row["user_name"]
+
+
+def test_unified_approvals_rejects_an_unauthenticated_caller(fake_ctx):
+    client = TestClient(
+        create_app(fake_ctx, auth=DiscordOAuthAuth("s", fake_ctx.guild_id)),
+        raise_server_exceptions=False,
+    )
+    assert client.get("/api/economy/approvals").status_code in (401, 403)
+
+
+def test_unified_approvals_rejects_a_plain_member(fake_ctx):
+    client = _non_admin_client(fake_ctx)
+    assert client.get("/api/economy/approvals").status_code == 403
+
+
+def test_shop_orders_admit_the_economy_manager_role(fake_ctx):
+    """Widened from admin-only 2026-09-03.
+
+    The orders queue sits on shop-approvals, which is deliberately NOT
+    adminOnly, so an admin-only gate rendered a permissions error box exactly
+    where the orders should have been. Asserting on the resolved dependency
+    rather than a live 200, because a manager session needs a configured
+    manager role and this file has no fixture for one — what matters is that
+    the route no longer demands the admin bit.
+    """
+    import inspect
+
+    from web_server.deps import require_economy_manager
+    from web_server.routes import economy as economy_routes
+
+    for fn in (economy_routes.list_shop_orders, economy_routes.refund_shop_order):
+        deps = [
+            p.default.dependency
+            for p in inspect.signature(fn).parameters.values()
+            if hasattr(p.default, "dependency")
+        ]
+        assert require_economy_manager in deps, fn.__name__

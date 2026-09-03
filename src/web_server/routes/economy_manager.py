@@ -28,6 +28,7 @@ from bot_modules.economy.perk_actions import revoke_role_perks
 from bot_modules.economy.approval_views import refresh_approvals_board
 from bot_modules.economy.quest_views import refresh_signoff_board
 from bot_modules.economy.signoff_notice import announce_signoff_outcome
+from bot_modules.services import economy_approvals_service as approvals_svc
 from bot_modules.services import economy_quests_service as quests_svc
 from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
@@ -44,6 +45,7 @@ from bot_modules.services.economy_service import (
 )
 from bot_modules.services.economy_stats_service import compute_live, compute_stats
 from web_server.auth import AuthenticatedUser
+from web_server.helpers import resolve_names
 from web_server.deps import (
     get_active_guild_id,
     get_ctx,
@@ -1624,3 +1626,56 @@ async def cancel_rental(
             )
     result["role_updated"] = role_updated
     return result
+
+
+# ── the unified approvals queue ───────────────────────────────────────────
+
+
+@router.get("/economy/approvals")
+async def list_all_approvals(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_economy_manager),
+):
+    """Everything waiting on a moderator, across every economy queue.
+
+    Billy's ask was "all economy approvals can be in one place". Before this,
+    a moderator had to open three pages to learn that nothing was waiting —
+    and two of the six queues (Pin of the Day, and custom-item orders on a page
+    that 403'd for them) had no working web surface at all.
+
+    One flat list rather than tabs, on purpose: tabs preserve exactly the thing
+    being complained about, since you would still click three times to find an
+    empty queue. Production runs these at zero to two pending rows each, so the
+    merged list is never long and "is anyone waiting on us?" is answered in one
+    glance.
+
+    Rows are polymorphic — the ``kind`` says which product it is, and the panel
+    renders that row's own action. Nothing about resolving a request moves
+    here: each product keeps its own approve/deny endpoint and its own copy.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            rows = approvals_svc.pending_for_dashboard(conn, guild_id)
+            return [
+                {
+                    "kind": r["kind"],
+                    "id": r["id"],
+                    # Snowflakes cross the wire as strings — a Discord id is
+                    # bigger than a JS number can hold exactly.
+                    "user_id": str(r["user_id"]),
+                    "user_name": "",
+                    "summary": r["summary"],
+                    "amount": r["amount"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ]
+
+    approvals = await run_query(_q)
+    bot = getattr(ctx, "bot", None)
+    guild = bot.get_guild(guild_id) if bot else None
+    await resolve_names(ctx, guild, approvals, ("user_id", "user_name"))
+    return {"approvals": approvals}

@@ -58,6 +58,7 @@ from web_server.routes.panel_posting import guild_or_503
 from web_server.deps import (
     get_active_guild_id,
     get_ctx,
+    require_economy_manager,
     require_perms,
     run_query,
 )
@@ -1071,9 +1072,17 @@ async def delete_shop_item(
 @router.get("/economy/shop-orders")
 async def list_shop_orders(
     request: Request,
-    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+    _: AuthenticatedUser = Depends(require_economy_manager),
 ):
-    """Orders waiting on staff, oldest first, with the buyer resolved."""
+    """Orders waiting on staff, oldest first, with the buyer resolved.
+
+    Economy managers, not just admins. This queue sits on a manager-visible
+    page, so an admin-only gate meant a manager opening Approvals got a
+    permissions error box where the orders should be — a live defect, not a
+    deliberate narrowing. Widened on Billy's call 2026-09-03, refund included:
+    a manager who can deny a themed day and refund its price can deny an order
+    and refund its price.
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -1108,7 +1117,7 @@ async def refund_shop_order(
     order_id: int,
     request: Request,
     body: ShopOrderResolveBody,
-    user: AuthenticatedUser = Depends(require_perms({"admin"})),
+    user: AuthenticatedUser = Depends(require_economy_manager),
 ):
     """Refuse an order: give the coins back and take it off the todo board.
 

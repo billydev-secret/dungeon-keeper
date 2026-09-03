@@ -193,6 +193,25 @@ pages stays whole**: Claims is the quest sign-off queue, so it sits under
 Quests rather than in a queues-only group that reads tidy and then sends
 someone hunting in the wrong place.
 
+**Amended 2026-09-03 — one stated exception, for "is anyone waiting on us?".**
+Billy's walkthrough note was that all economy approvals should be in one place,
+which is exactly the queues-only group the rule above argued against. The rule
+stands for *settings*; it does not survive contact with **work queues**,
+because the two answer different questions. A setting is found by knowing what
+feature you want to change, so keeping it beside its feature is right. A queue
+is found by asking whether anybody is waiting — a question that is not about
+any one feature, and that the split made unanswerable without opening three
+pages and still missing two queues (Pin of the Day and custom-item orders had
+no working web surface at all).
+
+The exception is deliberately narrow, and it is a **finder, not a move**. The
+`shop-approvals` page gained an "Everything Waiting" list that unions all six
+pending queues; every row says where it is handled and links there. Nothing
+that resolves a request moved: each product keeps its own endpoint, its own
+copy, its own side effects and its own page. So a feature still spans pages and
+is still whole — there is now one index over the pending work, which is not the
+same as a queues-only group.
+
 QOTD went further and **merged**. Its settings page (`economy-qotd`, adminOnly)
 owned a single role id in 88 lines and never earned a nav slot; it is now the
 top card of the page that already held the sponsored queue, which keeps the

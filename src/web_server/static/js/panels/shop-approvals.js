@@ -35,6 +35,7 @@ export function mount(container) {
     // the point of this page and they are manager-readable.
     const cfg = await api("/api/economy/config").catch(() => null);
     render(container, cfg);
+    wireAllApprovals(container);
     wireEmojiQueue(container);
     wireThemeQueue(container);
     wireShopOrders(container);
@@ -54,6 +55,15 @@ function render(container, cfg) {
       ${economyOffBanner(cfg)}
 
       <section class="form card">
+        <div class="section-label">Everything Waiting</div>
+        <div class="field-hint" style="margin-bottom:1rem;">
+          Every economy queue in one list, longest wait first — so one look answers
+          “is anyone waiting on us?”. Each row says where it gets handled.
+        </div>
+        <div data-all-approvals></div>
+      </section>
+
+      <section class="form card" style="margin-top:1.5rem;">
         <div class="section-label">Emoji Approval Queue</div>
         <div class="field-hint" style="margin-bottom:1rem;">
           Emojis members have sponsored and paid for, waiting on your decision.
@@ -362,4 +372,113 @@ function wireShopOrders(container) {
   });
 
   refresh();
+}
+
+// ── The unified queue ─────────────────────────────────────────────────────
+//
+// Six economy queues used to live on three pages, and two of them (Pin of the
+// Day, and orders on a page that 403'd for a manager) had no working web
+// surface at all — so a moderator could not find out that nothing was waiting
+// without opening three pages and still miss two queues.
+//
+// A flat list, not tabs. Tabs would preserve the exact complaint: you would
+// still click three times to learn a queue was empty. Production runs these at
+// zero to two pending rows each, so one list is never long.
+//
+// Resolving stays with the product. This section is a *finder* — every row
+// says where the work is done, and nothing here approves anything, so no
+// product's copy, permissions or side effects move.
+
+const KIND_LABEL = {
+  theme:   "Themed day",
+  sponsor: "Sponsored question",
+  pin:     "Pin of the day",
+  emoji:   "Sponsored emoji",
+  claim:   "Quest sign-off",
+  order:   "Shop order",
+};
+
+// Where each kind is actually worked. A section on this page scrolls; another
+// page is a link. Pin of the Day has no web queue and is resolved from the
+// Discord approvals board — saying so is more honest than a dead link.
+const KIND_ACTION = {
+  theme:   { kind: "scroll", target: "[data-theme-queue]", label: "Below \u2193" },
+  emoji:   { kind: "scroll", target: "[data-emoji-queue]", label: "Below \u2193" },
+  order:   { kind: "scroll", target: "[data-orders]",      label: "Below \u2193" },
+  sponsor: { kind: "link",   href: "#/economy-qotd-submissions", label: "QOTD \u2192" },
+  claim:   { kind: "link",   href: "#/economy-claims",           label: "Claims \u2192" },
+  pin:     { kind: "none",   label: "In Discord" },
+};
+
+function waitedFor(ts) {
+  const secs = Math.max(0, Date.now() / 1000 - Number(ts || 0));
+  const days = Math.floor(secs / 86400);
+  if (days >= 1) return days === 1 ? "1 day" : `${days} days`;
+  const hours = Math.floor(secs / 3600);
+  if (hours >= 1) return hours === 1 ? "1 hour" : `${hours} hours`;
+  const mins = Math.floor(secs / 60);
+  return mins <= 1 ? "just now" : `${mins} mins`;
+}
+
+function approvalActionCell(kind) {
+  const action = KIND_ACTION[kind];
+  if (!action) return "";
+  if (action.kind === "link") {
+    return `<a href="${esc(action.href)}">${esc(action.label)}</a>`;
+  }
+  if (action.kind === "scroll") {
+    return `<a href="#" data-scroll-to="${esc(action.target)}">${esc(action.label)}</a>`;
+  }
+  return `<span class="field-hint">${esc(action.label)}</span>`;
+}
+
+function approvalRow(row) {
+  return `<tr>
+    <td>${esc(KIND_LABEL[row.kind] || row.kind)}</td>
+    <td>${esc(row.user_name || row.user_id)}</td>
+    <td>${esc(row.summary || "\u2014")}</td>
+    <td style="white-space:nowrap;">${esc(String(row.amount ?? 0))}</td>
+    <td style="white-space:nowrap;">${esc(waitedFor(row.created_at))}</td>
+    <td style="white-space:nowrap;">${approvalActionCell(row.kind)}</td>
+  </tr>`;
+}
+
+async function wireAllApprovals(container) {
+  const host = container.querySelector("[data-all-approvals]");
+  if (!host) return;
+  host.innerHTML = `<div class="field-hint">Loading\u2026</div>`;
+
+  let rows;
+  try {
+    rows = (await api("/api/economy/approvals")).approvals || [];
+  } catch (err) {
+    // A failure here must not read as "nothing is waiting" — that is the one
+    // wrong answer this section can give.
+    host.innerHTML =
+      `<div class="error">Couldn\u2019t load the queue: ${esc(err.message)}. `
+      + `The sections below still work.</div>`;
+    return;
+  }
+
+  if (!rows.length) {
+    host.innerHTML = `<div class="field-hint">Nothing is waiting on you.</div>`;
+    return;
+  }
+
+  host.innerHTML = `
+    <div class="data-table-scroll"><table class="data-table">
+      <thead><tr>
+        <th>Type</th><th>Member</th><th>What</th><th>Coins</th>
+        <th>Waiting</th><th>Handled</th>
+      </tr></thead>
+      <tbody>${rows.map(approvalRow).join("")}</tbody>
+    </table></div>`;
+
+  host.querySelectorAll("[data-scroll-to]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const el = container.querySelector(a.dataset.scrollTo);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  });
 }
