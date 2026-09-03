@@ -113,8 +113,12 @@ SQLite-backed. Tests in `tests/`.
 ## Gates (before every commit)
 
 - The **pre-commit hook** runs `python scripts/gate.py --scoped` automatically
-  on every commit: ruff + pyright, then only the tests mapped to the staged
-  diff (git diff vs HEAD + untracked). Touching a broadly-shared file (`core/`,
+  on every commit: ruff, then only the tests mapped to the staged
+  diff (git diff vs HEAD + untracked). **Pyright is not in the per-commit
+  tiers** — it can't be scoped to a diff, so it cost minutes and ~1.5 GB on
+  every commit and N parallel sessions ran N copies. It still runs in the
+  full `gate.py`, in CI on every push, and nightly; `--pyright` or
+  `GATE_PYRIGHT=1` forces it into a scoped run. Touching a broadly-shared file (`core/`,
   `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
   the full suite **in the prod checkout only**; in a session worktree that
   fallback is **deferred** — the diff maps normally and the gate prints which
@@ -139,7 +143,7 @@ SQLite-backed. Tests in `tests/`.
   you do run it locally, run it **solo**: a parallel full run alongside other
   work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors
   (see memory: rm -rf /tmp/pytest-of-ben and re-run). `--quick` runs
-  ruff + pyright (no pytest) plus the scoped browser panel checks (layout +
+  ruff (no pytest, no pyright) plus the scoped browser panel checks (layout +
   console) when dashboard assets changed. Coverage floor in pyproject.toml must
   not be lowered.
 - Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on

@@ -379,7 +379,9 @@ Same commit, not a follow-up.
 ## Gates
 
 - [ ] `python scripts/gate.py --scoped` — runs automatically in the pre-commit
-      hook (ruff + pyright, then the tests mapped to the staged diff). In a
+      hook (ruff, then the tests mapped to the staged diff — **not** pyright,
+      which is unscopable and so runs in the full gate, CI and nightly only;
+      `--pyright` forces it). In a
       session worktree a shared-file edit no longer fans out to the whole suite;
       the gate names the paths whose full run it **deferred** to main.
 - [ ] `python scripts/gate.py` on **main**, once a batch of merges is complete —

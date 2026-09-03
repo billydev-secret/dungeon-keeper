@@ -3,11 +3,21 @@
 
 Usage:
     python scripts/gate.py            # ruff + pyright + FULL pytest
-    python scripts/gate.py --scoped   # ruff + pyright + tests for changed files
-    python scripts/gate.py --quick    # ruff + pyright + scoped browser panel checks (no pytest)
+    python scripts/gate.py --scoped   # ruff + tests for changed files (no pyright)
+    python scripts/gate.py --quick    # ruff + scoped browser panel checks (no pytest, no pyright)
+    python scripts/gate.py --pyright  # force the type check on into a scoped/quick run
     python scripts/gate.py -k foo     # extra args forwarded to pytest
 
 The pre-commit hook runs ``--scoped`` (not ``--quick``).
+
+**Pyright does not run in the per-commit tiers.** It is a whole-repo type check
+that took 371 s and peaked at 1.5 GB on this machine, and it ran on *every*
+commit in *every* parallel session — several concurrent copies is enough memory
+pressure to wedge the box, which is what it was doing. It still runs in the full
+``gate.py``, in CI on every push/PR (``.github/workflows/test.yml``) and nightly,
+so a type error reaches main only if someone pushes without a full local gate,
+and CI catches it on that same push. Set ``GATE_PYRIGHT=1`` (or pass
+``--pyright``) to put it back in a scoped run.
 
 Runs everything with the repo venv's interpreter, located automatically,
 so it works no matter which python launched this script.
@@ -503,15 +513,40 @@ def run_pytest(py: str, *args: str) -> None:
         sys.exit(code)
 
 
+def wants_pyright(*, scoped: bool, quick: bool, forced: bool) -> bool:
+    """Whether this tier runs the whole-repo type check.
+
+    The full gate always does. The per-commit tiers (``--scoped``/``--quick``)
+    skip it unless explicitly asked, because pyright cannot be scoped to a diff
+    — it needs the whole graph — so it costs the same minutes and gigabyte on a
+    one-line change as on a refactor, once per parallel session.
+    """
+    return forced or not (scoped or quick)
+
+
 def main() -> None:
     argv = sys.argv[1:]
     quick = "--quick" in argv
     scoped = "--scoped" in argv
-    pytest_args = [a for a in argv if a not in ("--quick", "--scoped")]
+    type_check = wants_pyright(
+        scoped=scoped, quick=quick,
+        forced="--pyright" in argv or os.environ.get("GATE_PYRIGHT") == "1",
+    )
+    pytest_args = [
+        a for a in argv if a not in ("--quick", "--scoped", "--pyright")
+    ]
 
     py = venv_python()
     run(py, "ruff", "-m", "ruff", "check", ".")
-    run(py, "pyright", "-m", "pyright")
+    # Whole-repo type check: minutes of wall clock and ~1.5 GB, unscopable
+    # (pyright has no "just these files" mode that still sees the graph). The
+    # per-commit tiers skip it so N parallel sessions don't run N copies; the
+    # full gate, CI on every push, and nightly all still run it.
+    if type_check:
+        run(py, "pyright", "-m", "pyright")
+    else:
+        print("── pyright: skipped in this tier (CI + nightly cover it; "
+              "--pyright forces it) " + "─" * 3)
 
     if quick:
         # Scoped mobile-layout check for any changed dashboard assets. Non-fatal

@@ -185,8 +185,8 @@ snapshots otherwise make results flap between runs.
 | authz / snowflake / help-links | ✅ | — (no pytest) | when a `src/web_server/` change maps them in | ✅ |
 | mobile layout / panel console | skipped (no browser) | scoped to changed panels* | scoped to changed panels* | full |
 
-`--quick` runs **no pytest at all** (ruff + pyright + the scoped browser panel
-checks when dashboard assets changed), so the authz/snowflake/help-links sweeps
+`--quick` runs **no pytest at all** (ruff + the scoped browser panel
+checks when dashboard assets changed; pyright is full-gate/CI/nightly only), so the authz/snowflake/help-links sweeps
 never run under it; under `--scoped` they run only when the staged diff touches
 `src/web_server/` and the mapping pulls their test files in.
 
