@@ -66,11 +66,13 @@ LOCK_FILES = ("requirements.lock", "requirements-dev.lock")
 
 # Only these are shipped. Everything else (the DB, models/, backups/, .venv,
 # .git) is either irrelevant to the suite or far too large to sync per run.
-# README.md is included even though it isn't code: test_games_help_logic.py
-# asserts it stays in sync with the actual party-game list, and a remote whose
-# only copy dates back to its initial `git clone` will drift the moment either
-# side changes — silently, since nothing else re-syncs it.
+# README.md is included even though it isn't code: it is tiny, and prose
+# tripwires have historically read it (the party-game count lived there until
+# 2026-09-03, when it moved to docs/features.md). A remote whose only copy
+# dates back to its initial `git clone` drifts silently, since nothing else
+# re-syncs it.
 # docs/ and assets/fonts/ are test inputs, not documentation niceties: the
+# party-game tripwire now reads docs/features.md, the
 # quote renderer refuses to run without its bundled fonts, and the QA-card
 # chunker reads the real checklists — a workspace without them fails 8 tests
 # that pass everywhere else (found the first time a full suite ran in the

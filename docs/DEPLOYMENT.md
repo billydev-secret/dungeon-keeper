@@ -1,8 +1,9 @@
 # Server Install & Deployment Guide
 
-A step-by-step guide for installing **dungeon-keeper (dk)** on a Linux server for
-production use. For a quick local dev setup on Windows, see the Quick Start in
-[README.md](../README.md).
+A step-by-step guide for installing **dungeon-keeper (dk)** on a Linux server
+for production use. Sections 2-3 double as the local dev setup; on Windows the
+only difference is activating the virtualenv with
+`.\.venv\Scripts\activate` instead of `source .venv/bin/activate`.
 
 > **One thing that trips everyone up:** `pyproject.toml` declares **no runtime
 > dependencies**. Running `pip install -e .` alone installs the package but
@@ -143,6 +144,35 @@ of them had a home on that page.)
 
 Stop with `Ctrl+C`. The SQLite database is written to `DB_PATH_PROD`
 (`dungeonkeeper.db` by default) in the working directory.
+
+### Bootstrap config keys
+
+Runtime configuration is stored in the database (`config` and `config_ids`
+tables), not in `.env`, and nearly all of it is set from the dashboard once the
+bot is running. The keys below are the bootstrap set — the handful worth knowing
+by name because they gate the first useful behavior:
+
+| Key | Description |
+|-----|-------------|
+| `guild_id` | Home guild ID (falls back to `GUILD_ID` in the environment) |
+| `mod_channel_id` | Channel for moderation notifications |
+| `greeter_role_id` | Greeter role (also pinged by intake cards) |
+| `xp_level_5_role_id` | Role granted at XP level 5 |
+| `xp_level_5_log_channel_id` | Channel for level-5 milestone announcements |
+| `xp_level_up_log_channel_id` | Channel for all level-up announcements |
+
+`config_ids` holds the list-valued settings, in buckets:
+`spoiler_required_channels`, `bypass_role_ids` (exempt from the spoiler guard),
+`xp_grant_allowed_user_ids`, and `xp_excluded_channel_ids`.
+
+Dev vs production command sync is **not** a config row: it is the
+`--debug` flag on `python -m dungeonkeeper`. With it, commands sync to
+`guild_id` only (which must be set, or the sync is skipped with a warning);
+without it they sync globally, which is what production wants.
+
+Role grants are **not** configured through flat keys — they live in `grant_roles`
+rows managed from the dashboard, and legacy keys are migrated on startup (see
+[role_grant_spec.md](role_grant_spec.md)).
 
 ---
 
