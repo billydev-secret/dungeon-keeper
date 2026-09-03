@@ -249,10 +249,16 @@ to currency.
   they want. Since 2026-08-22 a guild that has **never** set the dial gets a
   `@QOTD` role made when the first question posts, and a `@Economy
   Notifications` role the first time a member presses 🔔 (which used to
-  dead-end at "ask an admin"). The notifications role is provisioned **even when
-  `game_role_id` is stored as 0**, unlike every other ping dial: the Economy
-  Settings panel writes 0 for an untouched picker on any save, and the role is
-  itself the opt-in mechanism, so "(none)" can only mean a broken button. Both keys are guild-scoped `econ_`-prefixed
+  dead-end at "ask an admin"). **Corrected 2026-09-03:** the notifications role
+  used to be provisioned even over a stored `0`, unlike every other ping dial,
+  on the grounds that the Economy Settings panel writes 0 for an untouched
+  picker on any save. The panel meanwhile told admins "(none)" left
+  notifications off — a preference the code did not enforce — so the dial is
+  now honoured like the rest: with `game_role_id` stored as 0 the 🔔 button
+  replies that notifications aren't set up in this server and makes nothing.
+  The save-artifact ambiguity it was covering for is answered on the panel
+  instead, by the state line under the picker
+  (`docs/role_provisioning_spec.md` §3). Both keys are guild-scoped `econ_`-prefixed
   config with no legacy fallback. `qotd_ping_role_id` set to 0 — an admin
   choosing "(none)" — means silent posts and no
   tag-to-ask. The mention only notifies if the role is mentionable or the bot holds

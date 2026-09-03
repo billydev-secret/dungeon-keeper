@@ -13,6 +13,7 @@ import {
   mountAsync,
 } from "../config-helpers.js";
 import { confirmDialog } from "../ui.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading configuration…</div></div>`;
@@ -48,7 +49,8 @@ export function mount(container) {
             <div class="field">
               <label>Jailed Role</label>
               <span data-picker="jailed_role_id"></span>
-              <div class="field-hint">Role assigned to jailed members; your channel permissions should hide the rest of the server from it.</div>
+              <div class="field-hint">Role assigned to jailed members; your channel permissions should hide the rest of the server from it. Leave it unset and I'll make one — or adopt a role already called <code>Jailed</code> — the first time you jail somebody.</div>
+              <div data-role-state="jailed_role_id"></div>
             </div>
             <div class="field">
               <label>Jail Category</label>
@@ -146,6 +148,7 @@ export function mount(container) {
     );
 
     guardForm(form);
+    mountRoleDialStates(container);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();

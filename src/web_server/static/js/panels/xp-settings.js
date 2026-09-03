@@ -1,4 +1,5 @@
 import { esc } from "../api.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 import {
   loadConfig, loadChannels, loadRoles, loadMembers,
   mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
@@ -83,7 +84,8 @@ export function mountSettings(container) {
             <div class="field">
               <label>Promotion Review Ping Role</label>
               <div data-picker="promotion_review_ping_role_id"></div>
-              <div class="field-hint">Pinged when a promotion review card posts, so your role managers know someone is up for review. Choose "(none)" to post the cards silently.</div>
+              <div class="field-hint">Pinged when a promotion review card posts, so your role managers know someone is up for review. Choose "(none)" to post the cards silently — I won't make one.</div>
+              <div data-role-state="promotion_review_ping_role_id"></div>
             </div>
             <div class="field">
               <label>Level 5 Log Channel</label>
@@ -249,6 +251,7 @@ export function mountSettings(container) {
     if (lockUnlessAdmin(container)) return;
 
     guardForm(form);
+    mountRoleDialStates(container);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();

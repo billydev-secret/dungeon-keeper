@@ -523,14 +523,19 @@ async def test_notify_button_provisions_the_role_when_never_configured(db):
 
 
 @pytest.mark.asyncio
-async def test_notify_button_provisions_even_over_a_stored_zero(db):
-    """A stored 0 on THIS dial is not a decision (Billy, 2026-08-22).
+async def test_notify_button_honours_a_stored_none(db):
+    """Reversed 2026-09-03 (Billy). This test asserted the opposite before.
 
-    Economy Settings saves as one form and writes ``game_role_id: "0"`` for an
-    untouched picker on every save, so changing a payout leaves a 0 here — and
-    prod has exactly that in two guilds. There is also no coherent "off" for an
-    opt-in role: with no role, nobody can opt in at all. So unlike every other
-    ping dial, a 0 here still provisions.
+    The 2026-08-22 call was that a stored 0 on this one dial is a save artifact
+    rather than a decision, so the button provisioned over it. But Economy
+    Settings tells the admin "(none)" leaves notifications off, and a
+    preference the code does not enforce is the one thing CLAUDE.md rules out
+    flatly. The dial is now real: with "(none)" stored, the member is told
+    notifications aren't set up here and **no role is created**.
+
+    In production this affects exactly one guild (1358148226850492618) — the
+    other two hold real role ids, and a guild with no row at all is
+    "never configured" and still gets a role made on the first press.
     """
     _enable(db, game_role_id=0)
     guild = FakeGuild(id=GUILD_ID)
@@ -539,10 +544,9 @@ async def test_notify_button_provisions_even_over_a_stored_zero(db):
 
     await GuideNotifyButton().callback(inter)
 
-    made = list(guild.roles)
-    assert [r.name for r in made] == ["Economy Notifications"]
-    member.add_roles.assert_awaited_once()
-    assert inter.response.send_message.await_args.args[0] != NOTIFY_UNCONFIGURED_MSG
+    assert list(guild.roles) == [], "made a role over an explicit (none)"
+    member.add_roles.assert_not_awaited()
+    assert inter.response.send_message.await_args.args[0] == NOTIFY_UNCONFIGURED_MSG
 
 
 @pytest.mark.asyncio

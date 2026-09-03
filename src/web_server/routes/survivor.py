@@ -20,7 +20,11 @@ import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
+from bot_modules.core.role_provision import (
+    ensure_feature_role,
+    provenance_recorder,
+)
+from bot_modules.services import feature_roles as fr
 from bot_modules.services import survivor_espn as espn
 from bot_modules.services import survivor_service as svc
 from bot_modules.services.moderation import write_audit
@@ -34,12 +38,14 @@ log = logging.getLogger("web.survivor")
 router = APIRouter()
 _ADMIN = Depends(require_perms({"admin"}))
 
-# The three roles the bot manages (spec §3.3), paired with the config key
-# that stores each one's id.
-MANAGED_ROLES = (
-    ("role_survivor_id", "🏈 Survivor"),
-    ("role_ghost_id", "👻 Ghost"),
-    ("role_sole_survivor_id", "🏈 Sole Survivor"),
+# The three roles the bot manages (spec §3.3), paired with the config key that
+# stores each one's id. Read from the shared registry rather than spelled out
+# here: `bot-roles` can only list a role the registry knows about, and a name
+# that lived at one call site was a role nothing could audit.
+MANAGED_ROLES = tuple(
+    (entry.key, entry.spec.name)
+    for entry in fr.MANAGED_ROLES
+    if entry.source == fr.SOURCE_SURVIVOR
 )
 
 _ID_KEYS = frozenset(
@@ -204,7 +210,12 @@ async def create_season(
 
             role = await ensure_feature_role(
                 guild,
-                RoleSpec(name=role_name, reason="Survivor season setup"),
+                fr.spec_for(key),
+                # The bot swaps these three on members every week, so a
+                # same-named role above its own top role is no use and must
+                # not be adopted.
+                assigns=True,
+                on_provision=provenance_recorder(ctx, guild_id, key),
                 # A brand-new season starts with no ids of its own; the helper's
                 # adopt-by-name step is what reuses the roles a previous season
                 # left behind instead of stacking up a second @Ghost each year.

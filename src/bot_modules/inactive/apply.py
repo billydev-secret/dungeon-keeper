@@ -26,11 +26,8 @@ import discord
 
 from bot_modules.core.app_context import AppContext
 from bot_modules.core.db_utils import get_config_value
-from bot_modules.core.role_provision import (
-    RoleSpec,
-    ensure_feature_role,
-    mod_log_announcer,
-)
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.services.feature_roles import INACTIVE_ROLE
 from bot_modules.inactive.store import (
     create_inactive,
     get_active_inactive,
@@ -161,21 +158,15 @@ async def ensure_inactive_role(
     """
     guild_id = guild.id
 
-    def _get_ids() -> tuple[int, int]:
+    def _get_channel_id() -> int:
         with ctx.open_db() as conn:
-            role_raw = get_config_value(conn, "inactive_role_id", "0", guild_id)
             chan_raw = get_config_value(conn, "inactive_channel_id", "0", guild_id)
         try:
-            role_id = int(role_raw or "0")
+            return int(chan_raw or "0")
         except ValueError:
-            role_id = 0
-        try:
-            chan_id = int(chan_raw or "0")
-        except ValueError:
-            chan_id = 0
-        return role_id, chan_id
+            return 0
 
-    role_id, chan_id = await asyncio.to_thread(_get_ids)
+    chan_id = await asyncio.to_thread(_get_channel_id)
 
     async def _lock_down(role: discord.Role) -> None:
         """Deny view everywhere, then grant the inactive channel back.
@@ -200,17 +191,20 @@ async def ensure_inactive_role(
                 # overwrite skips that channel rather than aborting the setup.
                 pass
 
-    return await ensure_feature_role(
+    # Through ensure_config_role: it is the only path that can tell this
+    # guild's own stored id from one inherited via the legacy guild_id=0
+    # fallback, and reading the key here instead announced a deletion to every
+    # guild that inherited one. See docs/role_provisioning_spec.md.
+    return await ensure_config_role(
+        ctx,
         guild,
-        RoleSpec(
-            name="Inactive",
-            reason="Dungeon Keeper inactive-channel setup",
-        ),
-        load=lambda: role_id,
-        store=lambda rid: ctx.set_config_value("inactive_role_id", str(rid), guild.id),
+        INACTIVE_ROLE.key,
+        INACTIVE_ROLE.spec,
+        feature=INACTIVE_ROLE.feature,
+        # The sweep needs a role, so a stored 0 is "not set up yet", not "off".
+        respect_opt_out=INACTIVE_ROLE.none_means_off,
+        assigns=INACTIVE_ROLE.assigns,
         on_create=_lock_down,
-        announce=mod_log_announcer(ctx, guild),
-        feature="the inactive sweep",
     )
 
 

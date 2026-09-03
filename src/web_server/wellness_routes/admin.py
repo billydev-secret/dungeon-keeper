@@ -13,7 +13,11 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends
 from fastapi.responses import JSONResponse
 
-from bot_modules.core.role_provision import RoleSpec, ensure_feature_role
+from bot_modules.core.role_provision import (
+    ensure_feature_role,
+    provenance_recorder,
+)
+from bot_modules.services import feature_roles as fr
 from bot_modules.services.wellness_service import (
     ENFORCEMENT_LEVELS,
     add_exempt_channel,
@@ -253,10 +257,12 @@ async def admin_resume_user(
 #: it, the bot hands it out on opt-in, and it means nothing without the
 #: feature — which is what makes auto-create safe here. Adopt-by-name means a
 #: guild that already has a "Wellness Guardian" role keeps it.
-WELLNESS_ROLE_SPEC = RoleSpec(
-    name="Wellness Guardian",
-    reason="Wellness activation from the dashboard",
-)
+#:
+#: The spec itself lives in the shared registry (round 2), so the Bot-Managed
+#: Roles page can list this role beside the other fifteen; a spec built here
+#: was one nothing could enumerate.
+WELLNESS_ROLE = fr.WELLNESS_ROLE
+WELLNESS_ROLE_SPEC = WELLNESS_ROLE.spec
 
 
 @router.get("/provision")
@@ -339,6 +345,10 @@ async def admin_provision_role(
             WELLNESS_ROLE_SPEC,
             load=lambda: stored_id,
             store=_store,
+            # The bot grants this on opt-in, so a same-named role above its own
+            # top role must not be adopted — it could never be handed out.
+            assigns=WELLNESS_ROLE.assigns,
+            on_provision=provenance_recorder(ctx, guild_id, WELLNESS_ROLE.key),
             feature="Wellness",
         )
         if role is None:

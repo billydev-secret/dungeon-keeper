@@ -148,6 +148,10 @@ const SECTIONS = [
         // Renamed 2026-08-31: "Reaction Roles" is what people actually call
         // this feature. "Role Menus" stays as a search keyword.
         { id: "role-menus",        label: "Reaction Roles",        module: "./panels/role-menus.js", help: "help-role-menus", keywords: "role menus" },
+        // New id 2026-09-03 (round 2 of role autocreate). The freeze is on
+        // renaming ids, not on minting them; "bot-roles" is the bare feature
+        // name with no section prefix, per dashboard_ia.md § Naming.
+        { id: "bot-roles",         label: "Bot-Managed Roles",     module: "./panels/bot-roles.js", adminOnly: true, keywords: "auto create roles provision jailed inactive dm modes survivor wellness ping roles missing deleted role audit", related: ["onboarding", "config-roles"] },
       ]},
       // IA3 (2026-08-29): the set-up-the-newcomer-experience job spanned three
       // headings (Welcome under Members, Auto-Role/Onboarding under Roles,

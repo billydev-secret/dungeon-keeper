@@ -2,6 +2,7 @@ import { api, apiPost, apiDelete, esc } from "../api.js";
 import { showStatus, guardForm, mountPicker, mountRolePicker, lockUnlessAdmin, mountAsync } from "../config-helpers.js";
 import { mountPanelPoster } from "../panel-post.js";
 import { toast } from "../ui.js";
+import { mountRoleDialStates } from "../role-dial-state.js";
 
 // Saveable-profile fields owners may persist between sessions.
 const SAVEABLE_FIELDS = [
@@ -126,6 +127,11 @@ export function mount(outer) {
               <label>Spectator Gate Role</label>
               <span data-picker="spectator_gate_role_id"></span>
               <div class="field-hint">If set, only members with this role can join spectator-mode rooms. Others see the room exists but can't join or read its chat (Discord ties the voice text chat to the Connect permission). Leave as "(none — open to everyone)" to let anyone spectate; non-members can then still read, just not speak.</div>
+              <div class="field-hint">Haven't got a role for it? Offer
+                <strong>Voice Spectator</strong> on Discord Onboarding and I'll make
+                it as part of offering it — I won't make one on its own, because a
+                gate role nobody holds is a spectator room nobody can enter.</div>
+              <div data-role-state="voice_master_spectator_gate_role_id"></div>
             </div>
           </div>
 
@@ -223,6 +229,7 @@ export function mount(outer) {
     );
 
     guardForm(form);
+    mountRoleDialStates(container);
 
     // Client-side validation names the offending field (W-C5).
     const NUM_FIELDS = [
