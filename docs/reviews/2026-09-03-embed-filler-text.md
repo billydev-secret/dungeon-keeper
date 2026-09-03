@@ -317,3 +317,117 @@ a cog rather than written as a literal in a builder. Findings 4 and 8 were both
 found that way and only because those two cogs were read in full; a card built
 by string concatenation across several helpers could still hide padding no grep
 here would surface.
+
+---
+
+## Proposed guide changes
+
+Four amendments to `embed_style_guide.md`, drafted here as the sentences to lift
+rather than as descriptions of them. `docs/` is owned by `documentation-review`
+and this file collides with `embed-style-review`'s own opinions about it, so
+these are staged here rather than applied.
+
+Three of the four are **amendments to rules that already exist**, not new
+concepts — the guide already reasons in "one job per slot"; it just never says a
+job may only be done once per card.
+
+### 1 — §Card anatomy: no slot repeats another slot
+
+The guide already rules this for one pair of slots (line 95, of title vs
+`set_author`: *"Never both fighting over the same job"*) and already frames
+footers as one-job-only (line 151: *"pick one, don't stack"*). It never
+generalises. **Append to §Card anatomy:**
+
+> - **One fact, one slot** (proposed 2026-09-03). A slot must not take a job
+>   another slot on the same card has already done. A footer that restates its
+>   own title, a description that re-announces the title in a full sentence, a
+>   field whose value repeats what its own name said — each is a line of the
+>   card spent saying nothing new. The test is subtractive: **delete the slot
+>   and ask what the reader no longer knows.** If the answer is "nothing", it
+>   was decoration. Applies within a card, not across a feature — a game's name
+>   recurring on its lobby, its round card and its recap is fine; twice on one
+>   card is not.
+
+This is the rule behind five of this review's findings, each of which is
+currently defensible because no rule is broken by any slot *individually*.
+
+### 2 — §Empty states: the placeholder-value contradiction
+
+Not a gap — a **conflict the guide currently loses**. §Empty states asks for a
+short plain sentence; four docstrings state the opposite convention
+(`games_mfk/embeds.py:45`, `games_compliment/embeds.py:38`,
+`games_mlt/embeds.py:52`, `music/embeds.py:43` — *"so the field always has a
+value"* / *"so the embed never has no fields"*), and **12 sites follow the code,
+not the guide.** An undocumented convention that contradicts a written rule is
+how a guide stops being true. **Append to §Empty states & pagination:**
+
+> - **A placeholder is not an empty state** (ruling proposed 2026-09-03). `—`,
+>   `(empty)` and `(nobody yet)` as a field's **entire value** are padding: they
+>   restate an absence the field name usually already carries (`Players (0)` /
+>   `—` says "empty" twice) and name no way out of it. Write the sentence
+>   instead — *"Nobody yet — press Join to play."* Prefer **omitting the field**
+>   to filling it, unless the card edits that field **by index** later
+>   (`set_field_at`), in which case the slot must survive and only the value
+>   changes.
+>   **The carve-out:** `—` stays correct as **one cell in a column of values**,
+>   where it means "no data for this row" and holds the alignment
+>   (`mahjong/sim_logic.py`, `survivor/embeds.py:35`, `member_info/embeds.py:92`,
+>   `services/guess_embeds.py:93`). Cell, yes; whole field value, no.
+
+The `set_field_at` clause is load-bearing: `cogs/games_story_cog.py:160`/`:179`
+write the roster into **field index 0**, so deleting that field on those two
+builders sends the first Join into the wrong slot.
+
+### 3 — §Footers: the game signature must earn its line
+
+§Footers already gives the format as `{GAME_ICON} Game Name • extra` and its
+reason (*"every game card signs itself so screenshots stay attributable"*). It
+just never says the `• extra` is load-bearing when the title is **already** the
+game name. **Amend that bullet:**
+
+> - **Game signature** (games only): `{GAME_ICON} Game Name • extra` — every
+>   game card signs itself so screenshots stay attributable. **When the title is
+>   already the bare game name, the signature has nothing left to attribute** —
+>   carry the `• extra` (host, fill state, round) or the card prints its own name
+>   twice. `games_rushmore/embeds.py:129` (footers the host) and
+>   `games_traditional/embeds.py:73-76` (appends `• One category each`) are the
+>   models.
+
+This documents two builders that already comply rather than inventing a standard.
+
+### 4 — §Empty states: a nudge must name an action available now
+
+The existing clause says add a nudge *"when there's an obvious next step."* The
+failure mode it doesn't cover is adding one when there **isn't** — which is how
+*"check back soon!"* gets written. **Amend that clause:**
+
+> Add a nudge when there's an obvious next step ("No role menus yet. Create one
+> to get started.") — and **only** then: a nudge names something the reader can
+> do **now**. When nothing is available to them, stop at the plain sentence or
+> say *when* ("the next board posts Monday"). "Check back soon" is a way of
+> ending the sentence, not a next step.
+
+### Enforcement, and the order it has to happen in
+
+Rules 1 and 3 are mechanically checkable — `footer != title` is a clean sweep —
+and `tests/test_embed_style_contract.py` (new on `embed-style-review`) already
+has the house pattern: a sweep, a *guards the guard* meta-test, and a docstring
+citing the guide section. Rule 2's placeholder sweep is checkable too.
+
+**That test is repo-wide and gates other sessions' commits.** A `footer != title`
+sweep added before the 10 sites are fixed turns `games-deep-review` — and every
+other live session — red on code it never touched. So the order is **fix the
+sites, then add the gate**, never the reverse. Same for rule 2's 12 sites.
+
+Rule 1's general form (a description restating a title) is **not** mechanically
+checkable and should stay prose. Only its title/footer special case gets a test.
+
+### Explicitly not proposed
+
+**A deixis rule** — "naming a control is information, pointing at it is not",
+the distinction between `cogs/guess_cog.py:1428` (*"Click below to play."*) and
+`services/dm_perms_service.py:759` (*"Set your own preference with the **My DM
+Settings** button below"*). It is a true distinction and it is in this review's
+body, but it produced two findings, it is heavily judgement-dependent, and it
+cannot be swept. A rule like that costs more in review-time argument than it
+saves in copy. Left as an observation, deliberately.
