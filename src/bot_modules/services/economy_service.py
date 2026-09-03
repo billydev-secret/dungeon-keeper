@@ -1607,6 +1607,18 @@ async def notify_member(
 # Maintenance rule (docs/data_register.md): a new econ_*/
 # casino_* table with per-member rows either joins this list or documents why
 # it is preserved.
+#: Swept with a plain ``WHERE guild_id = ? AND user_id = ?``. A table only
+#: belongs here if it HAS both columns: the sweep tolerates schema drift by
+#: logging and continuing, so a table listed here without a ``guild_id`` fails
+#: silently on every erasure and is never cleared. Five such tables
+#: (``econ_quest_progress``, ``econ_quest_progress_marks``, ``econ_qotd_rewards``,
+#: ``econ_community_contrib``, ``econ_community_tier_payouts``) sat here from
+#: their introduction until the 2026-09-02 GDPR review found them — together
+#: 108,687 production rows that an erasure reported as cleared and did not
+#: touch. They are keyed on a parent quest or QOTD instead, and are handled by
+#: ``_PURGE_PARENT_SCOPED_TABLES`` below. ``tests/test_privacy_service.py``
+#: now fails if any table named in either structure lacks the columns its
+#: statement uses.
 _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_wallets",
     "econ_streaks",
@@ -1614,8 +1626,6 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_notify_prefs",
     "econ_conversions",
     "econ_quest_claims",
-    "econ_quest_progress",
-    "econ_quest_progress_marks",
     "econ_rerolls",
     "econ_set_bonus",
     "econ_board_overrides",
@@ -1630,12 +1640,21 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "econ_raffle_tickets",
     "econ_photo_rewards",
     "econ_intake_rewards",
-    "econ_qotd_rewards",
+    # All four `economy_submission_store` products, kept together on purpose.
+    # Each row is one member's paid submission and carries the free text they
+    # wrote for it, so none has an Art 17(3) ground: the money that moved lives
+    # on in the preserved `econ_ledger`, and deleting the submission corrupts
+    # no balance. Pin and Theme were added when they shipped; emoji and QOTD
+    # sponsor were missed and were unreachable by erasure until the 2026-09-02
+    # GDPR review — both were empty in production, so nothing was retained in
+    # error, but the first sale would have written member-authored text into a
+    # table the purge could not reach. A new product on this store belongs
+    # here in the same commit.
+    "econ_emoji_submissions",
     "econ_pin_submissions",
+    "econ_qotd_submissions",
     "econ_theme_submissions",
     "econ_shop_purchases",
-    "econ_community_contrib",
-    "econ_community_tier_payouts",
     "econ_game_wagers",
     "econ_bounty_contributions",
     "econ_auction_bids",
@@ -1663,6 +1682,19 @@ _PURGE_USER_ID_TABLES: tuple[str, ...] = (
     "casino_baccarat_rounds",
     "casino_dice_rounds",
     "casino_keno_rounds",
+)
+
+#: Tables that name a member but carry no ``guild_id`` of their own, reaching
+#: their guild through a parent row instead. ``(table, member column, parent
+#: table, parent key, child key)``. Scoping through the parent matters: a bare
+#: ``user_id`` match would erase the member's rows in every guild the bot
+#: serves, not only the one making the request.
+_PURGE_PARENT_SCOPED_TABLES: tuple[tuple[str, str, str, str, str], ...] = (
+    ("econ_quest_progress", "user_id", "econ_quests", "id", "quest_id"),
+    ("econ_quest_progress_marks", "user_id", "econ_quests", "id", "quest_id"),
+    ("econ_community_contrib", "user_id", "econ_quests", "id", "quest_id"),
+    ("econ_community_tier_payouts", "user_id", "econ_quests", "id", "quest_id"),
+    ("econ_qotd_rewards", "user_id", "econ_qotd", "id", "qotd_id"),
 )
 
 
@@ -1720,6 +1752,19 @@ def econ_purge_user(conn: sqlite3.Connection, guild_id: int, user_id: int) -> No
                 "econ purge: failed on %s for user %d in guild %d: %s",
                 table, user_id, guild_id, exc,
             )
+    for table, column, parent, parent_key, child_key in _PURGE_PARENT_SCOPED_TABLES:
+        try:
+            conn.execute(
+                f"DELETE FROM {table} WHERE {column} = ? AND {child_key} IN "
+                f"(SELECT {parent_key} FROM {parent} WHERE guild_id = ?)",
+                (user_id, guild_id),
+            )
+        except sqlite3.Error as exc:
+            log.warning(
+                "econ purge: failed on %s for user %d in guild %d: %s",
+                table, user_id, guild_id, exc,
+            )
+
     # Reply-credit rows name the member on either side.
     for col in ("target_author_id", "replier_id"):
         try:

@@ -16,6 +16,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     get_ledger,
 )
+from bot_modules.services import economy_service as econ_service
 from bot_modules.services import qa_service
 from bot_modules.services.qa_service import (
     DEFAULT_QA_SETTINGS,
@@ -43,7 +44,51 @@ OTHER = 1002
 ADMIN = 9001
 
 S = DEFAULT_QA_SETTINGS
-DAY = local_day_for(time.time(), 0.0)  # today in UTC — matches ledger created_at
+#: A fixed instant, and the day derived from it. These used to be
+#: ``local_day_for(time.time(), 0.0)`` evaluated at import, with the comment
+#: "matches ledger created_at" — true except across a boundary. The daily cap
+#: counts ``qa_reward`` rows in ``econ_ledger`` whose ``created_at`` falls
+#: inside ``local_day_bounds(DAY)``, and ``apply_credit`` stamps those rows with
+#: the real clock at call time. A suite that imported this module before UTC
+#: midnight and reached the cap test after it therefore wrote the credits into
+#: the *next* day, outside the window being counted, so the cap silently
+#: stopped applying and the third verdict got paid. The full gate caught it
+#: running 23:55–00:04 UTC on 2026-09-02; it would have passed again minutes
+#: later, which is what makes this kind of test worth pinning rather than
+#: re-running. Freezing the clock the ledger stamps from removes the boundary
+#: entirely instead of narrowing the window.
+FROZEN_NOW = 1_780_000_000.0
+DAY = local_day_for(FROZEN_NOW, 0.0)
+
+
+class _FrozenClock:
+    """Stands in for ``time`` inside ``economy_service``.
+
+    Only ``time()`` is pinned; everything else falls through to the real
+    module, so patching this in cannot quietly change other behaviour.
+    """
+
+    def __init__(self, now: float) -> None:
+        self._now = now
+
+    def time(self) -> float:
+        return self._now
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_ledger_clock(monkeypatch):
+    """Pin the clock ``apply_credit``/``apply_debit`` stamp ledger rows with.
+
+    Autouse because every payment in this file goes through that path, and a
+    test that pays is only meaningful if its credit lands in the day the cap is
+    counting. Ledger reads order by ``created_at DESC, id DESC``, so identical
+    timestamps still tie-break on insertion order and nothing here goes
+    ambiguous.
+    """
+    monkeypatch.setattr(econ_service, "time", _FrozenClock(FROZEN_NOW))
 
 
 @pytest.fixture

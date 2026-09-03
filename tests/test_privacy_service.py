@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from bot_modules.core.db_utils import open_db
@@ -958,3 +960,329 @@ def test_purge_clears_posted_question_the_member_was_only_asked(db):
     with open_db(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM risky_posted_questions").fetchone()[0] == 0
 
+
+
+# ── Erasure statements must match the schema they run against ────────────────
+#
+# `purge_user_data` and `econ_purge_user` tolerate schema drift: a failing
+# statement logs a warning and the sweep continues, so one table missing on an
+# older deployment cannot abort an erasure midway. The cost of that tolerance
+# is that a statement naming a column the table does not have fails on *every*
+# erasure, silently, forever — which is exactly what happened to eight tables
+# between their introduction and the 2026-09-02 GDPR review (five of them
+# holding 108,687 production rows an erasure reported as cleared and never
+# touched).
+#
+# This test is the standing guard: run the whole erasure against a fully
+# migrated schema and require it to be silent. It fails on the day someone adds
+# a table to a purge list without the columns that list's statement uses.
+
+#: The one warning that is correct rather than a defect. `foolsday_exclusions`
+#: is created by application code at first use (a `CREATE TABLE IF NOT EXISTS`
+#: in `foolsday_service`) rather than by a migration, so it genuinely does not
+#: exist in a freshly-migrated schema.
+_EXPECTED_PURGE_WARNINGS = {"foolsday_exclusions"}
+
+
+def test_purge_runs_clean_against_the_migrated_schema(db, caplog):
+    """No purge statement may reference a column its table does not have."""
+    caplog.set_level(logging.WARNING)
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    unexpected = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name.startswith("dungeonkeeper.")
+        and ("purge" in record.getMessage().lower())
+        and not any(t in record.getMessage() for t in _EXPECTED_PURGE_WARNINGS)
+    ]
+    assert not unexpected, (
+        "purge_user_data hit schema errors it silently swallowed:\n  "
+        + "\n  ".join(unexpected)
+    )
+
+
+@pytest.mark.parametrize(
+    "table, columns, values",
+    [
+        pytest.param(
+            "econ_quest_progress",
+            "(quest_id, user_id, period, current, target)",
+            "(?, ?, 'all', 1, 5)",
+            id="quest-progress",
+        ),
+        pytest.param(
+            "econ_quest_progress_marks",
+            "(quest_id, user_id, period, occurrence)",
+            "(?, ?, 'all', 'x')",
+            id="quest-progress-marks",
+        ),
+        pytest.param(
+            "econ_community_contrib",
+            "(quest_id, user_id, count)",
+            "(?, ?, 3)",
+            id="community-contrib",
+        ),
+        pytest.param(
+            "econ_community_tier_payouts",
+            "(quest_id, tier, user_id)",
+            "(?, 1, ?)",
+            id="community-tier-payouts",
+        ),
+    ],
+)
+def test_purge_clears_quest_tables_that_key_on_the_quest(db, table, columns, values):
+    """These carry no guild_id and reach their guild through `econ_quests`."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_quests (id, guild_id, title, qtype, created_at) "
+            "VALUES (1, ?, 'q', 'daily', 0)",
+            (GUILD,),
+        )
+        conn.execute(
+            f"INSERT INTO {table} {columns} VALUES {values}", (1, USER)
+        )
+        conn.execute(
+            f"INSERT INTO {table} {columns} VALUES {values}", (1, OTHER_USER)
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        remaining = conn.execute(
+            f"SELECT user_id FROM {table}"
+        ).fetchall()
+    assert [r[0] for r in remaining] == [OTHER_USER]
+
+
+def test_purge_of_quest_rows_does_not_cross_guilds(db):
+    """A parent-scoped delete must not erase the member in another guild."""
+    other_guild = GUILD + 1
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_quests (id, guild_id, title, qtype, created_at) "
+            "VALUES (1, ?, 'a', 'daily', 0)",
+            (GUILD,),
+        )
+        conn.execute(
+            "INSERT INTO econ_quests (id, guild_id, title, qtype, created_at) "
+            "VALUES (2, ?, 'b', 'daily', 0)",
+            (other_guild,),
+        )
+        for quest_id in (1, 2):
+            conn.execute(
+                "INSERT INTO econ_quest_progress "
+                "(quest_id, user_id, period, current, target) "
+                "VALUES (?, ?, 'all', 1, 5)",
+                (quest_id, USER),
+            )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        remaining = conn.execute(
+            "SELECT quest_id FROM econ_quest_progress"
+        ).fetchall()
+    assert [r[0] for r in remaining] == [2]
+
+
+def test_purge_clears_qotd_rewards_through_their_qotd(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO econ_qotd (id, guild_id, channel_id, message_id, "
+            "question, posted_by, local_day, created_at) "
+            "VALUES (1, ?, 5, 6, 'q', 9, '2026-01-01', 0)",
+            (GUILD,),
+        )
+        conn.execute(
+            "INSERT INTO econ_qotd_rewards (qotd_id, user_id) VALUES (1, ?)",
+            (USER,),
+        )
+        conn.execute(
+            "INSERT INTO econ_qotd_rewards (qotd_id, user_id) VALUES (1, ?)",
+            (OTHER_USER,),
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        remaining = conn.execute(
+            "SELECT user_id FROM econ_qotd_rewards"
+        ).fetchall()
+    assert [r[0] for r in remaining] == [OTHER_USER]
+
+
+def test_purge_clears_wellness_counter_children_before_their_parent(db):
+    """They key on `cap_id` only — once the cap is gone nothing can find them."""
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO wellness_caps (id, guild_id, user_id, label, scope, "
+            "window, cap_limit, created_at) "
+            "VALUES (1, ?, ?, 'l', 'guild', 'day', 3, 0)",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO wellness_cap_counters (cap_id, window_start_epoch, "
+            "count) VALUES (1, 0, 2)"
+        )
+        conn.execute(
+            "INSERT INTO wellness_cap_overages (cap_id, window_start_epoch, "
+            "overage_count) VALUES (1, 0, 1)"
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        for table in ("wellness_cap_counters", "wellness_cap_overages"):
+            assert (
+                conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+            ), table
+
+
+# ── The five decisions settled 2026-09-02 ────────────────────────────────────
+
+
+def test_purge_clears_quote_rows_from_either_side(db):
+    """A quote row names two members and is incoherent with one removed."""
+    with open_db(db) as conn:
+        for quoter, quoted in ((USER, OTHER_USER), (OTHER_USER, USER),
+                               (OTHER_USER, 1003)):
+            conn.execute(
+                "INSERT INTO quote_audit_log (ts, guild_id, channel_id, "
+                "quoter_id, quoted_user_id, quoted_message_id, "
+                "posted_message_id, theme, font) "
+                "VALUES (0, ?, 1, ?, ?, 2, 3, 't', 'f')",
+                (GUILD, quoter, quoted),
+            )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            "SELECT quoter_id, quoted_user_id FROM quote_audit_log"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, 1003)]
+
+
+@pytest.mark.parametrize(
+    "table, subject_sql, actor_column, blanked",
+    [
+        pytest.param(
+            "inactive_members",
+            "INSERT INTO inactive_members (guild_id, user_id, moderator_id, "
+            "created_at) VALUES (?, ?, ?, 0)",
+            "moderator_id",
+            0,
+            id="inactive-members",
+        ),
+        pytest.param(
+            "promotion_review_cards",
+            "INSERT INTO promotion_review_cards (guild_id, user_id, "
+            "channel_id, message_id, created_at, resolved_by) "
+            "VALUES (?, ?, 1, 2, 0, ?)",
+            "resolved_by",
+            None,
+            id="promotion-review-cards",
+        ),
+    ],
+)
+def test_purge_deletes_the_subjects_row_but_only_blanks_the_actors(
+    db, table, subject_sql, actor_column, blanked
+):
+    """Erasing a mod must not delete an unrelated member's record."""
+    with open_db(db) as conn:
+        # The member as subject — this row is about them and goes.
+        conn.execute(subject_sql, (GUILD, USER, 999))
+        # The member as actor on someone else's row — the row stands, the id
+        # is blanked, because the record belongs to OTHER_USER.
+        conn.execute(subject_sql, (GUILD, OTHER_USER, USER))
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            f"SELECT user_id, {actor_column} FROM {table}"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, blanked)]
+
+
+def test_purge_clears_qa_verdicts_but_only_unsigns_the_test(db):
+    with open_db(db) as conn:
+        conn.execute(
+            "INSERT INTO qa_tests (id, guild_id, entry_key, title, body_md, "
+            "verified_by, created_at, updated_at) "
+            "VALUES (1, ?, 'k', 't', 'b', ?, '', '')",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO qa_verdicts (test_id, guild_id, user_id, verdict, "
+            "note, created_at, updated_at) "
+            "VALUES (1, ?, ?, 'pass', 'my note', '', '')",
+            (GUILD, USER),
+        )
+        conn.execute(
+            "INSERT INTO qa_verdicts (test_id, guild_id, user_id, verdict, "
+            "voided_by, created_at, updated_at) "
+            "VALUES (1, ?, ?, 'fail', ?, '', '')",
+            (GUILD, OTHER_USER, USER),
+        )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        # The test itself survives — it is the project's work product.
+        assert tuple(conn.execute(
+            "SELECT COUNT(*), verified_by FROM qa_tests"
+        ).fetchone()) == (1, None)
+        # Their own verdict goes; the one they merely voided stands, unsigned.
+        assert [
+            tuple(r) for r in conn.execute(
+                "SELECT user_id, voided_by FROM qa_verdicts"
+            ).fetchall()
+        ] == [(OTHER_USER, None)]
+
+
+def test_purge_clears_the_members_own_blocks_but_not_blocks_against_them(db):
+    """A block list withholds something — the other member's entry stands."""
+    with open_db(db) as conn:
+        for owner, target in ((USER, OTHER_USER), (OTHER_USER, USER)):
+            conn.execute(
+                "INSERT INTO voice_master_blocked (guild_id, owner_id, "
+                "target_id, added_at) VALUES (?, ?, ?, 0)",
+                (GUILD, owner, target),
+            )
+        conn.commit()
+
+    with open_db(db) as conn:
+        purge_user_data(conn, GUILD, USER)
+        conn.commit()
+
+    with open_db(db) as conn:
+        rows = conn.execute(
+            "SELECT owner_id, target_id FROM voice_master_blocked"
+        ).fetchall()
+    assert [tuple(r) for r in rows] == [(OTHER_USER, USER)]
