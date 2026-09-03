@@ -65,12 +65,6 @@ def init_interaction_tables(conn: sqlite3.Connection) -> None:
         log.exception("interaction_graph: message_id column may already exist")
 
 
-def clear_interaction_data(conn: sqlite3.Connection, guild_id: int) -> None:
-    """Delete all interaction records for a guild (both aggregate and log tables)."""
-    conn.execute("DELETE FROM user_interactions WHERE guild_id = ?", (guild_id,))
-    conn.execute("DELETE FROM user_interactions_log WHERE guild_id = ?", (guild_id,))
-
-
 def record_interactions(
     conn: sqlite3.Connection,
     guild_id: int,

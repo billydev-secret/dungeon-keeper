@@ -149,8 +149,8 @@ export function mount(container, initialParams = {}) {
         header +
         renderEmpty(
           "No role pings recorded in this window. Tracking starts the next time " +
-            "the bot sees a role ping. To recover past ones, run the ping backfill " +
-            "on the Admin Backfill panel.",
+            "the bot sees a role ping. Past ones can be recovered by a maintenance " +
+            "script the bot owner runs on the server.",
         );
       wireControls(panel);
       return;

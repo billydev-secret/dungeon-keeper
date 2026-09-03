@@ -81,7 +81,64 @@ problem — the controls are doing something real. *Relabelled in wave 4.*
   to *be* the panel. Same shape as Quality Score → Contributors.
   *Built in wave 4 — `50ec4d6c`.*
 
-### Still blocked on a decision — nobody should build these until Billy rules
+### Decided 2026-09-03 — no longer blocked
+
+Billy worked through these question by question. Full decision tables live in
+the two design docs; the short form:
+
+* **Part 3 #2 — consolidate approvals** ☑ — shipped. One unified list on the
+  frozen `shop-approvals` id, unioning **six** queues (themed day, sponsored
+  question, pin, sponsored emoji, quest sign-off, custom-item order) — two more
+  than the plan assumed, because Pin of the Day and custom-item orders had no
+  working web surface at all. Custom-item orders **widened from admin to
+  economy manager, refund included**; the admin gate had been rendering a
+  permissions error box on a manager-visible page, so it was a live defect
+  either way.
+
+  **The shape came out better than planned.** It is a *finder*, not a move:
+  every row links to where that product is already handled, and nothing that
+  resolves a request changed. That means none of the costs the investigation
+  priced actually had to be paid — `economy-claims` and
+  `economy-qotd-submissions` keep their route ids and their telemetry, QOTD's
+  ping-role dial stays where it is, and `tests/web/test_shop_split.py` passes
+  untouched. That last one matters: the split existed because
+  `config-helpers`' unsaved-edit flag is a module global, so putting QOTD's
+  settings form on a page with a queue re-creates a real bug. Not moving the
+  form avoids it entirely. `dashboard_ia.md` still gained a stated exception,
+  because a queue is found by asking "is anyone waiting?" rather than by
+  knowing which feature you want.
+* **Part 3 #3 — Policy Tickets for members.** A ballot is a **thread in the
+  channel it was launched in**, recorded as a policy ticket, with the mod
+  channel uninvolved. Fully public names; anyone who can see the thread may
+  vote; admins only may open; simple majority, ties fail, no turnout floor. A
+  pass **records a result only** — adoption stays a separate mod action. See
+  [policy-tickets-member-voting.md](policy-tickets-member-voting.md).
+* **Part 3 #10 — role autocreate round 2.** Roster page **plus provenance**;
+  "(none)" on the economy notification dial becomes real (reversing the
+  2026-08-22 call); both R4 dials reopen create-on-offer, closing the spectate
+  room's @everyone exposure; the invite stays narrow and the Onboarding panel
+  explains the missing permission instead. No role-delete button. See
+  [role-autocreate-round-2.md](role-autocreate-round-2.md).
+* **Part 4 #6 — Auto-Thread states: "not sure".** Left alone; the wave-4
+  relabel already addressed the confusion without removing behaviour.
+* **Part 4 #8 — Backfill Jobs: dropped** (`81b88193`), with the ping job ported
+  to `scripts/backfill_ping_events.py` first so the outstanding recovery of
+  5,774 historical pings was not stranded.
+* **Part 4 #9 — Mention Awards: keep.** No action.
+
+### Raised, awaiting a separate call
+
+* **`econ_game_role_id = 0` in guild 1358148226850492618** (96k messages, live).
+  The other two guilds hold real role ids, so only this one's 🔔 button is dead.
+  Clearing the row re-enables it, but that is a production config write.
+* **A DK config export/import.** What "duplicable server template" actually
+  means once Discord's template API is ruled out — bigger than all of round 2,
+  deliberately not smuggled into it.
+* **Porting the role backfill to a script.** `role_events` has a measured 15x
+  production undercount and two dashboard surfaces read it; it is the one job
+  from the retired panel worth reconsidering.
+
+### Previously blocked (all now decided above)
 
 1. **Part 3 #2 — consolidate all approvals** into one place (spending, QOTD, shop,
    claims). A real IA change across four surfaces.
@@ -248,13 +305,26 @@ Ordered by Billy's evident pain, not by size.
    "waiting / answer / archived or locked" never made sense; it isn't that kind
    of thread.
 7. **Income Sources: an unbuilt feature is on the page** (`economy-income-sources`)
-   ☐ — "the idea is not built yet, doesn't need to be in the web page." Keep it
-   as notes somewhere instead.
+   ☑ — "the idea is not built yet, doesn't need to be in the web page." Keep it
+   as notes somewhere instead. *Shipped in wave 3 (`fb19d114`): the
+   "Ideas Not Built Yet" card and its `SUGGESTIONS` const were deleted, and the
+   same commit preserved every idea verbatim, with its blocker, in
+   `docs/plans/economy-and-perk-shop.md` (the "keep it as notes" half of the
+   ask). A sweep of all ~150 panels and manual.html found no other surface
+   advertising an unbuilt feature.*
 8. **Backfill Jobs may be removable** (`admin-backfill`) ☐ — "not sure it's really
    needed anymore."
 9. **Mention Awards needs a second look** (`mention-awards`) ☐ — "not totally sure
    what it is doing here."
-10. **Quick Reference still feels a bit long** (`help-quickref`) ☐ — mild.
+10. **Quick Reference still feels a bit long** (`help-quickref`) ☑ — mild.
+    *Renamed to **Everyday Commands**. Measured against the manual's other 31
+    sections it was the 5th shortest — a quarter of the median — so the length
+    complaint was never about size. It read long because the name promised a
+    complete index and delivered 16 hand-picked rows, so they felt both
+    incomplete and too many at once. Renaming resets the promise; the page
+    also lost a duplicated sign-off and two descriptions that wrapped to three
+    lines. No row was cut — the table is already curated, and the wellness
+    review has one queued to add.*
 11. **Yellow text coloring is jarring** ☐ — home/quick reference; wants an easier
     color.
 

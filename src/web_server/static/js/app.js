@@ -42,7 +42,7 @@ const SECTIONS = [
       // "Home", not "Dashboard": the section label above it already says
       // Dashboard, and IA2 fixed this exact collision for Economy's Bank.
       { id: "home", label: "Home", module: "./panels/home.js", keywords: "dashboard overview" },
-      { id: "help-quickref", label: "Quick Reference", module: "./panels/help.js" },
+      { id: "help-quickref", label: "Everyday Commands", module: "./panels/help.js", keywords: "quick reference cheat sheet commands slash" },
     ],
   },
   {
@@ -214,7 +214,6 @@ const SECTIONS = [
         // the nav is built once from this static list. "Billy-bot" stays as a
         // search keyword so the old name still finds the page.
         { id: "config-advisor",    label: "AI Assistant",      module: "./panels/config-advisor.js", adminOnly: true, keywords: "advisor assistant ai ask billy billy-bot", help: "help-ask" },
-        { id: "admin-backfill",    label: "Backfill Jobs",     module: "./panels/admin-backfill.js", adminOnly: true },
       ]},
     ],
   },
@@ -1315,6 +1314,11 @@ const MOVED_PAGES = {
   // config-booster-roles: booster colors became the rentable Palette perk
   // (2a83904b), sold from Shop & Perks.
   "config-booster-roles": "economy-sinks",
+  // admin-backfill: retired 2026-09-03. Four one-shot data jobs behind four
+  // buttons, opened four times in its life. The ping job survives as
+  // scripts/backfill_ping_events.py; the rest went with it. Ping Response is
+  // the successor because the one job anybody still needed fed that report.
+  "admin-backfill": "ping-response",
 };
 
 /** Rewrite a retired page's hash to its successor. True if it redirected. */

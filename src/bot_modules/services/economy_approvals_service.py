@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from bot_modules.core.db_utils import sql_identifier as _ident
+from bot_modules.services import economy_emoji_service as emoji_svc
 from bot_modules.services import economy_pin_service as pin_svc
 from bot_modules.services import economy_qotd_sponsor_service as sponsor_svc
 from bot_modules.services import economy_submission_store as store
@@ -158,3 +159,142 @@ def card_location(row: Any) -> tuple[int, int]:
         return int(row["card_channel_id"] or 0), int(row["card_message_id"] or 0)
     except (IndexError, KeyError, TypeError, ValueError):
         return 0, 0
+
+
+# ── The dashboard's wider queue ───────────────────────────────────────────
+#
+# The board above answers a moderator standing in Discord: "is anybody waiting
+# on a yes/no?" The dashboard answers a slightly bigger question — "is anybody
+# waiting on us at all?" — so it carries two more products the board leaves
+# out, for reasons that are about Discord rather than about the work:
+#
+#   * The **sponsored emoji** has no yes/no button because approving it means
+#     handing Discord an image file, which a board row cannot do. On a web page
+#     that is just a row whose action opens the upload, so it belongs here.
+#   * A **quest sign-off** is not a paid submission at all — no price, no
+#     refund, and its payout is the quest's own reward — so it cannot join the
+#     UNION above. It is merged in Python instead.
+#   * A **custom-item order** lives in its own table and takes its summary from
+#     the item it bought, so it needs a join the others don't. Merged the same
+#     way. It is the one row whose action is a refusal rather than a decision:
+#     delivering an order means ticking its todo off elsewhere.
+#
+# ``QUEUES`` is deliberately left alone: its keys ride in the board's select
+# values and its signature, so widening it would change a Discord surface to
+# serve a web one.
+
+EMOJI_QUEUE = ApprovalQueue(
+    "emoji", "sponsored emoji", emoji_svc.PRODUCT, "name"
+)
+
+#: The four paid-submission products, as the dashboard sees them.
+DASHBOARD_QUEUES: tuple[ApprovalQueue, ...] = QUEUES + (EMOJI_QUEUE,)
+
+#: Every row type the unified dashboard queue can hold, including the one that
+#: is not a submission. Used to validate a filter value at the edge.
+DASHBOARD_KINDS: tuple[str, ...] = tuple(q.key for q in DASHBOARD_QUEUES) + (
+    "claim",
+    "order",
+)
+
+
+def _pending_claims(conn: sqlite3.Connection, guild_id: int) -> list[dict[str, Any]]:
+    """Quest sign-offs waiting on a staff decision, normalised to queue shape.
+
+    ``amount`` is the quest's reward rather than a price, because nobody paid
+    to claim — the coins flow the other way on approval. It is still the number
+    a reviewer wants on the row, so it rides in the same field rather than
+    inventing a second one the other four products would leave empty.
+
+    A claim whose quest has since been deleted still appears, with an empty
+    summary: the member is waiting either way, and hiding the row would strand
+    them with no surface that shows it.
+    """
+    rows = conn.execute(
+        """SELECT c.id, c.user_id, c.created_at,
+                  COALESCE(q.title, '') AS summary,
+                  COALESCE(q.reward, 0) AS amount
+           FROM econ_quest_claims c
+           LEFT JOIN econ_quests q ON q.id = c.quest_id
+           WHERE c.guild_id = ? AND c.state = 'pending'""",
+        (guild_id,),
+    ).fetchall()
+    return [
+        {
+            "kind": "claim",
+            "id": int(r["id"]),
+            "user_id": int(r["user_id"]),
+            "summary": r["summary"],
+            "amount": int(r["amount"] or 0),
+            "created_at": float(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+
+def _pending_orders(conn: sqlite3.Connection, guild_id: int) -> list[dict[str, Any]]:
+    """Custom-item orders waiting on staff, normalised to queue shape.
+
+    Another table that cannot join the UNION: an order lives in
+    ``econ_shop_purchases`` and takes its summary from the item it bought, so
+    it needs a join the four submission products don't have.
+
+    Unlike the others, "resolving" an order is not a yes/no on this page — it
+    is delivered by ticking its todo off, and the only decision surfaced here
+    is the refusal. The row still belongs in the list: somebody paid and is
+    waiting, which is the whole question this queue answers.
+    """
+    rows = conn.execute(
+        """SELECT p.id, p.user_id, p.price, p.created_at,
+                  COALESCE(i.name, '') AS summary
+           FROM econ_shop_purchases p
+           LEFT JOIN econ_shop_items i ON i.id = p.item_id
+           WHERE p.guild_id = ? AND p.state = 'pending'""",
+        (guild_id,),
+    ).fetchall()
+    return [
+        {
+            "kind": "order",
+            "id": int(r["id"]),
+            "user_id": int(r["user_id"]),
+            "summary": r["summary"],
+            "amount": int(r["price"] or 0),
+            "created_at": float(r["created_at"]),
+        }
+        for r in rows
+    ]
+
+
+def pending_for_dashboard(
+    conn: sqlite3.Connection, guild_id: int, *, limit: int = 200
+) -> list[dict[str, Any]]:
+    """Everything waiting on a moderator, across all five products, oldest first.
+
+    Oldest first for the same reason the board is: this is a work list, and the
+    longest wait should be handled next. ``kind`` then ``id`` break ties so two
+    requests made in the same instant keep a stable order between renders.
+
+    The ``limit`` is generous on purpose. Production runs these queues at zero
+    to two pending rows each, so the cap is a runaway guard rather than
+    pagination — if it ever truncates, the caller should say so rather than
+    quietly showing a short list.
+    """
+    sql = " UNION ALL ".join(_pending_select(q) for q in DASHBOARD_QUEUES)
+    submissions = [
+        {
+            "kind": r["kind"],
+            "id": int(r["id"]),
+            "user_id": int(r["user_id"]),
+            "summary": r["summary"] or "",
+            "amount": int(r["price"] or 0),
+            "created_at": float(r["created_at"]),
+        }
+        for r in conn.execute(sql, tuple(guild_id for _ in DASHBOARD_QUEUES))
+    ]
+    merged = (
+        submissions
+        + _pending_claims(conn, guild_id)
+        + _pending_orders(conn, guild_id)
+    )
+    merged.sort(key=lambda r: (r["created_at"], r["kind"], r["id"]))
+    return merged[: max(0, int(limit))]

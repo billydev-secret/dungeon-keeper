@@ -14,12 +14,15 @@ import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.economy_approvals_service import (
+    DASHBOARD_KINDS,
+    DASHBOARD_QUEUES,
     QUEUES,
     QUEUES_BY_KEY,
     card_location,
     get_approval_row,
     pending_approval_count,
     pending_approvals,
+    pending_for_dashboard,
     set_approval_card,
 )
 from bot_modules.services.economy_pin_service import submit_pin
@@ -235,3 +238,143 @@ def test_a_second_post_repoints_the_location(conn):
 def test_card_location_reads_anything_unusable_as_uncarded(row):
     """"Don't know" and "not carded" collapse to the same do-nothing answer."""
     assert card_location(row) == (0, 0)
+
+
+# ── the dashboard's wider queue ─────────────────────────────────────────
+#
+# The board's QUEUES answers "is anybody waiting on a yes/no?"; the dashboard
+# answers "is anybody waiting on us at all?", which is two products bigger.
+
+
+def _emoji(conn, user_id, name="sparkle", guild_id=GUILD):
+    _fund(conn, user_id, guild_id=guild_id)
+    conn.execute(
+        "INSERT INTO econ_emoji_submissions (guild_id, user_id, name, image_path,"
+        " state, price, created_at) VALUES (?, ?, ?, '/tmp/x.png', 'pending', ?, ?)",
+        (guild_id, user_id, name, 250, 1000.0),
+    )
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def _claim(conn, user_id, title="Host a hangout", reward=75, guild_id=GUILD):
+    conn.execute(
+        "INSERT INTO econ_quests (guild_id, title, qtype, reward, signoff, active,"
+        " created_at) VALUES (?, ?, 'daily', ?, 1, 1, 1000.0)",
+        (guild_id, title, reward),
+    )
+    quest_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO econ_quest_claims (quest_id, guild_id, user_id, period, state,"
+        " created_at) VALUES (?, ?, ?, '2026-09-03', 'pending', 1000.0)",
+        (quest_id, guild_id, user_id),
+    )
+    claim_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    return quest_id, claim_id
+
+
+def _order(conn, user_id, item="Custom title", price=500, guild_id=GUILD):
+    conn.execute(
+        "INSERT INTO econ_shop_items (guild_id, name, kind, billing, price,"
+        " created_at) VALUES (?, ?, 'manual', 'once', ?, 1000.0)",
+        (guild_id, item, price),
+    )
+    item_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "INSERT INTO econ_shop_purchases (guild_id, user_id, item_id, price, state,"
+        " created_at) VALUES (?, ?, ?, ?, 'pending', 1000.0)",
+        (guild_id, user_id, item_id, price),
+    )
+    return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+
+def test_the_board_queue_is_not_widened_by_the_dashboard_one():
+    """QUEUES keys ride in the Discord board's select values and signature.
+
+    Widening it to serve a web page would change a Discord surface, so the
+    dashboard gets its own tuple and the board's stays exactly three.
+    """
+    assert [q.key for q in QUEUES] == ["theme", "sponsor", "pin"]
+    assert [q.key for q in DASHBOARD_QUEUES] == ["theme", "sponsor", "pin", "emoji"]
+    assert set(DASHBOARD_KINDS) == {
+        "theme", "sponsor", "pin", "emoji", "claim", "order",
+    }
+
+
+def test_an_empty_dashboard_queue_is_empty(conn):
+    assert pending_for_dashboard(conn, GUILD) == []
+
+
+def test_every_product_lands_in_one_list(conn):
+    """The whole point of the merge: one look answers "is anyone waiting?"."""
+    _theme(conn, 11)
+    _sponsor(conn, 12)
+    _pin(conn, 13)
+    _emoji(conn, 14)
+    _claim(conn, 15)
+    _order(conn, 16)
+    kinds = {r["kind"] for r in pending_for_dashboard(conn, GUILD)}
+    assert kinds == {"theme", "sponsor", "pin", "emoji", "claim", "order"}
+
+
+def test_the_list_is_oldest_first_across_products(conn):
+    """It is a work list: the longest wait is handled next."""
+    t = _theme(conn, 11)
+    s = _sponsor(conn, 12)
+    _stamp(conn, "econ_theme_submissions", t, 3000.0)
+    _stamp(conn, "econ_qotd_submissions", s, 1000.0)
+    e = _emoji(conn, 14)
+    _stamp(conn, "econ_emoji_submissions", e, 2000.0)
+    order = [r["kind"] for r in pending_for_dashboard(conn, GUILD)]
+    assert order == ["sponsor", "emoji", "theme"]
+
+
+def test_an_order_carries_its_item_name_and_price(conn):
+    _order(conn, 16, item="Custom title", price=500)
+    row = next(r for r in pending_for_dashboard(conn, GUILD) if r["kind"] == "order")
+    assert row["summary"] == "Custom title"
+    assert row["amount"] == 500
+
+
+def test_a_claim_carries_its_quest_reward_as_the_amount(conn):
+    """Nobody paid to claim — the coins flow the other way — but the number a
+    reviewer wants on the row is still the amount, so it rides in that field."""
+    _claim(conn, 15, title="Host a hangout", reward=75)
+    row = next(r for r in pending_for_dashboard(conn, GUILD) if r["kind"] == "claim")
+    assert row["summary"] == "Host a hangout"
+    assert row["amount"] == 75
+
+
+def test_a_claim_whose_quest_was_deleted_still_appears(conn):
+    """The member is waiting either way; hiding the row would strand them."""
+    quest_id, _ = _claim(conn, 15)
+    conn.execute("DELETE FROM econ_quests WHERE id = ?", (quest_id,))
+    row = next(r for r in pending_for_dashboard(conn, GUILD) if r["kind"] == "claim")
+    assert row["summary"] == ""
+    assert row["amount"] == 0
+
+
+def test_only_pending_rows_are_listed(conn):
+    t = _theme(conn, 11)
+    approve_theme(conn, t, resolver_id=MOD)
+    _claim(conn, 15)
+    conn.execute("UPDATE econ_quest_claims SET state = 'paid'")
+    _order(conn, 16)
+    conn.execute("UPDATE econ_shop_purchases SET state = 'fulfilled'")
+    assert pending_for_dashboard(conn, GUILD) == []
+
+
+def test_another_guilds_rows_never_appear(conn):
+    _theme(conn, 11, guild_id=GUILD)
+    _theme(conn, 11, guild_id=OTHER_GUILD)
+    _emoji(conn, 14, guild_id=OTHER_GUILD)
+    _claim(conn, 15, guild_id=OTHER_GUILD)
+    _order(conn, 16, guild_id=OTHER_GUILD)
+    rows = pending_for_dashboard(conn, GUILD)
+    assert len(rows) == 1
+
+
+def test_the_limit_is_a_runaway_guard_not_pagination(conn):
+    for i in range(5):
+        _pin(conn, 20 + i, message=f"pin {i}")
+    assert len(pending_for_dashboard(conn, GUILD, limit=3)) == 3
+    assert len(pending_for_dashboard(conn, GUILD)) == 5

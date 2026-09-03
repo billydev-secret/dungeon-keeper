@@ -8,7 +8,7 @@ fixtures from ``tests/web/conftest.py``.
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -303,102 +303,6 @@ def test_gender_set_overwrites_existing(authed_client, fake_ctx):
         assert get_gender(conn, fake_ctx.guild_id, 101) == "female"
 
 
-# ── /api/admin/backfill-* ─────────────────────────────────────────────
-
-
-def test_backfill_endpoints_return_503_when_bot_unavailable(authed_client):
-    """Without a connected bot, the guild lookup fails and the endpoint refuses
-    to start a job."""
-    for path in (
-        "/api/admin/backfill-roles",
-        "/api/admin/backfill-xp",
-        "/api/admin/backfill-interactions",
-    ):
-        if path == "/api/admin/backfill-roles":
-            resp = authed_client.post(path)
-        else:
-            resp = authed_client.post(path, json={"days": 30})
-        assert resp.status_code == 503, f"{path} should refuse without a guild"
-
-
-def test_backfill_roles_invokes_sync_helper(authed_client, fake_ctx):
-    guild = _attach_mock_bot_with_guild(fake_ctx, [])
-    with patch(
-        "web_server.routes.admin_backfill.backfill_roles_sync",
-        return_value={"grants_added": 2, "removes_added": 1},
-    ) as mock_sync:
-        resp = authed_client.post("/api/admin/backfill-roles")
-    assert resp.status_code == 200
-    assert "Grants added: 2" in resp.json()["message"]
-    assert "removes added: 1" in resp.json()["message"]
-    mock_sync.assert_called_once_with(fake_ctx, guild)
-
-
-def _make_coroutine_returning_mock():
-    """A mock whose __call__ captures args AND returns a real coroutine so the
-    endpoint's ``asyncio.create_task(coro)`` doesn't blow up.
-
-    The endpoint pattern is ``backfill_xp_async(ctx, guild, days=days)`` →
-    that synchronous call must return an awaitable. We can't use AsyncMock
-    because the endpoint schedules but never awaits inside the test window;
-    instead we use a plain MagicMock so the call args land in ``call_args``
-    immediately, and return a real coroutine so the scheduling code path
-    doesn't raise.
-    """
-
-    async def _real_coro():
-        return {}
-
-    return MagicMock(return_value=_real_coro())
-
-
-def test_backfill_xp_schedules_async_job(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [])
-    mock = _make_coroutine_returning_mock()
-    with patch("web_server.routes.admin_backfill.backfill_xp_async", mock):
-        resp = authed_client.post("/api/admin/backfill-xp", json={"days": 30})
-    assert resp.status_code == 200
-    assert resp.json()["job"] == "backfill-xp"
-    assert "30 days" in resp.json()["message"]
-    assert mock.call_args.kwargs["days"] == 30
-
-
-def test_backfill_xp_days_zero_says_all_history(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [])
-    mock = _make_coroutine_returning_mock()
-    with patch("web_server.routes.admin_backfill.backfill_xp_async", mock):
-        resp = authed_client.post("/api/admin/backfill-xp", json={"days": 0})
-    assert "all available history" in resp.json()["message"]
-
-
-def test_backfill_interactions_passes_reset_and_channel(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [])
-    mock = _make_coroutine_returning_mock()
-    with patch(
-        "web_server.routes.admin_backfill.backfill_interactions_async", mock,
-    ):
-        resp = authed_client.post(
-            "/api/admin/backfill-interactions?reset=true&channel_id=4321",
-            json={"days": 14},
-        )
-    assert resp.status_code == 200
-    kwargs = mock.call_args.kwargs
-    assert kwargs["days"] == 14
-    assert kwargs["reset"] is True
-    assert kwargs["channel_id"] == 4321
-    assert "channel 4321" in resp.json()["message"]
-    assert "existing data cleared" in resp.json()["message"]
-
-
-def test_backfill_days_clamped_to_valid_range(authed_client, fake_ctx):
-    """days is clamped to [0, 3650] — protects against negative or absurd values."""
-    _attach_mock_bot_with_guild(fake_ctx, [])
-    mock = _make_coroutine_returning_mock()
-    with patch("web_server.routes.admin_backfill.backfill_xp_async", mock):
-        authed_client.post("/api/admin/backfill-xp", json={"days": 999_999})
-    assert mock.call_args.kwargs["days"] == 3650
-
-
 # ── Auth gates ────────────────────────────────────────────────────────
 
 
@@ -410,7 +314,6 @@ def test_backfill_days_clamped_to_valid_range(authed_client, fake_ctx):
         ("POST", "/api/todos", {"task": "x"}),
         ("GET", "/api/gender/list", None),
         ("POST", "/api/gender/set", {"user_id": "1", "gender": "male"}),
-        ("POST", "/api/admin/backfill-roles", None),
     ],
 )
 def test_small_routes_require_auth(fake_ctx, method, path, body):

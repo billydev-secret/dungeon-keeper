@@ -367,6 +367,35 @@ to currency.
      button opening an ephemeral pick-one select. The backstop, and the only
      surface when the channel dial is unset.
 
+  **A third surface, and it is only a finder (2026-09-03).** Billy's
+  walkthrough note was that all economy approvals should be in one place.
+  `shop-approvals` gained an **Everything Waiting** list, served by
+  `GET /api/economy/approvals` (`require_economy_manager`) over
+  `economy_approvals_service.pending_for_dashboard`. It unions **six** queues,
+  not the board's three: the four paid-submission products (themed day,
+  sponsored question, pin, sponsored emoji) via the shared `_pending_select`,
+  plus quest sign-offs and custom-item orders merged in Python, because neither
+  is a paid submission — a claim has no price and pays the quest's own reward,
+  and an order takes its summary from a join to the item it bought.
+
+  Two things it deliberately is not. It is **not** the board's `QUEUES`: those
+  keys ride in the Discord select values and the board signature, so
+  `DASHBOARD_QUEUES` is a separate tuple and the board still shows three. And
+  it **resolves nothing** — every row links to where that product is already
+  handled, so no approve path, permission or member-facing copy moved. Pin of
+  the Day still has no web queue and its row says "In Discord"; listing it is
+  the point, since before this a waiting pin was invisible on the dashboard.
+
+  Motivating fact, and the reason a flat list beat tabs: production runs these
+  queues at zero to two pending rows each, so the win is "one glance says
+  nobody is waiting", which tabs would have preserved as three clicks.
+
+  Custom-item orders were **widened from `require_perms({"admin"})` to
+  `require_economy_manager`** in the same change (Billy, 2026-09-03), refund
+  included. They sit on a page that is deliberately not `adminOnly`, so the
+  admin gate had been rendering a permissions error box exactly where the
+  orders should be — a live defect either way.
+
   `approvals_channel_id` is a **new, dedicated dial** and is deliberately not
   `bank_channel_id`: that is the economy's member-facing explainer in the main
   guild (`🏦│how-it-works`), and a review card names the member, shows what
