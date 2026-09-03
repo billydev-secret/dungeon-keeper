@@ -44,9 +44,11 @@ jobs:
         run: |
           python -m pytest --tb=short -q --cov=src --cov-report=term-missing
 
-      # The browser-driven checks run only here (they need a Chromium download
-      # and are minutes long, so they stay out of per-push CI and the default
-      # suite). Selected by marker, not by filename: this step used to name
+      # Per-push CI runs these too (test.yml's `browser` job, added when the
+      # heavy checks moved off developer machines). Nightly keeps its own run
+      # because it is the unscoped one: every panel at every viewport, where
+      # per-push CI inherits whatever scoping the suite defaults to.
+      # Selected by marker, not by filename: this step used to name
       # test_mobile_layout and test_panel_console explicitly, which meant the
       # other five browser files ran in no tier at all — a stale fixture in
       # test_panel_js_fixes sat red for days before anyone ran it by hand.

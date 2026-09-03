@@ -114,11 +114,14 @@ SQLite-backed. Tests in `tests/`.
 
 - The **pre-commit hook** runs `python scripts/gate.py --scoped` automatically
   on every commit: ruff, then only the tests mapped to the staged
-  diff (git diff vs HEAD + untracked). **Pyright is not in the per-commit
-  tiers** — it can't be scoped to a diff, so it cost minutes and ~1.5 GB on
-  every commit and N parallel sessions ran N copies. It still runs in the
-  full `gate.py`, in CI on every push, and nightly; `--pyright` or
-  `GATE_PYRIGHT=1` forces it into a scoped run. Touching a broadly-shared file (`core/`,
+  diff (git diff vs HEAD + untracked). **The two heavy checks — pyright and the
+  browser panel sweep — belong to CI, not to your machine.** Neither can be
+  scoped to a diff, and both ran automatically (pyright on every commit at
+  371 s and ~1.5 GB measured; the sweep on every dashboard-asset commit,
+  Chromium, minutes), so N parallel sessions ran N copies and wedged the box.
+  Both now run on every push/PR in `test.yml` and again in nightly. Locally
+  they are opt-in: `--quick` runs both before a push, and `--pyright` /
+  `--browser` (or `GATE_PYRIGHT=1` / `GATE_BROWSER=1`) force one into any run. Touching a broadly-shared file (`core/`,
   `models/`, `migrations/`, deps, any `conftest.py`, `gate.py`) falls back to
   the full suite **in the prod checkout only**; in a session worktree that
   fallback is **deferred** — the diff maps normally and the gate prints which
@@ -143,12 +146,14 @@ SQLite-backed. Tests in `tests/`.
   you do run it locally, run it **solo**: a parallel full run alongside other
   work can exhaust the tmpfs quota and spray hundreds of bogus sqlite errors
   (see memory: rm -rf /tmp/pytest-of-ben and re-run). `--quick` runs
-  ruff (no pytest, no pyright) plus the scoped browser panel checks (layout +
-  console) when dashboard assets changed. Coverage floor in pyproject.toml must
+  ruff + pyright (no pytest) plus the scoped browser panel checks (layout +
+  console) when dashboard assets changed — it is the deliberate pre-push
+  tier for the checks the hook no longer does. Coverage floor in pyproject.toml must
   not be lowered.
-- Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage on
-  every push/PR to main, and `nightly.yml` runs it on a schedule — so a miss in
-  the scoped tier is caught at push, not in prod.
+- Backstop: CI (`.github/workflows/test.yml`) runs the full suite + coverage,
+  pyright, and a parallel `browser` job (panel layout + console) on every
+  push/PR to main, and `nightly.yml` runs the lot again on a schedule — so a
+  miss in the scoped tier is caught at push, not in prod.
 
 ## Dependencies
 
@@ -201,10 +206,12 @@ SQLite-backed. Tests in `tests/`.
   bare number), a **manual broken-link** check, and a **browser suite**
   (`browser` marker, Playwright): responsive **layout** (no off-screen/clipped
   content at phone/tablet/desktop) and **panel-load health** (no JS exception /
-  console error / broken fetch on mount). The browser suite runs scoped to
-  changed panels in `gate.py` and fully in nightly; it auto-skips without a
-  browser (`python -m playwright install chromium` to enable). Both tiers
-  select by the **`browser` marker over `tests/web/`, never by filename** —
+  console error / broken fetch on mount). The browser suite runs on every
+  push/PR in CI's `browser` job and fully in nightly; locally it is opt-in
+  (`gate.py --quick`, or `--browser`), scoped to the changed panels, and
+  auto-skips without a browser (`python -m playwright install chromium` to
+  enable). Every tier selects by the **`browser` marker over `tests/web/`,
+  never by filename** —
   naming files is what once left five of the seven browser test files running
   in no tier at all; `tests/test_gate_mobile_scope.py` fails if either tier
   goes back to a list. When you add or

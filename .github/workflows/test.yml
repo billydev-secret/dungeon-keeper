@@ -41,6 +41,41 @@ jobs:
         run: |
           python -m pytest --tb=short -q --cov=src --cov-report=term-missing
 
+  # Browser-driven panel checks (responsive layout + panel-load health).
+  # These used to run in the per-commit gate on the developer's own machine,
+  # which meant every parallel session could launch its own Chromium; moved
+  # here so the cost is paid once, on a runner, in parallel with the suite.
+  # Selected by marker, never by filename — naming files is what once left five
+  # of the seven browser test files running in no tier at all.
+  browser:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.lock
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Browser checks (layout + panel console)
+        env:
+          BOT_ENV: dev
+          DISCORD_TOKEN_DEV: fake-token
+          GUILD_ID_DEV: "9001"
+          DB_PATH_DEV: dk_dev.db
+          AUDIT_CHANNEL_DEV: "0"
+        run: |
+          python -m pytest -m browser --tb=short -q tests/
+
   # Frontend lint. The browser JS/CSS was never linted in CI (the pytest
   # eslint/stylelint items silently skip when node_modules is absent).
   # This job runs them for real, and it is blocking: the deferral to
