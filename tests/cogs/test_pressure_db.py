@@ -331,7 +331,9 @@ async def test_get_active_nick_after_revert_returns_none(db):
 
 async def test_get_config_defaults_for_missing(db):
     cfg = await pdb.get_config(db, 9999)
-    assert cfg["cooldown_hours"] == 48
+    # 0 since the rematch cooldown started being enforced on duels
+    # (duels-party-116): no cooldown is what every duel behaved like before.
+    assert cfg["cooldown_hours"] == 0
     assert cfg["sentence_hours"] == 24
     # allow_early_revert is a duel_config column nothing has ever read (early
     # nickname revert was never built), so it is not offered as a default.

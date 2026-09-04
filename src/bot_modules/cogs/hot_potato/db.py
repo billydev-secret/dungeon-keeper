@@ -4,7 +4,11 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from bot_modules.duels.db import CHALLENGE_RESPONSE_SECONDS
+from bot_modules.duels.db import (
+    CHALLENGE_RESPONSE_SECONDS,
+    NAMING_WINDOW_SECONDS,
+    active_idle_seconds,
+)
 from bot_modules.games.utils import game_store
 from .game import HotPotatoGame, game_from_row
 
@@ -84,7 +88,11 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[HotPotatoGame]:
        OR (state = 'ACTIVE'   AND last_action_at <= ?)
        OR (state = 'RESOLVED' AND resolved_at   <= ?)
         """,
-        (now - CHALLENGE_RESPONSE_SECONDS, now - 600, now - 300),
+        (
+            now - CHALLENGE_RESPONSE_SECONDS,
+            now - active_idle_seconds("hot_potato"),
+            now - NAMING_WINDOW_SECONDS,
+        ),
     )
     return [game_from_row(r) for r in rows]
 
@@ -97,6 +105,9 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
         "guild_id": guild_id,
         "min_timer": 10.0,
         "max_timer": 45.0,
+        # The group cog's anti-ping-pong wait, adopted here in migration 208:
+        # without it the duel was a click race decided by a random tick.
+        "min_hold": 2.0,
     }
     if row:
         defaults.update(dict(row))
@@ -105,6 +116,15 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
 
 async def upsert_config(db: GamesDb, guild_id: int, **fields) -> None:
     await game_store.upsert_config(db, "hot_potato_config", guild_id, **fields)
+
+
+async def get_style_total(db: GamesDb, guild_id: int, user_id: int) -> int:
+    """A player's running style total on this server (0 if they have none)."""
+    row = await db.fetchone(
+        "SELECT total_points FROM hot_potato_style WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    return int(row["total_points"]) if row else 0
 
 
 async def add_style_points(db: GamesDb, guild_id: int, user_id: int, points: int) -> None:

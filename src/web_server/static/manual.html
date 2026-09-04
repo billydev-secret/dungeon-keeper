@@ -220,15 +220,37 @@
       Accept or Decline. The card counts down live, so you can both see how long is left; once it runs
       out the buttons stop working and the challenger can send a fresh one. A challenge that was
       still waiting when the bot restarted keeps its buttons for whatever time was left.</p>
+
+    <p>A group-game <strong>lobby</strong> stays open for <strong>5 minutes</strong> from the last time
+      someone joined or left &mdash; the card shows a live <em>Closes</em> countdown, and every join resets
+      it. The host gets one ping a minute before it closes, and a lobby that fills up (the game's
+      <em>Most Players Per Lobby</em> setting) <strong>starts on its own</strong> without waiting for
+      Start. If it does close, the card says why: nobody pressed Start, or not enough people joined.</p>
+
+    <p>Every result card has a <strong>🔁 Run It Back</strong> button for five minutes after the game ends.
+      In a 1-v-1 either player can press it &mdash; it sends the other person a fresh challenge with the
+      same stakes and wager, and they still choose whether to accept. For a group game the host presses
+      it: a new lobby opens with the same stakes, everyone from the last game is pinged to press Join,
+      and it starts itself once it's full. A rematch is checked exactly like a typed command (the game
+      has to be switched on and allowed in the channel, and nobody can be pulled into a nickname game
+      while wearing a sentence).</p>
+
+    <p>Won a nickname game? You have <strong>30 minutes</strong> to press <strong>Name the Loser</strong>,
+      with one reminder in the channel after two minutes. If you start another game against the same
+      person before naming them, that window ends (they can't end it for you). If the loser can't be renamed &mdash; they left the server, their
+      role sits above the bot's, or they're already wearing a sentence from another game &mdash; the
+      card says so and the win still stands. Leave the server mid-game and you're taken out of it:
+      dropped from a lobby or a live round (the last player standing wins), a 1-v-1 you were in is
+      called off, and any stake you had in comes back.</p>
     <table>
       <thead><tr><th>Command</th><th>Game &amp; flow</th></tr></thead>
       <tbody>
-        <tr><td><code>/games hotpotato challenge @user</code></td><td><strong>Hot Potato</strong> — pass the bomb back and forth before the hidden timer blows; whoever's holding it loses</td></tr>
+        <tr><td><code>/games hotpotato challenge @user</code></td><td><strong>Hot Potato</strong> — pass the bomb back and forth before the hidden timer blows; whoever's holding it loses. You have to hold it a moment before you can pass it back (two seconds unless the server sets otherwise), so a pass is a decision rather than a click race. Holding it late in the fuse earns style points; the result card shows what each of you earned this game and your running total on the server</td></tr>
         <tr><td><code>/games quickdraw challenge @user</code></td><td><strong>Quickdraw</strong> — first to react when the signal drops wins; false-starters lose instantly</td></tr>
-        <tr><td><code>/games pressure challenge @user</code></td><td><strong>Pressure Cooker</strong> — nickname duel: pump the meter with submissions your target rates Legit or Weak</td></tr>
-        <tr><td><code>/games hotpotatogroup start</code></td><td><strong>Hot Potato (group)</strong> — lobby version: the bomb hops around the circle until it detonates</td></tr>
-        <tr><td><code>/games musicalchairs start</code></td><td><strong>Musical Chairs</strong> — wait while the music plays (sit early and you're out), then hit <strong>Sit</strong> the moment it stops; there's always one chair fewer than there are players, so whoever misses out is eliminated. The lobby shows a <em>How to play</em> summary, every elimination is announced in the channel with the reason, and the panel re-posts itself at the bottom of the channel each time the music stops so the button is never buried</td></tr>
-        <tr><td><code>/games chicken start</code></td><td><strong>Chicken</strong> — a meter climbs toward a crash; bail in time to survive, cut it closest for style points</td></tr>
+        <tr><td><code>/games pressure challenge @user</code></td><td><strong>Pressure Cooker</strong> — nickname duel: take turns pressing <strong>Pump</strong>; each press adds a random 1&ndash;15 to a shared gauge, and whoever pushes it past 100 loses. The winner picks the loser's nickname for as long as the server's setting says (24 hours unless changed)</td></tr>
+        <tr><td><code>/games hotpotatogroup start</code></td><td><strong>Hot Potato (Group)</strong> — lobby version for 2+ players: the bomb hops around the circle until it detonates, the holder is out, and a fresh fuse is lit until one player is left. Every message about it says "(Group)" so it can't be confused with the two-player duel</td></tr>
+        <tr><td><code>/games musicalchairs start</code></td><td><strong>Musical Chairs</strong> — wait while the music plays (sit early and you're out), then hit <strong>Sit</strong> the moment it stops; there's always one chair fewer than there are players, so whoever misses out is eliminated. The lobby shows a <em>How to play</em> summary, every elimination is announced in the channel with the reason, and the panel re-posts itself at the bottom of the channel each time the music stops so the button is never buried. If <em>nobody</em> sits before the scramble ends, the same round plays again with fresh music; if that happens twice running the game is called off, nobody is renamed and any stakes come back</td></tr>
+        <tr><td><code>/games chicken start</code></td><td><strong>Chicken</strong> — a meter climbs toward a crash point that is <strong>hidden</strong> and different every game (somewhere between the server's earliest and latest crash settings), so the bar can blow well before it looks full. Bail in time to survive; whoever bails last wins, and if more than one player is still holding when it blows, one of them is picked at random to take the forfeit. If nobody bails at all, everyone crashes: no winner, no nickname, and any wager goes back</td></tr>
       </tbody>
     </table>
 
@@ -238,7 +260,12 @@
         <strong>Nickname stakes &amp; staff</strong>
         <p>By default the loser surrenders their nickname for a set sentence, so
         the bot needs the <strong>Manage Nicknames</strong> permission — without
-        it these games can't run. A player whose top role sits <em>above</em> the
+        it these games can't run. How long a sentence lasts is a per-game
+        dashboard setting (<em>Nickname Lasts</em>, 24 hours unless an admin
+        changes it), and every card names the real number. While you're wearing
+        a sentence you can still play &mdash; you just can't stake your nickname
+        again until it ends, so use a wager or custom stakes with
+        <code>nickname: False</code>. A player whose top role sits <em>above</em> the
         bot's (a staff member, say) can still play: the game shows a heads-up that
         it won't be able to rename them, and if they lose the win still counts —
         the winner's chosen name is posted in the channel and it's on the honour
@@ -290,7 +317,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Configure via the <a href="/">web dashboard</a></strong>
-        <p>Each game's cooldowns, nickname/sentence duration, timers, player counts, how many challenges one person may start in an hour, and channel restrictions are set from the dashboard's <strong>Games</strong> nav section — one panel per game (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs).</p>
+        <p>Each game's cooldowns, nickname/sentence duration, timers, player counts, how many challenges one person may start in an hour, and channel restrictions are set from the dashboard's <strong>Games</strong> nav section — one panel per game (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato (Group), Chicken, Musical Chairs). The <em>Wait Before a Rematch</em> / <em>Wait Between Games</em> setting only holds back <strong>nickname</strong> games — the same two people (or, for a group game, the same player) can't stake their nicknames again until it passes, and the refusal says how long is left. Wagered and custom-stakes games are never held back. It ships at 0, so nothing waits unless an admin sets it.</p>
       </div>
     </div>
 

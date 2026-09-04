@@ -41,8 +41,16 @@ from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 from bot_modules.core.branding import apply_section_spacing
 
 from . import db as duels_db
+from .db import (
+    LOBBY_IDLE_SECONDS,
+    NAMING_WINDOW_SECONDS,
+    REMATCH_WINDOW_SECONDS,
+    active_idle_seconds,
+)
 from .filters import (
+    custom_stakes_from,
     game_is_nick_stake,
+    nick_stakes_line,
     resolve_nick_stake,
     resolve_stakes_text,
     validate_nickname,
@@ -133,10 +141,9 @@ class BaseGame(commands.Cog):
         resolved = await self._db_fetch_resolved_games()
         for game in resolved:
             if game.result_message_id and game.winner_id and game.loser_id:
-                self.bot.add_view(
-                    ResultView(game.id, game.winner_id, game.loser_id, self._handle_set_nick),
-                    message_id=game.result_message_id,
-                )
+                view = self._result_view(game)
+                if view.children:  # NICKED past its rematch window has nothing left
+                    self.bot.add_view(view, message_id=game.result_message_id)
 
         lobby = await self._db_fetch_lobby_games()
         for game in lobby:
@@ -213,6 +220,9 @@ class BaseGame(commands.Cog):
             nicks = await duels_db.fetch_expired_nicks(self.db, now, self.GAME_KEY)
             for nick_row in nicks:
                 await self._revert_nick(nick_row)
+
+            await self._warn_stale_lobbies(now)
+            await self._remind_unnamed(now)
         except Exception:
             log.exception("%s expire loop error", self.GAME_DISPLAY_NAME)
 
@@ -259,7 +269,24 @@ class BaseGame(commands.Cog):
             view=None,
         )
 
+    def _dead_lobby_copy(self, roster_size: int, min_players: int) -> str:
+        """Why a lobby closed, in the words of what actually happened. The old
+        card blamed the players ("Not enough players started in time") even
+        when a full lobby died because nobody pressed Start."""
+        window = self._span(LOBBY_IDLE_SECONDS)
+        if roster_size >= min_players:
+            return (
+                f"Nobody pressed **▶️ Start** in time — a lobby closes after "
+                f"{window} without a join or a start."
+            )
+        return (
+            f"Not enough people joined in time — this game needs {min_players}, "
+            f"and a lobby closes after {window} without a join or a start."
+        )
+
     async def _expire_lobby(self, game: Any) -> None:
+        min_players, _max_players = await self.get_lobby_params(game.guild_id)
+        copy = self._dead_lobby_copy(len(getattr(game, "roster", []) or []), min_players)
         await self._db_set_state(game.id, "EXPIRED_LOBBY")
         self._game_locks.pop(game.id, None)
         await self._edit_message_silent(
@@ -267,7 +294,7 @@ class BaseGame(commands.Cog):
             game.message_id,
             embed=discord.Embed(
                 title="⏱️ Lobby Expired",
-                description="Not enough players started in time.",
+                description=copy,
                 color=COLOR_YELLOW,
             ),
             view=None,
@@ -281,25 +308,239 @@ class BaseGame(commands.Cog):
             game.message_id,
             embed=discord.Embed(
                 title="🏳️ Game Abandoned",
-                description="No activity in 5 minutes. Game over — no nickname consequences.",
+                description=(
+                    f"No activity in {self._span(active_idle_seconds(self.GAME_KEY))}. "
+                    "Game over — no nickname consequences."
+                ),
                 color=COLOR_YELLOW,
             ),
             view=None,
         )
 
     async def _expire_resolved(self, game: Any) -> None:
-        await self._db_set_state(game.id, "NO_NICK_SET")
-        if game.result_message_id:
+        await self._conclude_unnamed(
+            game,
+            duels_db.NICK_REASON_WINNER_TIMEOUT,
+            card=discord.Embed(
+                title="⏰ Nickname Not Set",
+                description=(
+                    f"The winner didn't name the loser within "
+                    f"{self._span(NAMING_WINDOW_SECONDS)}. No rename applied."
+                ),
+                color=COLOR_YELLOW,
+            ),
+        )
+
+    async def _conclude_unnamed(
+        self,
+        game: Any,
+        reason: str,
+        *,
+        card: discord.Embed | None = None,
+    ) -> None:
+        """End a RESOLVED game with no rename, saying why.
+
+        ``NO_NICK_SET`` used to cover four different endings — the winner
+        never pressed the button, the loser outranks the bot, the loser left
+        the server, the loser was already serving — so the state lied about
+        what happened (duels-party-118). Every path that concludes without a
+        rename comes through here and writes ``nick_reason``. ``card``
+        replaces the result message when the room should see the ending too;
+        the interaction paths answer the winner ephemerally and leave the
+        card as it is.
+        """
+        assert reason in duels_db.NICK_REASONS, reason
+        await self._db_set_state(game.id, "NO_NICK_SET", nick_reason=reason)
+        if card is not None and getattr(game, "result_message_id", None):
             await self._edit_message_silent(
-                game.channel_id,
-                game.result_message_id,
+                game.channel_id, game.result_message_id, embed=card, view=None,
+            )
+
+    async def _warn_stale_lobbies(self, now: float) -> None:
+        """One ping to the host shortly before an idle lobby closes."""
+        for game_id in await duels_db.fetch_lobby_warning_ids(self.db, self.GAME_KEY, now):
+            game = await self._db_get_game(game_id)
+            if game is None or game.state != "LOBBY":
+                continue
+            await duels_db.mark_lobby_warned(self.db, self.GAME_KEY, game_id)
+            closes_at = int(float(game.last_action_at or now) + LOBBY_IDLE_SECONDS)
+            await self._announce_to_channel(
+                game_id,
+                f"<@{game.host_id}> ⏱️ your {self.GAME_DISPLAY_NAME} lobby closes "
+                f"<t:{closes_at}:R> — press **▶️ Start**, or wait for another join "
+                "to reset the clock.",
+            )
+
+    async def _remind_unnamed(self, now: float) -> None:
+        """One ping to a winner who hasn't pressed Name the Loser yet."""
+        for game_id in await duels_db.fetch_naming_reminder_ids(self.db, self.GAME_KEY, now):
+            game = await self._db_get_game(game_id)
+            if game is None or game.state != "RESOLVED" or not game.winner_id:
+                continue
+            await duels_db.mark_naming_reminded(self.db, self.GAME_KEY, game_id)
+            guild = self.bot.get_guild(game.guild_id)
+            loser = self._member_label(guild, int(game.loser_id)) if game.loser_id else "the loser"
+            closes_at = int(float(game.resolved_at or now) + NAMING_WINDOW_SECONDS)
+            await self._announce_to_channel(
+                game_id,
+                f"<@{game.winner_id}> 📝 you haven't named {loser} yet — press "
+                f"**Name the Loser** on the result card. It closes <t:{closes_at}:R>.",
+            )
+
+    # ── A member leaves the server ────────────────────────────────────────────
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member) -> None:
+        """Take a leaver out of every game of this type they were in.
+
+        The economy cog already refunds a leaver's escrow; what nobody did was
+        drop them from the roster, so a lobby or a live round that included
+        them stalled until the sweep abandoned it (duels-party-127). The manual
+        promised the refund, and the refund arrived — the game just sat there.
+        """
+        try:
+            await self._drop_leaver(member.guild.id, member.id)
+        except Exception:
+            log.exception(
+                "%s: failed to drop leaver %d from guild %d",
+                self.GAME_DISPLAY_NAME, member.id, member.guild.id,
+            )
+
+    async def _drop_leaver(self, guild_id: int, user_id: int) -> None:
+        for game in await self._db_fetch_lobby_games():
+            if game.guild_id == guild_id and user_id in game.roster:
+                async with self._get_lock(game.id):
+                    await self._drop_leaver_from_lobby(game, user_id)
+        for game in await self._db_fetch_active_games():
+            if game.guild_id != guild_id:
+                continue
+            roster = getattr(game, "roster", None)
+            if roster is not None:
+                if user_id in game.alive:
+                    async with self._get_lock(game.id):
+                        await self._drop_leaver_from_round(game, user_id)
+            elif user_id in (game.challenger_id, game.target_id):
+                async with self._get_lock(game.id):
+                    await self._void_for_leaver(game, user_id)
+        for game in await self._db_fetch_pending_games():
+            if game.guild_id == guild_id and user_id in (game.challenger_id, game.target_id):
+                await self._expire_pending(game)
+        for game in await self._db_fetch_resolved_games():
+            if game.guild_id != guild_id or game.state != "RESOLVED":
+                continue
+            if user_id == game.loser_id:
+                reason = duels_db.NICK_REASON_LOSER_LEFT
+            elif user_id == game.winner_id:
+                reason = duels_db.NICK_REASON_WINNER_LEFT
+            else:
+                continue
+            who = "loser" if reason == duels_db.NICK_REASON_LOSER_LEFT else "winner"
+            await self._conclude_unnamed(
+                game, reason,
+                card=discord.Embed(
+                    title="🚪 Nickname Not Set",
+                    description=f"The {who} left the server. No rename applied.",
+                    color=COLOR_YELLOW,
+                ),
+            )
+
+    async def _drop_leaver_from_lobby(self, game: Any, user_id: int) -> None:
+        game = await self._db_get_game(game.id)
+        if not game or game.state != "LOBBY" or user_id not in game.roster:
+            return
+        if user_id == game.host_id:
+            await self._db_set_state(game.id, "EXPIRED_LOBBY")  # refunds everyone
+            self._game_locks.pop(game.id, None)
+            await self._edit_message_silent(
+                game.channel_id, game.message_id,
                 embed=discord.Embed(
-                    title="⏰ Nickname Not Set",
-                    description="Winner didn't set a nickname in time. No rename applied.",
+                    title="🚫 Lobby Closed",
+                    description="The host left the server, so the lobby is closed.",
                     color=COLOR_YELLOW,
                 ),
                 view=None,
             )
+            return
+        await self._return_stake(game.id, user_id)
+        new_roster = [u for u in game.roster if u != user_id]
+        await self._db_set_state(
+            game.id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time(),
+        )
+        guild = self.bot.get_guild(game.guild_id)
+        game = await self._db_get_game(game.id)
+        if guild is None or game is None:
+            return
+        min_players, max_players = await self.get_lobby_params(game.guild_id)
+        embed = await self._lobby_embed(
+            game, guild, min_players, max_players, await self._game_ante(game.id)
+        )
+        await self._edit_message_silent(
+            game.channel_id, game.message_id, embed,
+            self._build_lobby_view(game.id, game.host_id),
+        )
+
+    async def _drop_leaver_from_round(self, game: Any, user_id: int) -> None:
+        """A live group game loses a player: out of ``alive``, announced, and
+        the game resolves if only one player is left standing. An empty
+        ``alive`` (Chicken, where bailers already left it) is left to the
+        game's own timer, which resolves it the same way it always would."""
+        game = await self._db_get_game(game.id)
+        if not game or game.state != "ACTIVE" or user_id not in game.alive:
+            return
+        await self._return_stake(game.id, user_id)
+        new_alive = [u for u in game.alive if u != user_id]
+        new_elim = list(game.elimination_order) + [user_id]
+        game.alive = new_alive
+        game.elimination_order = new_elim
+        await self._db_set_state(
+            game.id, "ACTIVE",
+            alive=json.dumps(new_alive),
+            elimination_order=json.dumps(new_elim),
+            last_action_at=time.time(),
+        )
+        await self._announce_elimination(game, user_id, "left the server", len(new_alive))
+        if len(new_alive) == 1:
+            await self._post_group_result(game, new_alive[0], user_id)
+            if game_is_nick_stake(game):
+                # The winner can't name someone who is gone; say so on the card
+                # instead of offering a button that fails.
+                fresh = await self._db_get_game(game.id)
+                if fresh is not None:
+                    await self._conclude_unnamed(
+                        fresh, duels_db.NICK_REASON_LOSER_LEFT,
+                        card=discord.Embed(
+                            title="🚪 Nickname Not Set",
+                            description=(
+                                "The loser left the server, so there's nobody to "
+                                "rename. The win stands."
+                            ),
+                            color=COLOR_YELLOW,
+                        ),
+                    )
+        else:
+            await self.on_player_left(game, user_id)
+
+    async def _void_for_leaver(self, game: Any, user_id: int) -> None:
+        """A duelist left mid-game: called off, every stake refunded."""
+        game = await self._db_get_game(game.id)
+        if not game or game.state != "ACTIVE":
+            return
+        await self._db_set_state(game.id, "VOID")
+        guild = self.bot.get_guild(game.guild_id)
+        await self._edit_message_silent(
+            game.channel_id, game.message_id,
+            embed=discord.Embed(
+                title="🏳️ Game Called Off",
+                description=(
+                    f"{self._member_label(guild, user_id)} left the server mid-game. "
+                    "No result, no nickname — any stakes are refunded."
+                ),
+                color=COLOR_YELLOW,
+            ),
+            view=None,
+        )
+        await self.on_game_resolved(game.id)
+        self._game_locks.pop(game.id, None)
 
     async def _revert_nick(self, nick_row: dict) -> None:
         guild = self.bot.get_guild(nick_row["guild_id"])
@@ -473,35 +714,153 @@ class BaseGame(commands.Cog):
         guild: discord.Guild,
         members: list[discord.Member],
     ) -> str | None:
+        """A refusal naming the first of ``members`` who is wearing a sentence.
+
+        Only the *nickname* stake is blocked — the old line said they "can't
+        play again until it expires", which was untrue: the loser of sentence
+        23 played seven wagered Pressure Cooker games while wearing it.
+        """
         for member in members:
             nick = await duels_db.get_active_nick_for_user(self.db, guild.id, member.id)
             if nick:
                 return (
-                    f"**{member.display_name}** is serving a nickname sentence "
-                    f"and can't play again until it expires."
+                    f"**{member.display_name}** is wearing a nickname sentence, so "
+                    f"their nickname can't be staked again until it ends — play for "
+                    f"a wager or custom stakes with `nickname: False` instead."
                 )
         return None
 
+    # ── Refusals ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _refuse(interaction: discord.Interaction, text: str) -> None:
+        """Send an ephemeral refusal in the house shape: ``❌ `` first.
+
+        One helper so no refusal on these six games can forget the prefix
+        again (duels-party-128: four of the six and the shared base had
+        none). Not in the style contract's ``_SEND_WRAPPERS`` on purpose —
+        that sweep expects a wrapper to forward its literal verbatim, and this
+        one adds the prefix itself; ``tests/test_duels_copy.py`` pins it.
+        """
+        body = text.strip()
+        if not body.startswith("❌"):
+            body = f"❌ {body}"
+        if interaction.response.is_done():
+            await interaction.followup.send(body, ephemeral=True)
+        else:
+            await interaction.response.send_message(body, ephemeral=True)
+
     # ── Availability ──────────────────────────────────────────────────────────
 
-    async def _refuse_if_disabled(
-        self, interaction: discord.Interaction, guild_id: int
-    ) -> bool:
-        """True — with a refusal already sent — when this game is switched off.
+    async def _launch_refusal(
+        self, guild_id: int, channel_id: int | None, cfg: dict
+    ) -> str | None:
+        """Why this game may not start here right now, or None.
 
-        The duel games had no off switch at all: the only gate on starting one
-        was the per-game channel allowlist, and an empty allowlist means "every
-        channel". Their panels now carry the same "Available on This Server"
-        toggle every other game has, stored in games_game_config under
-        ``GAME_KEY``. No row means enabled, so an untouched guild is unaffected.
+        The two gates every door into one of these games shares — the
+        command, and the Run It Back button on a result card. The "Available
+        on This Server" toggle is the same ``games_game_config`` row every
+        other game reads (no row means enabled); the channel rule is the
+        game's own allowlist, empty meaning everywhere. The party games'
+        global channel list and their one-game-per-channel rule are
+        deliberately not applied — a duel has always run alongside a party
+        game, and changing that is a decision, not a fix (spec §8).
         """
-        if await check_game_enabled(self.db, self.GAME_KEY, guild_id):
-            return False
-        await interaction.response.send_message(
-            f"{self.GAME_DISPLAY_NAME} is switched off on this server.",
-            ephemeral=True,
+        if not await check_game_enabled(self.db, self.GAME_KEY, guild_id):
+            return f"{self.GAME_DISPLAY_NAME} is switched off on this server."
+        allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
+        if allowlist and channel_id not in allowlist:
+            return (
+                f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel — "
+                "an admin picks where it can run on the dashboard."
+            )
+        return None
+
+    # ── Copy that names a dial ───────────────────────────────────────────────
+    #
+    # "24 hours" and "5 minutes" were typed into every result card, DM and
+    # slash description while sentence_hours is a dial and the sweeps have
+    # their own constants (duels-party-125). Everything member-facing that
+    # states a duration comes through here now.
+
+    @staticmethod
+    def _span(seconds: int | float) -> str:
+        """``300`` → "5 minutes", ``90`` → "90 seconds", ``7200`` → "2 hours"."""
+        seconds = int(seconds)
+        if seconds % 3600 == 0 and seconds >= 3600:
+            n, unit = seconds // 3600, "hour"
+        elif seconds % 60 == 0 and seconds >= 60:
+            n, unit = seconds // 60, "minute"
+        else:
+            n, unit = seconds, "second"
+        return f"{n} {unit}" if n == 1 else f"{n} {unit}s"
+
+    @classmethod
+    def _hours_span(cls, hours: int | float | None) -> str:
+        """"24 hours" — from the dial when the caller knows it, else the
+        default a guild with no config row plays under."""
+        if hours is None:
+            hours = duels_db.default_sentence_hours()
+        return cls._span(float(hours) * 3600)
+
+    async def _sentence_hours(self, guild_id: int) -> int:
+        cfg = await duels_db.get_config(self.db, guild_id, self.GAME_KEY)
+        try:
+            return max(1, int(cfg.get("sentence_hours") or duels_db.default_sentence_hours()))
+        except (TypeError, ValueError):
+            return duels_db.default_sentence_hours()
+
+    def _nick_stakes_line(self, sentence_hours: int | None) -> str:
+        """The "🏷️ Loser surrenders their nickname for N hours." stakes line."""
+        return nick_stakes_line(self._hours_span(sentence_hours))
+
+    def nick_forfeit_copy(self, sentence_hours: int | None = None) -> str:
+        """Fallback stakes line for a plain nickname game (``stakes_text`` None)."""
+        return f"Loser surrenders their nickname for {self._hours_span(sentence_hours)}."
+
+    def nick_applied_copy(
+        self, who: str, nick: str, sentence_hours: int | None = None
+    ) -> str:
+        return (
+            f"**{who}** is now known as **{nick}** for "
+            f"{self._hours_span(sentence_hours)}."
         )
-        return True
+
+    def nick_self_apply_copy(
+        self, who: str, nick: str, sentence_hours: int | None = None
+    ) -> str:
+        # Discord blocks the bot from renaming the guild owner, so the sentence
+        # is real but has to be applied by hand. Saying "is now known as" here
+        # would be a plain lie about what happened.
+        return (
+            f"Discord won't let me rename the server owner, so **{who}** has to "
+            f"set **{nick}** themselves. It stands for {self._hours_span(sentence_hours)}."
+        )
+
+    def awaiting_nick_copy(self, winner_name: str, sentence_hours: int | None = None) -> str:
+        return (
+            f"**{winner_name}**, press **Name the Loser** within "
+            f"{self._span(NAMING_WINDOW_SECONDS)}. The nickname lasts "
+            f"{self._hours_span(sentence_hours)}."
+        )
+
+    @staticmethod
+    def _remaining(seconds: float) -> str:
+        """``5400`` → "1h 30m"; under a minute rounds up to "1m"."""
+        total = max(60, int(seconds + 59) // 60 * 60)
+        hours, mins = total // 3600, (total % 3600) // 60
+        return f"{hours}h {mins}m" if hours else f"{mins}m"
+
+    def _cooldown_copy(self, remaining: float | None) -> str:
+        """The lobby-join cooldown refusal. ``remaining`` None is the form
+        the no-contact gate borrows, so it must stay a sentence a real
+        cooldown could also produce."""
+        if remaining is None:
+            return "You're on cooldown for this game — try again later."
+        return (
+            f"You're on cooldown for this game — try again in "
+            f"**{self._remaining(remaining)}**."
+        )
 
     # ── Rate limit ────────────────────────────────────────────────────────────
 
@@ -615,10 +974,8 @@ class BaseGame(commands.Cog):
         guild = interaction.guild
         loser = guild.get_member(game.loser_id) if guild else None
         name = loser.display_name if loser else "The loser"
-        await interaction.response.send_message(
-            self._sentence_in_progress_copy(name), ephemeral=True
-        )
-        await self._db_set_state(game.id, "NO_NICK_SET")
+        await self._refuse(interaction, self._sentence_in_progress_copy(name))
+        await self._conclude_unnamed(game, duels_db.NICK_REASON_ALREADY_SERVING)
         return True
 
     async def _handle_set_nick(self, interaction: discord.Interaction, game_id: int) -> None:
@@ -684,12 +1041,13 @@ class BaseGame(commands.Cog):
             return
 
         cleaned_nick = nick_result.value
+        sentence_hours = int(cfg["sentence_hours"])
         loser = guild.get_member(game.loser_id)  # type: ignore[arg-type]
         if not loser:
-            await interaction.response.send_message(
-                "The loser appears to have left the server. No rename applied.", ephemeral=True
+            await self._refuse(
+                interaction, "The loser appears to have left the server. No rename applied."
             )
-            await self._db_set_state(game_id, "NO_NICK_SET")
+            await self._conclude_unnamed(game, duels_db.NICK_REASON_LOSER_LEFT)
             return
 
         perm_error = await self._check_bot_can_nick(guild)
@@ -705,17 +1063,18 @@ class BaseGame(commands.Cog):
             # Same shape as the owner branch below: the rename can't happen, so
             # hand the name over publicly rather than swallowing it in an
             # ephemeral the loser and the room never see.
-            await interaction.response.send_message(
+            await self._refuse(
+                interaction,
                 f"**{loser.display_name}**'s role is above mine, so I can't "
                 f"rename them — but your win stands, and they've been told.",
-                ephemeral=True,
             )
-            await self._db_set_state(game_id, "NO_NICK_SET")
+            await self._conclude_unnamed(game, duels_db.NICK_REASON_LOSER_OUTRANKS)
             await self._announce_to_channel(
                 game_id,
                 f"{loser.mention} 📋 {interaction.user.mention} won, and named you "
                 f"**{cleaned_nick}** — but your role sits above mine so I can't "
-                f"apply it. Honour system for the next 24 hours.",
+                f"apply it. Honour system for the next "
+                f"{self._hours_span(sentence_hours)}.",
             )
             return
 
@@ -725,10 +1084,8 @@ class BaseGame(commands.Cog):
         # eventual revert. Refuse rather than stack sentences.
         existing_sentence = await self._check_no_active_nick(guild, [loser])
         if existing_sentence:
-            await interaction.response.send_message(
-                self._sentence_in_progress_copy(loser.display_name), ephemeral=True
-            )
-            await self._db_set_state(game_id, "NO_NICK_SET")
+            await self._refuse(interaction, self._sentence_in_progress_copy(loser.display_name))
+            await self._conclude_unnamed(game, duels_db.NICK_REASON_ALREADY_SERVING)
             return
 
         original_nick = loser.nick
@@ -757,16 +1114,17 @@ class BaseGame(commands.Cog):
                 guild,
                 self_apply_nick=cleaned_nick,
                 original_name=original_display_name,
+                sentence_hours=sentence_hours,
             )
             await interaction.response.edit_message(
-                embed=embed, view=self._disabled_result_view(game)
+                embed=embed, view=self._result_view(game, disabled=True)
             )
             # Mention the loser: the embed edit is easy to scroll past, and the
             # rename genuinely will not happen unless they act on it.
             await interaction.followup.send(
                 f"{loser.mention} 📋 Discord won't let me rename the server owner, "
                 f"so this one is on the honour system — your sentence is "
-                f"**{cleaned_nick}**, for the next 24 hours. "
+                f"**{cleaned_nick}**, for the next {self._hours_span(sentence_hours)}. "
                 f"{interaction.user.mention} won it fair and square.",
             )
             return
@@ -801,21 +1159,120 @@ class BaseGame(commands.Cog):
         await self._db_set_state(game_id, "NICKED")
 
         embed = self.render_result_state(
-                game, guild, imposed_nick=cleaned_nick, original_name=original_display_name
-            )
+            game, guild, imposed_nick=cleaned_nick, original_name=original_display_name,
+            sentence_hours=sentence_hours,
+        )
         await interaction.response.edit_message(
-            embed=embed, view=self._disabled_result_view(game)
+            embed=embed, view=self._result_view(game, disabled=True)
         )
 
-    def _disabled_result_view(self, game: Any) -> ResultView:
+    # ── The result card's buttons ─────────────────────────────────────────────
+
+    @staticmethod
+    def _rematch_deadline(game: Any) -> float | None:
+        """When this result's Run It Back stops working, or None once it has.
+        Measured from ``resolved_at`` when the game recorded one, else from
+        now (the card is being posted this instant)."""
+        base = getattr(game, "resolved_at", None) or time.time()
+        deadline = float(base) + REMATCH_WINDOW_SECONDS
+        return deadline if deadline > time.time() else None
+
+    def _result_view(
+        self,
+        game: Any,
+        *,
+        winner_id: int | None = None,
+        loser_id: int | None = None,
+        disabled: bool = False,
+    ) -> ResultView:
+        """The one place a result card's buttons are built.
+
+        ``📝 Name the Loser`` only on a nickname game still at RESOLVED;
+        ``🔁 Run It Back`` on every settled game while its window is open.
+        """
+        state = getattr(game, "state", None)
+        nick_live = game_is_nick_stake(game) and state in (None, "RESOLVED", "ACTIVE")
         view = ResultView(
             game.id,
-            game.winner_id,  # type: ignore[arg-type]
-            game.loser_id,  # type: ignore[arg-type]
-            self._handle_set_nick,
+            int(winner_id if winner_id is not None else game.winner_id),
+            int(loser_id if loser_id is not None else game.loser_id),
+            self._handle_set_nick if nick_live else None,
+            on_rematch=self._handle_rematch,
+            rematch_deadline=None if disabled else self._rematch_deadline(game),
         )
-        view.disable()
+        if disabled:
+            view.disable()
         return view
+
+    async def _handle_rematch(self, interaction: discord.Interaction, game_id: int) -> None:
+        """Run It Back: the same people, stakes and wager, one press.
+
+        A duel re-posts the challenge card from the presser to the other
+        duelist — Accept is still theirs to press, so nobody's coins or
+        nickname go on the line without them saying so, and the wager is
+        declared now and taken at accept exactly as a typed challenge is. A
+        group game reopens a lobby with the host seated (and their ante
+        taken) and pings the old roster to press Join; it starts itself the
+        moment it is full. Both go through the same door as the command —
+        the enabled switch, the channel rule, the no-contact list, the
+        sentence and cooldown preflights — because they *are* the command.
+        """
+        game = await self._db_get_game(game_id)
+        if game is None or game.state not in (
+            "RESOLVED", "RESOLVED_NO_NICK", "NICKED", "NO_NICK_SET",
+        ):
+            await self._refuse(interaction, "That game hasn't finished yet.")
+            return
+        if self._rematch_deadline(game) is None:
+            from .views import REMATCH_EXPIRED_TEXT
+
+            await self._refuse(interaction, REMATCH_EXPIRED_TEXT)
+            return
+        guild = interaction.guild
+        if guild is None:
+            await self._refuse(interaction, "This only works in a server.")
+            return
+        presser = interaction.user.id
+        ante = await self._game_ante(game_id)
+        wager = ante if ante > 0 else None
+        nick_stake = game_is_nick_stake(game)
+        custom = custom_stakes_from(getattr(game, "stakes_text", None))
+
+        roster = getattr(game, "roster", None)
+        if roster is None:
+            other = game.target_id if presser == game.challenger_id else game.challenger_id
+            if presser not in (game.challenger_id, game.target_id):
+                await self._refuse(interaction, "Only the two who played can run it back.")
+                return
+            target = guild.get_member(int(other))
+            if target is None:
+                await self._refuse(
+                    interaction, "Your opponent has left the server — challenge someone else."
+                )
+                return
+            await self._base_challenge(  # type: ignore[attr-defined]
+                interaction, target, custom, wager, nickname=nick_stake,
+                stakes_prevalidated=True,
+            )
+            return
+
+        if presser != game.host_id:
+            await self._refuse(interaction, "Only the host can run it back — ask them to press it.")
+            return
+        new_id = await self._base_lobby(
+            interaction, custom, wager, nickname=nick_stake, stakes_prevalidated=True,
+        )
+        if new_id is None:
+            return  # refused before a lobby was posted
+        others = [int(u) for u in roster if int(u) != presser and guild.get_member(int(u))]
+        if others:
+            mentions = " ".join(f"<@{u}>" for u in others)
+            try:
+                await interaction.followup.send(
+                    f"🔁 Run it back! {mentions} — press **✋ Join** on the new lobby."
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
 
     # ── Lobby flow (N-player games) ───────────────────────────────────────────
 
@@ -839,6 +1296,8 @@ class BaseGame(commands.Cog):
         *,
         color: discord.Color | None = None,
         settings: EconSettings | None = None,
+        closes_at: float | None = None,
+        sentence_hours: int | None = None,
     ) -> discord.Embed:
         names = []
         for uid in game.roster:
@@ -848,7 +1307,10 @@ class BaseGame(commands.Cog):
         host_name = host.display_name if host else str(game.host_id)
         embed = discord.Embed(
             title=f"🎮 {self.GAME_DISPLAY_NAME} — Lobby",
-            description="Press **✋ Join** to get in. Host presses **▶️ Start** when ready.",
+            description=(
+                "Press **✋ Join** to get in. Host presses **▶️ Start** when ready — "
+                f"or it starts on its own once {max_players} are in."
+            ),
             color=color or discord.Color(COLOR_GOLD),
         )
         if self.HOW_TO_PLAY:
@@ -858,7 +1320,10 @@ class BaseGame(commands.Cog):
             value="\n".join(f"• {n}" for n in names) or "—",
             inline=False,
         )
-        stakes = game.stakes_text or "Last one standing wins; the final loser surrenders their nickname for 24h."
+        stakes = game.stakes_text or (
+            "Last one standing wins; the final loser surrenders their nickname for "
+            f"{self._hours_span(sentence_hours)}."
+        )
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         if ante > 0:
             pot = (
@@ -875,6 +1340,14 @@ class BaseGame(commands.Cog):
                     f"{pot} so far, and it grows with each player.\n"
                     "_Leaving the lobby refunds you._"
                 ),
+                inline=False,
+            )
+        if closes_at is not None:
+            # A live countdown, not a number: the old card said nothing at all
+            # about the clock, and a footer can't carry a timestamp.
+            embed.add_field(
+                name="⏱️ Closes",
+                value=f"<t:{int(closes_at)}:R> — every join resets the clock.",
                 inline=False,
             )
         embed.set_footer(text=f"Host: {host_name} • Need {min_players}+ players to start.")
@@ -897,9 +1370,13 @@ class BaseGame(commands.Cog):
         """
         accent = await safe_resolve_accent(self.bot, guild, log_label="base game")
         settings = await self._econ_settings(guild.id) if ante > 0 else None
+        last = getattr(game, "last_action_at", None) or getattr(game, "created_at", None)
+        closes_at = float(last) + LOBBY_IDLE_SECONDS if last else None
+        sentence_hours = await self._sentence_hours(guild.id) if game_is_nick_stake(game) else None
         return self._render_lobby(
             game, guild, min_players, max_players, ante,
-            color=accent, settings=settings,
+            color=accent, settings=settings, closes_at=closes_at,
+            sentence_hours=sentence_hours,
         )
 
     async def _econ_settings(self, guild_id: int) -> EconSettings | None:
@@ -921,58 +1398,56 @@ class BaseGame(commands.Cog):
         stakes_text: str | None,
         wager: int | None = None,
         nickname: bool | None = None,
-    ) -> None:
+        *,
+        stakes_prevalidated: bool = False,
+    ) -> int | None:
         """Open a join lobby for an N-player game. Called by a subclass /start command.
+
+        Returns the new game's id, or None when the lobby was refused.
 
         ``wager`` opens a coin-wagered lobby: the host antes immediately (they
         are in the roster from creation, and their stake is what records the
         ante every joiner must match), each joiner pays on join, and the pot
         goes to the winner. Leaving refunds; so does a cancelled, expired or
-        abandoned game.
+        abandoned game. ``stakes_prevalidated`` is the Run It Back path
+        handing back text that already went through ``validate_stakes`` (and
+        its markdown escape) the first time.
         """
         if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
+            await self._refuse(interaction, "This command only works in a server.")
+            return None
 
         host = interaction.user  # type: ignore[assignment]
         guild: discord.Guild = interaction.guild
 
-        if await self._refuse_if_disabled(interaction, guild.id):
-            return
-
         cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
-        allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
-        if allowlist and interaction.channel_id not in allowlist:
-            await interaction.response.send_message(
-                f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel.", ephemeral=True
-            )
-            return
+        refusal = await self._launch_refusal(guild.id, interaction.channel_id, cfg)
+        if refusal:
+            await self._refuse(interaction, refusal)
+            return None
 
         limit = self._challenge_limit(cfg)
         if self._check_rate_limit(host.id, limit):
-            await interaction.response.send_message(
-                f"You've started too many games recently. Maximum {limit} per hour.",
-                ephemeral=True,
+            await self._refuse(
+                interaction,
+                f"You've started too many games recently — the limit here is "
+                f"{limit} an hour. Try again a little later.",
             )
-            return
+            return None
 
         # Normalise the stakes text before deciding whether this is a nickname
         # game — see the same reordering in _base_challenge: whitespace-only
         # stakes clean to None, and reading the raw string here would skip the
         # preflights for a game that turns out to stake the nickname after all.
-        if stakes_text:
+        if stakes_text and not stakes_prevalidated:
             stakes_result = validate_stakes(
                 stakes_text,
                 max_length=cfg["max_stakes_length"],
                 denylist=json.loads(cfg.get("nick_denylist") or "[]"),
             )
             if not stakes_result.ok:
-                await interaction.response.send_message(
-                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
-                )
-                return
+                await self._refuse(interaction, f"Stakes rejected: {stakes_result.reason}")
+                return None
             stakes_text = stakes_result.value or None
 
         # Nickname-mode preflight only applies when the loser is going to be
@@ -980,40 +1455,36 @@ class BaseGame(commands.Cog):
         nick_stake = resolve_nick_stake(stakes_text, wager, nickname)
         if not nick_stake and stakes_text is None and wager is None:
             # See _base_challenge: a game with nothing staked is not a game.
-            await interaction.response.send_message(
+            await self._refuse(
+                interaction,
                 "Turning the nickname stake off means you need to stake "
                 "something else — add `wager:` or `stakes:`.",
-                ephemeral=True,
             )
-            return
+            return None
         nick_notice: str | None = None
         if nick_stake:
             err = await self._check_bot_can_nick(guild)
             if err:
-                await interaction.response.send_message(err, ephemeral=True)
-                return
+                await self._refuse(interaction, err)
+                return None
             err = await self._check_no_active_nick(guild, [host])  # type: ignore[list-item]
             if err:
-                await interaction.response.send_message(err, ephemeral=True)
-                return
+                await self._refuse(interaction, err)
+                return None
             # The host outranking the bot doesn't block the lobby — warn later.
             nick_notice = self._rename_warning(guild, [host])  # type: ignore[list-item]
             cd = await duels_db.check_group_cooldown(
                 self.db, guild.id, self.GAME_KEY, host.id, cfg["cooldown_hours"]
             )
             if cd is not None:
-                hours, mins = int(cd // 3600), int((cd % 3600) // 60)
-                await interaction.response.send_message(
-                    f"❌ You need to wait **{hours}h {mins}m** before playing again.",
-                    ephemeral=True,
-                )
-                return
+                await self._refuse(interaction, self._cooldown_copy(cd))
+                return None
 
         if wager is not None:
             err = await self._wager_precheck(guild.id, host.id, wager)
             if err:
-                await interaction.response.send_message(err, ephemeral=True)
-                return
+                await self._refuse(interaction, err)
+                return None
 
         # Every live stake goes into the persisted text so the lobby, the
         # round embeds and the result all list the same set.
@@ -1023,7 +1494,8 @@ class BaseGame(commands.Cog):
             each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
             wager_line = f"💰 {each} to join — winner takes the pot."
         stakes_text = resolve_stakes_text(
-            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line
+            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line,
+            nick_line=self._nick_stakes_line(int(cfg["sentence_hours"])),
         )
 
         min_players, max_players = await self.get_lobby_params(guild.id)
@@ -1042,8 +1514,8 @@ class BaseGame(commands.Cog):
             err = await self._take_stake(guild.id, game_id, host.id, wager)
             if err:
                 await self._db_set_state(game_id, "EXPIRED_LOBBY")
-                await interaction.response.send_message(err, ephemeral=True)
-                return
+                await self._refuse(interaction, err)
+                return None
 
         game = await self._db_get_game(game_id)
         embed = await self._lobby_embed(
@@ -1056,25 +1528,25 @@ class BaseGame(commands.Cog):
         await self._db_set_state(game_id, "LOBBY", message_id=msg.id, last_action_at=time.time())
         if nick_notice:
             await interaction.followup.send(nick_notice, ephemeral=True)
+        return game_id
 
     async def _handle_lobby_join(self, interaction: discord.Interaction, game_id: int) -> None:
+        #: Set when a join filled the lobby and started the game (see
+        #: _handle_lobby_start for why the chore is signed off after the lock).
+        started: tuple[int, int] | None = None
         async with self._get_lock(game_id):
             game = await self._db_get_game(game_id)
             if not game or game.state != "LOBBY":
-                await interaction.response.send_message(
-                    "This lobby is no longer open.", ephemeral=True
-                )
+                await self._refuse(interaction, "This lobby is no longer open.")
                 return
             uid = interaction.user.id
             if uid in game.roster:
-                await interaction.response.send_message("You're already in.", ephemeral=True)
+                await self._refuse(interaction, "You're already in.")
                 return
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
             min_players, max_players = await self.get_lobby_params(game.guild_id)
             if len(game.roster) >= max_players:
-                await interaction.response.send_message(
-                    f"The lobby is full ({max_players}).", ephemeral=True
-                )
+                await self._refuse(interaction, f"The lobby is full ({max_players}).")
                 return
             # A joiner kept apart from anyone already seated (host included)
             # gets the lobby's own cooldown line: a private condition nobody
@@ -1082,9 +1554,7 @@ class BaseGame(commands.Cog):
             # card visibly contradicts. Before the nickname preflight, so a
             # refused joiner never reaches it.
             if await self._blocked_with_any(game.guild_id, uid, game.roster):
-                await interaction.response.send_message(
-                    "You're on cooldown for this game.", ephemeral=True
-                )
+                await self._refuse(interaction, self._cooldown_copy(None))
                 return
 
             member = guild.get_member(uid)
@@ -1093,7 +1563,7 @@ class BaseGame(commands.Cog):
                 err = await self._check_bot_can_nick(guild) or \
                     await self._check_no_active_nick(guild, [member])
                 if err:
-                    await interaction.response.send_message(err, ephemeral=True)
+                    await self._refuse(interaction, err)
                     return
                 # Joining while outranking the bot is allowed — warn, don't block.
                 nick_notice = self._rename_warning(guild, [member])
@@ -1102,9 +1572,7 @@ class BaseGame(commands.Cog):
                     self.db, game.guild_id, self.GAME_KEY, uid, cfg["cooldown_hours"]
                 )
                 if cd is not None:
-                    await interaction.response.send_message(
-                        "You're on cooldown for this game.", ephemeral=True
-                    )
+                    await self._refuse(interaction, self._cooldown_copy(cd))
                     return
 
             # Wagered lobby: the ante is taken on JOIN, so a player knows
@@ -1115,38 +1583,52 @@ class BaseGame(commands.Cog):
             if ante > 0:
                 err = await self._take_stake(game.guild_id, game_id, uid, ante)
                 if err:
-                    await interaction.response.send_message(err, ephemeral=True)
+                    await self._refuse(interaction, err)
                     return
 
             new_roster = list(game.roster) + [uid]
             await self._db_set_state(
                 game_id, "LOBBY", roster=json.dumps(new_roster), last_action_at=time.time()
             )
-            game.roster = new_roster
-            embed = await self._lobby_embed(game, guild, min_players, max_players, ante)
-            await interaction.response.edit_message(
-                embed=embed, view=self._build_lobby_view(game_id, game.host_id)
-            )
+            game = await self._db_get_game(game_id)
+            if not game:
+                return
+            if len(new_roster) >= max_players:
+                # A full lobby starts itself: the 10-player Musical Chairs
+                # lobby on 2026-08-17 expired under its host while everyone
+                # was reading the rules, waiting for a Start press.
+                err = await self._start_lobby_locked(interaction, game, guild)
+                if err is None:
+                    started = (game.guild_id, game.host_id)
+                else:
+                    # Can't start (someone in the roster is wearing a
+                    # sentence, say): the joiner is in, the card refreshes,
+                    # and the joiner hears why Start will refuse too.
+                    nick_notice = f"{nick_notice}\n{err}" if nick_notice else err
+            if started is None:
+                embed = await self._lobby_embed(game, guild, min_players, max_players, ante)
+                await interaction.response.edit_message(
+                    embed=embed, view=self._build_lobby_view(game_id, game.host_id)
+                )
             if nick_notice:
                 await interaction.followup.send(nick_notice, ephemeral=True)
+        if started is not None:
+            await sign_off_game_chore(self.bot, *started)
 
     async def _handle_lobby_leave(self, interaction: discord.Interaction, game_id: int) -> None:
         async with self._get_lock(game_id):
             game = await self._db_get_game(game_id)
             if not game or game.state != "LOBBY":
-                await interaction.response.send_message(
-                    "This lobby is no longer open.", ephemeral=True
-                )
+                await self._refuse(interaction, "This lobby is no longer open.")
                 return
             uid = interaction.user.id
             if uid == game.host_id:
-                await interaction.response.send_message(
-                    "The host can't leave — use **🚫 Cancel** to close the lobby.",
-                    ephemeral=True,
+                await self._refuse(
+                    interaction, "The host can't leave — use **🚫 Cancel** to close the lobby."
                 )
                 return
             if uid not in game.roster:
-                await interaction.response.send_message("You're not in this lobby.", ephemeral=True)
+                await self._refuse(interaction, "You're not in this lobby.")
                 return
             guild: discord.Guild = interaction.guild  # type: ignore[assignment]
             min_players, max_players = await self.get_lobby_params(game.guild_id)
@@ -1160,7 +1642,9 @@ class BaseGame(commands.Cog):
                     "%s: refunded %d to %d on lobby leave (game %d)",
                     self.GAME_KEY, refunded, uid, game_id,
                 )
-            game.roster = new_roster
+            game = await self._db_get_game(game_id)
+            if not game:
+                return
             ante = await self._game_ante(game_id)
             embed = await self._lobby_embed(game, guild, min_players, max_players, ante)
             await interaction.response.edit_message(
@@ -1171,14 +1655,10 @@ class BaseGame(commands.Cog):
         async with self._get_lock(game_id):
             game = await self._db_get_game(game_id)
             if not game or game.state != "LOBBY":
-                await interaction.response.send_message(
-                    "This lobby is no longer open.", ephemeral=True
-                )
+                await self._refuse(interaction, "This lobby is no longer open.")
                 return
             if interaction.user.id != game.host_id:
-                await interaction.response.send_message(
-                    "❌ Only the host can cancel the lobby.", ephemeral=True
-                )
+                await self._refuse(interaction, "Only the host can cancel the lobby.")
                 return
             await self._db_set_state(game_id, "EXPIRED_LOBBY")
             self._game_locks.pop(game_id, None)
@@ -1199,65 +1679,30 @@ class BaseGame(commands.Cog):
             async with self._get_lock(game_id):
                 game = await self._db_get_game(game_id)
                 if not game or game.state != "LOBBY":
-                    await interaction.response.send_message(
-                        "This lobby is no longer open.", ephemeral=True
-                    )
+                    await self._refuse(interaction, "This lobby is no longer open.")
                     return
                 if interaction.user.id != game.host_id:
-                    await interaction.response.send_message(
-                        "❌ Only the host can start the game.", ephemeral=True
-                    )
+                    await self._refuse(interaction, "Only the host can start the game.")
                     return
                 min_players, _max_players = await self.get_lobby_params(game.guild_id)
                 if len(game.roster) < min_players:
-                    await interaction.response.send_message(
-                        f"❌ You need at least **{min_players}** players to start "
+                    await self._refuse(
+                        interaction,
+                        f"You need at least **{min_players}** players to start "
                         f"(currently {len(game.roster)}).",
-                        ephemeral=True,
                     )
                     return
 
                 guild: discord.Guild = interaction.guild  # type: ignore[assignment]
-                nick_notice: str | None = None
-                if game_is_nick_stake(game):
-                    members = [m for m in (guild.get_member(u) for u in game.roster) if m]
-                    err = await self._check_bot_can_nick(guild) or \
-                        await self._check_no_active_nick(guild, members)
-                    if err:
-                        await interaction.response.send_message(err, ephemeral=True)
-                        return
-                    # Players outranking the bot don't block the start — warn, and
-                    # skip their rename if one of them loses.
-                    nick_notice = self._rename_warning(guild, members)
-
-                await self._db_set_state(
-                    game_id, "ACTIVE",
-                    alive=json.dumps(list(game.roster)),
-                    last_action_at=time.time(),
-                )
-                game = await self._db_get_game(game_id)
-                if not game:
+                err = await self._start_lobby_locked(interaction, game, guild)
+                if err is not None:
+                    await self._refuse(interaction, err)
                     return
-                await self.on_game_start(game)
                 # A lobby game only counts as "run" once it actually starts — the
                 # roster is real by here, where at lobby-open time it was one
                 # person and an invitation. Credited to the host who opened it,
                 # not whoever pressed Start.
-                #
-                # Assigned only once on_game_start has returned: the row is
-                # ACTIVE either way, but a start that raised is not a game
-                # anyone ran, and crediting it would also put a REST board
-                # repaint in front of the error the player is waiting for.
                 started = (game.guild_id, game.host_id)
-                game = await self._db_get_game(game_id)
-                if not game:
-                    return
-                view = self.build_game_view(game.id)
-                embed = self.render_game_state(game, guild)
-                self.bot.add_view(view, message_id=game.message_id)
-                await interaction.response.edit_message(embed=embed, view=view)
-                if nick_notice:
-                    await interaction.followup.send(nick_notice, ephemeral=True)
 
         finally:
             # In a finally, and outside the lock: by the time `started` is
@@ -1270,6 +1715,50 @@ class BaseGame(commands.Cog):
             # to hold the per-game lock while it does.
             if started is not None:
                 await sign_off_game_chore(self.bot, *started)
+
+    async def _start_lobby_locked(
+        self, interaction: discord.Interaction, game: Any, guild: discord.Guild
+    ) -> str | None:
+        """Start a LOBBY game. Caller holds the lock and has checked who is
+        pressing and that the floor is met. Returns a refusal (nothing sent)
+        when the nickname preflight fails; otherwise the game is ACTIVE, the
+        lobby message has become the game card, and the rename warning (if
+        any) has been sent as a follow-up.
+
+        Shared by the host's Start press and the auto-start a full lobby
+        performs on the join that fills it.
+        """
+        nick_notice: str | None = None
+        if game_is_nick_stake(game):
+            members = [m for m in (guild.get_member(u) for u in game.roster) if m]
+            err = await self._check_bot_can_nick(guild) or \
+                await self._check_no_active_nick(guild, members)
+            if err:
+                return err
+            # Players outranking the bot don't block the start — warn, and
+            # skip their rename if one of them loses.
+            nick_notice = self._rename_warning(guild, members)
+
+        await self._db_set_state(
+            game.id, "ACTIVE",
+            alive=json.dumps(list(game.roster)),
+            last_action_at=time.time(),
+        )
+        fresh = await self._db_get_game(game.id)
+        if not fresh:
+            return None
+        await self.on_game_start(fresh)
+        # on_game_start may have written more fields — read the row it left.
+        fresh = await self._db_get_game(game.id)
+        if not fresh:
+            return None
+        view = self.build_game_view(fresh.id)
+        embed = self.render_game_state(fresh, guild)
+        self.bot.add_view(view, message_id=fresh.message_id)
+        await interaction.response.edit_message(embed=embed, view=view)
+        if nick_notice:
+            await interaction.followup.send(nick_notice, ephemeral=True)
+        return None
 
     # ── Group resolution (timer-driven, posts to channel like duel _explode) ──
 
@@ -1301,17 +1790,18 @@ class BaseGame(commands.Cog):
         result_message_id = None
         channel = self.bot.get_channel(game.channel_id)
         if channel and guild:
-            result_embed = self.render_result_state(game, guild)
+            sentence_hours = await self._sentence_hours(game.guild_id) if nick_mode else None
+            result_embed = self.render_result_state(
+                game, guild, sentence_hours=sentence_hours
+            )
             winner_m = guild.get_member(winner_id)
             loser_m = guild.get_member(loser_id)
             ping = " ".join(m.mention for m in (winner_m, loser_m) if m)
+            game.resolved_at = now
+            rv = self._result_view(game, winner_id=winner_id, loser_id=loser_id)
             try:
-                if nick_mode:
-                    rv = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
-                    msg = await channel.send(content=ping, embed=result_embed, view=rv)  # type: ignore[union-attr]
-                    self.bot.add_view(rv, message_id=msg.id)
-                else:
-                    msg = await channel.send(content=ping, embed=result_embed)  # type: ignore[union-attr]
+                msg = await channel.send(content=ping, embed=result_embed, view=rv)  # type: ignore[union-attr]
+                self.bot.add_view(rv, message_id=msg.id)
                 result_message_id = msg.id
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -1440,6 +1930,11 @@ class BaseGame(commands.Cog):
     async def on_game_resolved(self, game_id: int) -> None:
         """Called after result message is posted — cancel any running timers."""
 
+    async def on_player_left(self, game: Any, user_id: int) -> None:
+        """Called after a leaver has been dropped from a live round and the
+        game continues with two or more players. A game whose round state
+        points at the leaver (a potato holder, say) can re-aim here."""
+
     # ── Abstract DB hooks (subclass must implement) ───────────────────────────
 
     async def _db_create_game(
@@ -1507,6 +2002,7 @@ class BaseGame(commands.Cog):
                 return
             if game is None:
                 return
+            await self._record_rematch_cooldown(game)
             await self._record_game_history(game_id, game, state)
             await pay_game_rewards(
                 self.bot,
@@ -1521,6 +2017,11 @@ class BaseGame(commands.Cog):
                 "%s terminal-state hook failed for game %s (%s)",
                 self.GAME_DISPLAY_NAME, game_id, state,
             )
+
+    async def _record_rematch_cooldown(self, game: Any) -> None:
+        """Note that this game was played, for the cooldown dial. Duels record
+        the pair (see ``BaseDuel``); group games write their per-player rows
+        at resolution and leave this a no-op."""
 
     async def _record_game_history(self, game_id: int, game: Any, state: str) -> None:
         """Put a settled game on the games record (``games_game_history``).

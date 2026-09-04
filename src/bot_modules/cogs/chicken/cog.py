@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 import asyncio
 import json
 import logging
+import random
 import time
 
 import discord
@@ -24,7 +25,14 @@ from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 from bot_modules.core.branding import apply_section_spacing
 
 from . import db as chdb
-from .game import ChickenGame, bravest_bailer, meter_pct, resolve_crash
+from .game import (
+    ChickenGame,
+    bravest_bailer,
+    crash_pct,
+    meter_pct,
+    resolve_crash,
+    roll_crash_at,
+)
 from .views import ChickenView
 
 log = logging.getLogger("dungeonkeeper.chicken")
@@ -135,7 +143,15 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             if not game or game.state != "ACTIVE" or game.phase != "CLIMBING":
                 return
             crashers = list(game.alive)
-            winner, loser = resolve_crash(crashers, game.bail_log)
+            # The tie-break among crashers is a seeded draw, and the seed is
+            # logged: whoever eats the nick is random, not the oldest account,
+            # and a disputed draw can be replayed from the log.
+            seed = random.getrandbits(32)
+            winner, loser = resolve_crash(crashers, game.bail_log, random.Random(seed))
+            log.info(
+                "chicken game %s crashed at %.1fs: crashers=%s seed=%s loser=%s",
+                game_id, game.crash_at or 0.0, crashers, seed, loser,
+            )
             if loser is not None and winner is not None:
                 await self._post_group_result(game, winner, loser)
             else:
@@ -236,17 +252,29 @@ class ChickenCog(BaseGame, name="ChickenCog"):
 
     async def on_game_start(self, game: ChickenGame) -> None:
         cfg = await chdb.get_config(self.db, game.guild_id)
-        duration = float(cfg["climb_duration"])
+        # The meter is drawn over max_climb; the crash lands somewhere in
+        # [min_climb, max_climb] and is never shown, so the bar can blow at
+        # 60% and nobody can count it out (duels-party-113). Seeded and logged
+        # for the same reason as the tie-break.
+        min_climb = float(cfg["min_climb"])
+        max_climb = max(min_climb, float(cfg["max_climb"]))
+        seed = random.getrandbits(32)
+        crash_at = roll_crash_at(min_climb, max_climb, random.Random(seed))
+        log.info(
+            "chicken game %s climb: max=%.1fs crash_at=%.1fs seed=%s",
+            game.id, max_climb, crash_at, seed,
+        )
         now = time.time()
         await self._db_set_state(
             game.id, "ACTIVE",
             phase="CLIMBING",
             climb_started_at=now,
-            climb_duration=duration,
+            climb_duration=max_climb,
+            crash_at=crash_at,
             bail_log="[]",
             last_action_at=now,
         )
-        self._schedule(game.id, duration, duration)
+        self._schedule(game.id, crash_at, max_climb)
 
     def _schedule(self, game_id: int, crash_in: float, total: float) -> None:
         crash = asyncio.create_task(self._run_crash_timer(game_id, crash_in))
@@ -259,7 +287,11 @@ class ChickenCog(BaseGame, name="ChickenCog"):
             asyncio.create_task(self._crash(game.id))
             return
         now = time.time()
-        remaining = (game.climb_started_at + game.climb_duration) - now
+        # Rows from before migration 208 have no crash_at: they crashed at the
+        # end of the drawn span, so keep that for them.
+        crash_at = game.crash_at if game.crash_at is not None else game.climb_duration
+        remaining = (game.climb_started_at + crash_at) - now
+        meter_left = max(0.0, (game.climb_started_at + game.climb_duration) - now)
 
         channel = self.bot.get_channel(game.channel_id)
         if channel:
@@ -274,7 +306,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         if remaining <= 0:
             asyncio.create_task(self._crash(game.id))
         else:
-            self._schedule(game.id, remaining, remaining)
+            self._schedule(game.id, remaining, meter_left)
 
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timers(game_id)
@@ -308,17 +340,23 @@ class ChickenCog(BaseGame, name="ChickenCog"):
 
         embed = discord.Embed(
             title="🐔 Chicken",
-            description="First to bail is safe — but ride to 100% and you **crash**.",
+            description=(
+                "Bail to get out safely — but the crash point is **hidden**, "
+                "and anyone still holding when it blows **crashes**."
+            ),
             color=accent if accent is not None else COLOR_YELLOW,
         )
         embed.add_field(name="Still Holding", value=holders, inline=False)
         embed.add_field(name="Bailed", value=bailed, inline=False)
         embed.add_field(
             name=f"⚡ Meter — {pct:.0f}%",
-            value=f"{_meter_bar(pct)}\n↑ crash at 100%. blink first or ride it out.",
+            value=(
+                f"{_meter_bar(pct)}\n"
+                "↑ it can blow at any moment. blink first or ride it out."
+            ),
             inline=False,
         )
-        stakes = game.stakes_text or "Whoever's still holding at the crash surrenders their nickname for 24h."
+        stakes = game.stakes_text or "Loser surrenders their nickname."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         apply_section_spacing(embed)
         return embed
@@ -331,14 +369,16 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         imposed_nick: str | None = None,
         original_name: str | None = None,
         self_apply_nick: str | None = None,
+        sentence_hours: int | None = None,
         **_kwargs,
     ) -> discord.Embed:
         if game.loser_id is not None:
             # crash with a nick loser
             crashers = ", ".join(self._name(guild, u) for u in game.alive) or "—"
             loser_name = self._name(guild, game.loser_id)
+            blew_at = crash_pct(game.crash_at, game.climb_duration)
             embed = discord.Embed(
-                title="💥 Crash at 100%!",
+                title=f"💥 Crash at {blew_at:.0f}%!",
                 description=f"😵 Still holding when it blew: {crashers}",
                 color=COLOR_RED,
             )
@@ -350,34 +390,38 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                     value=f"**{self._name(guild, game.winner_id)}** bailed last at {pct:.0f}%",
                     inline=False,
                 )
-            embed.add_field(name="💀 Takes the Stake", value=loser_name, inline=False)
-            stakes = game.stakes_text or "24-hour nickname surrender."
+            if len(game.alive) > 1:
+                embed.add_field(
+                    name="💀 Takes the Stake",
+                    value=f"{loser_name} — drawn at random from everyone who crashed",
+                    inline=False,
+                )
+            else:
+                embed.add_field(name="💀 Takes the Stake", value=loser_name, inline=False)
+            stakes = game.stakes_text or self.nick_forfeit_copy(sentence_hours)
             embed.add_field(name="📋 Stakes", value=stakes, inline=False)
             if self_apply_nick:
-                # Discord blocks the bot from renaming the guild owner, so the
-                # sentence is real but has to be applied by hand. Saying "is now
-                # known as" here would be a plain lie about what happened.
                 embed.add_field(
                     name="🏷️ Nickname — Over To You",
-                    value=(
-                        f"Discord won't let me rename the server owner, so "
-                        f"**{original_name or loser_name}** has to set "
-                        f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                    value=self.nick_self_apply_copy(
+                        original_name or loser_name, self_apply_nick, sentence_hours
                     ),
                     inline=False,
                 )
             elif imposed_nick:
                 embed.add_field(
                     name="🏷️ Nickname Applied",
-                    value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                    value=self.nick_applied_copy(
+                        original_name or loser_name, imposed_nick, sentence_hours
+                    ),
                     inline=False,
                 )
             elif game_is_nick_stake(game):
                 embed.add_field(
                     name="⏳ Awaiting Nickname",
-                    value=(
-                        f"**{self._name(guild, game.winner_id) if game.winner_id else 'Winner'}**, "
-                        "press **Name the loser** within 5 minutes."
+                    value=self.awaiting_nick_copy(
+                        self._name(guild, game.winner_id) if game.winner_id else "Winner",
+                        sentence_hours,
                     ),
                     inline=False,
                 )
@@ -400,9 +444,14 @@ class ChickenCog(BaseGame, name="ChickenCog"):
                 embed.add_field(name="Chicken Ranking", value="\n".join(lines), inline=False)
             return embed
 
+        blew_at = crash_pct(game.crash_at, game.climb_duration)
         embed = discord.Embed(
             title="💥 Total Wipeout!",
-            description="Nobody blinked — everyone rode it straight into the crash. No winner, no nicknames.",
+            description=(
+                f"Nobody blinked — everyone crashed at {blew_at:.0f}%. "
+                "No winner, no nickname, and the pot is refunded: any wager goes "
+                "straight back to the players."
+            ),
             color=COLOR_RED,
         )
         return embed
@@ -416,7 +465,7 @@ class ChickenCog(BaseGame, name="ChickenCog"):
     @app_commands.describe(
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — every player antes this; winner takes the pot",
-        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
+        nickname="Also stake nicknames? The winner renames the loser (default: only when nothing else is staked)",
     )
     async def ch_start(
         self,

@@ -1404,6 +1404,7 @@ def build_my_stats_embed(
             ),
             inline=False,
         )
+    apply_section_spacing(embed)
     return embed
 
 

@@ -9,6 +9,7 @@ import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.hot_potato_group import db as hpgdb
+from bot_modules.duels.db import LOBBY_IDLE_SECONDS
 from bot_modules.duels import db as duels_db
 from bot_modules.services.games_db import GamesDb
 
@@ -100,7 +101,9 @@ async def test_fetch_resolved_games(db):
 
 async def test_fetch_sweepable_stale_lobby(db):
     gid = await hpgdb.create_lobby(db, GUILD, CH, HOST, None)
-    await hpgdb.set_game_state(db, gid, "LOBBY", last_action_at=time.time() - 200)
+    await hpgdb.set_game_state(
+        db, gid, "LOBBY", last_action_at=time.time() - LOBBY_IDLE_SECONDS - 10
+    )
     games = await hpgdb.fetch_sweepable_games(db, time.time())
     assert any(g.id == gid for g in games)
 

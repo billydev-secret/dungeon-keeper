@@ -72,7 +72,7 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Availability</div>
             ${numField("cooldown_hours", "Wait Before a Rematch (hours)", cfg.cooldown_hours,
-              "How long the same two people must wait before they can duel each other again. 0 allows endless rematches.",
+              "How long the same two people must wait after a game before they can stake their nicknames against each other again. Wagered and custom-stakes rematches are never held back. 0 allows endless rematches.",
               { min: 0, max: 8760 })}
             ${numField("challenge_limit_per_hour", "Challenges Per Person Per Hour", cfg.challenge_limit_per_hour,
               "How many challenges one person may start in an hour. Set to 0 for no limit. This is a spam brake, not a pacing rule &mdash; a busy games night can easily run through a low number.",

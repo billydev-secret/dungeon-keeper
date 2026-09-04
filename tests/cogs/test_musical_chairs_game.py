@@ -1,11 +1,15 @@
 """Unit tests for musical_chairs/game.py (pure logic, no Discord)."""
 from __future__ import annotations
 
+import pytest
+
 from bot_modules.cogs.musical_chairs.game import (
+    MAX_NO_SITTER_RERUNS,
     MusicalChairsGame,
     chairs_for,
     game_from_row,
     is_false_start,
+    no_sitter_verdict,
     resolve_round,
 )
 
@@ -69,6 +73,23 @@ def test_resolve_round_ignores_dead_in_seated():
     assert eliminated == [1]
 
 
+# ── no_sitter_verdict ──────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("alive", "survivors", "reruns", "expected"),
+    [
+        pytest.param([1, 2], [], 0, "rerun", id="final-round-nobody-sat"),
+        pytest.param([1, 2, 3], [], 0, "rerun", id="early-round-nobody-sat"),
+        pytest.param([1, 2], [], MAX_NO_SITTER_RERUNS, "void", id="twice-in-a-row"),
+        pytest.param([1, 2], [2], 0, None, id="someone-sat"),
+        pytest.param([1, 2], [2], MAX_NO_SITTER_RERUNS, None, id="someone-sat-after-a-rerun"),
+        pytest.param([], [], 0, None, id="nobody-left-to-seat"),
+    ],
+)
+def test_no_sitter_verdict(alive, survivors, reruns, expected):
+    assert no_sitter_verdict(alive, survivors, reruns) == expected
+
+
 # ── game_from_row / dataclass ──────────────────────────────────────────────────
 
 def test_challenger_id_aliases_host_id():
@@ -101,3 +122,9 @@ def test_game_from_row_parses_json():
 def test_game_from_row_null_json_empty():
     g = game_from_row(_row(roster=None, alive=None, elimination_order=None, seated=None))
     assert g.roster == [] and g.alive == [] and g.elimination_order == [] and g.seated == []
+
+
+def test_game_from_row_reruns_is_optional():
+    """A row fetched before migration 208 has no reruns column at all."""
+    assert game_from_row(_row()).reruns == 0
+    assert game_from_row(_row(reruns=1)).reruns == 1

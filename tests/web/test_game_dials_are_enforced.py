@@ -174,6 +174,71 @@ def test_duel_panel_exposes_the_nickname_denylist(stem: str) -> None:
     assert "payload.nick_denylist" in src
 
 
+def test_the_rematch_cooldown_dial_is_read_by_both_game_shapes() -> None:
+    """duels-party-116: 'Wait Before a Rematch' sat on the three duel panels
+    and was read by nothing, while the group games enforced the same dial at
+    48 hours. Both shapes read it now, and it ships at 0 — no cooldown is
+    what every duel behaved like before."""
+    from bot_modules.duels import db as duels_db
+    from web_server.routes.config import _DUEL_SHARED_DEFAULTS
+
+    duel = (_ROOT / "src" / "bot_modules" / "duels" / "base_duel.py").read_text(encoding="utf-8")
+    group = (_ROOT / "src" / "bot_modules" / "duels" / "base_game.py").read_text(encoding="utf-8")
+    assert "duels_db.check_cooldown(" in duel and 'cfg["cooldown_hours"]' in duel
+    assert "duels_db.check_group_cooldown(" in group and 'cfg["cooldown_hours"]' in group
+    assert duels_db._CONFIG_DEFAULTS["cooldown_hours"] == 0
+    assert _DUEL_SHARED_DEFAULTS["cooldown_hours"] == 0
+
+
+@pytest.mark.parametrize("stem", sorted(DUEL_PANELS))
+def test_the_rematch_cooldown_hint_says_it_guards_the_nickname_stake(stem: str) -> None:
+    """The dial only holds back nickname games; a hint promising to stop
+    'the same two people' playing at all would be a lie for a wagered rematch."""
+    src = _duel_panel(stem)
+    hint = re.search(r'numField\("cooldown_hours".*?"([^"]*nickname[^"]*)"', src, re.S)
+    assert hint, f"config-games-{stem}.js's cooldown hint doesn't say it is nickname-only"
+    assert "never held back" in hint.group(1)
+
+
+# ── Per-game mechanics dials that replaced or joined a table (2026-09-04) ────
+# The duel panels' numeric dials are numField(...) calls PUT to a
+# /api/config/games-* route and read back through each game's db.get_config.
+# Chicken's "Climb Time" became the Earliest/Latest Crash pair (the crash is
+# rolled between them and hidden), and Hot Potato's duel gained the group
+# cog's Shortest Hold. Each has to be a key the cog reads, or it is inert.
+
+
+def _duel_num_fields(stem: str) -> list[str]:
+    return re.findall(r'numField\("([a-z_]+)"', _duel_panel(stem))
+
+
+@pytest.mark.parametrize(
+    ("stem", "dials", "reader"),
+    [
+        pytest.param("chicken", ["min_climb", "max_climb"], "chicken/cog.py", id="chicken-crash-range"),
+        pytest.param("hotpotato", ["min_hold"], "hot_potato/cog.py", id="hot-potato-min-hold"),
+    ],
+)
+def test_new_mechanics_dials_are_offered_and_read(stem: str, dials: list[str], reader: str) -> None:
+    from web_server.routes.config import _DUEL_GAMES
+
+    offered = _duel_num_fields(stem)
+    cog = (_COGS / reader).read_text(encoding="utf-8")
+    game_key = DUEL_PANELS[stem][1]
+    for dial in dials:
+        assert dial in offered, f"config-games-{stem}.js no longer offers {dial}"
+        assert dial in _DUEL_GAMES[game_key]["fields"], f"the API cannot write {dial}"
+        assert f'cfg["{dial}"]' in cog, f"{reader} never reads {dial}"
+
+
+def test_chicken_no_longer_offers_a_fixed_public_climb_time() -> None:
+    """duels-party-113: a fixed climb_duration was a public crash point."""
+    from web_server.routes.config import _DUEL_GAMES
+
+    assert "climb_duration" not in _duel_num_fields("chicken")
+    assert "climb_duration" not in _DUEL_GAMES["chicken"]["fields"]
+
+
 # ── A bank is a dial too ────────────────────────────────────────────────────
 # The same rule one level up: a panel that offers a question bank promises the
 # rows curated there will be served. AMA's panel offered the whole

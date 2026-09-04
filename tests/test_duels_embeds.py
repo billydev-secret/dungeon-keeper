@@ -35,8 +35,10 @@ def _guild() -> MagicMock:
     return guild
 
 
-def _self(name: str) -> MagicMock:
-    holder = MagicMock()
+def _self(name: str) -> BaseGame:
+    """A bare game holder: real copy helpers (the builders call
+    ``nick_forfeit_copy`` and friends), no bot, no db."""
+    holder = BaseGame.__new__(BaseGame)
     holder.GAME_DISPLAY_NAME = name
     return holder
 

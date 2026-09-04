@@ -23,7 +23,7 @@ from bot_modules.games.command_groups import games
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED, COLOR_YELLOW
 
 from . import db as mcdb
-from .game import MusicalChairsGame, chairs_for, resolve_round
+from .game import MusicalChairsGame, chairs_for, no_sitter_verdict, resolve_round
 from .views import SitView
 
 log = logging.getLogger("dungeonkeeper.musical_chairs")
@@ -208,6 +208,14 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         guild = self.bot.get_guild(game.guild_id)
         channel = self.bot.get_channel(game.channel_id)
 
+        verdict = no_sitter_verdict(game.alive, survivors, game.reruns)
+        if verdict == "void":
+            await self._void_no_sitter(game)
+            return True
+        if verdict == "rerun":
+            await self._rerun_round(game, now)
+            return False
+
         if len(survivors) <= 1:
             winner = survivors[0] if survivors else (eliminated[-1] if eliminated else None)
             loser = new_elim[-1] if new_elim else None
@@ -240,6 +248,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             alive=json.dumps(survivors),
             elimination_order=json.dumps(new_elim),
             seated="[]",
+            reruns=0,
             phase_started_at=now,
             phase_duration=music,
             last_action_at=now,
@@ -267,6 +276,67 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         task = asyncio.create_task(self._run_music_timer(game.id, music))
         self._timers[game.id] = task
         return False
+
+    async def _rerun_round(self, game: MusicalChairsGame, now: float) -> None:
+        """Nobody sat: play the same round again with fresh music.
+
+        Same players, same chairs, no elimination; the panel is edited back
+        to its MUSIC face and the music timer re-armed. Caller holds the lock.
+        """
+        cfg = await mcdb.get_config(self.db, game.guild_id)
+        music = random.uniform(cfg["min_music"], cfg["max_music"])
+        await self._db_set_state(
+            game.id, "ACTIVE",
+            phase="MUSIC",
+            seated="[]",
+            reruns=game.reruns + 1,
+            phase_started_at=now,
+            phase_duration=music,
+            last_action_at=now,
+        )
+        game.phase = "MUSIC"
+        game.seated = []
+        game.reruns += 1
+        await self._announce_to_channel(
+            game.id,
+            "🪑 Nobody sat! Same players, same chairs — 🎵 the music starts again…",
+        )
+        guild = self.bot.get_guild(game.guild_id)
+        game2 = await mcdb.get_game(self.db, game.id)
+        if guild and game2 and game2.message_id:
+            await self._resolve_accent(game.id, guild)
+            await self._edit_message_silent(
+                game2.channel_id, game2.message_id,
+                self.render_game_state(game2, guild),
+                self.build_game_view(game.id),
+            )
+        task = asyncio.create_task(self._run_music_timer(game.id, music))
+        self._timers[game.id] = task
+
+    async def _void_no_sitter(self, game: MusicalChairsGame) -> None:
+        """Nobody sat twice in a row: the game is called off, every stake
+        refunded by the terminal seam, and nobody is renamed. Caller holds
+        the lock."""
+        await self._db_set_state(game.id, "VOID", seated="[]", last_action_at=time.time())
+        await self._announce_to_channel(
+            game.id,
+            "🏳️ Nobody sat two rounds running — the game is called off. "
+            "No result, no nickname; any stakes are refunded.",
+        )
+        if game.message_id:
+            await self._edit_message_silent(
+                game.channel_id, game.message_id,
+                embed=discord.Embed(
+                    title="🏳️ Game Called Off",
+                    description=(
+                        "Nobody sat two rounds running. No result, no nickname — "
+                        "any stakes are refunded."
+                    ),
+                    color=COLOR_YELLOW,
+                ),
+                view=None,
+            )
+        await self.on_game_resolved(game.id)
 
     # ── Button handler ────────────────────────────────────────────────────────
 
@@ -424,7 +494,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
             embed.add_field(name="🪑 Chairs", value=str(chairs), inline=True)
             embed.add_field(name="👥 Still in", value=alive_names, inline=False)
 
-        stakes = game.stakes_text or "Last seated wins; the runner-up surrenders their nickname for 24h."
+        stakes = game.stakes_text or "Loser surrenders their nickname."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         apply_section_spacing(embed)
         return embed
@@ -437,6 +507,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         imposed_nick: str | None = None,
         original_name: str | None = None,
         self_apply_nick: str | None = None,
+        sentence_hours: int | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner_name = self._name(guild, game.winner_id) if game.winner_id else "?"
@@ -451,35 +522,29 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
         embed.add_field(name="🥈 Runner-up", value=loser_name, inline=True)
         embed.add_field(name="👥 Players", value=str(len(game.roster)), inline=True)
 
-        stakes = game.stakes_text or "24-hour nickname surrender."
+        stakes = game.stakes_text or self.nick_forfeit_copy(sentence_hours)
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
 
         if self_apply_nick:
-            # Discord blocks the bot from renaming the guild owner, so the
-            # sentence is real but has to be applied by hand. Saying "is now
-            # known as" here would be a plain lie about what happened.
             embed.add_field(
                 name="🏷️ Nickname — Over To You",
-                value=(
-                    f"Discord won't let me rename the server owner, so "
-                    f"**{original_name or loser_name}** has to set "
-                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                value=self.nick_self_apply_copy(
+                    original_name or loser_name, self_apply_nick, sentence_hours
                 ),
                 inline=False,
             )
         elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=self.nick_applied_copy(
+                    original_name or loser_name, imposed_nick, sentence_hours
+                ),
                 inline=False,
             )
         elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
-                value=(
-                    f"**{winner_name}**, press **Name the loser** within 5 minutes. "
-                    "The nickname lasts 24 hours."
-                ),
+                value=self.awaiting_nick_copy(winner_name, sentence_hours),
                 inline=False,
             )
         apply_section_spacing(embed)
@@ -497,7 +562,7 @@ class MusicalChairsCog(BaseGame, name="MusicalChairsCog"):
     @app_commands.describe(
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — every player antes this; winner takes the pot",
-        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
+        nickname="Also stake nicknames? The winner renames the loser (default: only when nothing else is staked)",
     )
     async def mc_start(
         self,

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.musical_chairs import cog as mc_cog
@@ -52,7 +53,7 @@ async def cog(db: GamesDb) -> MusicalChairsCog:
     return MusicalChairsCog(FakeBot(db))  # type: ignore[arg-type]
 
 
-async def _game(db, *, phase, alive, seated=None, elim=None, stakes=None):
+async def _game(db, *, phase, alive, seated=None, elim=None, stakes=None, reruns=0):
     gid = await mcdb.create_lobby(db, GUILD, CH, alive[0], stakes)
     await mcdb.set_game_state(
         db, gid, "ACTIVE",
@@ -61,6 +62,7 @@ async def _game(db, *, phase, alive, seated=None, elim=None, stakes=None):
         alive=json.dumps(alive),
         seated=json.dumps(seated or []),
         elimination_order=json.dumps(elim or []),
+        reruns=reruns,
     )
     return await mcdb.get_game(db, gid)
 
@@ -169,6 +171,70 @@ async def test_close_round_no_show_multi_elim(cog, db):
     assert g.state == "RESOLVED"
     assert g.winner_id == 1
     assert g.loser_id in (2, 3)  # last eliminated of the pair
+
+
+# ── a round nobody sat in (duels-party-114) ────────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("alive", "seated"),
+    [
+        pytest.param([1, 2], [], id="final-round"),
+        pytest.param([1, 2, 3], [], id="early-round"),
+    ],
+)
+async def test_close_round_with_no_sitter_reruns_instead_of_resolving(cog, db, alive, seated):
+    """Two left, one chair, both miss the scramble: the later-listed player
+    used to be declared winner AND runner-up and take the pot. The round
+    re-runs — same players, fresh music, no terminal write."""
+    game = await _game(db, phase="SCRAMBLE", alive=alive, seated=seated)
+    try:
+        resolved = await cog._close_round_locked(game)
+        assert resolved is False
+        g = await mcdb.get_game(db, game.id)
+        assert g.state == "ACTIVE"
+        assert g.phase == "MUSIC"
+        assert g.alive == alive
+        assert g.elimination_order == []
+        assert g.seated == []
+        assert g.reruns == 1
+        assert g.winner_id is None and g.loser_id is None
+        assert g.round == 1
+    finally:
+        cog._cancel_timer(game.id)
+
+
+async def test_close_round_with_no_sitter_twice_voids_and_pays_nobody(db, sync_db_path):
+    econ_cog = _econ_cog(db, sync_db_path, (1, 2))
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2], seated=[], reruns=1)
+    resolved = await econ_cog._close_round_locked(game)
+    assert resolved is True
+    g = await mcdb.get_game(db, game.id)
+    assert g.state == "VOID"
+    assert g.winner_id is None and g.loser_id is None
+    with open_db(sync_db_path) as conn:
+        assert get_balance(conn, GUILD, 1) == 0
+        assert get_balance(conn, GUILD, 2) == 0
+
+
+async def test_a_round_with_a_sitter_resets_the_rerun_count(cog, db):
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2, 3], seated=[2, 3], reruns=1)
+    try:
+        resolved = await cog._close_round_locked(game)
+        assert resolved is False
+        g = await mcdb.get_game(db, game.id)
+        assert g.reruns == 0
+        assert g.alive == [2, 3]
+    finally:
+        cog._cancel_timer(game.id)
+
+
+async def test_no_sitter_rerun_is_announced(announce_cog, db):
+    game = await _game(db, phase="SCRAMBLE", alive=[1, 2], seated=[])
+    try:
+        await announce_cog._close_round_locked(game)
+        assert any("Nobody sat" in t for t in announce_cog.bot.channel.texts)
+    finally:
+        announce_cog._cancel_timer(game.id)
 
 
 def _econ_cog(db, db_path, member_ids=(1, 2, 3)):

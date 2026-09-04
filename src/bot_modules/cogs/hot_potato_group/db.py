@@ -5,6 +5,11 @@ import json
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.duels.db import (
+    LOBBY_IDLE_SECONDS,
+    NAMING_WINDOW_SECONDS,
+    active_idle_seconds,
+)
 from bot_modules.games.utils import game_store
 from .game import HotPotatoGroupGame, game_from_row
 
@@ -68,7 +73,11 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[HotPotatoGroupG
        OR (state = 'ACTIVE'   AND last_action_at <= ?)
        OR (state = 'RESOLVED' AND resolved_at   <= ?)
         """,
-        (now - 90, now - 600, now - 300),
+        (
+            now - LOBBY_IDLE_SECONDS,
+            now - active_idle_seconds("hot_potato_group"),
+            now - NAMING_WINDOW_SECONDS,
+        ),
     )
     return [game_from_row(r) for r in rows]
 

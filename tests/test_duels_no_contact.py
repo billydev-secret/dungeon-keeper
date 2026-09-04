@@ -37,8 +37,12 @@ from tests.fakes import FakeEconGamesBot, FakeMember, fake_interaction
 GUILD = 9001
 CH = 100
 
-IN_PROGRESS = "You two already have a game in progress."
-COOLDOWN = "You're on cooldown for this game."
+# The ordinary refusals, in the house shape (❌ first, duels-party-128). The
+# cooldown line is the *timeless* form: a genuine cooldown names how long is
+# left, and the no-contact gate can't, so it borrows the form a real cooldown
+# also produces.
+IN_PROGRESS = "❌ You two already have a game in progress."
+COOLDOWN = "❌ You're on cooldown for this game — try again later."
 
 
 @pytest_asyncio.fixture
@@ -202,7 +206,7 @@ async def test_name_the_loser_press_is_refused_across_a_pair(db, sync_db_path, p
         assert state == "RESOLVED"
         return
     interaction.response.send_modal.assert_not_awaited()
-    assert _sent(interaction) == [cog._sentence_in_progress_copy("U2")]
+    assert _sent(interaction) == [f"❌ {cog._sentence_in_progress_copy('U2')}"]
     assert "already serving a nickname sentence" in _sent(interaction)[0]
     assert state == "NO_NICK_SET"
 

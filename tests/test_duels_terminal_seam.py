@@ -335,6 +335,37 @@ async def test_duel_history_row_names_the_challenger_as_host(db, sync_db_path):
     assert json.loads(rows[0]["payload"])["winner_id"] == 2
 
 
+# ── A settled duel starts the pair's rematch clock (duels-party-116) ──────────
+
+
+@pytest.mark.parametrize(
+    ("state", "on_clock"),
+    [
+        pytest.param("RESOLVED_NO_NICK", True, id="settled"),
+        pytest.param("RESOLVED", True, id="settled-awaiting-nick"),
+        pytest.param("ABANDONED", False, id="abandoned"),
+        pytest.param("VOID", False, id="void"),
+    ],
+)
+async def test_only_a_settled_duel_records_the_pair_cooldown(db, sync_db_path, state, on_clock):
+    """The rematch dial reads duel_cooldowns, which nothing wrote for a duel
+    until the terminal seam started recording every settled pair — the
+    timer-driven Hot Potato path included, since it ends through the same
+    hook."""
+    from bot_modules.duels import db as duels_db
+
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = RecordingQuickdraw(FakeEconGamesBot(db, sync_db_path, [1, 2]))  # type: ignore[arg-type]
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await qdb.set_game_state(db, gid, "ACTIVE", qd_state="DRAW", fired_at=time.time())
+
+    await cog._db_set_state(gid, state, winner_id=2, loser_id=1)
+
+    remaining = await duels_db.check_cooldown(db, GUILD, "quickdraw", 2, 1, 1)
+    assert (remaining is not None and remaining > 0) is on_clock
+
+
 @pytest.mark.parametrize("state", ["ABANDONED", "VOID", "EXPIRED_PENDING", "DECLINED"])
 async def test_unsettled_ends_write_no_history_row(db, sync_db_path, state):
     """Only a game that was played goes on the record — the same rule as the

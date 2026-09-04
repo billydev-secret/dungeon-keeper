@@ -714,7 +714,10 @@ def _inactive_section(conn, guild_id: int, guild) -> dict:
 # them — every panel below surfaces them, closing that gap.
 
 _DUEL_SHARED_DEFAULTS: dict = {
-    "cooldown_hours": 48,
+    # 0 = play again straight away. Enforced on all six games since 2026-09-04
+    # (nickname games only); 48 was what the group games imposed and what the
+    # duels ignored. Kept in step with duels/db.py _CONFIG_DEFAULTS.
+    "cooldown_hours": 0,
     "sentence_hours": 24,
     "channel_allowlist": "[]",
     # Extra banned words on top of the bot's built-in nickname denylist. The
@@ -742,8 +745,14 @@ _DUEL_GAMES: dict = {
     },
     "hot_potato": {
         "table": "hot_potato_config",
-        "defaults": {"min_timer": 10.0, "max_timer": 45.0},
-        "fields": {"min_timer": (5.0, None), "max_timer": (10.0, None)},
+        # min_hold: the group cog's anti-ping-pong wait, adopted by the duel
+        # (migration 208) so a pass is a decision rather than a click race.
+        "defaults": {"min_timer": 10.0, "max_timer": 45.0, "min_hold": 2.0},
+        "fields": {
+            "min_timer": (5.0, None),
+            "max_timer": (10.0, None),
+            "min_hold": (0.0, None),
+        },
     },
     "hot_potato_group": {
         "table": "hp_group_config",
@@ -761,9 +770,13 @@ _DUEL_GAMES: dict = {
     },
     "chicken": {
         "table": "chicken_config",
-        "defaults": {"climb_duration": 25.0, "min_players": 2, "max_players": 8},
+        # The crash point is rolled per game in [min_climb, max_climb] and
+        # hidden; the meter is drawn over max_climb. Replaced the fixed,
+        # public climb_duration in migration 208.
+        "defaults": {"min_climb": 10.0, "max_climb": 25.0, "min_players": 2, "max_players": 8},
         "fields": {
-            "climb_duration": (5.0, None),
+            "min_climb": (5.0, None),
+            "max_climb": (5.0, None),
             "min_players": (2, None),
             "max_players": (2, None),
         },
@@ -882,9 +895,12 @@ def _duel_game_upsert(
 ) -> None:
     spec = _DUEL_GAMES[game_key]
     if shared_updates:
+        # The column's own DEFAULT is still the historical 48; seed a fresh
+        # row with the code default so a partial save can't inherit it.
         conn.execute(
-            "INSERT OR IGNORE INTO duel_config (guild_id, game_type) VALUES (?, ?)",
-            (guild_id, game_key),
+            "INSERT OR IGNORE INTO duel_config (guild_id, game_type, cooldown_hours)"
+            " VALUES (?, ?, ?)",
+            (guild_id, game_key, _DUEL_SHARED_DEFAULTS["cooldown_hours"]),
         )
         set_clause = ", ".join(f"{k} = ?" for k in shared_updates)
         conn.execute(
@@ -2616,6 +2632,7 @@ class QuickdrawConfigUpdate(DuelSharedConfigUpdate):
 class HotPotatoConfigUpdate(DuelSharedConfigUpdate):
     min_timer: float | None = None
     max_timer: float | None = None
+    min_hold: float | None = None
 
 
 class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
@@ -2627,7 +2644,8 @@ class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
 
 
 class ChickenConfigUpdate(DuelSharedConfigUpdate):
-    climb_duration: float | None = None
+    min_climb: float | None = None
+    max_climb: float | None = None
     min_players: int | None = None
     max_players: int | None = None
 

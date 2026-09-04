@@ -56,6 +56,23 @@ def game_from_row(row) -> HotPotatoGame:
     )
 
 
+def hold_remaining(
+    pass_log: list[dict], holder_id: int, now: float, min_hold: float
+) -> float:
+    """Seconds the current holder still has to wait before they may pass.
+
+    0 when the wait is over, the dial is off, or the log has no open entry
+    for this holder (a restart mid-hold, or a pre-migration row). Mirrors
+    the group cog's check so the two games feel the same in the hand.
+    """
+    if min_hold <= 0 or not pass_log:
+        return 0.0
+    last = pass_log[-1]
+    if last.get("holder_id") != holder_id or last.get("received_at") is None:
+        return 0.0
+    return max(0.0, float(min_hold) - (now - float(last["received_at"])))
+
+
 def compute_style_points(
     pass_log: list[dict],
     started_at: float,
