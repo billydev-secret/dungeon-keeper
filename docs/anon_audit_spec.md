@@ -93,11 +93,11 @@ the out-of-band hard-erasure path, in addition to the routine retention sweep.
 | `hottakes` | `take_submitted` |
 | `fantasies` | `entry_submitted` |
 | `clapback` | `answer_submitted` — **only when the game's `anonymous` option is on**; with attribution on there is no anonymity to account for |
-| `wyr` | `vote` (only while the round is anonymous), `question_posed`, `voters_revealed` |
+| `wyr` | `vote` (only while the round is anonymous), `question_posed`. `voters_revealed` is no longer written: the host/mod Reveal Voters button was replaced on 2026-09-04 by each voter's own **Show My Vote** (vote-games-61), and a member naming themselves is not a de-anonymisation to account for — the `vote` row already tells a mod who voted |
 | `compliment` | `pairings_generated` |
 
 On moderation events (`question_approved`/`question_rejected`,
-`voters_revealed`, `hot_seat_skipped`) `actor_id` is the **moderator**, not an
+`hot_seat_skipped`; historically `voters_revealed`) `actor_id` is the **moderator**, not an
 anonymous poster, and `target_id` is the member the action concerned.
 
 Note that AMA's screened approve/reject handlers run in the host's DMs, so

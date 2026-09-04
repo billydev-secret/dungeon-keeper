@@ -220,3 +220,27 @@ class ClassicRescueFillView(discord.ui.View):
         await self._on_cancel(interaction)
 
 
+
+
+class RecapView(discord.ui.View):
+    """Under the reveal: bring the room back for the next story.
+
+    A round used to end on one filled story with nothing to press — to play
+    again the host re-typed the command with tier and mode (trivia-tail-90).
+    **Another One** draws the next template from the pool at the same tier,
+    mode and tag, through the shared launch guard. Host or mod only.
+    """
+
+    def __init__(self, host_id: int, on_again):
+        super().__init__(timeout=None)
+        self.host_id = host_id
+        self._on_again = on_again
+
+    @discord.ui.button(label="🔁 Another One", style=discord.ButtonStyle.primary, custom_id="ml_another")
+    async def another(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message(
+                "❌ Only the host or a mod can start another one.", ephemeral=True)
+            return
+        await self._on_again(interaction, self)

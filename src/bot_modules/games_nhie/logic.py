@@ -32,6 +32,28 @@ from typing import Any, Literal
 
 DEFAULT_LIVES = 3
 
+# The player-posed statement queue holds this many at a time — the same cap
+# WYR and MLT put on their Pose queues; NHIE's was unbounded until
+# 2026-09-04 (vote-games-62, common-lib-round-2 item 3).
+MAX_QUEUED_STATEMENTS = 15
+
+
+def queue_statement(
+    queued: list[str], text: str, cap: int = MAX_QUEUED_STATEMENTS,
+) -> int | None:
+    """Append a posed statement; return the new queue length, or ``None``
+    when the queue is full (nothing is appended) or ``text`` is blank.
+
+    Mutates ``queued`` in place. Whitespace is stripped first.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if len(queued) >= cap:
+        return None
+    queued.append(cleaned)
+    return len(queued)
+
 VoteKind = Literal["guilty", "innocent"]
 WinnerStatus = Literal["winner", "all_eliminated", "continue"]
 

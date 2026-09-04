@@ -211,6 +211,9 @@ EXPECTED: dict[str, dict[str, str]] = {
     "games-price":       {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
     "games-clapback":    {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
     "games-ama":         {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
+    # Live Games pages added 2026-09-04 (one pacing dial each), same gate as AMA.
+    "hottakes":          {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
+    "fantasies":         {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
     "games-ffa":         {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
     "games-traditional": {"admin": _O, "moderator": _H, "game-host": _O, "mod-host": _O, "member": _H},
     # ── the four social features (moved to their own section) ───────

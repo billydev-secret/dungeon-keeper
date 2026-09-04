@@ -20,6 +20,7 @@ from bot_modules.cogs.games_legitlibs.quiplash_logic import (
     clamp_tier,
     collect_complete_submissions,
     get_prior_submission,
+    payout_roster,
     shuffle_reveal_order,
     store_submission,
     submitted_count,
@@ -256,6 +257,32 @@ def test_collect_complete_submissions_filters_partial():
 
 def test_collect_complete_submissions_empty():
     assert collect_complete_submissions({}) == {}
+
+
+# ── payout_roster ────────────────────────────────────────────────────
+# The reveal pays whoever actually submitted a complete story, not every
+# joined player (trivia-tail-95): two members could join, press nothing for
+# the whole timer and collect the participation reward.
+
+
+@pytest.mark.parametrize(
+    "submissions,expected",
+    [
+        pytest.param({}, [], id="nobody-submitted-nobody-paid"),
+        pytest.param(
+            {"1": {"fills": {"a": "x"}, "partial": False},
+             "2": {"fills": {"a": "y"}, "partial": True}},
+            [1], id="partial-does-not-count",
+        ),
+        pytest.param(
+            {"1": {"fills": {"a": "x"}, "partial": False},
+             "3": {"fills": {"a": "z"}, "partial": False}},
+            [1, 3], id="ints-not-json-string-keys",
+        ),
+    ],
+)
+def test_payout_roster_is_the_complete_submitters(submissions, expected):
+    assert payout_roster(collect_complete_submissions(submissions)) == expected
 
 
 def test_collect_complete_submissions_treats_missing_partial_as_complete():

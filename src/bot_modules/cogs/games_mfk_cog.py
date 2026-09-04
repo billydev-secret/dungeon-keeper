@@ -10,7 +10,7 @@ import discord
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
@@ -196,7 +196,7 @@ class MFKCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="mfk", description="Start a Marry, Fornicate, Kiss game!")
+    @app_commands.command(name="mfk", description=play_description("mfk"))
     @app_commands.describe(
         options='Custom categories (comma-separated, exactly 3). e.g. "Cruise, Wedding, Vacation"',
         start_in="Show a lobby countdown — game starts in this many minutes (host still closes the pool)",

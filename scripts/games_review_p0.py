@@ -1,13 +1,13 @@
 """Prod-state fixes from the 2026-09-02 games deep review (package P0).
 
-Four one-off writes the review found that no code change can make on its own.
+One-off writes the review found that no code change can make on its own.
 Each is idempotent; the script writes nothing without ``--apply``.
 
     python -m scripts.games_review_p0            # dry run, prints every change
-    python -m scripts.games_review_p0 --apply    # applies all four
-    python -m scripts.games_review_p0 --only survivor,mahjong,tags,wyr --apply
+    python -m scripts.games_review_p0 --apply    # applies every step
+    python -m scripts.games_review_p0 --only survivor,mahjong,tags,wyr,photo --apply
 
-The four steps (register ids in docs/reviews/2026-09-02-games-deep-review-findings.md):
+The steps (register ids in docs/reviews/2026-09-02-games-deep-review-findings.md):
 
 * **survivor** (survivor-172): season 3's ``last_slate_week`` and
   ``last_lastcall_week`` were set to 1 by the loop on the first Wednesday and
@@ -27,6 +27,14 @@ The four steps (register ids in docs/reviews/2026-09-02-games-deep-review-findin
   ("Would you rather A, or B?") and the parser needs ``A | B``. Rewrite each
   row that has no ``|`` by stripping the prefix and splitting on the last
   ", or " / " or "; rows that do not split cleanly are listed, not touched.
+* **photo** (photo-external-103): the daily photo schedule is a legacy row
+  from the shared scheduler carrying ``announce=1`` and a role, so members
+  were pinged every day by a line the Photo Challenge panel never showed —
+  and setting the panel's Ping Role would have pinged twice. Copy that
+  role into the photo config's ``ping_role_id`` (only where the config has
+  none), then clear ``announce``/``announce_role_id`` and the leftover
+  ``{"prompt": ""}`` options on every photo row. The route now clears them
+  on every save too, so this cannot recur.
 """
 
 from __future__ import annotations
@@ -50,7 +58,7 @@ from bot_modules.survivor.tasks import rearm_weekly_task  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "dungeonkeeper.db"
 
-STEPS = ("survivor", "mahjong", "tags", "wyr")
+STEPS = ("survivor", "mahjong", "tags", "wyr", "photo")
 
 _WYR_PREFIX = re.compile(r"^\s*would you rather\s+", re.IGNORECASE)
 _WYR_SPLIT = re.compile(r",?\s+or\s+", re.IGNORECASE)
@@ -172,11 +180,60 @@ def step_wyr(conn: sqlite3.Connection, apply: bool) -> int:
     return changed
 
 
+def step_photo(conn: sqlite3.Connection, apply: bool) -> int:
+    changed = 0
+    rows = conn.execute(
+        "SELECT id, guild_id, announce, announce_role_id, options FROM games_scheduled "
+        "WHERE game_type = 'photo' AND (announce != 0 OR announce_role_id IS NOT NULL "
+        "OR options != '{}') ORDER BY id"
+    ).fetchall()
+    for r in rows:
+        role_id = int(r["announce_role_id"] or 0)
+        cfg = conn.execute(
+            "SELECT options FROM games_game_config WHERE guild_id = ? AND game_type = 'photo'",
+            (r["guild_id"],),
+        ).fetchone()
+        opts = json.loads(cfg["options"] or "{}") if cfg else {}
+        have = str(opts.get("ping_role_id") or "").strip()
+        copy_role = role_id > 0 and have in ("", "0")
+        print(
+            f"  photo: schedule {r['id']} (guild {r['guild_id']}) announce={r['announce']} "
+            f"role={r['announce_role_id']} options={r['options']!r} -> announce=0 role=NULL "
+            f"options='{{}}'" + (f"; ping_role_id {have!r} -> {role_id!r}" if copy_role
+                                 else f"; ping_role_id stays {have!r}")
+        )
+        if apply:
+            if copy_role:
+                opts["ping_role_id"] = str(role_id)
+                if cfg:
+                    conn.execute(
+                        "UPDATE games_game_config SET options = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE guild_id = ? AND game_type = 'photo'",
+                        (json.dumps(opts), r["guild_id"]),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO games_game_config (guild_id, game_type, enabled, options) "
+                        "VALUES (?, 'photo', 1, ?)",
+                        (r["guild_id"], json.dumps(opts)),
+                    )
+            conn.execute(
+                "UPDATE games_scheduled SET announce = 0, announce_role_id = NULL, options = '{}' "
+                "WHERE id = ?",
+                (r["id"],),
+            )
+        changed += 1
+    if not changed:
+        print("  photo: no photo schedule announces on its own")
+    return changed
+
+
 STEP_FNS = {
     "survivor": step_survivor,
     "mahjong": step_mahjong,
     "tags": step_tags,
     "wyr": step_wyr,
+    "photo": step_photo,
 }
 
 

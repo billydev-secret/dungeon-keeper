@@ -20,8 +20,13 @@ High-leverage pieces:
   current status of each question (the cog's existing predicate).
 * :func:`should_expire` — pure retention check used to prune stale
   unanswered question views after 7 days.
-* :func:`first_content_line` — strips the AI's idle-question text down
-  to a single chat-safe line.
+* :func:`open_question_cards` / :func:`pending_screened_dms` — the two
+  sets of live buttons a close or a restart has to find again: posted
+  question cards still waiting on the hot seat, and screened questions
+  still sitting in the host's DMs.
+* :func:`hot_seat_seconds_remaining` — how much of the hot seat's hour is
+  left after a restart, so the auto-rotate timer is re-armed rather than
+  dropped.
 * :func:`compute_recap_stats` — pulls the ``_do_close`` totals
   (unique askers, rotations, etc.) out of the close path so the recap
   embed builder can take a plain dict.
@@ -42,6 +47,24 @@ AMA_FORMAT_PANEL = "panel"
 # Retention horizon for unanswered questions before their view is
 # pruned and the entry flipped to "expired".
 UNANSWERED_QUESTION_RETENTION = timedelta(days=7)
+
+# How long one person holds the hot seat before the seat rotates on its own.
+HOT_SEAT_SECONDS = 3600
+
+# Answered (or passed) questions per hot-seat turn before the seat rotates.
+# The dashboard's "Questions per Turn" dial overrides it per server; the
+# clamp keeps a stored 0 or 999 from producing a seat that never moves or
+# never settles.
+DEFAULT_QUESTIONS_PER_TURN = 4
+MIN_QUESTIONS_PER_TURN = 1
+MAX_QUESTIONS_PER_TURN = 20
+
+# Title Case labels for the two moderation modes (embed_style_guide). The
+# payload keeps the lowercase enum; only the embeds go through this map.
+MODE_LABELS = {
+    "unfiltered": "Unfiltered",
+    "screened": "Screened",
+}
 
 # Status values the cog treats as "terminal" — once a question is in
 # one of these states, its persistent view is removed and it stops
@@ -111,25 +134,20 @@ def build_question_entry(
     hot_seat_id: int,
     *,
     status: str = "pending",
-    source: str | None = None,
     now_iso: str | None = None,
 ) -> dict[str, Any]:
     """Return the dict appended to ``payload["questions"]`` for a new ask.
 
     ``status`` is ``"pending"`` for player questions (flipped to
-    ``"approved"`` once the message has been posted). ``source`` tags
-    the origin of a question and is omitted for ordinary player asks.
+    ``"approved"`` once the message has been posted).
     """
-    entry: dict[str, Any] = {
+    return {
         "asker_id": asker_id,
         "text": text,
         "status": status,
         "asked_at": now_iso if now_iso is not None else utcnow_iso(),
         "hot_seat_id": hot_seat_id,
     }
-    if source is not None:
-        entry["source"] = source
-    return entry
 
 
 def add_question(payload: dict[str, Any], entry: dict[str, Any]) -> int:
@@ -178,23 +196,6 @@ def mark_question_approved(
         q.setdefault("asked_at", now_iso)
 
 
-def mark_question_message(
-    payload: dict[str, Any],
-    q_idx: int,
-    message_id: int,
-) -> None:
-    """Record the posted question's message id without touching status.
-
-    Used by the idle-AI path which inserts the entry pre-``approved``
-    and only needs the message-id back-fill. Unconditional write,
-    matching the cog's existing ``questions[q_idx]["question_message_id"]
-    = msg.id`` assignment.
-    """
-    questions: list[dict[str, Any]] = payload.get("questions", [])
-    if q_idx >= len(questions):
-        return
-    questions[q_idx]["question_message_id"] = message_id
-
 
 def mark_question_answered(
     payload: dict[str, Any],
@@ -236,6 +237,20 @@ def mark_question_passed(
     payload["total_passed"] = payload.get("total_passed", 0) + 1
 
 
+def mark_question_pending_dm(
+    payload: dict[str, Any], q_idx: int, dm_message_id: int,
+) -> None:
+    """Record the host-DM message a screened question is waiting on.
+
+    The approval buttons live on that DM. Its id is what lets a restart
+    re-register them (:func:`pending_screened_dms`) instead of leaving the
+    question stuck in the queue with dead buttons.
+    """
+    questions: list[dict[str, Any]] = payload.get("questions", [])
+    if q_idx < len(questions):
+        questions[q_idx]["host_dm_message_id"] = dm_message_id
+
+
 def mark_question_rejected(payload: dict[str, Any], q_idx: int) -> None:
     """Flip a screened question's status to ``"rejected"``.
 
@@ -275,28 +290,79 @@ def recompute_totals(payload: dict[str, Any]) -> None:
     )
 
 
-def first_content_line(text: str) -> str | None:
-    """Extract the first non-empty line from AI-generated question text.
-
-    Strips bullet/number prefixes (``-``, ``*``, digits + ``.``) and
-    surrounding quotes, then truncates at 500 characters so the
-    resulting question is chat-safe. Returns ``None`` if the input has
-    no non-blank lines.
-    """
-    for line in text.strip().splitlines():
-        cleaned = line.strip().lstrip("-*0123456789. ").strip().strip('"').strip("'")
-        if cleaned:
-            return cleaned[:500]
-    return None
-
-
 def unique_asker_count(questions: Iterable[dict[str, Any]]) -> int:
-    """Return the number of distinct human askers (``asker_id > 0``).
+    """Return the number of distinct askers with a real member id.
 
-    The cog uses ``0`` as the AI's sentinel asker_id; excluding it from
-    the count keeps the recap's "X people asked" line accurate.
+    Every question is asked by a member now; the ``> 0`` filter is a
+    cheap defence against a malformed entry (old payloads once carried a
+    bot-seeded ``asker_id`` of 0) so it can never count as a person.
     """
     return len({q["asker_id"] for q in questions if q.get("asker_id", 0) > 0})
+
+
+def question_message_id(question: dict[str, Any]) -> int | None:
+    """The posted card's message id, under either key the payload has used."""
+    mid = question.get("question_message_id") or question.get("message_id")
+    return int(mid) if mid else None
+
+
+def open_question_cards(questions: Iterable[dict[str, Any]]) -> list[tuple[int, int]]:
+    """``(index, message_id)`` for every posted question still awaiting the
+    hot seat — the cards whose Reply / Pass buttons must be retired when the
+    game ends, or re-registered after a restart."""
+    out: list[tuple[int, int]] = []
+    for idx, q in enumerate(questions):
+        mid = question_message_id(q)
+        if mid is None or is_resolved_status(q.get("status")):
+            continue
+        out.append((idx, mid))
+    return out
+
+
+def pending_screened_dms(questions: Iterable[dict[str, Any]]) -> list[tuple[int, int]]:
+    """``(index, host_dm_message_id)`` for every screened question the host
+    has not yet approved or rejected and whose approval DM is known."""
+    out: list[tuple[int, int]] = []
+    for idx, q in enumerate(questions):
+        if (q.get("status") or "").lower() != "pending":
+            continue
+        dm_id = q.get("host_dm_message_id")
+        if dm_id:
+            out.append((idx, int(dm_id)))
+    return out
+
+
+def hot_seat_seconds_remaining(
+    started_at: Any,
+    now: datetime,
+    *,
+    total: int = HOT_SEAT_SECONDS,
+    floor: int = 5,
+) -> int:
+    """Seconds left of the hot seat's hour, for re-arming the timer after a
+    restart. An unknown start (old payload) gets the full hour; a seat whose
+    hour already elapsed while the bot was down gets ``floor`` seconds so it
+    rotates promptly rather than never (the vote games' own rule)."""
+    started = parse_iso_ts(started_at)
+    if started is None:
+        return total
+    remaining = total - int((now - started).total_seconds())
+    return max(floor, min(total, remaining))
+
+
+def resolve_questions_per_turn(value: Any) -> int:
+    """Clamp the dashboard's "Questions per Turn" dial into a usable turn."""
+    try:
+        n = int(value) if value not in (None, "") else DEFAULT_QUESTIONS_PER_TURN
+    except (TypeError, ValueError):
+        n = DEFAULT_QUESTIONS_PER_TURN
+    return max(MIN_QUESTIONS_PER_TURN, min(MAX_QUESTIONS_PER_TURN, n))
+
+
+def mode_label(mode: Any) -> str:
+    """Title Case label for a stored mode ("screened" → "Screened")."""
+    key = str(mode or "").lower()
+    return MODE_LABELS.get(key, key.title() or "Unfiltered")
 
 
 def compute_recap_stats(payload: dict[str, Any]) -> dict[str, int]:
@@ -308,7 +374,7 @@ def compute_recap_stats(payload: dict[str, Any]) -> dict[str, int]:
     * ``total_answered`` — denormalised answered count
     * ``total_passed``   — denormalised passed count
     * ``rotations``      — number of hot-seat changes during the game
-    * ``unique_askers``  — human askers only (AI sentinel excluded)
+    * ``unique_askers``  — distinct askers (a malformed id 0 never counts)
     """
     questions: list[dict[str, Any]] = payload.get("questions", [])
     return {
@@ -374,12 +440,16 @@ def bottom_bar_label(hot_seat_name: str | None, queue_len: int) -> str:
     return "🎙️ AMA"
 
 
-def remaining_questions_text(questions_this_turn: int, per_turn: int = 4) -> str:
+def remaining_questions_text(
+    questions_this_turn: int, per_turn: int = DEFAULT_QUESTIONS_PER_TURN,
+) -> str:
     """Return the ``"N question(s) left this turn."`` blurb.
 
-    Pluralisation matches the existing main-embed wording exactly so the
-    extraction doesn't visibly change the lobby text.
+    ``questions_this_turn`` counts questions the seat has *answered or
+    passed* (social-prompt-34): a question still waiting on the seat does
+    not use up the turn, so a slow answerer is never rotated out with
+    cards still open. Never goes below zero.
     """
-    remaining = per_turn - questions_this_turn
+    remaining = max(0, per_turn - questions_this_turn)
     suffix = "s" if remaining != 1 else ""
     return f"**{remaining}** question{suffix} left this turn."

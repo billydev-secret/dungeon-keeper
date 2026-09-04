@@ -15,13 +15,31 @@ the extraction centralizes it.
 Helpers (:func:`add_take`, :func:`shuffle_takes`,
 :func:`compute_recap_summary`) are pure dict/list transforms the cog's
 ``modify_payload`` closures and recap builders delegate to.
+
+Pacing (2026-09-04, anon-tail-71/72/74): a take's vote closes on a timer
+(:data:`DEFAULT_TAKE_SECONDS`, the **Seconds per Take** dial, 0 = host-paced
+— the timer itself is ``games/utils/round_pacing.RoundPacing``), or the
+moment :func:`everyone_has_voted` says every :func:`active_voters` member has
+weighed in; voting needs :data:`MIN_TAKES` takes (:func:`voting_refusal`),
+and a take's author is not one of its voters.
 """
 
 from __future__ import annotations
 
 import random
 import statistics
+from collections.abc import Iterable
 from typing import Any
+
+# Seconds a take stays open for votes when the dashboard dial is unset.
+# 0 on the dial means host-paced (Next only), as it does for WYR/NHIE/MLT.
+DEFAULT_TAKE_SECONDS = 45
+
+# Voting needs this many takes: with one, everyone knows whose it is.
+MIN_TAKES = 2
+
+# The one ephemeral line for a self-vote — the same words Fantasies uses.
+SELF_VOTE_REFUSAL = "❌ You can't vote on your own entry!"
 
 # Vote scale constants — kept here so tests and recap builders can use
 # them without dragging in Discord-bound modules.
@@ -55,7 +73,65 @@ def add_take(payload: dict[str, Any], user_id: int, text: str) -> int:
             "display_order": len(takes),
         }
     )
+    # The distinct submitters, under the key the lobby sweep reads as a
+    # roster (``lobby_roster_size``): Hot Takes is a lobby game since
+    # 2026-09-04, so the idle-lobby close needs to see who is "in".
+    participants: list[int] = payload.setdefault("participants", [])
+    if user_id not in participants:
+        participants.append(user_id)
     return len(takes)
+
+
+def voting_refusal(takes: list[dict[str, Any]]) -> str | None:
+    """Why Start Voting must wait, or ``None`` when the lobby may start.
+
+    Fewer than :data:`MIN_TAKES` takes is refused with the reason: a
+    lone take is not anonymous — the room knows whose it is.
+    """
+    count = len(takes)
+    if count >= MIN_TAKES:
+        return None
+    if count == 0:
+        return "❌ No hot takes submitted yet!"
+    return (
+        f"❌ Need at least {MIN_TAKES} hot takes before voting — with just one, "
+        "everyone would know whose it is."
+    )
+
+
+def active_voters(
+    takes: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    exclude: int | None = None,
+) -> set[int]:
+    """The room a take is waiting on: everyone who submitted a take plus
+    everyone who has voted on an earlier take this game, minus the take's
+    own author (who may not vote on it). A member who only ever votes joins
+    the set from their first vote onward.
+    """
+    room: set[int] = set()
+    for t in takes:
+        if isinstance(t, dict) and t.get("user_id") is not None:
+            room.add(int(t["user_id"]))
+    for r in results:
+        if isinstance(r, dict):
+            room.update(int(v) for v in r.get("voters") or [])
+    if exclude is not None:
+        room.discard(int(exclude))
+    return room
+
+
+def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
+    """True when every expected voter has voted — the vote-complete auto-advance.
+
+    An empty expected set never advances (nobody to wait for is not the same
+    as everyone having spoken); the timer or Next handles that take.
+    """
+    expected_set = {int(u) for u in expected}
+    if not expected_set:
+        return False
+    return expected_set <= {int(u) for u in voted}
 
 
 def build_voting_start_message(takes: list[dict[str, Any]]) -> str:

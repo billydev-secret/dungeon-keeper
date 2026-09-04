@@ -26,6 +26,7 @@ from ..quiplash_logic import (
     clamp_tier as ql_clamp_tier,
     collect_complete_submissions as ql_collect_complete_submissions,
     get_prior_submission as ql_get_prior_submission,
+    payout_roster as ql_payout_roster,
     shuffle_reveal_order as ql_shuffle_reveal_order,
     store_submission as ql_store_submission,
     submitted_count as ql_submitted_count,
@@ -36,12 +37,15 @@ from ..rendering import (
     render_redacted_body,
 )
 from ..modals import make_fill_modal
-from ..validation import lobby_is_full
+from ..validation import lobby_is_full, player_range
 from ..views import JoinView, QuiplashFillView
 
 log = logging.getLogger(__name__)
 
-FILL_TIMEOUT = 300  # seconds players have to submit
+# Was five minutes; the loop already ends early once everyone has submitted,
+# and a shorter clock keeps the room's attention for the reveal and the next
+# story (trivia-tail-90).
+FILL_TIMEOUT = 120  # seconds players have to submit
 
 _GAME_ICONS_LL = GAME_ICONS["legitlibs"]
 
@@ -76,6 +80,9 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
         return None
 
     blanks = template["blanks"]
+    # Everyone fills every blank, so the blank-derived cap is a Classic fact
+    # that made every short template a one-player lobby here (trivia-tail-83).
+    lobby_min, lobby_max = player_range(template, "quiplash")
 
     # Create game record
     game_id = await create_game(
@@ -87,7 +94,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
     # ── Join phase ──────────────────────────────────────────────────────────
     join_embed = build_join_embed(
-        host_name, template["title"], tier, "quiplash", 1, template["player_min"], color=accent,
+        host_name, template["title"], tier, "quiplash", 1, lobby_min, color=accent,
     )
 
     async def handle_join_action(action_interaction: discord.Interaction, action: str):
@@ -101,11 +108,9 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
             if uid in payload["players"]:
                 await action_interaction.response.send_message("You're already in!", ephemeral=True)
                 return
-            if lobby_is_full(payload["players"], template["player_max"]):
+            if lobby_is_full(payload["players"], lobby_max):
                 await action_interaction.response.send_message(
-                    f"This round is full — **{template['player_max']}** players "
-                    "are already in. This template doesn't have enough blanks "
-                    "to give anyone else a turn.",
+                    f"This round is full — **{lobby_max}** players are already in.",
                     ephemeral=True,
                 )
                 return
@@ -116,7 +121,7 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "quiplash",
-                len(payload["players"]), template["player_min"], color=accent,
+                len(payload["players"]), lobby_min, color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -125,9 +130,9 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
                 pass
 
         elif action == "start":
-            if len(payload["players"]) < template["player_min"]:
+            if len(payload["players"]) < lobby_min:
                 await action_interaction.response.send_message(
-                    f"Need at least {template['player_min']} players to start.", ephemeral=True
+                    f"Need at least {lobby_min} players to start.", ephemeral=True
                 )
                 return
             claimed = False
@@ -301,55 +306,66 @@ async def run_quiplash(cog, *, channel, guild, host_id: int, host_name: str,
 
         # Collect complete (non-partial) submissions
         complete = ql_collect_complete_submissions(submissions)
+        # The reveal pays whoever put a story in, not everyone who pressed
+        # Join (trivia-tail-95); the history row still counts the roster.
+        paid_ids = ql_payout_roster(complete)
+        last_msg: discord.Message | None = None
 
         try:
             if not complete:
-                await channel.send(embed=build_no_submissions_embed(template["title"], tier, color=accent))
-                return
-
-            await update_game_state(db, game_id, "revealing")
-
-            # Shuffle order for anonymous reveal
-            uid_list = ql_shuffle_reveal_order(list(complete.keys()))
-
-            total = len(uid_list)
-
-            if total == 1:
-                # Single submission — reveal attributed immediately
-                uid = uid_list[0]
-                fills = complete[uid]["fills"]
-                name = resolve_name(guild, int(uid))
-                filled = render_filled_body(template["body"], blanks, fills)
-                embed = build_reveal_embed(template["title"], tier, filled, 1, 1, color=accent)
-                embed.set_footer(text=f"📝 LegitLibs • by {name}")
-                await channel.send(embed=embed)
-            else:
-                await channel.send(f"**Revealing {total} submissions…**")
-                for i, uid in enumerate(uid_list, 1):
-                    fills = complete[uid]["fills"]
-                    filled = render_filled_body(template["body"], blanks, fills)
-                    embed = build_reveal_embed(template["title"], tier, filled, i, total, color=accent)
-                    await channel.send(embed=embed)
-                    await asyncio.sleep(3)
-
-                # Cast reveal — show who wrote which submission
-                cast_lines = [
-                    f"**#{i}** — {resolve_name(guild, int(uid))}"
-                    for i, uid in enumerate(uid_list, 1)
-                ]
-                cast_embed = discord.Embed(
-                    title=f"{_GAME_ICONS_LL} Who Wrote What",
-                    description="\n".join(cast_lines),
-                    color=accent if accent is not None else PHASE_RESULTS,
+                last_msg = await channel.send(
+                    embed=build_no_submissions_embed(template["title"], tier, color=accent)
                 )
-                await channel.send(embed=cast_embed)
+            else:
+                await update_game_state(db, game_id, "revealing")
 
-            await mark_template_used(db, guild.id, template["template_id"])
+                # Shuffle order for anonymous reveal
+                uid_list = ql_shuffle_reveal_order(list(complete.keys()))
+
+                total = len(uid_list)
+
+                if total == 1:
+                    # Single submission — reveal attributed immediately
+                    uid = uid_list[0]
+                    fills = complete[uid]["fills"]
+                    name = resolve_name(guild, int(uid))
+                    filled = render_filled_body(template["body"], blanks, fills)
+                    embed = build_reveal_embed(template["title"], tier, filled, 1, 1, color=accent)
+                    embed.set_footer(text=f"📝 LegitLibs • by {name}")
+                    last_msg = await channel.send(embed=embed)
+                else:
+                    await channel.send(f"**Revealing {total} submissions…**")
+                    for i, uid in enumerate(uid_list, 1):
+                        fills = complete[uid]["fills"]
+                        filled = render_filled_body(template["body"], blanks, fills)
+                        embed = build_reveal_embed(template["title"], tier, filled, i, total, color=accent)
+                        await channel.send(embed=embed)
+                        await asyncio.sleep(3)
+
+                    # Cast reveal — show who wrote which submission
+                    cast_lines = [
+                        f"**#{i}** — {resolve_name(guild, int(uid))}"
+                        for i, uid in enumerate(uid_list, 1)
+                    ]
+                    cast_embed = discord.Embed(
+                        title=f"{_GAME_ICONS_LL} Who Wrote What",
+                        description="\n".join(cast_lines),
+                        color=accent if accent is not None else PHASE_RESULTS,
+                    )
+                    last_msg = await channel.send(embed=cast_embed)
+
+                await mark_template_used(db, guild.id, template["template_id"])
         finally:
             await end_game(db, game_id, player_count=len(player_ids), round_count=1,
-                           bot=cog.bot, player_ids=player_ids)
+                           bot=cog.bot, player_ids=paid_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
+        # Only once the round is over and the channel is free: the button
+        # goes through the launch guard, which would refuse a busy channel.
+        if last_msg is not None:
+            await cog.offer_another(
+                last_msg, host_id, {"mode": "quiplash", "tier": tier, "tag": tag},
+            )
 
     # Lobby is live; the round advances via button presses (defined above).
     return game_id

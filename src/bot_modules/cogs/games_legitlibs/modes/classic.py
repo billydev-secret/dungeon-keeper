@@ -45,14 +45,17 @@ from ..rendering import (
     render_filled_body_attributed,
 )
 from ..modals import make_fill_modal
-from ..validation import lobby_is_full
+from ..validation import lobby_is_full, player_range
 from ..views import (
     JoinView, ClassicFillView, ClassicRescueView, ClassicRescueFillView,
 )
 
 log = logging.getLogger(__name__)
 
-FILL_TIMEOUT = 300   # seconds — round 1
+# Round 1 fill window. Was five minutes; the loop already ends early once
+# everyone has submitted, and a shorter clock keeps the room's attention for
+# the reveal and the next story (trivia-tail-90).
+FILL_TIMEOUT = 120   # seconds — round 1
 CLAIM_TIMEOUT = 45   # seconds — rescue claim window
 RESCUE_TIMEOUT = 120 # seconds — round 2 fill
 POLL_INTERVAL = 15   # seconds — counter refresh cadence
@@ -88,6 +91,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         return None
 
     blanks = template["blanks"]
+    # Classic keeps the template's stored range — round-robin hands out the
+    # blanks, so it is a real capacity (see validation.player_range).
+    lobby_min, lobby_max = player_range(template, "classic")
 
     # Create game record
     game_id = await create_game(
@@ -108,7 +114,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
     # ── Join phase ──────────────────────────────────────────────────────────
     join_embed = build_join_embed(
         host_name, template["title"], tier, "classic",
-        1, template["player_min"], color=accent,
+        1, lobby_min, color=accent,
     )
 
     async def handle_join_action(action_interaction: discord.Interaction, action: str):
@@ -124,9 +130,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 await action_interaction.response.send_message(
                     "You're already in!", ephemeral=True)
                 return
-            if lobby_is_full(payload["players"], template["player_max"]):
+            if lobby_is_full(payload["players"], lobby_max):
                 await action_interaction.response.send_message(
-                    f"This round is full — **{template['player_max']}** players "
+                    f"This round is full — **{lobby_max}** players "
                     "are already in. This template doesn't have enough blanks "
                     "to give anyone else a turn.",
                     ephemeral=True,
@@ -139,7 +145,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "classic",
-                len(payload["players"]), template["player_min"], color=accent,
+                len(payload["players"]), lobby_min, color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -166,7 +172,7 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
 
             new_embed = build_join_embed(
                 host_name, template["title"], tier, "classic",
-                len(payload["players"]), template["player_min"], color=accent,
+                len(payload["players"]), lobby_min, color=accent,
             )
             assert action_interaction.message is not None
             try:
@@ -175,9 +181,9 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
                 pass
 
         elif action == "start":
-            if len(payload["players"]) < template["player_min"]:
+            if len(payload["players"]) < lobby_min:
                 await action_interaction.response.send_message(
-                    f"Need at least {template['player_min']} players to start.",
+                    f"Need at least {lobby_min} players to start.",
                     ephemeral=True,
                 )
                 return
@@ -607,28 +613,38 @@ async def run_classic(cog, *, channel, guild, host_id: int, host_name: str,
         cur_payload = await get_game_payload(db, game_id)
         player_ids = cur_payload.get("players", [])
         fills = cur_payload.get("fills", {})
+        # The reveal pays the people who put a word in, not everyone who
+        # pressed Join (trivia-tail-95); the history row still counts the
+        # joined roster.
+        contrib_ids = unique_contributors(fills)
+        reveal_msg: discord.Message | None = None
         try:
             await update_game_state(db, game_id, "revealing")
 
             filled_body = render_filled_body_attributed(
                 template["body"], blanks, fills, guild,
             )
-            contrib_ids = unique_contributors(fills)
             contrib_names = resolve_names(guild, contrib_ids)
 
             embed = build_classic_reveal_embed(
                 template["title"], tier, filled_body, contrib_names, color=accent,
             )
-            await channel.send(embed=embed)
+            reveal_msg = await channel.send(embed=embed)
 
             await mark_template_used(db, guild.id, template["template_id"])
         finally:
             await end_game(db, game_id,
                            player_count=len(player_ids),
                            round_count=1,
-                           bot=cog.bot, player_ids=player_ids)
+                           bot=cog.bot, player_ids=contrib_ids)
             cog.bot.active_views.pop(game_id, None)
             cog._game_canceled.discard(game_id)
+        # Only once the round is over and the channel is free: the button
+        # goes through the launch guard, which would refuse a busy channel.
+        if reveal_msg is not None:
+            await cog.offer_another(
+                reveal_msg, host_id, {"mode": "classic", "tier": tier, "tag": tag},
+            )
 
     # Lobby is live; the round advances via button presses (defined above).
     return game_id

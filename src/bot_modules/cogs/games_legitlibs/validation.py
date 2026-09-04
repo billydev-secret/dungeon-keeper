@@ -8,6 +8,28 @@ _MENTION_RE = re.compile(r"<@[!&]?\d+>|@everyone|@here")
 MAX_BLANKS = 25
 MIN_BLANKS = 1
 
+#: Quiplash's lobby range. Everyone fills every blank, so the ideal template
+#: is short and the blank-derived cap (a Classic-mode fact) is meaningless —
+#: a 5-blank template derived to player_max 1, which auto-joined the host and
+#: let nobody else press Join (trivia-tail-83). A fixed, room-sized range.
+QUIPLASH_PLAYER_MIN = 2
+QUIPLASH_PLAYER_MAX = 12
+
+
+def player_range(template: dict, mode: str) -> tuple[int, int | None]:
+    """The (floor, ceiling) a lobby enforces for *template* in *mode*.
+
+    Classic keeps the template's stored range — derived from its blank count
+    on the dashboard (each player fills 5–10 blanks), or authored in the
+    starter pack. Quiplash ignores it and uses the fixed range above. A
+    ``None`` ceiling means uncapped.
+    """
+    if mode == "quiplash":
+        return QUIPLASH_PLAYER_MIN, QUIPLASH_PLAYER_MAX
+    lo = int(template.get("player_min") or 1)
+    hi = template.get("player_max")
+    return lo, (int(hi) if hi else None)
+
 
 def lobby_is_full(players, player_max) -> bool:
     """True when a template's player ceiling leaves no room for another joiner.

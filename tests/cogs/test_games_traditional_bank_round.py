@@ -170,9 +170,13 @@ async def test_bank_round_serves_every_player_without_repeats(sync_db_path):
     await view.bank_round.callback(inter)
 
     assert inter.response.deferred
-    # Launch posted 1 lobby message; the bank round adds one card per player.
-    cards = channel.sends[1:]
+    # Launch posted 1 lobby message; the bank round adds one card per player,
+    # and — because that dealt every (player, category) pair — the plain-text
+    # "pass complete" notice after them (trivia-tail-84/89).
+    cards = [m for m in channel.sends[1:] if m.embed is not None]
     assert len(cards) == 2, "bank round did not post one card per player"
+    notices = [m for m in channel.sends[1:] if m.embed is None]
+    assert len(notices) == 1 and "Pass 1 complete" in notices[0].content
     # Each card pings a distinct player and carries a distinct question.
     mentions = {c.content for c in cards}
     assert mentions == {"<@1>", "<@2>"}
@@ -212,7 +216,9 @@ async def test_bank_round_rerun_serves_only_new_players(sync_db_path):
     view = bot.active_views[game_id]
 
     await view.bank_round.callback(FakeInteraction(host, channel, guild, bot))
-    assert len(channel.sends) == 3  # lobby + one card each for Host and Bee
+    # lobby + one card each for Host and Bee (+ the pass-complete notice)
+    assert [m.content for m in channel.sends[1:] if m.embed is not None] == ["<@1>", "<@2>"]
+    first_round = len(channel.sends)
 
     # A new player joins after the first round.
     payload = await get_game_payload(db, game_id)
@@ -224,7 +230,7 @@ async def test_bank_round_rerun_serves_only_new_players(sync_db_path):
     await view.bank_round.callback(inter2)
 
     # Only the newcomer got a card; the first group wasn't double-asked.
-    cards = channel.sends[3:]
+    cards = [m for m in channel.sends[first_round:] if m.embed is not None]
     assert [c.content for c in cards] == ["<@3>"]
     payload = await get_game_payload(db, game_id)
     assert payload["bank_asked"] == 3
@@ -253,8 +259,10 @@ async def test_bank_round_reports_everyone_already_asked(sync_db_path):
     inter2 = FakeInteraction(host, channel, guild, bot)
     await view.bank_round.callback(inter2)
 
-    # No second card; the host is told everyone is already covered.
-    assert len(channel.sends) == 2  # lobby + the single first-round card
+    # No second card (and no second pass notice); the host is told everyone is
+    # already covered.
+    assert [m.content for m in channel.sends if m.embed is not None][1:] == ["<@1>"]
+    assert sum(1 for m in channel.sends if m.embed is None) == 1  # one pass-complete notice
     payload = await get_game_payload(db, game_id)
     assert payload["bank_asked"] == 1
     msg = inter2.followup.messages[-1][0]

@@ -225,3 +225,80 @@ async def test_backfill_records_a_card_nobody_answered_as_answered(sync_db_path)
     assert (row["player_count"], row["round_count"], row["guild_id"]) == (0, 0, GUILD)
     # …and it is not re-counted on the next launch.
     assert await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 99) == 0
+
+
+# ── Yesterday's recap (photo-external-105) ───────────────────────────────────
+#
+# Members posted into a stream and never heard back. The next card carries a
+# one-line recap of the previous 24 h: photos, posters, and the most-loved
+# photo (most reactions) as a jump link. Same ingest-time signals as the
+# counts above — media_kind and the reaction tallies — no content is read.
+
+
+def _seed_reactions(db_path, message_id, *counts):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        for i, n in enumerate(counts):
+            conn.execute(
+                "INSERT INTO message_reactions (message_id, emoji, count) VALUES (?, ?, ?)",
+                (message_id, f"e{i}", n),
+            )
+
+
+async def test_recap_counts_the_day_and_picks_the_most_loved_photo(sync_db_path):
+    from bot_modules.games_photo.logic import previous_day_recap
+
+    now = CARD_TS + 86400
+    _seed_image(sync_db_path, author_id=11, ts=now - 3600)
+    first = _seed_image.n
+    _seed_image(sync_db_path, author_id=11, ts=now - 3000)
+    _seed_image(sync_db_path, author_id=22, ts=now - 2000)
+    loved = _seed_image.n
+    _seed_image(sync_db_path, author_id=BOT_ID, ts=now - 1000)          # the card itself
+    _seed_image(sync_db_path, author_id=33, ts=now - 86400 - 5)         # yesterday's yesterday
+    _seed_image(sync_db_path, author_id=44, ts=now - 500, media_kind="gif")
+    _seed_reactions(sync_db_path, first, 2, 1)
+    _seed_reactions(sync_db_path, loved, 4)
+
+    recap = await previous_day_recap(
+        GamesDb(sync_db_path), channel_id=PHOTO_CHAN, exclude_author_ids=[BOT_ID], now=now,
+    )
+    assert recap is not None
+    assert (recap.photos, recap.posters) == (3, 2)
+    assert recap.most_loved == (loved, 22, 4)
+
+
+async def test_recap_is_none_when_nobody_posted(sync_db_path):
+    from bot_modules.games_photo.logic import previous_day_recap
+
+    assert await previous_day_recap(
+        GamesDb(sync_db_path), channel_id=PHOTO_CHAN, exclude_author_ids=[BOT_ID], now=CARD_TS,
+    ) is None
+
+
+async def test_recap_has_no_most_loved_without_a_single_reaction(sync_db_path):
+    from bot_modules.games_photo.logic import previous_day_recap
+
+    now = CARD_TS + 86400
+    _seed_image(sync_db_path, author_id=11, ts=now - 3600)
+    recap = await previous_day_recap(
+        GamesDb(sync_db_path), channel_id=PHOTO_CHAN, exclude_author_ids=[BOT_ID], now=now,
+    )
+    assert recap is not None
+    assert (recap.photos, recap.posters, recap.most_loved) == (1, 1, None)
+
+
+def test_recap_line_names_the_poster_and_links_the_photo():
+    from bot_modules.games_photo.logic import DayRecap, recap_line
+
+    recap = DayRecap(photos=17, posters=15, most_loved=(555, 22, 9))
+    line = recap_line(recap, guild_id=1, channel_id=2, name_fn=lambda uid: f"U{uid}")
+    assert line == (
+        "Yesterday: 17 photos from 15 people — most loved: U22's, "
+        "https://discord.com/channels/1/2/555"
+    )
+    assert "<@" not in line
+    assert recap_line(DayRecap(1, 1, None), guild_id=1, channel_id=2, name_fn=str) == (
+        "Yesterday: 1 photo from 1 person"
+    )

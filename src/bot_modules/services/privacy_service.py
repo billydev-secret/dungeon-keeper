@@ -618,6 +618,18 @@ def purge_user_data(
         (guild_id, user_id),
         table="confession_pending",
     )
+    # The member's anonymous aliases (2026-09-04, anon-tail-69): one row per
+    # confession thread or Anonymous Truth or Dare prompt they replied under,
+    # user id beside the pseudonym. Routing metadata like `confession_threads`
+    # — no text — and since migration 211 it shares that table's seven-day
+    # sweep, but it goes at erasure too: an alias row is exactly what would
+    # tie a still-visible pseudonymous reply back to an erased member.
+    _delete(
+        conn,
+        "DELETE FROM confession_emoji_assignments WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+        table="confession_emoji_assignments",
+    )
 
     # ── 2026-09-02 GDPR review: tables whose member column is not `user_id`,
     # or which are not guild-scoped and must reach their guild through a

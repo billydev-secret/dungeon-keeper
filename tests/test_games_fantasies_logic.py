@@ -619,6 +619,7 @@ async def test_entry_survives_a_submission_that_used_to_be_rejected(monkeypatch)
 # ── the game has an ending: End Game posts the recap and pays the room ──
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 
 from bot_modules.games.utils.game_manager import (  # noqa: E402
     ConfirmCloseView,
@@ -804,3 +805,137 @@ async def test_round_with_no_entries_hands_control_back_to_the_panel(sync_db_pat
     assert "No entries" in notice and "End Game" in notice
     assert bot.active_views[gid] is view
     assert view._active_submit_view is None
+
+
+# ── pacing, the lobby copy, the joining state (anon-tail-71/72/75) ──
+
+from bot_modules.games.utils.round_pacing import TIMER_FIELD_NAME  # noqa: E402
+from bot_modules.games_fantasies.embeds import LOBBY_DESCRIPTION  # noqa: E402
+from bot_modules.games_fantasies.logic import (  # noqa: E402
+    DEFAULT_ENTRY_SECONDS,
+    active_voters,
+    everyone_has_voted,
+)
+
+
+@pytest.mark.parametrize(
+    ("entries", "results", "exclude", "expected"),
+    [
+        pytest.param([{"user_id": 1}, {"user_id": 2}], [], 1, {2}, id="submitters-minus-the-author"),
+        pytest.param([{"user_id": 1}], [{"voters": [5]}], 1, {5}, id="earlier-voters-join"),
+        pytest.param([{"user_id": 1}], [], 1, set(), id="a-lone-author-waits-on-nobody"),
+    ],
+)
+def test_active_voters(entries, results, exclude, expected):
+    assert active_voters(entries, results, exclude=exclude) == expected
+
+
+@pytest.mark.parametrize(
+    ("expected", "voted", "result"),
+    [
+        pytest.param({1, 2}, [1, 2], True, id="all-in"),
+        pytest.param({1, 2}, [2], False, id="one-missing"),
+        pytest.param(set(), [1], False, id="nobody-expected-never-advances"),
+    ],
+)
+def test_everyone_has_voted(expected, voted, result):
+    assert everyone_has_voted(expected, voted) is result
+
+
+def test_lobby_embed_carries_how_to_play_and_the_mod_visibility_line():
+    embed = build_lobby_embed("Alice")
+    assert embed.description == LOBBY_DESCRIPTION
+    assert "How to play" in embed.description
+    assert "mods can still see who sent it" in embed.description
+    assert all(f.name != "⏰ Starting" for f in embed.fields)
+    assert build_lobby_embed("Alice", start_at=1_700_000_000).fields[-1].value == "<t:1700000000:R>"
+
+
+@pytest.mark.parametrize(
+    ("advance_at", "closed", "shown"),
+    [
+        pytest.param(1_700_000_000, False, True, id="timed-open"),
+        pytest.param(1_700_000_000, True, False, id="timed-closed"),
+        pytest.param(None, False, False, id="host-paced"),
+    ],
+)
+def test_vote_embed_shows_the_countdown_only_while_timed_and_open(advance_at, closed, shown):
+    embed = build_vote_embed(
+        entry_text="x", entry_num=1, category="Fantasy", same_votes=[], nope_votes=[],
+        closed=closed, advance_at=advance_at,
+    )
+    assert any(f.name == TIMER_FIELD_NAME for f in embed.fields) is shown
+
+
+def _voter(user_id: int):
+    return SimpleNamespace(
+        user=SimpleNamespace(id=user_id, display_name=f"U{user_id}"),
+        channel=None,
+        message=SimpleNamespace(id=1, edit=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+
+async def test_the_vote_closes_itself_once_everyone_expected_has_voted(sync_db_path):
+    bot = _SpyBot(sync_db_path)
+    advance = AsyncMock()
+    view = fan_cog.FantasiesVoteView(
+        "g", 1, "beach", 1, "Fantasy", bot.games_db, bot, "Host", advance,
+        entry_author_id=9, expected_voters={2, 3},
+    )
+    await view.vote_same.callback(_voter(2))  # type: ignore[arg-type]
+    advance.assert_not_awaited()
+    await view.vote_nope.callback(_voter(3))  # type: ignore[arg-type]
+    assert advance.await_count == 1
+    assert (view.same_votes, view.nope_votes) == ([2], [3])
+
+
+@pytest.mark.parametrize(
+    ("options", "stored_dial", "expected"),
+    [
+        pytest.param({}, None, DEFAULT_ENTRY_SECONDS, id="built-in-default"),
+        pytest.param({}, 15, 15, id="dashboard-dial"),
+        pytest.param({"round_seconds": 0}, 15, 0, id="slash-zero-beats-the-dial"),
+    ],
+)
+async def test_launch_opens_a_joining_lobby_with_the_entry_timer(sync_db_path, options, stored_dial, expected):
+    bot = _SpyBot(sync_db_path)
+    cog = fan_cog.FantasiesCog(bot)  # type: ignore[arg-type]
+    if stored_dial is not None:
+        await bot.games_db.execute(
+            "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES (?, ?, 1, ?)",
+            (9001, "fantasies", json.dumps({"round_seconds": stored_dial})),
+        )
+    channel = SimpleNamespace(
+        id=100, guild=None, name="games", send=AsyncMock(return_value=SimpleNamespace(id=555)),
+    )
+    gid = await cog.launch(channel=channel, host_id=1, host_name="Host", guild_id=9001, options={**options, "start_in": 3})
+    assert gid is not None
+    row = await get_active_game(bot.games_db, 100)
+    assert row is not None and row["state"] == "joining"
+    payload = json.loads(row["payload"])
+    assert payload["round_seconds"] == expected
+    assert payload["start_epoch"] > 0
+
+
+async def test_start_round_leaves_the_lobby_state(monkeypatch, sync_db_path):
+    """The start-ping sweep polls state='joining'; a game with a round running
+    must drop out of it or the idle close could take a live game."""
+    bot = _SpyBot(sync_db_path)
+    cog = fan_cog.FantasiesCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_run_round", AsyncMock())
+    gid = await create_game(bot.games_db, 100, 1, "fantasies", state="joining", payload={"rounds": {}, "results": []})
+    view = fan_cog.FantasiesMainView(gid, 1, bot.games_db, bot, cog)
+
+    await view.start_round.callback(_interaction(1, SimpleNamespace(id=100, guild=None)))  # type: ignore[arg-type]
+
+    row = await get_active_game(bot.games_db, 100)
+    assert row is not None and row["state"] == "playing"
+
+
+def test_fantasies_is_a_lobby_game():
+    from bot_modules.games.constants import LOBBY_GAME_TYPES, LOBBY_MIN_PLAYERS, LOBBY_START_BUTTON
+
+    assert "fantasies" in LOBBY_GAME_TYPES
+    assert LOBBY_START_BUTTON["fantasies"] == "Start Round"
+    assert LOBBY_MIN_PLAYERS["fantasies"] == 1

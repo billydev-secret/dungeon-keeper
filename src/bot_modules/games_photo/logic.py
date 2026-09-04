@@ -1,4 +1,5 @@
-"""Fill in the daily photo card's history row after the fact.
+"""Fill in the daily photo card's history row after the fact, and recap the
+day for the next card.
 
 The card archives the moment it posts (there is no live game to keep open —
 members just reply in the channel), so its ``games_game_history`` row said
@@ -19,7 +20,8 @@ climbing.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
 
@@ -111,3 +113,82 @@ async def backfill_card_counts(
         if (cur.rowcount or 0) > 0:
             changed += 1
     return changed
+
+
+# ── Yesterday's recap (photo-external-105) ───────────────────────────────────
+#
+# The card was a stream with no ending: members posted and never heard back.
+# The next card now carries one line under it — how many photos from how many
+# people in the previous 24 h, and the most-loved one as a jump link. Same
+# ingest-time signals as the counts above (media_kind, the reaction tallies
+# ``message_reactions`` keeps per emoji); nothing about a photo is read.
+
+
+@dataclass(frozen=True)
+class DayRecap:
+    """One day's answers. ``most_loved`` is ``(message_id, author_id,
+    reactions)`` for the photo with the most reactions, or None when nobody
+    reacted to anything."""
+
+    photos: int
+    posters: int
+    most_loved: tuple[int, int, int] | None
+
+
+async def previous_day_recap(
+    db,
+    *,
+    channel_id: int,
+    exclude_author_ids: Sequence[int] = (),
+    now: float | None = None,
+    window_seconds: int = BACKFILL_WINDOW_SECONDS,
+) -> DayRecap | None:
+    """The recap for the ``window_seconds`` before ``now`` in one channel, or
+    None when no photo was posted (nothing to say — the line is skipped)."""
+    import time
+
+    now = time.time() if now is None else now
+    excluded = [int(a) for a in exclude_author_ids] or [0]
+    placeholders = ", ".join("?" for _ in excluded)
+    since, until = int(now) - window_seconds, int(now)
+    counts = await db.fetchone(
+        "SELECT COUNT(*) AS photos, COUNT(DISTINCT author_id) AS posters "
+        "FROM messages WHERE channel_id = ? AND media_kind = ? AND deleted_at IS NULL "
+        f"AND author_id NOT IN ({placeholders}) AND ts >= ? AND ts < ?",
+        (int(channel_id), PHOTO_MEDIA_KIND, *excluded, since, until),
+    )
+    photos = int(counts["photos"]) if counts else 0
+    if photos == 0:
+        return None
+    loved = await db.fetchone(
+        "SELECT m.message_id, m.author_id, SUM(r.count) AS reactions "
+        "FROM messages m JOIN message_reactions r ON r.message_id = m.message_id "
+        "WHERE m.channel_id = ? AND m.media_kind = ? AND m.deleted_at IS NULL "
+        f"AND m.author_id NOT IN ({placeholders}) AND m.ts >= ? AND m.ts < ? "
+        "GROUP BY m.message_id HAVING SUM(r.count) > 0 "
+        "ORDER BY reactions DESC, m.ts ASC LIMIT 1",
+        (int(channel_id), PHOTO_MEDIA_KIND, *excluded, since, until),
+    )
+    most_loved = (
+        (int(loved["message_id"]), int(loved["author_id"]), int(loved["reactions"]))
+        if loved else None
+    )
+    return DayRecap(photos=photos, posters=int(counts["posters"]), most_loved=most_loved)
+
+
+def recap_line(
+    recap: DayRecap, *, guild_id: int, channel_id: int, name_fn: Callable[[int], str]
+) -> str:
+    """The one line posted under the next card. Names come through
+    ``name_fn`` (never a ``<@id>`` — a mention the reader's client can't
+    resolve renders as a bare number), the photo as a jump link."""
+    photos = f"{recap.photos} photo{'' if recap.photos == 1 else 's'}"
+    people = f"{recap.posters} {'person' if recap.posters == 1 else 'people'}"
+    line = f"Yesterday: {photos} from {people}"
+    if recap.most_loved is not None:
+        message_id, author_id, _n = recap.most_loved
+        line += (
+            f" — most loved: {name_fn(author_id)}'s, "
+            f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
+        )
+    return line

@@ -13,7 +13,7 @@ from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from bot_modules.services.name_resolver import NameFn, build_name_fn
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
@@ -37,11 +37,13 @@ from bot_modules.games_ttl.embeds import (
     build_reveal_embed,
 )
 from bot_modules.games_ttl.logic import (
+    MIN_PLAYERS,
     add_submission,
     compute_recap_winners,
     mark_played,
     parse_lie_index,
     played_ids_from_payload,
+    roster_ids,
     shuffle_statements,
     submission_locked,
     tally_votes,
@@ -206,8 +208,12 @@ class TTLSubmitView(discord.ui.View):
             return
         payload = await get_game_payload(self.db, self.game_id)
         submissions = payload.get("submissions", {})
-        if len(submissions) < 2:
-            await interaction.response.send_message("❌ Need at least 2 players to start guessing!", ephemeral=True)
+        # Three, not two: at two each round is decided by a single vote
+        # (the subject can't vote on their own statements; vote-games-57).
+        if len(submissions) < MIN_PLAYERS:
+            await interaction.response.send_message(
+                f"❌ Need at least {MIN_PLAYERS} players to start guessing!", ephemeral=True,
+            )
             return
 
         self.stop()
@@ -373,7 +379,7 @@ class TTLCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="twotruths", description="Start a Two Truths and a Lie game!")
+    @app_commands.command(name="twotruths", description=play_description("ttl"))
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
         log.info("%s used /games play twotruths in #%s", interaction.user.display_name, channel_name(interaction.channel))
@@ -573,7 +579,10 @@ class TTLCog(commands.Cog):
 
         payload = await get_game_payload(self.db, game_id)
         payload["scores"] = scores
-        player_ids = list(played_ids)
+        # Every subject plus every voter — a member who guessed all game
+        # and never submitted is paid too (vote-games-57). game_roster._ttl
+        # rebuilds the same list for the sweep and /games end.
+        player_ids = roster_ids(played_ids, scores)
 
         stats = compute_recap_winners(scores, played_ids)
 
@@ -601,7 +610,7 @@ class TTLCog(commands.Cog):
         await end_game(
             self.db, game_id,
             player_count=len(player_ids),
-            round_count=len(player_ids),
+            round_count=len(played_ids),
             payload=payload,
             bot=self.bot, player_ids=player_ids,
         )
@@ -614,7 +623,7 @@ class TTLCog(commands.Cog):
         A lobby (``state == 'joining'``) gets its submit view re-registered on
         the lobby message so members keep writing and the host still presses
         Start Guessing — recovery used to re-drive guessing for any row with a
-        submission, bypassing that button and its 2-submission floor, and left
+        submission, bypassing that button and its 3-submission floor, and left
         an empty lobby with dead buttons (vote-games-56).
 
         Once Start Guessing has run (``state == 'guessing'``) the loop is

@@ -33,6 +33,7 @@ from bot_modules.games_clapback import embeds as clapback_embeds
 from bot_modules.games_compliment import embeds as compliment_embeds
 from bot_modules.games_config import embeds as games_config_embeds
 from bot_modules.games_fantasies import embeds as fantasies_embeds
+from bot_modules.games_help import embeds as games_help_embeds
 from bot_modules.games_hottakes import embeds as hottakes_embeds
 from bot_modules.games_mfk import embeds as mfk_embeds
 from bot_modules.games_mlt import embeds as mlt_embeds
@@ -130,6 +131,11 @@ def _welcome_member() -> MagicMock:
 
 
 CASES = [
+    case(
+        "games_help.detail",
+        lambda **kw: games_help_embeds.build_game_detail_embed("wyr", **kw),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
     case(
         "member_info.panel",
         lambda **kw: member_info_embeds.build_member_info_embed(
@@ -397,6 +403,16 @@ CASES = [
         None,
     ),
     case(
+        "price.lobby",
+        lambda **kw: price_embeds.build_lobby_embed("Host", ["Ann"], 5, "bank", **kw),
+        None,
+    ),
+    case(
+        "price.scenario_wait",
+        lambda **kw: price_embeds.build_scenario_wait_embed("Host", 1, 5, "host", **kw),
+        None,
+    ),
+    case(
         "price.scenario",
         lambda **kw: price_embeds.build_scenario_embed(
             "Host", "scen", 1, 5, 30, submitted=0, **kw
@@ -503,6 +519,11 @@ CASES = [
         lambda **kw: compliment_embeds.build_pairings_embed(
             {1: 2, 2: 3, 3: 1}, name_fn=_named, **kw
         ),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    case(
+        "compliment.wrap_recap",
+        lambda **kw: compliment_embeds.build_wrap_recap_embed(5, 6, **kw),
         discord.Color(games_constants.BRAND_COLOR),
     ),
     case(
@@ -1071,6 +1092,7 @@ KNOWN_UNCOVERED = {
     "bot_modules.games_ama.embeds.build_main_embed",
     "bot_modules.games_ama.embeds.build_panel_embed",
     "bot_modules.games_ama.embeds.build_question_embed",
+    "bot_modules.games_ama.embeds.build_screened_dm_embed",
     "bot_modules.games_config.embeds.build_audit_channel_embed",
     "bot_modules.games_config.embeds.build_channel_allowed_embed",
     "bot_modules.games_config.embeds.build_channel_disallowed_embed",

@@ -25,16 +25,28 @@ from bot_modules.games.utils.question_source import get_traditional_question
 from bot_modules.games_traditional.logic import (
     CAT_LABELS,
     CATEGORIES,
+    IDLE_MINUTES_DEFAULT,
     asked_counts_by_user,
+    asked_key,
+    asked_on_pass,
     available_targets,
     category_allowed,
+    clamp_idle_minutes,
+    current_pass,
     filter_nsfw_prefs,
+    idle_close_notice,
+    idle_seconds_left,
+    parse_asked_key,
+    pass_complete,
+    pass_complete_notice,
     question_pool_size,
     record_asked,
     select_bank_categories_for_all,
     select_next_question_target,
+    start_next_pass,
     summarize_asked_by_category,
     toggle_pref,
+    touch_activity,
 )
 
 
@@ -136,6 +148,141 @@ def test_record_asked_overwrites_same_pair():
     record_asked(payload, "42", "sfw_truth", "First")
     record_asked(payload, "42", "sfw_truth", "Second")
     assert payload["asked"]["42:sfw_truth"] == "Second"
+
+
+# ── passes (trivia-tail-89: the game used to dead-end once every pair was asked)
+
+
+@pytest.mark.parametrize(
+    ("uid", "cat", "pass_no", "expected"),
+    [
+        pytest.param("42", "sfw_truth", 1, "42:sfw_truth", id="pass-1-keeps-the-legacy-key"),
+        pytest.param("42", "sfw_truth", 2, "42:sfw_truth:2", id="pass-2-carries-the-pass"),
+        pytest.param("7", "nsfw_dare", 10, "7:nsfw_dare:10", id="two-digit-pass"),
+    ],
+)
+def test_asked_key_round_trips(uid, cat, pass_no, expected):
+    assert asked_key(uid, cat, pass_no) == expected
+    assert parse_asked_key(expected) == (uid, cat, pass_no)
+
+
+def test_current_pass_defaults_to_one_and_tolerates_junk():
+    assert current_pass({}) == 1
+    assert current_pass({"pass": 3}) == 3
+    assert current_pass({"pass": "x"}) == 1
+    assert current_pass({"pass": 0}) == 1
+
+
+def test_record_asked_uses_the_payloads_current_pass():
+    payload = {"pass": 2, "asked": {"42:sfw_truth": "First"}}
+    record_asked(payload, "42", "sfw_truth", "Second")
+    assert payload["asked"] == {"42:sfw_truth": "First", "42:sfw_truth:2": "Second"}
+
+
+def test_available_targets_reopen_on_the_next_pass():
+    prefs = {"1": ["sfw_truth"], "2": ["sfw_dare"]}
+    asked = {"1:sfw_truth": "q", "2:sfw_dare": "q"}
+    assert available_targets(prefs, asked) == []
+    assert available_targets(prefs, asked, pass_no=2) == [("1", "sfw_truth"), ("2", "sfw_dare")]
+
+
+def test_select_on_pass_two_still_prefers_the_least_asked_over_all_passes():
+    """A late joiner asked once is picked ahead of someone asked on both passes."""
+    prefs = {"1": ["sfw_truth"], "2": ["sfw_truth"]}
+    asked = {"1:sfw_truth": "q", "2:sfw_truth": "q", "1:sfw_truth:2": "q"}
+    assert select_next_question_target(prefs, asked, pass_no=2) == ("2", "sfw_truth")
+
+
+@pytest.mark.parametrize(
+    ("prefs", "asked", "pass_no", "expected"),
+    [
+        pytest.param({}, {}, 1, False, id="empty-room-is-never-complete"),
+        pytest.param({"1": []}, {}, 1, False, id="no-prefs-is-never-complete"),
+        pytest.param({"1": ["sfw_truth"]}, {}, 1, False, id="nothing-asked"),
+        pytest.param({"1": ["sfw_truth"]}, {"1:sfw_truth": "q"}, 1, True, id="everyone-asked"),
+        pytest.param({"1": ["sfw_truth"]}, {"1:sfw_truth": "q"}, 2, False, id="pass-two-reopens"),
+        pytest.param({"1": ["sfw_truth"]}, {"1:sfw_truth": "q", "1:sfw_truth:2": "q"}, 2, True, id="pass-two-complete"),
+    ],
+)
+def test_pass_complete(prefs, asked, pass_no, expected):
+    assert pass_complete(prefs, asked, pass_no) is expected
+
+
+def test_start_next_pass_increments_and_returns():
+    payload: dict = {}
+    assert start_next_pass(payload) == 2
+    assert start_next_pass(payload) == 3
+    assert payload["pass"] == 3
+
+
+def test_bank_categories_reopen_on_the_next_pass():
+    prefs = {"1": ["sfw_truth"]}
+    asked = {"1:sfw_truth": "q"}
+    assert select_bank_categories_for_all(prefs, asked) == {}
+    assert select_bank_categories_for_all(prefs, asked, pass_no=2) == {"1": "sfw_truth"}
+
+
+def test_summary_and_counts_read_pass_keys():
+    asked = {"1:sfw_truth": "q", "1:sfw_truth:2": "q", "2:nsfw_dare:2": "q"}
+    assert summarize_asked_by_category(asked)["sfw_truth"] == 2
+    assert summarize_asked_by_category(asked)["nsfw_dare"] == 1
+    assert asked_counts_by_user(asked) == {"1": 2, "2": 1}
+
+
+def test_progress_is_per_pass():
+    prefs = {"1": ["sfw_truth", "sfw_dare"]}
+    asked = {"1:sfw_truth": "q", "1:sfw_dare": "q", "1:sfw_truth:2": "q"}
+    assert question_pool_size(prefs, asked, pass_no=2) == 2
+    assert asked_on_pass(asked, 2) == 1
+    assert asked_on_pass(asked, 1) == 2
+
+
+def test_pass_complete_notice_names_the_pass_and_both_buttons():
+    text = pass_complete_notice(2)
+    assert "Pass 2 complete" in text
+    assert "Ask Question" in text and "End Game" in text
+
+
+# ── idle close (trivia-tail-84: 18 of 19 games were left to the 24h sweep)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(None, IDLE_MINUTES_DEFAULT, id="unset-is-the-default"),
+        pytest.param("", IDLE_MINUTES_DEFAULT, id="blank-is-the-default"),
+        pytest.param("x", IDLE_MINUTES_DEFAULT, id="junk-is-the-default"),
+        pytest.param(0, 0, id="zero-is-off"),
+        pytest.param("15", 15, id="string-minutes"),
+        pytest.param(-5, 0, id="negative-clamps-to-off"),
+        pytest.param(99999, 24 * 60, id="clamps-to-a-day"),
+    ],
+)
+def test_clamp_idle_minutes(raw, expected):
+    assert clamp_idle_minutes(raw) == expected
+
+
+def test_idle_seconds_left_is_none_when_the_dial_is_off():
+    assert idle_seconds_left({"idle_minutes": 0, "last_activity": 0}, now=1000) is None
+    assert idle_seconds_left({"last_activity": 0}, now=1000) is None
+
+
+def test_idle_seconds_left_counts_from_the_last_activity():
+    payload: dict = {"idle_minutes": 20}
+    touch_activity(payload, now=1000)
+    assert payload["last_activity"] == 1000
+    assert idle_seconds_left(payload, now=1000) == 20 * 60
+    assert idle_seconds_left(payload, now=1000 + 19 * 60) == 60
+    assert idle_seconds_left(payload, now=1000 + 25 * 60) == 0
+
+
+def test_idle_seconds_left_with_no_activity_stamp_starts_now():
+    assert idle_seconds_left({"idle_minutes": 1}, now=5000) == 60
+
+
+def test_idle_close_notice_says_how_quiet():
+    assert "20 quiet minutes" in idle_close_notice(20)
+    assert "1 quiet minute." in idle_close_notice(1)
 
 
 # ── available_targets ────────────────────────────────────────────────
@@ -436,6 +583,28 @@ def test_build_recap_embed_with_zero_asked():
 # ── build_lobby_embed ────────────────────────────────────────────────
 
 
+def test_build_tod_embed_progress_shows_the_pass_after_a_rollover():
+    payload = {
+        "pass": 2,
+        "participants": [1],
+        "prefs": {"1": ["sfw_truth"]},
+        "asked": {"1:sfw_truth": "q"},
+    }
+    embed = build_tod_embed("Host", payload)
+    field = next(f for f in embed.fields if f.name == "Questions Asked")
+    assert field.value == "Pass 2: 0 / 1 (1 total)"
+
+
+def test_build_recap_embed_carries_the_idle_note_and_pass_count():
+    payload = {"pass": 3, "participants": [1], "asked": {"1:sfw_truth": "q"}}
+    embed = build_recap_embed(payload, note="⌛ wrapped up")
+    assert embed.description == "⌛ wrapped up"
+    assert any(f.name == "Passes" and f.value == "3" for f in embed.fields)
+    plain = build_recap_embed({"participants": [], "asked": {}})
+    assert plain.description is None
+    assert not any(f.name == "Passes" for f in plain.fields)
+
+
 def test_build_lobby_embed_has_join_prompt_in_description():
     embed = build_lobby_embed("Alice")
     assert embed.description is not None
@@ -703,7 +872,7 @@ def test_host_view_lays_its_buttons_out_two_per_row():
     assert rows == {
         0: ["SFW Truth", "SFW Dare"],
         1: ["NSFW Truth", "NSFW Dare"],
-        2: ["Ask Question", "Bank Round"],
+        2: ["Ask Question", "Write My Own", "Bank Round"],
         3: ["❓ Help", "End Game"],
     }
 
@@ -803,3 +972,211 @@ async def test_ask_question_with_only_the_blocked_partner_open_uses_the_ordinary
     (content, kwargs), = interaction.response.messages
     assert content == "All player/category combinations have been asked!"
     assert kwargs.get("ephemeral") is True
+
+
+# ── Ask Question draws from the bank, honours the age-gate, rolls the pass ──
+
+
+class _AskChannel(SimpleNamespace):
+    def __init__(self, *, nsfw: bool = False, **kw):
+        super().__init__(**kw)
+        self._nsfw = nsfw
+        self.sent: list[tuple] = []
+
+    def is_nsfw(self) -> bool:
+        return self._nsfw
+
+    async def send(self, content=None, **kwargs):
+        self.sent.append((content, kwargs))
+        return SimpleNamespace(id=1)
+
+
+async def _ask_view_in(sync_db_path, prefs, asked, *, nsfw: bool, extra: dict | None = None):
+    view, interaction = await _ask_view(sync_db_path, prefs, asked)
+    interaction.channel = _AskChannel(nsfw=nsfw, id=4242, name="games", guild=interaction.guild)
+    if extra:
+        def _apply(p):
+            p.update(extra)
+        await modify_payload(view.db, view.game_id, _apply)
+    return view, interaction
+
+
+from bot_modules.games.utils.game_manager import get_game_payload, modify_payload  # noqa: E402
+
+
+async def test_ask_question_pre_fills_the_modal_from_the_bank(monkeypatch, sync_db_path):
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(sync_db_path, {"2": ["sfw_truth"]}, {}, nsfw=False)
+    await view.db.execute(
+        "INSERT INTO games_question_bank (game_type, category, question_text, tags)"
+        " VALUES ('traditional', 'sfw', 'Bank Q?', '[\"sfw_truth\"]')"
+    )
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    (modal,) = interaction.response.modals
+    assert modal.bank_default == "Bank Q?"
+    assert modal.question.default == "Bank Q?"
+
+
+async def test_write_my_own_opens_an_empty_box(monkeypatch, sync_db_path):
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(sync_db_path, {"2": ["sfw_truth"]}, {}, nsfw=False)
+    await view.db.execute(
+        "INSERT INTO games_question_bank (game_type, category, question_text, tags)"
+        " VALUES ('traditional', 'sfw', 'Bank Q?', '[\"sfw_truth\"]')"
+    )
+    await view.write_own.callback(interaction)  # type: ignore[arg-type]
+    (modal,) = interaction.response.modals
+    assert modal.bank_default is None
+    assert modal.question.default is None
+
+
+async def test_ask_question_in_a_channel_that_lost_its_age_gate_serves_no_nsfw(monkeypatch, sync_db_path):
+    """safety-sweep-10 / trivia-tail-96: an NSFW-only player in a channel that
+    is no longer age-restricted is not asked at all — the presser sees the
+    empty-room reply, never an 'NSFW Truth for X' box."""
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(sync_db_path, {"2": ["nsfw_truth"]}, {}, nsfw=False)
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    assert interaction.response.modals == []
+    (content, _), = interaction.response.messages
+    assert content == traditional_cog.NO_PLAYERS_REPLY
+
+
+async def test_ask_question_in_an_age_gated_channel_still_serves_nsfw(monkeypatch, sync_db_path):
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(sync_db_path, {"2": ["nsfw_truth"]}, {}, nsfw=True)
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    (modal,) = interaction.response.modals
+    assert modal.cat == "nsfw_truth"
+
+
+async def test_ask_question_rolls_into_a_second_pass_once_everyone_was_asked(monkeypatch, sync_db_path):
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(
+        sync_db_path, {"2": ["sfw_truth"]}, {"2:sfw_truth": "q"}, nsfw=False,
+    )
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    (modal,) = interaction.response.modals
+    assert modal.target_id == "2"
+    assert (await get_game_payload(view.db, view.game_id))["pass"] == 2
+
+
+async def test_modal_submit_records_under_lock_and_announces_a_complete_pass(monkeypatch, sync_db_path):
+    """The record goes through modify_payload (a toggle landing while the box
+    was open survives), a bank question sent unchanged counts as a bank ask,
+    and closing the pass posts the loud line in the channel."""
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view_in(sync_db_path, {"2": ["sfw_truth"]}, {}, nsfw=False)
+    channel = interaction.channel
+    modal = traditional_cog.AskQuestionModal(
+        view.game_id, view.db, channel, 1, view.bot,
+        target_id="2", target_name="Bee", category="sfw_truth", bank_default="Bank Q?",
+    )
+    # A concurrent toggle between opening the box and sending it.
+    def _join(p):
+        toggle_pref(p, 3, "sfw_dare")
+    await modify_payload(view.db, view.game_id, _join)
+
+    modal.question._value = "Bank Q?"
+    responded: list[str] = []
+    interaction.response.defer = lambda: _record(responded)  # type: ignore[attr-defined]
+    await modal.on_submit(interaction)  # type: ignore[arg-type]
+
+    payload = await get_game_payload(view.db, view.game_id)
+    assert payload["asked"] == {"2:sfw_truth": "Bank Q?"}
+    assert payload["prefs"]["3"] == ["sfw_dare"]  # the toggle was kept
+    assert payload["bank_asked"] == 1 and payload["bank_used"] == ["Bank Q?"]
+    assert payload["last_activity"] > 0
+    # Player 3 joined mid-box, so the pass is not complete: no loud line yet.
+    assert [c for c, _ in channel.sent if c and "complete" in c] == []
+
+    # Ask player 3 too — that closes pass 1 and the room hears it.
+    modal2 = traditional_cog.AskQuestionModal(
+        view.game_id, view.db, channel, 1, view.bot,
+        target_id="3", target_name="Cat", category="sfw_dare",
+    )
+    modal2.question._value = "Own Q"
+    await modal2.on_submit(interaction)  # type: ignore[arg-type]
+    payload = await get_game_payload(view.db, view.game_id)
+    assert payload["bank_asked"] == 1  # a written question is not a bank ask
+    assert any(c and "Pass 1 complete" in c for c, _ in channel.sent)
+
+
+async def _record(bucket: list[str]) -> None:
+    bucket.append("deferred")
+
+
+async def test_launch_stores_the_idle_dial_and_arms_the_close(sync_db_path):
+    from tests.fakes import FakeChannel
+
+    class _Msg(SimpleNamespace):
+        pass
+
+    class _Chan(FakeChannel):
+        async def send(self, *a, **kw):
+            return _Msg(id=99, channel=self)
+
+    bot = SimpleNamespace(games_db=GamesDb(sync_db_path), active_views={}, ctx=SimpleNamespace(db_path=sync_db_path))
+    await bot.games_db.execute(
+        "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES (77, 'traditional', 1, ?)",
+        ('{"idle_minutes": 7}',),
+    )
+    cog = traditional_cog.TraditionalCog(bot)  # type: ignore[arg-type]
+    game_id = await cog.launch(channel=_Chan(id=4242), host_id=1, host_name="Host", guild_id=77, options={})
+    assert game_id
+    payload = await get_game_payload(bot.games_db, game_id)
+    assert payload["idle_minutes"] == 7 and payload["last_activity"] > 0
+    view = bot.active_views[game_id]
+    try:
+        assert view._idle_task is not None and not view._idle_task.done()
+    finally:
+        view._idle_task.cancel()
+
+
+async def test_idle_fire_posts_the_recap_pays_and_archives(monkeypatch, sync_db_path):
+    """The window ran out with nothing pressed: the room sees the notice and
+    the recap, and the game ends through the paying path with reason=idle."""
+    spy = AsyncMock()
+    monkeypatch.setattr(traditional_cog, "end_game", spy)
+    view, interaction = await _ask_view_in(
+        sync_db_path, {"2": ["sfw_truth"]}, {"2:sfw_truth": "q"}, nsfw=False,
+        extra={"idle_minutes": 1, "last_activity": 1},
+    )
+    channel = interaction.channel
+    channel.guild = None  # no payout footer lookup against a fake guild
+    edits: list = []
+
+    async def _edit(**kw):
+        edits.append(kw)
+
+    view._message = SimpleNamespace(edit=_edit, channel=channel)
+    await view._idle_fire()
+
+    assert view._closed and view.is_finished()
+    (_, kwargs), = [s for s in channel.sent if "embed" in s[1]]
+    assert kwargs["embed"].description == idle_close_notice(1)
+    call = spy.await_args
+    assert call is not None and call.kwargs["player_ids"] == [2] and call.kwargs["reason"] == "idle"
+    assert view.game_id not in view.bot.active_views
+
+
+async def test_idle_fire_re_arms_when_activity_landed_meanwhile(monkeypatch, sync_db_path):
+    spy = AsyncMock()
+    monkeypatch.setattr(traditional_cog, "end_game", spy)
+    view, interaction = await _ask_view_in(
+        sync_db_path, {"2": ["sfw_truth"]}, {}, nsfw=False,
+        extra={"idle_minutes": 60, "last_activity": int(time.time())},
+    )
+    view._message = SimpleNamespace(edit=AsyncMock(), channel=interaction.channel)
+    await view._idle_fire()
+    try:
+        assert not view._closed
+        spy.assert_not_awaited()
+        assert view._idle_task is not None
+    finally:
+        if view._idle_task:
+            view._idle_task.cancel()
+
+
+import time  # noqa: E402
+from unittest.mock import AsyncMock  # noqa: E402

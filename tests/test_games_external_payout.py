@@ -845,3 +845,244 @@ async def test_a_game_gamebot_dropped_pays_the_rounds_that_were_played(gdb):
     assert args[2] == {ALICE: 2, BOB: 2, CAROL: 1}
     assert args[3] == [ALICE, BOB]
     assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_cah"
+
+
+# ── Gamebot's 2026-08-15 Anagrams rewrite, end to end (photo-external-99) ────
+
+
+def _embeds_new_scoreboard(points):
+    """Post-rewrite Scoreboard: empty fields, scores in the description by
+    display name — the real 2026-08-22 18:51 shape."""
+    desc = "\n\n".join(
+        f"**{name}** — {n} points\n{'TRIP, SAME' if n else 'No words submitted.'}"
+        for name, n in points.items()
+    ) + "\n\n**Skipped words:** COLOGNE"
+    return [{"title": "Scoreboard", "description": desc}]
+
+
+def _embeds_wins(winner):
+    return [{"title": "Game over!", "description": f"<@{winner}> wins!\nVote for Gamebot!"}]
+
+
+@pytest.mark.asyncio
+async def test_new_format_anagrams_pays_by_display_name(gdb):
+    # Payouts were dead for a week over this: the scores moved into the
+    # description and the finish became "<@id> wins!", so the old reader saw
+    # nothing and the cog marked every game 'skip'.
+    await _bank(gdb, 4200, "2026-08-22T18:47:10", _embeds_lobby("Anagrams", [ALICE, BOB, CAROL]))
+    await _bank(gdb, 4201, "2026-08-22T18:51:28",
+                _embeds_new_scoreboard({"EP": 1700, "Velocibaker": 0, "UnfeelingFreedom": 1300}))
+    await _bank(gdb, OVER_ID, "2026-08-22T18:51:29", _embeds_wins(ALICE))
+
+    members = {
+        "EP": SimpleNamespace(id=ALICE, bot=False),
+        "Velocibaker": SimpleNamespace(id=BOB, bot=False),
+        "UnfeelingFreedom": SimpleNamespace(id=CAROL, bot=False),
+    }
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+    at = datetime(2026, 8, 22, 18, 51, 29, tzinfo=timezone.utc)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock(return_value=60)
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members), at=at))
+
+    args, kwargs = pay.await_args
+    assert args[2] == {ALICE: 1700, BOB: 0, CAROL: 1300}
+    assert args[3] == ALICE
+    assert kwargs["game_key"] == "anagrams"
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_anagrams"
+
+
+# ── Survey Says and Wisecracks (photo-external-101) ─────────────────────────
+
+
+def _embeds_named_final_scores(points, reached=None):
+    lines = [f"**{name}**: {n} points" for name, n in points.items()]
+    if reached is not None:
+        lines.append(f"<@{reached}> reached 5 points!")
+    return [{"title": "Final scores", "description": "\n".join(lines)}]
+
+
+@pytest.mark.asyncio
+async def test_survey_says_pays_its_final_scores_with_the_declared_winner(gdb):
+    await _bank(gdb, 4300, "2026-08-22T18:54:07", _embeds_lobby("Survey Says", [ALICE, BOB, CAROL]))
+    await _bank(gdb, OVER_ID, "2026-08-22T18:59:12",
+                _embeds_named_final_scores({"EP": 5, "UnfeelingFreedom": 4, "Velocibaker": 2}, reached=ALICE))
+
+    members = {
+        "EP": SimpleNamespace(id=ALICE, bot=False),
+        "UnfeelingFreedom": SimpleNamespace(id=BOB, bot=False),
+        "Velocibaker": SimpleNamespace(id=CAROL, bot=False),
+    }
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+    at = datetime(2026, 8, 22, 18, 59, 12, tzinfo=timezone.utc)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock(return_value=30)
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members), at=at))
+        await cog._pay_gamebot_game(_over_message(_guild(members), at=at))  # replay
+
+    pay.assert_awaited_once()
+    args, kwargs = pay.await_args
+    assert args[2] == {ALICE: 5, BOB: 4, CAROL: 2}
+    assert args[3] == [ALICE]
+    assert kwargs["game_key"] == "survey_says"
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_survey_says"
+
+
+@pytest.mark.asyncio
+async def test_the_game_over_survey_says_posts_after_its_final_scores_pays_nobody(gdb):
+    # Real shape: *Final scores* at :12.7, then a "<@id> wins!" *Game over!*
+    # at :13.4. The second bounds into a window of its own (the previous
+    # terminal is right behind it) and has no lobby — it must not be paid as
+    # a phantom one-player game on top of the real payout.
+    await _bank(gdb, 4300, "2026-08-22T18:54:07", _embeds_lobby("Survey Says", [ALICE]))
+    await _bank(gdb, 4301, "2026-08-22T18:59:12", _embeds_named_final_scores({"EP": 5}, reached=ALICE))
+    await _bank(gdb, OVER_ID, "2026-08-22T18:59:13", _embeds_wins(ALICE))
+
+    members = {"EP": SimpleNamespace(id=ALICE, bot=False)}
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+    at = datetime(2026, 8, 22, 18, 59, 13, tzinfo=timezone.utc)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock(return_value=30)
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members), at=at))
+
+    pay.assert_not_awaited()
+    assert OVER_ID not in await _claimed_kinds(gdb)
+
+
+@pytest.mark.asyncio
+async def test_wisecracks_derives_every_tied_leader_as_winner(gdb):
+    await _bank(gdb, 4400, "2026-08-21T14:19:23", _embeds_lobby("Wisecracks", [ALICE, BOB, CAROL]))
+    await _bank(gdb, OVER_ID, "2026-08-21T14:27:32",
+                _embeds_named_final_scores({"EP": 2, "Lily": 2, "Slow": 1}))
+
+    members = {
+        "EP": SimpleNamespace(id=ALICE, bot=False),
+        "Lily": SimpleNamespace(id=BOB, bot=False),
+        "Slow": SimpleNamespace(id=CAROL, bot=False),
+    }
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+    at = datetime(2026, 8, 21, 14, 27, 32, tzinfo=timezone.utc)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score", new=AsyncMock(return_value=30)
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message(_guild(members), at=at))
+
+    args, kwargs = pay.await_args
+    assert args[2] == {ALICE: 2, BOB: 2, CAROL: 1}
+    assert args[3] == [ALICE, BOB]
+    assert kwargs["game_key"] == "wisecracks"
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_wisecracks"
+
+
+# ── a no-op payout releases its claim (photo-external-109) ───────────────────
+
+
+async def _bank_cah(gdb, scores):
+    await _bank(gdb, 4000, "2026-07-21T01:07:40", _embeds_lobby("Cards Against Humanity", [ALICE, BOB]))
+    await _bank(gdb, 4002, "2026-07-21T01:08:30", _embeds_standings(scores))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_game_over(ALICE))
+
+
+@pytest.mark.parametrize(
+    ("credited", "scores", "kept"),
+    [
+        pytest.param(0, {ALICE: 5, BOB: 1}, False, id="no-op-releases"),
+        pytest.param(60, {ALICE: 5, BOB: 1}, True, id="paid-keeps"),
+        pytest.param(0, {ALICE: 0, BOB: 0}, True, id="all-zero-is-deliberate"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cah_claim_is_released_only_when_a_payout_no_ops(gdb, credited, scores, kept):
+    # The claim is taken before crediting; a transient no-op (guild not
+    # cached, economy briefly off, cap at 0 while tuning) used to burn it and
+    # leave the players unpaid forever. A scoreboard where nobody scored is
+    # the one legitimate 0 and stays claimed.
+    await _bank_cah(gdb, scores)
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score",
+        new=AsyncMock(return_value=credited),
+    ):
+        await cog._pay_gamebot_game(_over_message())
+
+    assert (OVER_ID in await _claimed_kinds(gdb)) is kept
+    row = await gdb.fetchone(
+        "SELECT parse_status FROM games_external_messages WHERE message_id = ?", (OVER_ID,)
+    )
+    assert row["parse_status"] == ("ok" if kept else "error")
+
+
+@pytest.mark.asyncio
+async def test_a_released_claim_can_be_paid_on_the_next_pass(gdb):
+    await _bank_cah(gdb, {ALICE: 5, BOB: 1})
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cah_game_by_score",
+        new=AsyncMock(side_effect=[0, 60]),
+    ) as pay:
+        await cog._pay_gamebot_game(_over_message())   # economy off: released
+        await cog._pay_gamebot_game(_over_message())   # edit / replay: pays
+        await cog._pay_gamebot_game(_over_message())   # and never again
+
+    assert pay.await_count == 2
+    assert (await _claimed_kinds(gdb))[OVER_ID] == "gamebot_cah"
+
+
+@pytest.mark.parametrize(
+    ("credited", "kept"),
+    [
+        pytest.param(None, False, id="not-attempted-releases"),
+        pytest.param(0, True, id="cap-clipped-keeps"),
+        pytest.param(3, True, id="paid-keeps"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_cat_catch_claim_follows_the_faucets_answer(gdb, credited, kept):
+    member = SimpleNamespace(id=CATCHER, bot=False)
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_cat_catch", new=AsyncMock(return_value=credited)
+    ):
+        await cog._pay_cat_catch(_catch_message(_CAT_CATCH, member))
+
+    assert (CATCH_MSG_ID in await _claimed_kinds(gdb)) is kept
+
+
+@pytest.mark.asyncio
+async def test_connect4_claim_is_released_on_a_no_op(gdb):
+    await _bank(gdb, 4100, "2026-07-21T01:07:00", _embeds_c4_start([ALICE, BOB]))
+    await _bank(gdb, OVER_ID, "2026-07-21T01:08:36", _embeds_c4_game_over(ALICE))
+    bot = MagicMock()
+    bot.games_db = gdb
+    cog = GamesExternalCog(bot)
+
+    with patch(
+        "bot_modules.cogs.games_external_cog.pay_game_rewards", new=AsyncMock(return_value=0)
+    ):
+        await cog._pay_gamebot_game(_over_message())
+
+    assert OVER_ID not in await _claimed_kinds(gdb)

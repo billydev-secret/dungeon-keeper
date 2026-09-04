@@ -330,6 +330,10 @@ const SECTIONS = [
         // question is typed by a member mid-game, so there was never one to
         // fill. Its route id stays `games-ama`; only the grouping moved.
         { id: "games-ama",          label: "Anonymous AMA",     module: "./panels/games-ama.js" },
+        // Two more member-written games (no bank), each with one pacing dial
+        // since 2026-09-04. New ids are the bare feature name.
+        { id: "hottakes",           label: "Hot Takes",         module: "./panels/games-hottakes.js", keywords: "hot takes unpopular opinions anonymous vote timer" },
+        { id: "fantasies",          label: "Fantasies & Dealbreakers", module: "./panels/games-fantasies.js", keywords: "fantasies dealbreakers anonymous vote timer" },
         { id: "games-legitlibs",    label: "LegitLibs",         module: "./panels/games-legitlibs.js", keywords: "mad libs madlibs templates blanks" },
         { id: "config-risky-rolls",  label: "Risky Rolls",     module: "./panels/config-risky-rolls.js", adminOnly: true },
         { id: "config-games-pressure", label: "Pressure Cooker", module: "./panels/config-games-pressure.js", adminOnly: true },

@@ -281,6 +281,30 @@ def test_find_round_winners_empty_when_tally_empty():
     assert find_round_winners({}) == []
 
 
+@pytest.mark.parametrize(
+    "tally, votes, expected",
+    [
+        # Everyone voted for themselves: three-way tie, no outside support —
+        # nobody is crowned (this is the "crown everyone" case).
+        pytest.param({1: 1, 2: 1, 3: 1}, {1: 1, 2: 2, 3: 3}, [], id="all-self-votes"),
+        # 1 and 2 tie at 2; 1's are a self-vote plus one outside vote, 2's
+        # are both outside votes — the crown goes to 2.
+        pytest.param(
+            {1: 2, 2: 2, 3: 0}, {1: 1, 3: 1, 4: 2, 5: 2}, [2], id="tie-broken-by-outside-votes",
+        ),
+        # Both finalists have one outside vote each: still a shared crown.
+        pytest.param({1: 2, 2: 2}, {1: 1, 2: 2, 3: 1, 4: 2}, [1, 2], id="genuine-tie-stays"),
+        # A lone leader keeps the crown even if their only vote is their own.
+        pytest.param({1: 1, 2: 0}, {1: 1}, [1], id="single-self-vote-leader"),
+        # No votes: nothing to crown, with or without the votes map.
+        pytest.param({1: 0, 2: 0}, {}, [], id="no-votes"),
+    ],
+)
+def test_find_round_winners_breaks_top_ties_without_self_votes(tally, votes, expected):
+    """vote-games-62: self-votes count, but they don't decide a tie."""
+    assert find_round_winners(tally, votes) == expected
+
+
 def test_find_round_winners_three_way_tie():
     tally = {1: 1, 2: 1, 3: 1}
     winners = find_round_winners(tally)
@@ -545,6 +569,18 @@ def test_build_results_embed_crowns_all_tied_top():
     assert "👑" not in lines[2]
 
 
+def test_build_results_embed_crowns_exactly_the_decided_winners():
+    """The board crowns what is banked: with ``winners`` given, a tied
+    player the tie-break dropped shows no crown."""
+    embed = build_results_embed(
+        prompt="x", round_num=1, tally={1: 2, 2: 2, 3: 0}, winners=[2],
+    )
+    assert embed.description is not None
+    lines = embed.description.split("\n")
+    crowned = [ln for ln in lines if "👑" in ln]
+    assert len(crowned) == 1 and "<@2>" in crowned[0]
+
+
 def test_build_results_embed_no_crown_when_zero_votes():
     """No one voted — nobody gets a crown, even though counts tie at 0."""
     embed = build_results_embed(
@@ -677,6 +713,19 @@ def test_full_round_flow_single_winner_then_crown():
     crowns: dict[str, int] = {}
     bump_crowns(crowns, winners)
     assert crowns == {"10": 1}
+
+
+def test_full_round_flow_self_vote_tie_crowns_nobody():
+    """Three players, three self-votes: the round banks no crown at all."""
+    players = [1, 2, 3]
+    votes: dict[int, int] = {}
+    for uid in players:
+        apply_vote(votes, uid, uid)
+    tally = tally_votes(votes, players)
+    winners = find_round_winners(tally, votes)
+    crowns: dict[str, int] = {}
+    bump_crowns(crowns, winners)
+    assert winners == [] and crowns == {}
 
 
 def test_full_round_flow_tie_awards_two_crowns():

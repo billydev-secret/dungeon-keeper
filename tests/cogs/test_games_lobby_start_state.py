@@ -139,11 +139,13 @@ async def test_ttl_start_guessing_records_the_guessing_state(sync_db_path):
     import bot_modules.cogs.games_ttl_cog as cog_mod
 
     db = GamesDb(sync_db_path)
+    # Three submissions: Start Guessing's floor rose to 3 (vote-games-57).
     subs = {"111": {"statements": ["a", "b", "c"], "lie": 2},
-            "222": {"statements": ["d", "e", "f"], "lie": 0}}
+            "222": {"statements": ["d", "e", "f"], "lie": 0},
+            "333": {"statements": ["g", "h", "i"], "lie": 1}}
     gid = await create_game(
         db, CHAN, HOST, "ttl", state="joining",
-        payload={"submissions": subs, "submission_count": 2, "submitter_names": {},
+        payload={"submissions": subs, "submission_count": 3, "submitter_names": {},
                  "scores": {}, "prompt": None},
     )
 

@@ -542,7 +542,9 @@ def test_build_attribution_embed_has_footer():
 # ── economy roster enrichment (Stage 2 faucet) ──────────────────────
 
 from types import SimpleNamespace  # noqa: E402
-from unittest.mock import AsyncMock  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+
+import discord  # noqa: E402
 
 import bot_modules.cogs.games_story_cog as story_cog  # noqa: E402
 from bot_modules.games.utils.game_manager import create_game  # noqa: E402
@@ -624,6 +626,7 @@ class _InstantTurnView:
         self._submitted_event.set()
         self._submitted_text = "And then the door opened."
         self._skipped = False
+        self._left: set[int] = set()
 
 
 async def test_run_story_deletes_the_spent_turn_panel(monkeypatch, sync_db_path):
@@ -652,3 +655,284 @@ async def test_run_story_deletes_the_spent_turn_panel(monkeypatch, sync_db_path)
     turn_panel = channel.sent[1]
     assert turn_panel.delete.await_count == 1
     assert turn_panel.edit.await_count == 0
+
+
+# ── pacing: 120 s turns, writer skip, drops, leave, host kept (anon-tail-73/77/78) ──
+
+from bot_modules.games_story.logic import (  # noqa: E402
+    DEFAULT_TURN_SECONDS,
+    MAX_CONSECUTIVE_MISSES,
+    WRITER_SKIP_AFTER_SECONDS,
+    format_drop_notice,
+    format_leave_notice,
+    note_turn_outcome,
+    roster_for_payout,
+    rotation_after_turn,
+    should_drop_writer,
+    writer_may_skip,
+    writer_skip_unlock_at,
+)
+
+
+def test_default_turn_is_two_minutes():
+    # Was 300 s: one AFK writer cost two five-minute holes in a fifteen-minute game.
+    assert DEFAULT_TURN_SECONDS == 120
+    assert story_cog._TURN_TIMEOUT == DEFAULT_TURN_SECONDS
+    assert 0 < WRITER_SKIP_AFTER_SECONDS < DEFAULT_TURN_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("order", "index", "remove", "expected"),
+    [
+        pytest.param([1, 2, 3], 0, (), ([1, 2, 3], 1), id="plain-advance"),
+        pytest.param([1, 2, 3], 2, (), ([1, 2, 3], 0), id="wraps-at-the-end"),
+        pytest.param([1, 2, 3], 1, {2}, ([1, 3], 1), id="current-writer-dropped-next-keeps-place"),
+        pytest.param([1, 2, 3], 0, {2}, ([1, 3], 1), id="next-writer-dropped-skips-to-the-one-after"),
+        pytest.param([1, 2, 3], 2, {1}, ([2, 3], 0), id="wrap-onto-a-dropped-writer"),
+        pytest.param([1, 2], 1, {1, 2}, ([], 0), id="everyone-gone"),
+        pytest.param([], 0, (), ([], 0), id="empty"),
+    ],
+)
+def test_rotation_after_turn(order, index, remove, expected):
+    assert rotation_after_turn(order, index, remove) == expected
+
+
+def test_rotation_after_turn_does_not_mutate_the_order():
+    order = [1, 2, 3]
+    rotation_after_turn(order, 0, {2})
+    assert order == [1, 2, 3]
+
+
+def test_two_consecutive_misses_drop_a_writer_and_a_sentence_resets():
+    misses: dict[int, int] = {}
+    assert note_turn_outcome(misses, 7, missed=True) == 1
+    assert not should_drop_writer(misses, 7)
+    assert note_turn_outcome(misses, 7, missed=False) == 0
+    assert note_turn_outcome(misses, 7, missed=True) == 1
+    assert note_turn_outcome(misses, 7, missed=True) == MAX_CONSECUTIVE_MISSES
+    assert should_drop_writer(misses, 7)
+    assert not should_drop_writer(misses, 8)  # never seen: never dropped
+
+
+@pytest.mark.parametrize(
+    ("presser", "elapsed", "expected"),
+    [
+        pytest.param(2, WRITER_SKIP_AFTER_SECONDS, True, id="writer-after-the-window"),
+        pytest.param(2, WRITER_SKIP_AFTER_SECONDS - 1, False, id="writer-too-early"),
+        pytest.param(99, WRITER_SKIP_AFTER_SECONDS + 100, False, id="a-non-writer-never"),
+    ],
+)
+def test_writer_may_skip(presser, elapsed, expected):
+    assert writer_may_skip(presser, turn_order=[1, 2, 3], opened_at=1000.0, now=1000.0 + elapsed) is expected
+
+
+def test_writer_skip_unlock_at_is_the_window_after_open():
+    assert writer_skip_unlock_at(1000.0) == 1000 + WRITER_SKIP_AFTER_SECONDS
+
+
+@pytest.mark.parametrize(
+    ("players", "sentences", "left", "expected"),
+    [
+        pytest.param([1, 2, 3], [], set(), [1, 2, 3], id="nobody-left"),
+        pytest.param([1, 2, 3], [], {2}, [1, 3], id="left-without-writing-is-unpaid"),
+        pytest.param([1, 2, 3], [{"author_id": 2, "text": "x"}], {2}, [1, 2, 3], id="left-after-writing-still-paid"),
+    ],
+)
+def test_roster_for_payout(players, sentences, left, expected):
+    assert roster_for_payout(players, sentences, left) == expected
+
+
+def test_drop_and_leave_notices_neutralize_mentions():
+    assert "@\u200beveryone" in format_drop_notice("@everyone")
+    assert "missed 2 turns" in format_drop_notice("Bob")
+    assert "@\u200bhere" in format_leave_notice("@here")
+
+
+async def test_sentence_modal_times_out_with_the_turn_and_hands_the_view_its_sentence():
+    """A dismissed modal used to leave the button callback parked on
+    modal.wait() forever (anon-tail-78). The modal now carries the turn's
+    timeout and on_submit sets the view's event directly."""
+    bot = _SpyBot(":memory:")
+    view = story_cog.StoryTurnView("g", 1, 2, "", bot.games_db, bot, turn_order=[1, 2])
+    modal = story_cog.StorySentenceModal("g", 2, "prev", turn_view=view)
+    assert modal.timeout == story_cog._TURN_TIMEOUT
+
+    modal.sentence._value = "And then it rained."  # what Discord fills in on submit
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=2, display_name="W"), channel=None,
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+    await modal.on_submit(interaction)  # type: ignore[arg-type]
+
+    assert view._submitted_event.is_set()
+    assert view._submitted_text == "And then it rained."
+    assert view.is_finished()
+
+
+def _press(user_id: int, *, admin: bool = False):
+    perms = SimpleNamespace(administrator=admin, manage_guild=admin)
+    if admin:
+        # is_host_or_mod only honours perms on a real Member inside a guild.
+        user = MagicMock(spec=discord.Member)
+        user.id = user_id
+        user.display_name = f"U{user_id}"
+        user.guild_permissions = perms
+        guild = SimpleNamespace(get_member=lambda uid: None)
+    else:
+        user = SimpleNamespace(id=user_id, display_name=f"U{user_id}", guild_permissions=perms)
+        guild = None
+    return SimpleNamespace(
+        user=user, guild=guild, channel=None, channel_id=None,
+        response=SimpleNamespace(send_message=AsyncMock(), send_modal=AsyncMock(), edit_message=AsyncMock()),
+        followup=SimpleNamespace(send=AsyncMock()),
+        message=SimpleNamespace(id=1, edit=AsyncMock(), embeds=[]),
+    )
+
+
+async def test_any_writer_can_skip_once_the_window_has_passed_and_not_before():
+    bot = _SpyBot(":memory:")
+    view = story_cog.StoryTurnView("g", 1, 2, "", bot.games_db, bot, turn_order=[1, 2, 3])
+
+    early = _press(3)
+    await view.skip.callback(early)  # type: ignore[arg-type]
+    assert early.response.send_message.await_args.args[0].startswith("❌")
+    assert not view._skipped
+
+    view.opened_at -= WRITER_SKIP_AFTER_SECONDS + 1
+    late = _press(3)
+    await view.skip.callback(late)  # type: ignore[arg-type]
+    assert view._skipped and view._submitted_event.is_set()
+
+    stranger = _press(42)
+    other = story_cog.StoryTurnView("g", 1, 2, "", bot.games_db, bot, turn_order=[1, 2, 3])
+    other.opened_at -= WRITER_SKIP_AFTER_SECONDS + 1
+    await other.skip.callback(stranger)  # type: ignore[arg-type]
+    assert stranger.response.send_message.await_args.args[0].startswith("❌")
+    assert not other._skipped
+
+
+async def test_leave_marks_the_writer_and_skips_when_it_is_their_turn():
+    bot = _SpyBot(":memory:")
+    view = story_cog.StoryTurnView("g", 1, 2, "", bot.games_db, bot, turn_order=[1, 2, 3])
+
+    bystander = _press(3)
+    await view.leave.callback(bystander)  # type: ignore[arg-type]
+    assert view._left == {3} and not view._skipped
+
+    current = _press(2)
+    await view.leave.callback(current)  # type: ignore[arg-type]
+    assert view._left == {2, 3} and view._skipped and view._submitted_event.is_set()
+
+    outsider = _press(99)
+    await view.leave.callback(outsider)  # type: ignore[arg-type]
+    assert outsider.response.send_message.await_args.args[0] == "You're not in this story's rotation."
+
+
+async def test_start_by_a_mod_keeps_the_lobby_host(monkeypatch, sync_db_path):
+    """anon-tail-77: whoever pressed Start became the host for Skip purposes,
+    so a mod starting on the host's behalf took the host's Skip away."""
+    bot = _SpyBot(sync_db_path)
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    run = AsyncMock()
+    monkeypatch.setattr(cog, "_run_story", run)
+    gid = await create_game(bot.games_db, 100, 1, "story", state="joining", payload={"players": [1, 2]})
+    view = story_cog.StoryJoinView(gid, 1, bot.games_db, bot, cog)
+
+    await view.start_story.callback(_press(99, admin=True))  # type: ignore[arg-type]
+
+    assert run.await_count == 1
+    assert run.await_args.kwargs["host_id"] == 1
+    assert "host_id" not in run.await_args.args[2]
+
+
+class _RecordingChannel:
+    id = 100
+    guild = None
+
+    def __init__(self) -> None:
+        self.sent: list[tuple[tuple, dict]] = []
+
+    async def send(self, *args, **kwargs):
+        self.sent.append((args, kwargs))
+        return SimpleNamespace(delete=AsyncMock(), edit=AsyncMock())
+
+    @property
+    def texts(self) -> list[str]:
+        return [str(a[0]) if a else str(k.get("content", "")) for a, k in self.sent]
+
+
+def _scripted_turn_view(*, misses: set[int], leaves: set[int] = frozenset()):
+    """A StoryTurnView stand-in: writers in ``misses`` never write, writers in
+    ``leaves`` press Leave without writing, everyone else writes at once."""
+
+    class _View:
+        def __init__(self, game_id, host_id, current_player_id, context_text, db, bot, turn_order=None):
+            self._submitted_event = asyncio.Event()
+            self._submitted_event.set()
+            self._left: set[int] = set()
+            self.turn_order = list(turn_order or [])
+            if current_player_id in leaves:
+                self._left.add(current_player_id)
+                self._skipped, self._submitted_text = True, None
+            elif current_player_id in misses:
+                self._skipped, self._submitted_text = True, None
+            else:
+                self._skipped, self._submitted_text = False, f"line by {current_player_id}."
+
+    return _View
+
+
+async def test_a_writer_who_misses_two_turns_is_dropped_and_the_story_goes_on(monkeypatch, sync_db_path):
+    monkeypatch.setattr(story_cog, "StoryTurnView", _scripted_turn_view(misses={2}))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "story", payload={"players": [1, 2]})
+    bot.active_views[gid] = object()
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    reveal = AsyncMock()
+    monkeypatch.setattr(cog, "_reveal_story", reveal)
+    channel = _RecordingChannel()
+
+    await cog._run_story(None, gid, {"players": [1, 2], "max_sentences": 6}, channel, host_id=1)
+
+    assert any("missed 2 turns" in t for t in channel.texts)
+    assert not any("All writers were skipped" in t for t in channel.texts)
+    assert reveal.await_args is not None
+    sentences = reveal.await_args.args[2]
+    assert len(sentences) == 6  # the starter plus five written lines
+    assert {s["author_id"] for s in sentences[1:]} == {1}
+    # Dropped for missing turns is not leaving: the writer is still on the roster.
+    assert reveal.await_args.args[3] == [1, 2]
+
+
+async def test_a_writer_who_leaves_without_writing_is_dropped_and_unpaid(monkeypatch, sync_db_path):
+    monkeypatch.setattr(story_cog, "StoryTurnView", _scripted_turn_view(misses=set(), leaves={2}))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "story", payload={"players": [1, 2]})
+    bot.active_views[gid] = object()
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    reveal = AsyncMock()
+    monkeypatch.setattr(cog, "_reveal_story", reveal)
+    channel = _RecordingChannel()
+
+    await cog._run_story(None, gid, {"players": [1, 2], "max_sentences": 4}, channel, host_id=1)
+
+    assert any("left the story" in t for t in channel.texts)
+    assert reveal.await_args is not None
+    assert reveal.await_args.args[3] == [1]
+    assert {s["author_id"] for s in reveal.await_args.args[2][1:]} == {1}
+
+
+async def test_an_all_miss_lap_still_ends_the_story(monkeypatch, sync_db_path):
+    monkeypatch.setattr(story_cog, "StoryTurnView", _scripted_turn_view(misses={1, 2}))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "story", payload={"players": [1, 2]})
+    bot.active_views[gid] = object()
+    cog = story_cog.StoryCog(bot)  # type: ignore[arg-type]
+    reveal = AsyncMock()
+    monkeypatch.setattr(cog, "_reveal_story", reveal)
+    channel = _RecordingChannel()
+
+    await cog._run_story(None, gid, {"players": [1, 2], "max_sentences": 10}, channel, host_id=1)
+
+    assert any("All writers were skipped" in t for t in channel.texts)
+    assert reveal.await_count == 1

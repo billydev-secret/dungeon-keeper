@@ -311,9 +311,17 @@ async def get_traditional_question(
 
 async def has_matching_questions(
     db, game_type: str, tags: list[str] | None, allow_nsfw: bool = False,
+    *, kind: str | None = None,
 ) -> bool:
     """True if at least one bank row matches the tag filter (same rules as
     _get_bank_question). Used by slash commands to refuse-on-empty-filtered-pool.
+
+    ``kind`` is FFA's required dimension (``"truth"`` / ``"dare"``): a row
+    must also carry that reserved tag, the way :func:`get_ffa_prompt` demands
+    it — so ``kind:dare tags:lily`` where every lily row is a truth reads as
+    no match here, at the command, rather than passing and having the launch
+    come back empty (anon-tail-76: the host was told the bot lacked channel
+    permissions). ``"random"`` / ``None`` places no kind requirement.
 
     Read-only: unlike the get_* serving functions, this must not mark a
     question served — it's just an existence check.
@@ -322,6 +330,8 @@ async def has_matching_questions(
         "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         (game_type,),
     )
+    if kind in ("truth", "dare"):
+        rows = [r for r in rows if kind in _parse_tags(r[2])]
     return bool(_filter_bank_rows(rows, set(tags or []), allow_nsfw))
 
 

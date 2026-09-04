@@ -18,12 +18,14 @@ from bot_modules.games_nhie.embeds import (
 )
 from bot_modules.games_nhie.logic import (
     DEFAULT_LIVES,
+    MAX_QUEUED_STATEMENTS,
     apply_round_lives,
     apply_vote,
     bump_guilt_scores,
     encode_round_state,
     find_winner,
     payload_to_round_state,
+    queue_statement,
 )
 from bot_modules.core.branding import SECTION_SPACER
 
@@ -41,6 +43,29 @@ def _unspaced(value: str | None) -> str:
 
 
 # ── apply_vote ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "queued, text, expected_result, expected_len",
+    [
+        pytest.param([], "  gone skydiving ", 1, 1, id="appends-stripped"),
+        pytest.param(["a"] * 14, "one more", 15, 15, id="fills-to-cap"),
+        pytest.param(["a"] * 15, "too many", None, 15, id="refused-at-cap"),
+        pytest.param([], "   ", None, 0, id="blank-ignored"),
+    ],
+)
+def test_queue_statement_caps_the_pose_queue(queued, text, expected_result, expected_len):
+    """vote-games-62: the NHIE pose queue was the one uncapped queue of the
+    three round games; it now holds 15 like WYR's and MLT's."""
+    assert queue_statement(queued, text) == expected_result
+    assert len(queued) == expected_len
+
+
+def test_queue_statement_cap_matches_the_sibling_games():
+    import bot_modules.cogs.games_mlt_cog as mlt_cog
+    import bot_modules.cogs.games_wyr_cog as wyr_cog
+
+    assert MAX_QUEUED_STATEMENTS == mlt_cog._MAX_QUEUED_PROMPTS == wyr_cog._MAX_QUEUED_QUESTIONS
 
 
 def test_apply_vote_adds_new_guilty_voter():

@@ -30,7 +30,26 @@ dashboard section (see History).
    `PHOTO CHALLENGE`) over the **guild icon**, falling back to the schedule
    creator's avatar. The card posts as a bare image (`photo.png`); if a ping
    role is configured, the message content is that role mention
-   (`AllowedMentions(roles=True)`).
+   (`AllowedMentions(roles=True)`). **That is the card's only ping**: photo
+   schedule rows are created with `announce=0` and every save through
+   `PUT /schedule/{id}` forces `announce=0`, `announce_role_id=NULL`,
+   `options='{}'`, so a row inherited from the shared scheduler (prod row 7
+   carried `announce=1` + a role and pinged members daily through a line the
+   panel never showed — photo-external-103) can never announce a second time.
+   The one-off copy of that legacy role into the config's `ping_role_id` is
+   `scripts/games_review_p0.py --only photo`.
+3b. **Yesterday's recap.** Right after the card, one plain-text line
+   (`games_photo.logic.previous_day_recap` + `recap_line`, posted by
+   `PhotoCog._post_recap`): *"Yesterday: 17 photos from 15 people — most
+   loved: Name's, <jump link>"* — photos and distinct posters with
+   `media_kind = 'media'` in the channel over the previous 24 h (bot's own
+   posts and deleted messages excluded), and the photo with the most
+   reactions (`SUM(message_reactions.count)`, earliest wins a tie) as a
+   `discord.com/channels/...` link. The poster is named through
+   `build_name_fn`, never a `<@id>`; the message is sent with
+   `AllowedMentions.none()` and `suppress_embeds`. No line when nobody
+   posted, and no "most loved" when nothing was reacted to. A recap failure
+   is logged and never blocks the card (photo-external-105).
 4. **No live game state.** The play is recorded to history fire-and-forget:
    `create_game(guild_id=…)` → `end_game(payload={'prompt','tags'}, bot=…)`
    immediately, so the row carries the prompt it showed and the guild it
@@ -120,7 +139,11 @@ game-host role — every `/api/photo-challenge` route requires
     `next_run_at=now`; fires on the next poll, reusing the busy/disabled
     guards), edit, delete. Last-run status is shown per row (`launching`,
     `launched`, `skipped_active`, `skipped_disabled`, `skipped_giveup`,
-    `skipped_hidden`, `skipped_late`, `error`).
+    `skipped_hidden`, `skipped_late` — "bot was offline at post time", the
+    scheduler's label for a recurring slot missed by more than the grace
+    period — `error`). The Setup hint names the Income Sources rate as the
+    payout and the `photo_post` quest as an optional stacking bonus
+    (photo-external-107).
   - An inline **Prompt Bank** section (`mountGamePanel`, `game_type='photo'`).
 
 Photo Challenge is a single dashboard page. The separate **Prompts & AI**

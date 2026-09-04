@@ -16,6 +16,7 @@ from discord import app_commands
 from bot_modules.games.constants import (
     GAME_ICONS,
     HOW_TO_PLAY,
+    play_description,
 )
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -789,7 +790,7 @@ class ClapbackCog(commands.Cog):
 
     # ── Slash command ────────────────────────────────────────────────────
 
-    @app_commands.command(name="clapback", description="Start a Clapback game — comedy head-to-head!")
+    @app_commands.command(name="clapback", description=play_description("clapback"))
     @app_commands.describe(
         start_in="Lobby countdown in minutes — the game starts itself when it runs out (3+ joined)",
     )

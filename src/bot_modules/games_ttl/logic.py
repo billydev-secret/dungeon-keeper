@@ -18,9 +18,12 @@ High-leverage pieces:
   for a given lie index.
 * :func:`update_scores` — applies a round's results to the running
   score dict (fooled count for the subject, correct-guess count for
-  each successful guesser, total guessers seen).
+  each successful guesser, total guessers seen). Every voter gets an
+  entry, right or wrong, so the scores double as the game's roster.
 * :func:`compute_recap_winners` — derives Best Liar / Most Honest /
   Best Guesser from the final scores dict, handling ties.
+* :func:`roster_ids` — the paid roster: every subject plus every voter,
+  mirrored by ``game_roster._ttl`` for the sweep and ``/games end``.
 
 Note: unlike traditional Truth-or-Dare, TTL doesn't have a per-category
 preference toggle — players opt in by submitting a modal, so there is
@@ -31,6 +34,11 @@ from __future__ import annotations
 
 import random
 from typing import Any
+
+# The smallest room Start Guessing accepts. At two, each round is decided by
+# a single vote (the subject can't vote on their own statements), so the
+# "room" guessing the lie is one person (vote-games-57).
+MIN_PLAYERS = 3
 
 # Module-level map for parsing the modal's "which is the lie?" answer.
 _LIE_INPUT_MAP: dict[str, str] = {
@@ -169,7 +177,12 @@ def update_scores(
     each correct voter gets a point in their ``correct_guesses``.
 
     A fresh entry is created lazily for any uid not already in
-    ``scores`` — handles both new subjects and first-time guessers.
+    ``scores`` — new subjects and first-time guessers alike. A fooled
+    voter gets an (all-zero) entry too: until 2026-09-04 only a correct
+    guesser was ever written, so a member who voted every round and
+    never once guessed right was invisible to the payout
+    (vote-games-57). The scores' keys are therefore the full roster —
+    see :func:`roster_ids`.
     """
     subj_key = str(subject_id)
     subj_entry = scores.setdefault(
@@ -179,13 +192,37 @@ def update_scores(
     subj_entry["fooled"] += len(fooled_voters)
     subj_entry["total_guessers"] += total_voters
 
-    for uid in correct_voters:
+    for uid in list(correct_voters) + list(fooled_voters):
         uid_str = str(uid)
         entry = scores.setdefault(
             uid_str,
             {"fooled": 0, "correct_guesses": 0, "total_guessers": 0},
         )
-        entry["correct_guesses"] += 1
+        if uid in correct_voters:
+            entry["correct_guesses"] += 1
+
+
+def roster_ids(
+    played_ids: set[str] | list[str],
+    scores: dict[str, dict[str, int]],
+) -> list[int]:
+    """Everyone the game pays: each revealed subject plus every voter seen.
+
+    ``scores`` holds an entry per voter since 2026-09-04 (see
+    :func:`update_scores`); the subjects are added explicitly so a round
+    nobody voted in still pays its subject. Ids round-trip as strings in
+    the payload and come back as ints, junk dropped, order stable.
+    ``game_roster._ttl`` rebuilds the same list from a stored payload.
+    """
+    out: list[int] = []
+    for raw in list(played_ids) + list(scores):
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if uid not in out:
+            out.append(uid)
+    return out
 
 
 def compute_recap_winners(
@@ -198,7 +235,9 @@ def compute_recap_winners(
       whose statements were actually played (``played_ids``); a player
       who only guessed shouldn't show up here.
     * **Best Guesser** considers everyone in ``scores`` — a non-subject
-      can still win by guessing all the lies correctly.
+      can still win by guessing all the lies correctly. Nobody wins it
+      when no lie was ever spotted: with every voter now in ``scores``
+      a 0-correct "winner" would be the whole room.
     * Ties produce multiple winners (all uids matching the extremum).
 
     Returns a dict with keys ``best_liar`` (list[str]),
@@ -224,6 +263,7 @@ def compute_recap_winners(
     max_correct = 0
     if scores:
         max_correct = max(s["correct_guesses"] for s in scores.values())
+    if max_correct > 0:
         best_guesser = [uid for uid, s in scores.items() if s["correct_guesses"] == max_correct]
 
     return {

@@ -42,6 +42,9 @@ GAMES = {
     "price": "games_price_cog.py",
     "rushmore": "games_rushmore_cog.py",
     "clapback": "games_clapback_cog.py",
+    "hottakes": "games_hottakes_cog.py",
+    "fantasies": "games_fantasies_cog.py",
+    "traditional": "games_traditional_cog.py",
 }
 
 # Dials deleted because nothing read them, with why. Each must stay gone.
@@ -111,13 +114,15 @@ def test_clapback_does_not_offer_an_nsfw_toggle() -> None:
     assert "channel_allows_nsfw(channel)" in _cog("clapback")
 
 
-def test_wyr_reveal_voters_is_documented() -> None:
-    """The deleted dial implied votes could be hidden. They cannot: a host or
-    mod can name every voter with a button, and that had never been written
-    down anywhere a member or admin would read."""
+def test_wyr_show_my_vote_is_documented() -> None:
+    """The deleted dial implied votes could be hidden. What actually governs
+    who is named is written down where a member reads it: each voter's own
+    **Show My Vote** (vote-games-61 replaced the host/mod-only Reveal Voters,
+    which named the whole room and refused everyone else)."""
     manual = (_ROOT / "src" / "web_server" / "static" / "manual.html").read_text(encoding="utf-8")
-    assert "Reveal Voters" in manual
-    assert "Reveal Voters" in _cog("wyr")
+    assert "Show My Vote" in manual
+    assert "Show My Vote" in _cog("wyr")
+    assert "Reveal Voters" not in manual
 
 
 # ── Duel panels: the promises they make about being switched off ─────────────
@@ -397,6 +402,32 @@ def test_the_config_api_knows_every_game_it_can_switch_off() -> None:
         assert base in ALL_GAME_TYPES, (
             f"scheduled launches of {gt} check an enable switch nothing can set"
         )
+
+
+# ── Schedule option choices are dials too ───────────────────────────────────
+# A scheduler dropdown offers what a launch can honour. Name Your Price's
+# schedule schema kept an 'AI generated' scenario source after in-game AI
+# generation was removed (trivia-tail-94): picking it silently ran the bank.
+# Every choice the schema offers must be one the slash command offers.
+
+
+@pytest.mark.parametrize(
+    ("game_type", "cog_file", "entry", "field"),
+    [pytest.param("price", "games_price_cog.py", "price_cmd", "source", id="price-source")],
+)
+def test_schedule_choices_match_the_slash_commands(game_type, cog_file, entry, field):
+    import importlib
+
+    from bot_modules.games.constants import SCHEDULE_OPTION_SCHEMA
+
+    schema = next(f for f in SCHEDULE_OPTION_SCHEMA[game_type] if f["name"] == field)
+    offered = {c["value"] for c in schema["choices"]}
+    module = importlib.import_module(f"bot_modules.cogs.{cog_file[:-3]}")
+    command = getattr(next(v for v in vars(module).values() if isinstance(v, type) and hasattr(v, entry)), entry)
+    slash = {c.value for c in command._params[field].choices}
+    assert offered == slash, f"{game_type}.{field} schedule choices {offered} != slash choices {slash}"
+    assert schema["default"] in offered
+    assert "ai" not in offered
 
 
 # ── The Game Night ping dial ────────────────────────────────────────────────

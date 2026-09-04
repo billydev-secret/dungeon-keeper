@@ -31,7 +31,7 @@ from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     sign_off_game_chore,
@@ -558,6 +558,11 @@ class RushmoreVoteView(discord.ui.View):
 
 
 class RushmoreRecapView(discord.ui.View):
+    """Rides on the recap: **Run Again** opens the next draft under whoever
+    pressed it — that *is* the hand-off, so the old Hand Off button (which
+    only printed a command hint and disabled Run Again) is gone
+    (social-prompt-45)."""
+
     def __init__(self, game_id: str, host_id: int, cog: "RushmoreCog", settings: dict):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -568,10 +573,8 @@ class RushmoreRecapView(discord.ui.View):
     @discord.ui.button(label="\U0001f501 Run Again", style=discord.ButtonStyle.primary, custom_id="rushmore_run_again")
     async def run_again(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("❌ Only the host or a mod can restart.", ephemeral=True)
-            return
-        # Same gate as the slash entry: an admin who unticks the game on the
+        # Any member may press it and becomes the new host. The same gate as
+        # the slash entry still applies: an admin who unticks the game on the
         # dashboard mid-evening must not be overridden by the recap card.
         refusal = await launch_refusal(
             self.cog.db, "rushmore", interaction.channel_id,
@@ -598,7 +601,7 @@ class RushmoreRecapView(discord.ui.View):
                 "timer": self._settings.get("timer", 30),
                 "source": self._settings.get("source", "host"),
                 "vote_timer": self._settings.get("vote_timer", 30),
-                "mode": self._settings.get("mode", "snake"),
+                "mode": self._settings.get("mode", "blitz"),
             },
         )
         # A recap's relaunch button goes straight to the launcher, missing the
@@ -611,24 +614,6 @@ class RushmoreRecapView(discord.ui.View):
             await sign_off_game_chore(
                 self.cog.bot, interaction.guild_id, interaction.user.id
             )
-
-    @discord.ui.button(label="\U0001f504 Hand Off", style=discord.ButtonStyle.secondary, custom_id="rushmore_hand_off")
-    async def hand_off(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("❌ Only the host or a mod can hand off.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "Type **/games play rushmore** to start a new game as the new host!",
-            ephemeral=True,
-        )
-        disable_all_items(self)
-        assert interaction.message
-        try:
-            await interaction.message.edit(view=self)
-        except discord.HTTPException:
-            pass
-        self.stop()
 
 
 # ── Cog ──────────────────────────────────────────────────────────────────────
@@ -694,7 +679,7 @@ class RushmoreCog(commands.Cog):
 
     # ── Slash command ────────────────────────────────────────────────
 
-    @app_commands.command(name="rushmore", description="Start a Mt. Rushmore Draft!")
+    @app_commands.command(name="rushmore", description=play_description("rushmore"))
     @app_commands.describe(
         topic="The topic (leave blank for AI/bank/manual entry)",
         source="Where topics come from",
@@ -765,9 +750,11 @@ class RushmoreCog(commands.Cog):
             int(options.get("timer", game_opts.get("timer", 30))),
             int(options.get("vote_timer", game_opts.get("vote_timer", 30))),
         )
-        mode = options.get("mode") or game_opts.get("mode") or "snake"
+        # Blitz by default (social-prompt-37): a six-player snake is 24 timed
+        # turns of dead time for five people; blitz is four rounds for all.
+        mode = options.get("mode") or game_opts.get("mode") or "blitz"
         if mode not in ("snake", "blitz"):
-            mode = "snake"
+            mode = "blitz"
         min_players, max_players = clamp_player_limits(
             options.get("min_players", game_opts.get("min_players", MIN_PLAYERS)),
             options.get("max_players", game_opts.get("max_players", MAX_PLAYERS)),
@@ -901,14 +888,18 @@ class RushmoreCog(commands.Cog):
                 pass
 
             # Ping the player — with its own pick button, so nobody has to
-            # scroll back up to the board message to act.
+            # scroll back up to the board message to act. One message per
+            # turn: the 10-second nudge edits this same ping in place rather
+            # than posting a second one (social-prompt-37 — a six-player
+            # snake used to leave ~70 self-deleting messages behind).
             member = guild.get_member(pid) if guild else None
             ping_text = (
                 f"{member.mention if member else player_name} It's your turn! "
                 f"Pick for Round {rnd} of your Mt. Rushmore of **{discord.utils.escape_markdown(draft_view.topic)}**!"
             )
+            ping_msg = None
             try:
-                await channel.send(
+                ping_msg = await channel.send(
                     ping_text, view=RushmorePingView(draft_view), delete_after=timer_secs,
                 )
             except discord.HTTPException:
@@ -921,16 +912,12 @@ class RushmoreCog(commands.Cog):
 
             # Schedule nudge
             nudge_task = None
-            if timer_secs > 15:
-                async def _nudge():
+            if timer_secs > 15 and ping_msg is not None:
+                async def _nudge(msg=ping_msg):
                     await asyncio.sleep(timer_secs - 10)
                     if not pick_event.is_set() and not draft_view._closed:
                         try:
-                            m = member.mention if member else player_name
-                            await channel.send(
-                                f"{m} ⏰ 10 seconds left to pick!",
-                                view=RushmorePingView(draft_view), delete_after=10,
-                            )
+                            await msg.edit(content=f"{ping_text}\n⏰ **10 seconds left to pick!**")
                         except discord.HTTPException:
                             pass
                 nudge_task = asyncio.create_task(_nudge())
@@ -1204,8 +1191,11 @@ class RushmoreCog(commands.Cog):
         except discord.HTTPException:
             pass
 
-        # Tally
-        winner_uids, max_votes, results_by_uid = tally_votes(vote_view.votes, eligible)
+        # Tally — a tie goes to fewest skips, then the quickest drafter.
+        winner_uids, max_votes, results_by_uid = tally_votes(
+            vote_view.votes, eligible,
+            skipped=draft_view.skipped, pick_times=draft_view.pick_times,
+        )
 
         winner_names = [resolve_name(guild, uid) for uid in winner_uids]
         winner_boards_list = [draft_view.boards.get(str(uid), []) for uid in winner_uids]

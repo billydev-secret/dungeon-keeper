@@ -19,32 +19,51 @@ from bot_modules.games.constants import (
     PHASE_RESULTS,
 )
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.games.utils.round_pacing import TIMER_FIELD_NAME, timer_field_value
 from bot_modules.games_hottakes.logic import (
+    MIN_TAKES,
     VOTE_LABELS,
     compute_recap_summary,
 )
 from bot_modules.core.branding import apply_section_spacing
+
+# The lobby says how the game goes and what "anonymous" means here, in the
+# embed itself rather than behind the Help button (anon-tail-72/75). The
+# mod-visibility line is the one FFA's reply help has always carried.
+LOBBY_DESCRIPTION = (
+    "Submit your spiciest take — all entries are anonymous.\n\n"
+    "**How to play:** press **Submit Hot Take** (as many as you like); when "
+    f"at least {MIN_TAKES} are in, the host presses **Start Voting** and the room rates "
+    "each take 🧊 → 🔥, one at a time. The hottest take wins.\n"
+    "Your name is never shown with your take — mods can still see who sent it."
+)
 
 
 def build_lobby_embed(
     host_name: str,
     submission_count: int = 0,
     color: discord.Color | None = None,
+    start_at: int | None = None,
 ) -> discord.Embed:
     """Build the initial lobby embed shown when ``/hottakes`` is invoked.
 
     ``submission_count`` is rendered in the Submissions field; the cog
     keeps this value live by editing the field in place as takes arrive.
     ``color`` is the resolved guild accent; it falls back to the old
-    :data:`PHASE_JOINING` constant when no guild is in scope.
+    :data:`PHASE_JOINING` constant when no guild is in scope. ``start_at``
+    is the host's advertised start (``start_in``), shown as a live relative
+    timestamp — advertising, not automation: the host still presses Start
+    Voting.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['hottakes']} Hot Takes",
-        description="Submit your spiciest take — all entries are anonymous.",
+        description=LOBBY_DESCRIPTION,
         color=color or discord.Color(PHASE_JOINING),
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Submissions", value=str(submission_count), inline=True)
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{int(start_at)}:R>", inline=True)
     embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
     apply_section_spacing(embed)
     return embed
@@ -57,6 +76,7 @@ def build_vote_embed(
     votes_by_user: dict[int, int],
     closed: bool = False,
     color: discord.Color | None = None,
+    advance_at: int | None = None,
 ) -> discord.Embed:
     """Build the per-round voting embed shown alongside the vote buttons.
 
@@ -66,7 +86,8 @@ def build_vote_embed(
     used for both the open and closed states (voting rounds are not a
     win/loss, so both are accent); it falls back to the old
     :data:`PHASE_PLAYING` / :data:`PHASE_RESULTS` constants when no
-    guild is in scope.
+    guild is in scope. ``advance_at`` (epoch) adds the shared live
+    countdown field while the take's timer is running.
     """
     title = f"{GAME_ICONS['hottakes']} Hot Take #{take_num}"
     if closed:
@@ -95,6 +116,8 @@ def build_vote_embed(
         value=f"Take {take_num}/{total_takes}",
         inline=False,
     )
+    if advance_at and not closed:
+        embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
     embed.set_footer(text=f"{GAME_ICONS['hottakes']} Hot Takes • 👁 Anonymous")
     apply_section_spacing(embed)
     return embed

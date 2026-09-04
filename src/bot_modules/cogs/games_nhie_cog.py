@@ -10,7 +10,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY
+from bot_modules.games.constants import GAME_ICONS, HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -55,12 +55,14 @@ from bot_modules.games_nhie.embeds import (
 )
 from bot_modules.games_nhie.logic import (
     DEFAULT_LIVES,
+    MAX_QUEUED_STATEMENTS,
     apply_round_lives,
     apply_vote,
     bump_guilt_scores,
     encode_round_state,
     find_winner,
     payload_to_round_state,
+    queue_statement,
 )
 
 log = logging.getLogger(__name__)
@@ -97,8 +99,14 @@ class PoseStatementModal(discord.ui.Modal, title="Pose a Statement"):
             await self._view.begin_round(text, self._message)
             await interaction.response.send_message("✅ Your statement opened the round!", ephemeral=True)
             return
-        self._view.queued_statements.append(text)
-        count = len(self._view.queued_statements)
+        # Same cap as WYR's and MLT's Pose queues (vote-games-62).
+        count = queue_statement(self._view.queued_statements, text)
+        if count is None:
+            await interaction.response.send_message(
+                f"The statement queue is full ({MAX_QUEUED_STATEMENTS}). Let some play first!",
+                ephemeral=True,
+            )
+            return
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
@@ -296,7 +304,7 @@ class NHIECog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="nhie", description="Start a Never Have I Ever game!")
+    @app_commands.command(name="nhie", description=play_description("nhie"))
     @app_commands.describe(
         question="Opening statement (e.g. 'gone skydiving') — defaults to question bank",
         lives="Number of lives per player (default 3, 0 = no elimination)",

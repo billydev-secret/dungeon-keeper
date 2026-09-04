@@ -162,13 +162,17 @@ def build_results_embed(
     color: discord.Color | None = None,
     *,
     name_fn: NameFn = mention,
+    winners: list[int] | None = None,
 ) -> discord.Embed:
     """Build the per-round results embed shown after votes are tallied.
 
-    Lines are sorted by descending vote count; the top-voted player(s)
-    get a 👑 crown prefix (multiple crowns appear on a tie). When
-    ``tally`` is empty (no votes were cast) the description renders a
-    placeholder so the embed is never blank.
+    Lines are sorted by descending vote count; the crowned player(s) get
+    a 👑 prefix. ``winners`` is what :func:`logic.find_round_winners`
+    decided — the cog passes it so the crowns shown match the crowns
+    banked once a tie at the top has been broken without self-votes
+    (vote-games-62); omitted, the top vote count is crowned (every tied
+    player on a tie). When ``tally`` is empty (no votes were cast) the
+    description renders a placeholder so the embed is never blank.
 
     ``name_fn`` turns a user id into embed-ready (already escaped) text.
 
@@ -182,9 +186,13 @@ def build_results_embed(
     )
     sorted_tally = sorted(tally.items(), key=lambda x: -x[1])
     max_votes = sorted_tally[0][1] if sorted_tally else 0
+    crowned = (
+        set(winners) if winners is not None
+        else {uid for uid, count in sorted_tally if count == max_votes and count > 0}
+    )
     lines: list[str] = []
     for uid, count in sorted_tally:
-        crown = "👑 " if count == max_votes and count > 0 else "   "
+        crown = "👑 " if uid in crowned else "   "
         lines.append(f"{crown}**{name_fn(uid)}** — {count} votes")
     embed.description = "\n".join(lines) if lines else "No votes cast."
     embed.set_footer(

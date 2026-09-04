@@ -1500,6 +1500,45 @@ def test_ll_template_update_keeps_the_range_derived(open_client):
     assert (data["player_min"], data["player_max"]) == (2, 4)
 
 
+def test_ll_template_update_keeps_an_authored_range_when_blanks_are_unchanged(open_client, fake_ctx):
+    """The starter pack ships with its own range (a 5-blank Quiplash story
+    is 2+ players, not the derived 1–1). The editor sends the blanks with
+    every save, so a title edit used to re-derive and clobber that range
+    (trivia-tail-83). Re-derive only when the blanks actually changed."""
+    from bot_modules.core.db_utils import open_db
+    tid = _create_template(open_client, blanks=_blanks(5)).json()["template_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "UPDATE legitlibs_templates SET player_min = 2, player_max = 5 WHERE template_id = ?",
+            (tid,),
+        )
+    resp = open_client.put(
+        f"{BASE}/legitlibs/templates/{tid}",
+        json={"title": "Renamed", "blanks": _blanks(5)},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert (data["player_min"], data["player_max"]) == (2, 5)
+
+    # Changing the blanks still re-derives.
+    open_client.put(f"{BASE}/legitlibs/templates/{tid}", json={"blanks": _blanks(20)})
+    data = open_client.get(f"{BASE}/legitlibs/templates/{tid}").json()
+    assert (data["player_min"], data["player_max"]) == (2, 4)
+
+
+def test_ll_template_list_carries_the_quiplash_range(open_client):
+    """The card shows the range per mode: the derived one is Classic's,
+    Quiplash has a fixed room-sized range the server owns."""
+    from bot_modules.cogs.games_legitlibs.validation import (
+        QUIPLASH_PLAYER_MAX, QUIPLASH_PLAYER_MIN,
+    )
+    _create_template(open_client, blanks=_blanks(5))
+    rows = open_client.get(f"{BASE}/legitlibs/templates").json()["templates"]
+    assert rows[0]["player_max"] == 1
+    assert rows[0]["quiplash_player_min"] == QUIPLASH_PLAYER_MIN
+    assert rows[0]["quiplash_player_max"] == QUIPLASH_PLAYER_MAX
+
+
 # ── Per-game config ───────────────────────────────────────────────────────────
 
 
@@ -1518,6 +1557,20 @@ def test_game_config_save_replaces_the_whole_option_set(open_client):
     assert resp.status_code == 200
     data = open_client.get(f"{BASE}/config/games/clapback").json()
     assert data["options"] == {"rounds": 7}
+
+
+def test_ama_dials_round_trip_with_the_role_id_as_a_string(open_client):
+    """The AMA panel's two dials (social-prompt-34/41): the role id is a
+    snowflake and must come back as the string it was saved as, never a
+    float-rounded number."""
+    big = "123456789012345678901"
+    resp = open_client.put(
+        f"{BASE}/config/games/ama",
+        json={"enabled": True, "options": {"hot_seat_ping_role_id": big, "questions_per_turn": 6}},
+    )
+    assert resp.status_code == 200
+    data = open_client.get(f"{BASE}/config/games/ama").json()
+    assert data["options"] == {"hot_seat_ping_role_id": big, "questions_per_turn": 6}
 
 
 def test_game_config_enabled_only_save_keeps_stored_options(open_client):

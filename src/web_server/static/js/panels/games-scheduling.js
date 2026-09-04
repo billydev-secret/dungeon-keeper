@@ -17,15 +17,20 @@ let _options = null;   // { games: [{type,name,icon,hosting,fields}], retry_grac
 
 // What "schedule it" actually buys, per game (discovery-4). Most party games
 // open a lobby and wait for a human; only a few finish on their own.
+// Keys mirror hosting_kind() / HOSTING_LABEL in games/constants.py.
 const HOSTING_TAG = {
   self: "Self-running",
   timer: "Self-running with a round timer",
+  countdown: "Starts itself after a countdown",
   host: "Needs a host",
 };
 const HOSTING_HINT = {
   self: "Runs itself: the bot posts it and it finishes on its own — nobody has to be at the keyboard.",
   timer: "Runs itself only with a round timer set below. Host-paced (0 seconds) it shows one question and "
     + "waits for someone to press Next, so leave a timer on for an unattended slot.",
+  countdown: "Opens a lobby with a ten-minute countdown and starts itself when it runs out, as long as "
+    + "enough players have joined. The bot still tags whoever creates this schedule when the lobby "
+    + "appears, in case the room is thin.",
   host: "Opens a lobby and waits for someone to press start. The bot tags whoever creates this schedule "
     + "the moment the lobby appears — make sure a host will be around.",
 };

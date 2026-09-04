@@ -13,20 +13,41 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.games.utils.round_pacing import TIMER_FIELD_NAME, timer_field_value
 from bot_modules.games_fantasies.logic import compute_recap_summary
 from bot_modules.core.branding import apply_section_spacing
 
+# The panel says how the game goes and what "anonymous" means here, in the
+# embed itself rather than behind the Help button (anon-tail-72/75). The
+# mod-visibility line is the one FFA's reply help has always carried.
+LOBBY_DESCRIPTION = (
+    "Submit anonymously each round, then vote!\n\n"
+    "**How to play:** the host presses **Start Round**; everyone submits a "
+    "💖 fantasy or a 🚩 dealbreaker, then each entry is shown one at a time "
+    "and the room votes ✅ Same or ❌ Not for me. Run as many rounds as you "
+    "like, then **End Game** posts the recap.\n"
+    "Your name is never shown with your entry — mods can still see who sent it."
+)
 
-def build_lobby_embed(host_name: str, color: "discord.Color | None" = None) -> discord.Embed:
-    """Build the lobby embed shown when ``/fantasies`` is invoked."""
+
+def build_lobby_embed(
+    host_name: str, color: "discord.Color | None" = None, start_at: int | None = None,
+) -> discord.Embed:
+    """Build the lobby embed shown when ``/fantasies`` is invoked.
+
+    ``start_at`` is the host's advertised first-round start (``start_in``),
+    a live relative timestamp — advertising, not automation.
+    """
     if color is None:
         color = discord.Color(BRAND_COLOR)
     embed = discord.Embed(
         title=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers",
-        description="Submit anonymously each round, then vote!",
+        description=LOBBY_DESCRIPTION,
         color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
+    if start_at:
+        embed.add_field(name="⏰ Starting", value=f"<t:{int(start_at)}:R>", inline=True)
     embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
     return embed
 
@@ -52,13 +73,15 @@ def build_vote_embed(
     total_entries: int = 0,
     closed: bool = False,
     color: "discord.Color | None" = None,
+    advance_at: int | None = None,
 ) -> discord.Embed:
     """Build the per-entry voting embed shown alongside the vote buttons.
 
     Renders the entry text, a horizontal bar chart of "Same" vs "Not
     for me" votes, and an optional progress indicator. ``closed`` flips
     the title suffix to ``— VOTE CLOSED`` so the message can be edited
-    in place when the round ends.
+    in place when the round ends. ``advance_at`` (epoch) adds the shared
+    live countdown field while the entry's timer is running.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -89,6 +112,8 @@ def build_vote_embed(
             value=f"Entry {entry_num}/{total_entries}",
             inline=False,
         )
+    if advance_at and not closed:
+        embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
     embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
     apply_section_spacing(embed)
     return embed

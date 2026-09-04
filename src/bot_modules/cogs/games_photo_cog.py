@@ -14,7 +14,12 @@ from bot_modules.games.utils.game_manager import (
     end_game,
 )
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
-from bot_modules.games_photo.logic import backfill_card_counts
+from bot_modules.games_photo.logic import (
+    backfill_card_counts,
+    previous_day_recap,
+    recap_line,
+)
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 
 log = logging.getLogger(__name__)
@@ -144,6 +149,15 @@ class PhotoCog(commands.Cog):
             log.warning("photo launch lacked send perms in channel %s", channel.id)
             return None
 
+        # One line under the card recapping the previous day — the ending the
+        # stream never had (photo-external-105). Plain text, no ping, the
+        # poster named through name_fn rather than a mention. Never allowed
+        # to stop a card that has already posted.
+        try:
+            await self._post_recap(channel, guild_id=guild_id)
+        except Exception:
+            log.exception("photo launch: recap failed in channel %s", channel.id)
+
         # Record the play to history for stats (fire-and-forget: there's no
         # interactive game state to keep alive — people just post in the channel).
         # The row is archived immediately with the prompt and tags it showed and
@@ -165,6 +179,29 @@ class PhotoCog(commands.Cog):
 
         await end_game(self.db, game_id, payload=payload, bot=self.bot)
         return game_id
+
+
+    async def _post_recap(self, channel, *, guild_id: int) -> None:
+        bot_user = getattr(self.bot, "user", None)
+        recap = await previous_day_recap(
+            self.db,
+            channel_id=channel.id,
+            exclude_author_ids=[bot_user.id] if bot_user is not None else [],
+        )
+        if recap is None:
+            return
+        guild = getattr(channel, "guild", None)
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=guild_id,
+            user_ids=[recap.most_loved[1]] if recap.most_loved else [],
+        )
+        await channel.send(
+            recap_line(recap, guild_id=guild_id, channel_id=channel.id, name_fn=name_fn),
+            allowed_mentions=discord.AllowedMentions.none(),
+            suppress_embeds=True,
+        )
 
 
 async def setup(bot: "Bot"):

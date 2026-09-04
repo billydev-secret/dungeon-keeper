@@ -15,6 +15,9 @@ external bank or a FIFO user-submitted queue). What it does have is:
   in place. WYR's analog of the traditional cog's ``toggle_pref`` — it
   mutates two mutable lists rather than a payload dict, but the shape
   ("returns metadata the caller echoes back to the user") is identical.
+- :func:`record_show_vote` / :func:`shown_on_side` — a voter's own
+  choice to be named beside their pick (vote-games-61: the old
+  host/mod-only Reveal Voters refused most of the room).
 - :func:`next_button_label` — render the ``"⏭️ Next (N queued)"`` label
   consistently from the queue length. Used in two places in the cog
   (modal submit and round carry-over) so it's worth centralizing.
@@ -81,6 +84,33 @@ def toggle_vote(
     if user_id not in same_side:
         same_side.append(user_id)
     return changed
+
+
+def record_show_vote(
+    votes_a: list[int],
+    votes_b: list[int],
+    shown: list[int],
+    user_id: int,
+) -> str:
+    """Record ``user_id``'s choice to be named beside their pick.
+
+    Mutates ``shown`` in place. Returns ``"shown"`` when the user was
+    added, ``"not_voted"`` when they have no vote to show (nothing
+    changes), or ``"already"`` for an idempotent re-press. Showing is
+    for the round — a voter who later switches sides is still shown, on
+    the side they are now on.
+    """
+    if user_id not in votes_a and user_id not in votes_b:
+        return "not_voted"
+    if user_id in shown:
+        return "already"
+    shown.append(user_id)
+    return "shown"
+
+
+def shown_on_side(side: list[int], shown: list[int]) -> list[int]:
+    """The voters on ``side`` who chose to be named, in vote order."""
+    return [uid for uid in side if uid in shown]
 
 
 def next_button_label(queued_count: int) -> str:

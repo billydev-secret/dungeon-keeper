@@ -33,9 +33,15 @@ log = logging.getLogger(__name__)
 # Games whose cog ends itself with a recap (``end_with_recap``): ``/games end``
 # hands them the close so the room gets the same game-over card and payout the
 # host's own 🏁 End Game posts, instead of the red Force-Closed card
-# (vote-games-52 / discovery-3). Looked up by cog name, the way AMA's cleanup
-# hook is, so a cog mid-reload degrades to the force-close path.
-RECAP_ENDING_COGS = {"wyr": "WYRCog", "nhie": "NHIECog", "mlt": "MLTCog"}
+# (vote-games-52 / discovery-3; AMA since social-prompt-33). Looked up by cog
+# name, the way AMA's cleanup hook is, so a cog mid-reload degrades to the
+# force-close path.
+RECAP_ENDING_COGS = {
+    "wyr": "WYRCog", "nhie": "NHIECog", "mlt": "MLTCog", "ama": "AMACog",
+    # A Compliment round in its wrap-up window finishes on the spot; a lobby
+    # answers False and takes the force-close (social-prompt-39).
+    "compliment": "ComplimentCog",
+}
 
 
 class GamesConfigCog(commands.Cog):

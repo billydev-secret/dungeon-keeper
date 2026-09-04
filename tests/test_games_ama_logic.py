@@ -33,20 +33,24 @@ from bot_modules.games_ama.logic import (
     bottom_bar_label,
     build_question_entry,
     compute_recap_stats,
-    first_content_line,
+    hot_seat_seconds_remaining,
     is_panel_target,
     is_resolved_status,
     mark_question_answered,
     mark_question_approved,
     mark_question_expired,
-    mark_question_message,
     mark_question_passed,
+    mark_question_pending_dm,
     mark_question_rejected,
+    mode_label,
     normalize_format,
+    open_question_cards,
     panel_bottom_bar_label,
     parse_iso_ts,
+    pending_screened_dms,
     recompute_totals,
     remaining_questions_text,
+    resolve_questions_per_turn,
     should_expire,
     toggle_panel_member,
     unique_asker_count,
@@ -169,18 +173,12 @@ def test_build_question_entry_minimum_fields():
     }
 
 
-def test_build_question_entry_ai_idle_source_and_status():
+def test_build_question_entry_takes_an_explicit_status():
     entry = build_question_entry(
-        asker_id=0,
-        text="some AI text",
-        hot_seat_id=99,
-        status="approved",
-        source="ai_idle",
+        asker_id=4, text="x", hot_seat_id=99, status="approved",
         now_iso="2024-01-01T00:00:00+00:00",
     )
     assert entry["status"] == "approved"
-    assert entry["source"] == "ai_idle"
-    assert entry["asker_id"] == 0
 
 
 def test_build_question_entry_default_timestamp_uses_now():
@@ -189,11 +187,17 @@ def test_build_question_entry_default_timestamp_uses_now():
     assert parse_iso_ts(entry["asked_at"]) is not None
 
 
-def test_build_question_entry_omits_source_when_none():
+def test_build_question_entry_has_no_source_tag():
+    """social-prompt-48: the retired AI idle-question path tagged entries
+    with ``source``; a player question never carries one."""
     entry = build_question_entry(
         asker_id=1, text="x", hot_seat_id=2, now_iso="2024-01-01T00:00:00+00:00"
     )
     assert "source" not in entry
+    import bot_modules.games_ama.logic as ama_logic
+
+    assert not hasattr(ama_logic, "first_content_line")
+    assert not hasattr(ama_logic, "mark_question_message")
 
 
 def test_add_question_appends_and_returns_index():
@@ -272,33 +276,7 @@ def test_mark_question_approved_out_of_range_is_noop():
     assert payload["questions"] == []
 
 
-# ── mark_question_message ────────────────────────────────────────────
 
-
-def test_mark_question_message_writes_id_unconditionally():
-    payload = {"questions": [{"asker_id": 0, "text": "x"}]}
-    mark_question_message(payload, 0, 555)
-    assert payload["questions"][0]["question_message_id"] == 555
-
-
-def test_mark_question_message_overwrites_existing_id():
-    """The cog uses an unconditional assignment in the idle-AI flow."""
-    payload = {
-        "questions": [
-            {"asker_id": 0, "text": "x", "question_message_id": 111}
-        ]
-    }
-    mark_question_message(payload, 0, 222)
-    assert payload["questions"][0]["question_message_id"] == 222
-
-
-def test_mark_question_message_out_of_range_is_noop():
-    payload = {"questions": []}
-    mark_question_message(payload, 0, 1)
-    assert payload["questions"] == []
-
-
-# ── mark_question_answered ───────────────────────────────────────────
 
 
 def test_mark_question_answered_sets_status_and_timestamp():
@@ -445,33 +423,10 @@ def test_recompute_totals_no_answered():
     assert payload["total_answered"] == 0
 
 
-# ── first_content_line ───────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        pytest.param("- Hello", "Hello", id="strips-dash-bullet"),
-        pytest.param("* Hello", "Hello", id="strips-star-bullet"),
-        pytest.param("1. Hello", "Hello", id="strips-numeric-bullet"),
-        pytest.param('"Hello there"', "Hello there", id="strips-double-quotes"),
-        pytest.param("'Hello'", "Hello", id="strips-single-quotes"),
-        pytest.param("\n  \n- Real Question\n", "Real Question", id="skips-blank-lines"),
-        pytest.param("", None, id="empty-returns-none"),
-        pytest.param("\n\n  \n", None, id="whitespace-only-returns-none"),
-        pytest.param("x" * 600, "x" * 500, id="truncates-to-500"),
-        # The cog only returns the first non-blank line, not joined text.
-        pytest.param("Q1?\nQ2?", "Q1?", id="uses-only-first-nonblank"),
-    ],
-)
-def test_first_content_line(text: str, expected: str | None):
-    assert first_content_line(text) == expected
-
-
 # ── unique_asker_count / compute_recap_stats ─────────────────────────
 
 
-def test_unique_asker_count_excludes_ai_sentinel():
+def test_unique_asker_count_excludes_a_zero_id():
     qs = [
         {"asker_id": 0},  # AI
         {"asker_id": 1},
@@ -557,6 +512,102 @@ def test_remaining_questions_text_pluralisation(asked, expected):
     assert remaining_questions_text(asked) == expected
 
 
+def test_remaining_questions_text_never_negative():
+    # A seat that answered more than the dial asked (the dial was lowered
+    # mid-game, or a leftover card from an earlier seat) shows 0, not -1.
+    assert remaining_questions_text(5, per_turn=4) == "**0** questions left this turn."
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        pytest.param(None, 4, id="unset-is-default"),
+        pytest.param("", 4, id="blank-is-default"),
+        pytest.param("abc", 4, id="garbage-is-default"),
+        pytest.param(0, 1, id="zero-clamps-to-one"),
+        pytest.param(6, 6, id="in-range"),
+        pytest.param("7", 7, id="string-number"),
+        pytest.param(999, 20, id="ceiling"),
+    ],
+)
+def test_resolve_questions_per_turn(value, expected):
+    assert resolve_questions_per_turn(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        pytest.param("unfiltered", "Unfiltered", id="unfiltered"),
+        pytest.param("screened", "Screened", id="screened"),
+        pytest.param("SCREENED", "Screened", id="upper-enum"),
+        pytest.param(None, "Unfiltered", id="missing"),
+    ],
+)
+def test_mode_label_is_title_case(mode, expected):
+    assert mode_label(mode) == expected
+
+
+def test_lobby_main_and_panel_embeds_title_case_the_mode():
+    """social-prompt-44: the three live embeds printed the raw enum while the
+    recap Title-Cased it."""
+    by = lambda e: {(f.name or ""): (f.value or "") for f in e.fields}  # noqa: E731
+    assert by(build_lobby_embed("H", "screened"))["Mode"] == "Screened"
+    assert by(build_main_embed("H", "screened", None, 0, [], str))["Mode"] == "Screened"
+    assert by(build_panel_embed("H", "unfiltered", [], str))["Mode"] == "Unfiltered"
+    assert by(build_recap_embed("screened", {}))["🎙️ Mode"] == "Screened"
+
+
+def test_main_embed_counts_the_turn_against_the_dial():
+    embed = build_main_embed("H", "unfiltered", "Bob", 1, [], str, per_turn=6)
+    assert embed.description is not None and "**5** questions left" in embed.description
+
+
+# ── hot-seat timer re-arm (social-prompt-42) ─────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("started_ago_s", "expected"),
+    [
+        pytest.param(None, 3600, id="unknown-start-gets-the-full-hour"),
+        pytest.param(600, 3000, id="ten-minutes-in"),
+        pytest.param(3600, 5, id="hour-elapsed-rotates-promptly"),
+        pytest.param(90000, 5, id="long-overdue-still-floors"),
+        pytest.param(-120, 3600, id="clock-skew-caps-at-the-hour"),
+    ],
+)
+def test_hot_seat_seconds_remaining(started_ago_s, expected):
+    now = datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc)
+    started = None if started_ago_s is None else (now - timedelta(seconds=started_ago_s)).isoformat()
+    assert hot_seat_seconds_remaining(started, now) == expected
+
+
+# ── the live buttons a close or a restart must find again ────────────
+
+
+def test_open_question_cards_lists_unresolved_posted_questions():
+    qs = [
+        {"status": "approved", "question_message_id": 11},
+        {"status": "answered", "question_message_id": 12},
+        {"status": "pending"},                       # screened, never posted
+        {"status": "approved", "message_id": 14},     # legacy key
+        {"status": "passed", "question_message_id": 15},
+    ]
+    assert open_question_cards(qs) == [(0, 11), (3, 14)]
+
+
+def test_pending_screened_dms_lists_only_pending_with_a_dm_id():
+    payload = {"questions": [
+        {"status": "pending"},
+        {"status": "pending"},
+        {"status": "approved"},
+    ]}
+    mark_question_pending_dm(payload, 1, 555)
+    mark_question_pending_dm(payload, 2, 556)  # approved already — ignored
+    mark_question_pending_dm(payload, 9, 557)  # out of range — no-op
+    assert payload["questions"][1]["host_dm_message_id"] == 555
+    assert pending_screened_dms(payload["questions"]) == [(1, 555)]
+
+
 def test_remaining_questions_text_custom_per_turn():
     assert remaining_questions_text(0, per_turn=2) == "**2** questions left this turn."
 
@@ -571,7 +622,7 @@ def test_build_lobby_embed_basic_fields():
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name.get("Host") == "Alice"
     assert by_name.get("Hot Seat") == "—"
-    assert by_name.get("Mode") == "unfiltered"
+    assert by_name.get("Mode") == "Unfiltered"
 
 
 def test_build_lobby_embed_has_footer():

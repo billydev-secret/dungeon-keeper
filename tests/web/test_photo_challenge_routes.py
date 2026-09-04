@@ -128,3 +128,26 @@ def test_shared_schedule_rejects_creating_photo(open_client):
         "channel_id": "42", "game_type": "photo", "recurrence": "daily", "time": "20:00",
     })
     assert resp.status_code == 400
+
+
+def test_schedule_save_clears_a_legacy_announce_role(open_client, fake_ctx):
+    """A photo row inherited from the shared scheduler carried announce=1 and a
+    role, so members were pinged by a line the panel never showed and would
+    have been pinged twice once a Ping Role was set (photo-external-103).
+    Saving the row clears it; the Setup panel's Ping Role is the only ping."""
+    open_client.put(f"{BASE}/config", json={"channel_id": "9999"})
+    with open_db(fake_ctx.db_path) as conn:
+        sid = create_scheduled(
+            conn, guild_id=GUILD, channel_id=9999, game_type="photo",
+            options='{"prompt": ""}', created_by=1, created_at=0.0, time_of_day=313,
+            recurrence="daily", recur_days=None, start_date=None, next_run_at=1.0,
+            giveup_at=None, announce=1, announce_role_id=777,
+        )
+        conn.commit()
+    resp = open_client.put(f"{BASE}/schedule/{sid}", json={"recurrence": "daily", "time": "05:13"})
+    assert resp.status_code == 200, resp.text
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT announce, announce_role_id, options FROM games_scheduled WHERE id = ?", (sid,)
+        ).fetchone()
+    assert (row[0], row[1], row[2]) == (0, None, "{}")

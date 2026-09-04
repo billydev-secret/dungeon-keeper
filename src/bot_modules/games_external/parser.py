@@ -43,10 +43,20 @@ the roster or the scores.
   *Game over!* → ``<@id> has won!`` (a draw's exact wording is unconfirmed —
   no real sample yet — so an unrecognised finish just pays participation, no
   winner).
-* Anagrams — a *Scoreboard* embed whose **field names** carry the scores as
-  ``"<username> - N POINTS"``. Unlike the other two, players are named by
-  Discord *username*, not mention, so the caller resolves them the same way
-  the Cat Bot path does. *Game over!* → ``<@id> is the winner!``.
+* Anagrams — a *Scoreboard* embed. Before 2026-08-15 its **field names**
+  carried the scores as ``"<username> - N POINTS"``; since the rewrite the
+  fields are empty and the **description** lists ``**DisplayName** — N
+  points`` per player (payouts were silently dead for a week over exactly
+  that — three real games unpaid, photo-external-99). Either way players are
+  *named*, not mentioned, so the caller resolves them by name the way the Cat
+  Bot path does. *Game over!* → ``<@id> is the winner!`` (old) or
+  ``<@id> wins!`` (new).
+* Survey Says and Wisecracks — a *Final scores* embed whose **description**
+  lists ``**DisplayName**: N points`` per player. Survey Says adds a
+  ``<@id> reached 5 points!`` line naming the winner; Wisecracks declares
+  nobody and the winner is the top score once the names resolve. Survey Says
+  also posts a *Game over!* (``<@id> wins!``) 0.7s after its *Final scores*,
+  which bounds into a window of its own and pays nobody (see ``_infer_game``).
 
 Telling the sub-games apart is done from the **lobby embed**, not the terminal:
 CAH and Anagrams share the *exact* same ``<@id> is the winner!`` phrasing, so a
@@ -67,7 +77,8 @@ _MENTION = re.compile(r"<@!?(\d+)>")
 # "<@123>: 3" (old) and "<@123>: **3**" (new — the score is bolded).
 _STANDINGS_ENTRY = re.compile(r"<@!?(\d+)>\s*:\s*\*{0,2}(\d+)\*{0,2}")
 _SUBMITTED = re.compile(r"<@!?(\d+)>\s+Submitted")
-_WINNER = re.compile(r"<@!?(\d+)>\s+is the winner")
+# "<@123> is the winner!" (through 2026-08-14) / "<@123> wins!" (since).
+_WINNER = re.compile(r"<@!?(\d+)>\s+(?:is the winner|wins!)")
 _C4_WON = re.compile(r"<@!?(\d+)>\s+has won")
 _RECAP_TITLE = "Time's up!"
 _JOINED_FIELD = "Joined Players"
@@ -83,10 +94,22 @@ _SCOREBOARD_TITLE = "Scoreboard"
 # An Anagrams Scoreboard field name: "efficientpanic - 900 POINTS". The trailing
 # "Pangram" field has no score and is skipped by the same pattern.
 _SCORE_FIELD = re.compile(r"^(.+?)\s+-\s+(\d+)\s+POINTS$")
+# The same score, post-2026-08-15, as a description line: "**EP** — 1700 points".
+# Anchored on the line so the trailing "**Skipped words:** COLOGNE" (no score)
+# and the found-words line under each player never match.
+_SCORE_LINE = re.compile(r"^\*\*(.+?)\*\*\s+[—–-]\s+(\d+)\s+points?\s*$", re.MULTILINE)
+# Survey Says / Wisecracks *Final scores* line: "**EP**: 5 points". The
+# per-round *Results* embeds carry the same line under a ✅/❌ prefix, which
+# the line anchor rejects — and the read is gated on the title anyway.
+_NAMED_FINAL_SCORE = re.compile(r"^\*\*(.+?)\*\*:\s+(\d+)\s+points?\s*$", re.MULTILINE)
+# Survey Says' winner line inside *Final scores*: "<@123> reached 5 points!".
+_REACHED = re.compile(r"<@!?(\d+)>\s+reached\s+\d+\s+points")
 
 _GAME_OVER_TITLE = "Game over!"
 # The post-2026-08-15 CAH finish. Unlike *Game over!* it declares no winner —
 # it is just the last standings under a header — so the winner is derived.
+# Survey Says and Wisecracks finish under the same title with named lines in
+# the description instead of a *Standings* field.
 _FINAL_SCORES_TITLE = "Final scores"
 # Gamebot dropping a game mid-run. Seen once (2026-08-16), 1.4s *after* a
 # perfectly good *Final scores* on a game that had already been won, so it is
@@ -104,20 +127,27 @@ _CRASHED_TITLE = "Something went wrong"
 GAME_CAH = "cah"
 GAME_CONNECT4 = "connect4"
 GAME_ANAGRAMS = "anagrams"
+GAME_SURVEY_SAYS = "survey_says"
+GAME_WISECRACKS = "wisecracks"
 
 _START_TITLE = re.compile(r"\bis starting an? (.+?) game!", re.IGNORECASE)
 # Same title, read from the front: everything before "is starting" is the host's
 # username (which can contain dots, underscores and spaces).
 _START_HOST = re.compile(r"^(?P<host>.+?)\s+is starting an? .+ game!\s*$", re.IGNORECASE)
 # Gamebot's own game names → our sub-game key. A name that isn't here is a game
-# we don't parse (Chess, Othello, Poker, Survey Says, Wisecracks, …); it still
-# bounds a window, but pays nobody.
+# we don't parse (Chess, Othello, Poker, …); it still bounds a window, but pays
+# nobody.
 _START_GAMES: dict[str, str] = {
     "cards against humanity": GAME_CAH,
     "cards against humanity: family edition": GAME_CAH,
     "connect 4": GAME_CONNECT4,
     "anagrams": GAME_ANAGRAMS,
+    "survey says": GAME_SURVEY_SAYS,
+    "wisecracks": GAME_WISECRACKS,
 }
+# The sub-games whose finish is a *Final scores* embed of named lines
+# ("**Name**: N points") — one extractor serves both.
+NAMED_SCORE_GAMES: frozenset[str] = frozenset({GAME_SURVEY_SAYS, GAME_WISECRACKS})
 
 # The reverse direction, for anything that has to *show* a Gamebot game to a
 # member (Event Echo's main-chat announcement). Kept here because this module
@@ -128,6 +158,8 @@ GAME_LABELS: dict[str, str] = {
     GAME_CAH: "Cards Against Humanity",
     GAME_CONNECT4: "Connect 4",
     GAME_ANAGRAMS: "Anagrams",
+    GAME_SURVEY_SAYS: "Survey Says",
+    GAME_WISECRACKS: "Wisecracks",
 }
 
 # A lobby that timed out without enough players. Gamebot still posts a *Game
@@ -212,18 +244,22 @@ def winner_from_game_over(embeds: Sequence[Mapping[str, Any]]) -> int | None:
 
 
 def is_game_over(embeds: Sequence[Mapping[str, Any]]) -> bool:
-    """True when these embeds are Gamebot's **CAH** end-of-game announcement.
+    """True when these embeds are a score-carrying game's finish — as opposed
+    to Connect 4's ``has won!`` *Game over!*.
 
-    *Final scores* is the new format's finish and is CAH's alone, so unlike
-    the old *Game over!* it needs no description check to tell it from Connect
-    4's. Deliberately does **not** cover *Something went wrong*: that ends a
-    window without being evidence a CAH game happened in it.
+    *Final scores* is CAH's finish since 2026-08-15 **and** Survey Says' /
+    Wisecracks' (named lines instead of a *Standings* field); *Game over!*
+    with a winner line is CAH's old finish and Anagrams' (either phrasing).
+    Which game it was is the lobby's job (``identify_game``); this only says
+    "somebody won something here". Deliberately does **not** cover *Something
+    went wrong*: that ends a window without being evidence a game happened
+    in it.
     """
     for title, desc in _embed_texts(embeds):
         title = title.strip()
         if title == _FINAL_SCORES_TITLE:
             return True
-        if title == _GAME_OVER_TITLE and "is the winner" in desc:
+        if title == _GAME_OVER_TITLE and _WINNER.search(desc):
             return True
     return False
 
@@ -236,14 +272,15 @@ def is_terminal(embeds: Sequence[Mapping[str, Any]]) -> bool:
 
     * *Game over!* — every sub-game's finish before 2026-08-15, and still
       Connect 4's as far as we know (no post-update sample exists).
-    * *Final scores* — CAH's finish from 2026-08-15.
+    * *Final scores* — CAH's finish from 2026-08-15, and Survey Says' and
+      Wisecracks' (a named-lines variant of the same title).
     * *Something went wrong* — Gamebot dropping a run. Terminal so that a game
       which dies mid-way still pays out the rounds that were actually played,
       and so that one trailing after a clean *Final scores* is bounded into a
       window of its own rather than re-paying the game before it.
 
     Telling *a* game apart from the next one only needs this; telling *which*
-    game it was needs the more specific ``is_game_over`` (CAH).
+    game it was is the lobby's job (``identify_game``).
     """
     for title, _desc in _embed_texts(embeds):
         if title.strip() in (_GAME_OVER_TITLE, _FINAL_SCORES_TITLE, _CRASHED_TITLE):
@@ -315,16 +352,28 @@ def current_game_window(
     exactly one game's messages, so neither rosters nor scores can bleed across
     games, and ``identify_game`` gets an unambiguous type to dispatch on.
     """
-    start = 0
+    start, _bounded = find_window_start(parsed, over_index)
+    return list(parsed[start : over_index + 1])
+
+
+def find_window_start(
+    parsed: Sequence[Mapping[str, Any]], over_index: int
+) -> tuple[int, bool]:
+    """``(start_index, bounded)`` for the game ending at ``over_index``.
+
+    ``bounded`` is False when the scan ran off the front of ``parsed`` without
+    meeting a lobby or a previous terminal — the slice the caller fetched may
+    simply be too short for a long game (the largest real one is 214 Gamebot
+    messages; photo-external-110), and it should fetch further back before
+    trusting the window.
+    """
     for i in range(over_index - 1, -1, -1):
         embeds = parsed[i].get("embeds") or []
         if is_game_start(embeds):
-            start = i
-            break
+            return i, True
         if is_terminal(embeds):
-            start = i + 1
-            break
-    return list(parsed[start : over_index + 1])
+            return i + 1, True
+    return 0, False
 
 
 def identify_game(window: Sequence[Mapping[str, Any]]) -> str | None:
@@ -344,26 +393,34 @@ def identify_game(window: Sequence[Mapping[str, Any]]) -> str | None:
 
 def _infer_game(window: Sequence[Mapping[str, Any]]) -> str | None:
     """Best-effort type for a lobby-less window, from the embeds it does have."""
-    saw_winner = False
+    saw_old_winner = False
     for msg in window:
         embeds = msg.get("embeds") or []
         for title, _desc in _embed_texts(embeds):
-            if title.strip() in (_STANDINGS_TITLE, _FINAL_SCORES_TITLE):
+            if title.strip() == _STANDINGS_TITLE:
                 return GAME_CAH
             if title.strip() == _SCOREBOARD_TITLE:
                 return GAME_ANAGRAMS
         # The new format has no standings embed of its own — the scores hang
-        # off *Round winner* as a field, and only CAH posts one.
+        # off *Round winner* and *Final scores* as a field, and only CAH posts
+        # one. A *Final scores* WITHOUT it is Survey Says' or Wisecracks',
+        # which can't be told apart without the lobby — so it falls through
+        # to None and pays nobody rather than guessing.
         if any(name == _STANDINGS_FIELD for name, _v in _embed_fields(embeds)):
             return GAME_CAH
         if winner_from_connect4_over(embeds) is not None:
             return GAME_CONNECT4
-        saw_winner = saw_winner or is_game_over(embeds)
-    # Nothing but a bare "<@id> is the winner!" to go on. CAH is by far the
-    # more common of the two games that word it that way, and an Anagrams game
-    # always posts its Scoreboard in the same window (caught above) — so this
-    # only misfires on history truncated to the terminal message itself.
-    return GAME_CAH if saw_winner else None
+        for _title, desc in _embed_texts(embeds):
+            saw_old_winner = saw_old_winner or "is the winner" in desc
+    # Nothing but a bare "<@id> is the winner!" to go on. That is the
+    # pre-2026-08-15 phrasing, when CAH was by far the more common of the two
+    # games using it, and an Anagrams game always posts its Scoreboard in the
+    # same window (caught above) — so this only misfires on history truncated
+    # to the terminal message itself. The new "<@id> wins!" is never CAH
+    # (CAH finishes on *Final scores* now): it is Anagrams' or the trailing
+    # Game over! Survey Says posts after its own *Final scores*, so a bare one
+    # is None.
+    return GAME_CAH if saw_old_winner else None
 
 
 def is_abandoned(window: Sequence[Mapping[str, Any]]) -> bool:
@@ -378,6 +435,36 @@ def is_abandoned(window: Sequence[Mapping[str, Any]]) -> bool:
             if _ABANDONED_MARK in desc:
                 return True
     return False
+
+
+def payable_game(window: Sequence[Mapping[str, Any]]) -> str | None:
+    """The sub-game key when this window would be paid, else None.
+
+    Mirrors the cog's own skip logic so the dashboard's "unpaid finishes"
+    health count (photo-external-100) flags only windows the live path would
+    actually credit: an abandoned lobby, a game we don't parse, a *Something
+    went wrong* trailing a clean finish, a solo Anagrams run that scored
+    nobody, or the *Game over!* Survey Says posts after its *Final scores*
+    all pay nobody by design and so are not "unpaid".
+    """
+    if is_abandoned(window):
+        return None
+    game = identify_game(window)
+    if game is None:
+        return None
+    if game == GAME_CAH:
+        scores, _winners = extract_cah_game(window)
+        return game if scores else None
+    if game == GAME_CONNECT4:
+        roster, _winner = extract_connect4_game(window)
+        return game if roster else None
+    if game == GAME_ANAGRAMS:
+        named, winner = extract_anagrams_game(window)
+        return game if named or winner is not None else None
+    if game in NAMED_SCORE_GAMES:
+        named, _winner = extract_named_scores_game(window)
+        return game if named else None
+    return None
 
 
 def extract_cah_game(
@@ -496,14 +583,18 @@ def extract_connect4_game(
 
 
 def scores_from_scoreboard(embeds: Sequence[Mapping[str, Any]]) -> dict[str, int]:
-    """``{username: points}`` from an Anagrams *Scoreboard* embed.
+    """``{name: points}`` from an Anagrams *Scoreboard* embed, either format.
 
-    The scores live in the **field names** (``"efficientpanic - 900 POINTS"``),
-    with the words each player found in the value. The trailing *Pangram* field
-    has no score and so doesn't match. Players are named by Discord username —
-    not mention — so the caller resolves them to members by name, exactly as
-    the Cat Bot payout does. Names are markdown-unescaped defensively; unlike
-    Cat Bot's, Gamebot's arrive raw (``dozer_nation``, no backslash).
+    Old (through 2026-08-14): the scores live in the **field names**
+    (``"efficientpanic - 900 POINTS"``), with the words each player found in
+    the value; the trailing *Pangram* field has no score and so doesn't match.
+    New: the fields are empty and the **description** lists ``**EP** — 1700
+    points`` per player, each followed by their words (or "No words
+    submitted."), with a scoreless ``**Skipped words:**`` line at the end.
+    Players are *named* either way — username before, display name after —
+    never mentioned, so the caller resolves them to members by name, exactly
+    as the Cat Bot payout does. Names are markdown-unescaped defensively;
+    unlike Cat Bot's, Gamebot's arrive raw (``dozer_nation``, no backslash).
     """
     out: dict[str, int] = {}
     for e in embeds:
@@ -517,6 +608,8 @@ def scores_from_scoreboard(embeds: Sequence[Mapping[str, Any]]) -> dict[str, int
             m = _SCORE_FIELD.match(str(f.get("name") or "").strip())
             if m:
                 out[_unescape_markdown(m.group(1).strip())] = int(m.group(2))
+        for m in _SCORE_LINE.finditer(str(e.get("description") or "")):
+            out[_unescape_markdown(m.group(1).strip())] = int(m.group(2))
     return out
 
 
@@ -529,14 +622,65 @@ def extract_anagrams_game(
     players by **username** while *Game over!* names the winner by **mention**.
     The caller resolves the usernames and folds the winner in by id.
 
-    Anagrams reuses CAH's exact ``<@id> is the winner!`` wording, which is why
-    the sub-game has to be identified from the lobby embed rather than here.
+    Anagrams reused CAH's exact ``<@id> is the winner!`` wording (and now
+    shares ``<@id> wins!`` with Survey Says), which is why the sub-game has to
+    be identified from the lobby embed rather than here.
     """
     scores: dict[str, int] = {}
     winner: int | None = None
     for msg in window:
         embeds = msg.get("embeds") or []
         scores.update(scores_from_scoreboard(embeds))
+        w = winner_from_game_over(embeds)
+        if w is not None:
+            winner = w
+    return scores, winner
+
+
+# ── Gamebot Survey Says / Wisecracks ─────────────────────────────────────────
+
+
+def scores_from_final_scores(embeds: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """``{display_name: points}`` from a named-lines *Final scores* embed.
+
+    Gated on the title: the per-round *Results* embeds list the same running
+    scores under a ✅/❌ prefix, and only the final one is the game's outcome.
+    CAH's *Final scores* has no such lines (its scores are a *Standings*
+    field of mentions) and reads as empty here.
+    """
+    out: dict[str, int] = {}
+    for title, desc in _embed_texts(embeds):
+        if title.strip() != _FINAL_SCORES_TITLE:
+            continue
+        for m in _NAMED_FINAL_SCORE.finditer(desc):
+            out[_unescape_markdown(m.group(1).strip())] = int(m.group(2))
+    return out
+
+
+def extract_named_scores_game(
+    window: Sequence[Mapping[str, Any]]
+) -> tuple[dict[str, int], int | None]:
+    """``({display_name: points}, declared_winner_id)`` for a Survey Says or
+    Wisecracks window.
+
+    The scores are the **last** *Final scores* in the window. The winner is
+    the ``<@id> reached N points!`` line Survey Says appends to it (or a
+    ``<@id> wins!`` *Game over!* in the same window); Wisecracks declares
+    nobody, so ``None`` means "derive the top scorer once the names resolve" —
+    the caller does that, since a name that matches no member can't win.
+    """
+    scores: dict[str, int] = {}
+    winner: int | None = None
+    for msg in window:
+        embeds = msg.get("embeds") or []
+        found = scores_from_final_scores(embeds)
+        if found:
+            scores = found
+        for title, desc in _embed_texts(embeds):
+            if title.strip() == _FINAL_SCORES_TITLE:
+                m = _REACHED.search(desc)
+                if m:
+                    winner = int(m.group(1))
         w = winner_from_game_over(embeds)
         if w is not None:
             winner = w

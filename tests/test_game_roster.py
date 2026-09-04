@@ -30,9 +30,11 @@ from bot_modules.games_fantasies.logic import build_result_entry
         ("legitlibs", {"players": [9, 10]}, ([9, 10], 1)),
         # rushmore — the draft roster the view seeds from the payload.
         ("rushmore", {"players": [2, 3], "rounds": {"1": {}}}, ([2, 3], 1)),
-        # ttl — explicit played list wins...
-        ("ttl", {"played": ["11", "12"], "scores": {"99": {}}}, ([11, 12], 2)),
-        # ...and legacy payloads fall back to scores keys.
+        # ttl — the played list is the round count, and the scores keys (one
+        # per voter since 2026-09-04, vote-games-57) widen the roster so a
+        # member who only ever guessed is paid...
+        ("ttl", {"played": ["11", "12"], "scores": {"11": {}, "99": {}}}, ([11, 12, 99], 2)),
+        # ...and legacy payloads fall back to scores keys for both.
         ("ttl", {"scores": {"11": {}, "12": {}}}, ([11, 12], 2)),
         # nhie — `lives` keeps eliminated players at 0 hp, so it is the full
         # roster; an eliminated player can still be the guiltiest winner.

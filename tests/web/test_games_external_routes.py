@@ -222,3 +222,67 @@ async def test_refresh_watch_cache_rebuilds_from_the_database(fake_ctx):
     await cog.refresh_watch_cache(gid)
 
     assert cog._watch[gid] == {(99, 10): "gamebot"}
+
+
+# ── health signal per watch (photo-external-100) ─────────────────────────────
+
+
+def _seed_payout(db_path, *, guild_id, message_id, kind, paid_at):
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_external_payouts (message_id, guild_id, kind, paid_at) "
+            "VALUES (?,?,?,?)",
+            (message_id, guild_id, kind, paid_at),
+        )
+
+
+def _seed_finish(db_path, *, guild_id, channel_id, author_id, message_id, created_at):
+    """A lobby + Final scores pair the parser would pay."""
+    import json
+
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_external_messages "
+            "(message_id, guild_id, channel_id, author_id, created_at, content, embeds_json) "
+            "VALUES (?,?,?,?,?,'',?)",
+            (message_id - 1, guild_id, channel_id, author_id, created_at,
+             json.dumps([{"title": "host is starting a Cards Against Humanity game!",
+                          "fields": [{"name": "Players (1/12)", "value": "<@11>"}]}])),
+        )
+        conn.execute(
+            "INSERT INTO games_external_messages "
+            "(message_id, guild_id, channel_id, author_id, created_at, content, embeds_json) "
+            "VALUES (?,?,?,?,?,'',?)",
+            (message_id, guild_id, channel_id, author_id, created_at,
+             json.dumps([{"title": "Final scores",
+                          "fields": [{"name": "Standings", "value": "<@11>: **5**"}]}])),
+        )
+
+
+def test_listing_reports_last_payout_and_unpaid_finishes(authed_client, fake_ctx):
+    """The banked count climbs whether or not anyone is paid; a parser break
+    is invisible without these two numbers."""
+    from datetime import datetime, timedelta, timezone
+
+    gid = fake_ctx.guild_id
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    _seed_watch(fake_ctx.db_path, guild_id=gid, channel_id=10, bot_id=99)
+    _seed_finish(fake_ctx.db_path, guild_id=gid, channel_id=10, author_id=99,
+                 message_id=500, created_at=recent)
+    _seed_finish(fake_ctx.db_path, guild_id=gid, channel_id=10, author_id=99,
+                 message_id=600, created_at=recent)
+    _seed_payout(fake_ctx.db_path, guild_id=gid, message_id=500, kind="gamebot_cah",
+                 paid_at="2026-08-30 20:01:00")
+
+    (w,) = authed_client.get("/api/games-external").json()["watches"]
+    assert w["last_payout_at"] == "2026-08-30 20:01:00"
+    assert w["unpaid_finishes"] == 1   # 600 would be paid and carries no claim
+    assert w["unpaid_days"] == 30
+
+
+def test_listing_health_is_empty_for_a_fresh_watch(authed_client, fake_ctx):
+    gid = fake_ctx.guild_id
+    _seed_watch(fake_ctx.db_path, guild_id=gid, channel_id=10, bot_id=99, kind="catbot")
+    (w,) = authed_client.get("/api/games-external").json()["watches"]
+    assert w["last_payout_at"] is None
+    assert w["unpaid_finishes"] == 0

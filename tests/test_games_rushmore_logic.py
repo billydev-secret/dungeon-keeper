@@ -207,11 +207,37 @@ def test_tally_votes_single_winner():
     assert results == [(10, 2), (20, 1), (30, 0)]
 
 
-def test_tally_votes_tie_returns_all_winners():
+def test_tally_votes_dead_heat_returns_all_winners():
     votes = {1: 10, 2: 20}
     winners, max_v, _ = tally_votes(votes, eligible=[10, 20])
     assert set(winners) == {10, 20}
     assert max_v == 1
+
+
+# social-prompt-36: at the three-player floor the vote cycles and every tied
+# uid used to win and be paid. Fewest skips breaks it, then total pick time.
+@pytest.mark.parametrize(
+    ("skipped", "pick_times", "expected"),
+    [
+        pytest.param(["20_2"], {}, [10], id="fewest-skips-wins"),
+        pytest.param(["10_1", "20_2"], {"10_2": 4.0, "20_1": 9.0}, [10], id="equal-skips-fastest-wins"),
+        pytest.param([], {"10_1": 3.0, "10_2": 3.0, "20_1": 2.0, "20_2": 5.0}, [10], id="times-are-summed"),
+        pytest.param([], {"10_1": 5.0, "20_1": 5.0}, [10, 20], id="true-dead-heat-is-shared"),
+        pytest.param(["10_1"], {"10_2": 1.0}, [20], id="a-skip-outweighs-speed"),
+        pytest.param(None, None, [10, 20], id="nothing-to-break-on"),
+    ],
+)
+def test_tally_votes_breaks_a_tie_on_skips_then_pick_time(skipped, pick_times, expected):
+    votes = {1: 10, 2: 20, 3: 10, 4: 20}
+    winners, max_v, results = tally_votes(votes, eligible=[10, 20, 30], skipped=skipped, pick_times=pick_times)
+    assert winners == expected
+    assert max_v == 2
+    assert dict(results) == {10: 2, 20: 2, 30: 0}, "the results table still shows the tie"
+
+
+def test_tally_votes_tie_break_does_not_touch_a_clear_winner():
+    winners, _, _ = tally_votes({1: 10, 2: 10, 3: 20}, eligible=[10, 20], skipped=["10_1", "10_2"])
+    assert winners == [10]
 
 
 def test_tally_votes_no_votes_returns_empty_winners():
@@ -577,6 +603,14 @@ def test_build_vote_embed_has_vote_field():
     assert "Vote" in field_names
 
 
+def test_build_vote_embed_says_spectators_may_vote():
+    """social-prompt-36: anyone in the channel could always vote; the card
+    never said so."""
+    embed = build_vote_embed("Host", "Snacks", timer_secs=30)
+    vote = next(f.value for f in embed.fields if f.name == "Vote")
+    assert vote is not None and "Anyone in the channel can vote" in vote
+
+
 # ── build_winner_embed ───────────────────────────────────────────────
 
 
@@ -915,8 +949,8 @@ def test_clamp_player_limits_never_exceeds_the_select_cap():
     """The vote is a Discord Select, which holds 25 options. A server that
     saved 200 while the dial was unbounded must not produce a lobby the vote
     message cannot render."""
-    assert clamp_player_limits(2, 200) == (2, 25)
-    assert clamp_player_limits(2, 25) == (2, 25)
+    assert clamp_player_limits(3, 200) == (3, 25)
+    assert clamp_player_limits(3, 25) == (3, 25)
 
 
 def test_clamp_player_limits_raises_a_ceiling_below_its_floor():
@@ -930,9 +964,12 @@ def test_clamp_player_limits_treats_zero_as_unset():
     assert clamp_player_limits(0, 0) == (MIN_PLAYERS, MAX_PLAYERS)
 
 
-def test_clamp_player_limits_floors_at_two():
-    """A one-player draft is not a game."""
-    assert clamp_player_limits(1, 25)[0] == 2
+@pytest.mark.parametrize("stored", [1, 2], ids=["one", "two"])
+def test_clamp_player_limits_floors_at_three(stored):
+    """social-prompt-36: a two-player draft always ties 1–1 (nobody can vote
+    for themselves), so a stored 2 from before the floor moved is raised."""
+    assert clamp_player_limits(stored, 25) == (MIN_PLAYERS, 25)
+    assert MIN_PLAYERS == 3
 
 
 def test_lobby_is_full_honours_a_configured_ceiling():
@@ -946,3 +983,40 @@ def test_lobby_is_full_honours_a_configured_ceiling():
 def test_can_start_honours_a_configured_floor():
     assert can_start([1, 2, 3, 4], 5) is False
     assert can_start([1, 2, 3, 4, 5], 5) is True
+
+
+# ── the recap card (social-prompt-45) ────────────────────────────────
+
+
+def test_recap_card_has_run_again_and_no_hand_off():
+    """Run Again under the presser *is* the hand-off; the Hand Off button
+    only printed a command hint and disabled Run Again."""
+    view = rushmore_cog.RushmoreRecapView("gid", 1, SimpleNamespace(db=None), {})
+    ids = {getattr(c, "custom_id", None) for c in view.children}
+    assert ids == {"rushmore_run_again"}
+
+
+async def test_run_again_is_open_to_any_member_who_becomes_the_host(monkeypatch, sync_db_path):
+    monkeypatch.setattr(rushmore_cog, "sign_off_game_chore", AsyncMock())
+    bot = _SpyBot(sync_db_path)
+    cog = rushmore_cog.RushmoreCog(bot)  # type: ignore[arg-type]
+    launch = AsyncMock(return_value="new-gid")
+    cog.launch = launch  # type: ignore[method-assign]
+    await cog.db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)", (778, 4242),
+    )
+    view = rushmore_cog.RushmoreRecapView("old", host_id=1, cog=cog, settings={})
+    presser = SimpleNamespace(
+        id=42, display_name="Someone",
+        guild_permissions=SimpleNamespace(administrator=False, manage_guild=False, manage_messages=False),
+    )
+    inter = SimpleNamespace(
+        user=presser, guild_id=4242, channel_id=778,
+        channel=SimpleNamespace(id=778, name="games", guild=None),
+        message=SimpleNamespace(edit=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+    )
+    await view.run_again.callback(inter)  # type: ignore[arg-type]
+    launch.assert_awaited_once()
+    assert launch.await_args.kwargs["host_id"] == 42
+    assert launch.await_args.kwargs["options"]["mode"] == "blitz", "blitz is the default draft mode"

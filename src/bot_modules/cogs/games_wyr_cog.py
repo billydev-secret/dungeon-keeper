@@ -12,7 +12,7 @@ from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.command_groups import play
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     finish_launch_response,
@@ -55,13 +55,13 @@ from bot_modules.games_wyr.logic import (
     next_button_label,
     parse_question_input,
     played_rounds,
+    record_show_vote,
     toggle_vote,
 )
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
     EVENT_QUESTION_POSED,
     EVENT_VOTE,
-    EVENT_VOTERS_REVEALED,
 )
 
 log = logging.getLogger(__name__)
@@ -173,10 +173,12 @@ class WYRRoundView(discord.ui.View):
         self.accent = accent
         self.votes_a: list[int] = []
         self.votes_b: list[int] = []
-        self.revealed = False
-        # Voter names only render once revealed; Reveal Voters swaps this for
-        # a real resolver (prefetched over the voters) before flipping the
-        # flag, so the mention fallback never reaches a rendered embed.
+        # Voters who pressed Show My Vote — named beside their pick, by their
+        # own choice (vote-games-61). Persisted with the votes.
+        self.shown: list[int] = []
+        # A name only renders for a shown voter; refresh_name_fn swaps this
+        # for a real resolver (prefetched over ``shown``) before any render,
+        # so the mention fallback never reaches a rendered embed.
         self._name_fn: NameFn = mention
         self._updater = LiveBarUpdater()
         self._closed = False
@@ -192,8 +194,19 @@ class WYRRoundView(discord.ui.View):
             self._set_round_controls(enabled=False)
 
     def _set_round_controls(self, *, enabled: bool) -> None:
-        for item in (self.vote_a, self.vote_b, self.next_btn, self.reveal_voters):
+        for item in (self.vote_a, self.vote_b, self.next_btn, self.show_my_vote):
             item.disabled = not enabled
+
+    async def refresh_name_fn(self, guild) -> None:
+        """Resolve the shown voters' names once, ahead of any render."""
+        if not self.shown:
+            return
+        self._name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=getattr(guild, "id", 0) or 0,
+            user_ids=list(self.shown),
+        )
 
     def _build_embed(self, closed=False) -> discord.Embed:
         return build_wyr_embed(
@@ -205,22 +218,23 @@ class WYRRoundView(discord.ui.View):
             self.anonymous,
             self.round_num,
             closed=closed,
-            revealed=self.revealed,
             color=self.accent,
             name_fn=self._name_fn,
             waiting=self.waiting,
             advance_at=self.pacing.advance_at(),
+            shown=self.shown,
         )
 
     async def persist_votes(self) -> None:
         """Write this round's tallies on every vote, not only on Next, so a
         restart mid-round rebuilds the bars it shows (vote-games-58)."""
-        a, b = list(self.votes_a), list(self.votes_b)
+        a, b, shown = list(self.votes_a), list(self.votes_b), list(self.shown)
 
         def _save(payload):
             rd = payload.setdefault("rounds", {}).setdefault(str(self.round_num), {})
             rd["a"] = a
             rd["b"] = b
+            rd["shown"] = shown
 
         await modify_payload(self.db, self.game_id, _save)
 
@@ -319,40 +333,34 @@ class WYRRoundView(discord.ui.View):
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
 
-    @discord.ui.button(label="👀 Reveal Voters", style=discord.ButtonStyle.secondary, custom_id="wyr_reveal", row=2)
-    async def reveal_voters(self, interaction: discord.Interaction, button: discord.ui.Button):
-        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not await may_control(interaction, self.host_id, self.db):
-            await interaction.response.send_message("❌ Only the host or a mod can reveal voters.", ephemeral=True)
-            return
-        # Resolve the voters' names before revealing: a <@id> inside the
-        # embed would show as a bare number to anyone who hasn't cached
-        # that member. Later voters are present members, so the resolver's
-        # live-cache step covers them with no further prefetch.
-        guild = interaction.guild
-        self._name_fn = await build_name_fn(
-            guild=guild,
-            db_path=self.bot.ctx.db_path,
-            guild_id=guild.id if guild else 0,
-            user_ids=self.votes_a + self.votes_b,
-        )
-        self.revealed = True
-        button.disabled = True
-        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+    @discord.ui.button(label="👀 Show My Vote", style=discord.ButtonStyle.secondary, custom_id="wyr_show_vote", row=2)
+    async def show_my_vote(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Put the presser's own name beside their pick — anyone's to press.
 
-        # A host/mod deliberately de-anonymising a round — the single most
-        # accountability-relevant action in this game.
-        if interaction.guild is not None:
-            await audit_anonymous(
-                self.bot, self.db, interaction.guild,
-                game_type="wyr", user=interaction.user,
-                event=EVENT_VOTERS_REVEALED,
-                game_id=self.game_id,
-                message_id=interaction.message.id if interaction.message else None,
-                channel_id=interaction.channel.id if interaction.channel else None,
-                extra={"round": self.round_num,
-                       "voter_count": len(self.votes_a) + len(self.votes_b)},
+        The host/mod-only **Reveal Voters** it replaces named the whole room
+        and refused everyone else (five refused presses in one prod game,
+        vote-games-61). A vote is its owner's to disclose, so this names one
+        voter by their own hand and writes no audit row — the vote itself is
+        already in the anonymity audit for mods.
+        """
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if self._closed or self.waiting:
+            await interaction.response.send_message("This round is over." if self._closed else "No question yet — pose one first!", ephemeral=True)
+            return
+        outcome = record_show_vote(self.votes_a, self.votes_b, self.shown, interaction.user.id)
+        if outcome == "not_voted":
+            await interaction.response.send_message(
+                "❌ Vote 🅰️ or 🅱️ first — then you can show which side you picked.", ephemeral=True,
             )
+            return
+        if outcome == "already":
+            await interaction.response.send_message("You're already showing your vote this round.", ephemeral=True)
+            return
+        # Resolve the name before rendering: a <@id> inside the embed would
+        # show as a bare number to anyone who hasn't cached that member.
+        await self.refresh_name_fn(interaction.guild)
+        await interaction.response.edit_message(embed=self._build_embed(), view=self)
+        await self.persist_votes()
 
     @discord.ui.button(label="🏁 End Game", style=discord.ButtonStyle.secondary, custom_id="wyr_end", row=2)
     async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -388,7 +396,7 @@ class WYRCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="wyr", description="Start a Would You Rather game!")
+    @app_commands.command(name="wyr", description=play_description("wyr"))
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
@@ -768,6 +776,8 @@ class WYRCog(commands.Cog):
         )
         view.votes_a = list(rd.get("a", []))
         view.votes_b = list(rd.get("b", []))
+        view.shown = list(rd.get("shown", []))
+        await view.refresh_name_fn(guild)
         view.message = message
         self.bot.active_views[game_id] = view
         self.bot.add_view(view, message_id=message.id)

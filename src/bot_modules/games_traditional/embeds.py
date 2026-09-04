@@ -15,6 +15,8 @@ from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games_traditional.logic import (
     CATEGORIES,
     CAT_LABELS,
+    asked_on_pass,
+    current_pass,
     question_pool_size,
     summarize_asked_by_category,
 )
@@ -54,8 +56,14 @@ def build_tod_embed(
     asked: dict[str, str] = payload.get("asked", {})
     prefs: dict[str, list[str]] = payload.get("prefs", {})
 
-    total_pool = question_pool_size(prefs, asked)
-    asked_value = f"{len(asked)} / {total_pool}" if total_pool else str(len(asked))
+    # Progress is per pass: "3 / 10" on the first sweep, and once the host has
+    # gone round again "Pass 2: 3 / 10 (13 total)" so the room can see both.
+    pass_no = current_pass(payload)
+    total_pool = question_pool_size(prefs, asked, pass_no)
+    on_pass = asked_on_pass(asked, pass_no)
+    asked_value = f"{on_pass} / {total_pool}" if total_pool else str(on_pass)
+    if pass_no > 1:
+        asked_value = f"Pass {pass_no}: {asked_value} ({len(asked)} total)"
     embed.add_field(name="Questions Asked", value=asked_value, inline=True)
 
     for cat in CATEGORIES:
@@ -81,12 +89,15 @@ def _footer_text(single_choice: bool) -> str:
 def build_recap_embed(
     payload: dict[str, Any],
     color: "discord.Color | None" = None,
+    note: str | None = None,
 ) -> discord.Embed:
     """Build the game-over recap embed.
 
     Shows totals plus a per-category breakdown for any non-zero
     category — categories with zero questions are skipped to keep the
-    embed compact.
+    embed compact. ``note`` is an optional one-line description saying
+    why the game ended (the idle close uses it); a host's End Game
+    passes none.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -97,10 +108,14 @@ def build_recap_embed(
 
     embed = discord.Embed(
         title=f"{GAME_ICONS['traditional']} Truth or Dare — Game Over",
+        description=note or None,
         color=color,
     )
     embed.add_field(name="Total Questions Asked", value=str(total_q), inline=True)
     embed.add_field(name="Participants", value=str(len(participants)), inline=True)
+    passes = current_pass(payload)
+    if passes > 1:
+        embed.add_field(name="Passes", value=str(passes), inline=True)
     bank_asked = payload.get("bank_asked", 0)
     if bank_asked:
         embed.add_field(name="Bank Round Questions", value=str(bank_asked), inline=True)

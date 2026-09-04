@@ -22,6 +22,13 @@ then the payout arrived a day later with nothing in the room to show for it
 games end this way). It is a notice, not a recap, and there is deliberately
 **no inactivity close** behind it: the host is trusted to end the game and
 the 24-hour sweep stays the safety net (games_system_spec.md, Non-goals).
+
+A game whose live view exposes ``close_now`` — AMA — is closed through that
+instead (social-prompt-33): the game's own completion site posts its recap
+with the payout footer and pays, the way the feature rotation already ended
+it, so the sweep's one-line notice is not needed there. If that closer
+fails, the game falls through to the archive-and-pay path below rather than
+staying open for another hour.
 """
 from __future__ import annotations
 
@@ -60,6 +67,25 @@ async def _post_notice(bot, channel_id: int, text: str) -> None:
         log.exception("Expiry notice failed in channel %s", channel_id)
 
 
+async def _close_through_live_view(bot, game_id: str, channel_id: int) -> bool:
+    """Prefer a live view's ``close_now`` (duck-typed, as the feature rotation
+    does) so the game posts its own recap. False when there is no such view,
+    no channel to post in, or the close raised — the caller then archives."""
+    view = getattr(bot, "active_views", {}).get(game_id)
+    closer = getattr(view, "close_now", None)
+    if closer is None:
+        return False
+    channel = bot.get_channel(int(channel_id))
+    if channel is None:
+        return False
+    try:
+        await closer(channel, reason=EXPIRE_REASON)
+    except Exception:
+        log.exception("Expiry: %s's own close failed; archiving it instead", game_id)
+        return False
+    return True
+
+
 async def sweep_expired_games(bot, db, *, max_age_hours: int = 24) -> int:
     """End every active game older than *max_age_hours*; return how many ended."""
     rows = await db.fetchall(
@@ -79,6 +105,12 @@ async def sweep_expired_games(bot, db, *, max_age_hours: int = 24) -> int:
                 log.warning("Unreadable payload on expiring game %s", game_id)
                 payload = {}
             players, rounds = roster_from_payload(row["game_type"], payload)
+
+            if await _close_through_live_view(bot, game_id, row["channel_id"]):
+                bot.active_views.pop(game_id, None)
+                ended += 1
+                log.info("Auto-expired game %s through its own close (%dh limit)", game_id, max_age_hours)
+                continue
 
             # bot= is what lets end_game both pay the roster and resolve the
             # guild for the history row; the bare call left guild_id = 0.

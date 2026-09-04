@@ -237,7 +237,12 @@ def build_vote_embed(
         name="Timer", value=format_deadline(now_plus(timer_secs)), inline=False,
     )
     embed.add_field(
-        name="Vote", value="Who built the best Mt. Rushmore?", inline=False,
+        name="Vote",
+        value=(
+            "Who built the best Mt. Rushmore? **Anyone in the channel can vote** — "
+            "not just the drafters (you just can't vote for yourself)."
+        ),
+        inline=False,
     )
     embed.set_footer(text=_footer(host_name))
     apply_section_spacing(embed)

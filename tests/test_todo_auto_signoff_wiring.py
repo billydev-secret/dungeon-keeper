@@ -280,7 +280,8 @@ def _calls(node: ast.AST) -> set[str]:
         # share the party games' finish_launch_response.
         ("bot_modules/cogs/risky_roll_cog.py", "_start_game"),
         # Recap relaunch buttons go straight to the launcher, missing the seam.
-        ("bot_modules/cogs/games_price_cog.py", "run_again"),
+        # Price's Run Again routes through one helper.
+        ("bot_modules/cogs/games_price_cog.py", "_relaunch"),
         ("bot_modules/cogs/games_rushmore_cog.py", "run_again"),
         ("bot_modules/cogs/games_clapback_cog.py", "play_again"),
         ("bot_modules/cogs/games_clapback_cog.py", "play_again_shuffled"),

@@ -381,7 +381,7 @@ async def test_the_ama_view_exposes_the_closer_the_rotation_looks_for():
     view._closed = False
     closed = []
 
-    async def fake_do_close(channel):
+    async def fake_do_close(channel, *, reason=None):
         closed.append(channel)
 
     view._do_close = fake_do_close

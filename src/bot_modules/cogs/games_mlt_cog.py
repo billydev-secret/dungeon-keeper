@@ -17,7 +17,7 @@ from bot_modules.services.game_start_ping_service import (
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -388,13 +388,16 @@ class MLTVoteView(discord.ui.View):
             advance_at=self.pacing.advance_at(),
         )
 
-    def _build_results_embed(self, tally: dict, name_fn: NameFn) -> discord.Embed:
+    def _build_results_embed(
+        self, tally: dict, name_fn: NameFn, winners: list[int] | None = None,
+    ) -> discord.Embed:
         return build_results_embed(
             prompt=self.prompt,
             round_num=self.round_num,
             tally=tally,
             color=self.accent,
             name_fn=name_fn,
+            winners=winners,
         )
 
     @discord.ui.button(label="✍️ Pose Prompt", style=discord.ButtonStyle.primary, custom_id="mlt_pose", row=1)
@@ -456,7 +459,7 @@ class MLTCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="mlt", description="Start a Most Likely To game!")
+    @app_commands.command(name="mlt", description=play_description("mlt"))
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
@@ -713,6 +716,10 @@ class MLTCog(commands.Cog):
             if view.waiting:
                 return {}
             tally = tally_votes(view.votes, players)
+            # Decide the crowns before showing them: a tie at the top is
+            # broken without self-votes, and the board must crown exactly
+            # what gets banked (vote-games-62).
+            winners = find_round_winners(tally, view.votes)
             name_fn = await build_name_fn(
                 guild=guild,
                 db_path=self.bot.ctx.db_path,
@@ -720,11 +727,10 @@ class MLTCog(commands.Cog):
                 user_ids=list(tally),
             )
             try:
-                await channel.send(embed=view._build_results_embed(tally, name_fn))
+                await channel.send(embed=view._build_results_embed(tally, name_fn, winners))
             except discord.HTTPException:
                 pass
             votes = encode_round_votes(view.votes)
-            winners = find_round_winners(tally)
 
             def _save(payload):
                 bump_crowns(payload.setdefault("crowns", {}), winners)

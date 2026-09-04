@@ -840,6 +840,13 @@ async def list_ll_templates(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    # The card shows the range per mode: the stored (blank-derived or
+    # authored) one is Classic's, Quiplash has a fixed room-sized range the
+    # lobby enforces (trivia-tail-83).
+    from bot_modules.cogs.games_legitlibs.validation import (  # noqa: PLC0415
+        QUIPLASH_PLAYER_MAX, QUIPLASH_PLAYER_MIN,
+    )
+
     def _q():
         with ctx.open_db() as conn:
             # This guild's own templates plus the shared global pool (guild_id 0).
@@ -881,6 +888,8 @@ async def list_ll_templates(
                     "tags": [t.strip() for t in r[4].split(",") if t.strip()] if r[4] else [],
                     "player_min": r[5],
                     "player_max": r[6],
+                    "quiplash_player_min": QUIPLASH_PLAYER_MIN,
+                    "quiplash_player_max": QUIPLASH_PLAYER_MAX,
                     "use_count": r[7],
                     "blanks_count": blanks_count,
                     # 0 = shared global pool; otherwise this guild owns it.
@@ -923,6 +932,17 @@ async def get_ll_template(
     return result
 
 
+def _blank_count(blanks_json: str | None) -> int:
+    """How many blanks a stored blanks JSON string holds (0 when unreadable)."""
+    if not blanks_json:
+        return 0
+    try:
+        blanks = json.loads(blanks_json)
+    except (json.JSONDecodeError, TypeError):
+        return 0
+    return len(blanks) if isinstance(blanks, list) else 0
+
+
 def _players_from_blanks(blanks_json: str | None) -> tuple[int | None, int | None]:
     """Return (player_min, player_max) derived from a blanks JSON string.
 
@@ -930,13 +950,7 @@ def _players_from_blanks(blanks_json: str | None) -> tuple[int | None, int | Non
       player_min = ceil(count / 10)  — keeps each player under 10
       player_max = floor(count / 5)  — keeps each player over 5
     """
-    if not blanks_json:
-        return None, None
-    try:
-        blanks = json.loads(blanks_json)
-        count = len(blanks) if isinstance(blanks, list) else 0
-    except (json.JSONDecodeError, TypeError):
-        return None, None
+    count = _blank_count(blanks_json)
     if count == 0:
         return None, None
     import math
@@ -995,7 +1009,7 @@ async def update_ll_template(
             # Only the owning guild (or anyone, for a shared global template) may
             # edit — a guild can't reach into another guild's templates.
             existing = conn.execute(
-                "SELECT template_id FROM legitlibs_templates "
+                "SELECT template_id, blanks FROM legitlibs_templates "
                 "WHERE template_id = ? AND (guild_id = ? OR guild_id = 0)",
                 (template_id, guild_id),
             ).fetchone()
@@ -1003,7 +1017,10 @@ async def update_ll_template(
                 return None
 
             fields = body.model_dump(exclude_none=True)
-            if "blanks" in fields:
+            # Re-derive the range only when the blanks actually changed. The
+            # editor sends them with every save, and the starter pack ships an
+            # authored range a title edit must not clobber (trivia-tail-83).
+            if "blanks" in fields and _blank_count(fields["blanks"]) != _blank_count(existing[1]):
                 p_min, p_max = _players_from_blanks(fields["blanks"])
                 fields["player_min"] = p_min
                 fields["player_max"] = p_max

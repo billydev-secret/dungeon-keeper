@@ -355,13 +355,14 @@ async def test_host_bounty_fires_the_game_host_quest(db_path):
 async def test_cah_score_payout_scales_by_ratio(db_path):
     _enable(db_path)  # reward_cah_win_max defaults to 50
     bot: Any = _Bot(db_path, [_member(1), _member(2), _member(3), _member(4)])
-    await pay_cah_game_by_score(
+    paid = await pay_cah_game_by_score(
         bot, GUILD, {1: 5, 2: 3, 3: 1, 4: 0}, 1, occurrence="9001"
     )
     assert _bal(db_path, 1) == 50  # winner (top score): the full cap
     assert _bal(db_path, 2) == 30  # 50 * 3/5
     assert _bal(db_path, 3) == 10  # 50 * 1/5
     assert _bal(db_path, 4) == 0   # share rounds to 0 -> no credit at all
+    assert paid == 90  # the total, so the caller can tell a no-op from a payout
 
 
 async def test_cah_score_payout_uses_configured_cap(db_path):
@@ -375,23 +376,54 @@ async def test_cah_score_payout_uses_configured_cap(db_path):
 async def test_cah_score_payout_off_when_cap_is_zero(db_path):
     _enable(db_path, reward_cah_win_max=0)
     bot: Any = _Bot(db_path, [_member(1)])
-    await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1)
+    assert await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1) == 0
     assert _bal(db_path, 1) == 0
 
 
 async def test_cah_score_payout_noop_when_disabled(db_path):
     bot: Any = _Bot(db_path, [_member(1)])
-    await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1)
+    assert await pay_cah_game_by_score(bot, GUILD, {1: 5}, 1) == 0
     assert _bal(db_path, 1) == 0
+    # …and an unknown guild is a 0 too, not an exception.
+    assert await pay_cah_game_by_score(bot, 9999, {1: 5}, 1) == 0
 
 
 async def test_cah_score_payout_all_zero_scores_pays_nobody(db_path):
     # A degenerate game with no points scored has no ratio to scale by.
     _enable(db_path)
     bot: Any = _Bot(db_path, [_member(1), _member(2)])
-    await pay_cah_game_by_score(bot, GUILD, {1: 0, 2: 0}, None)
+    assert await pay_cah_game_by_score(bot, GUILD, {1: 0, 2: 0}, None) == 0
     assert _bal(db_path, 1) == 0
     assert _bal(db_path, 2) == 0
+
+
+# ── pay_cat_catch reports whether it tried (photo-external-109) ───────────────
+
+async def test_cat_catch_reports_none_when_no_payout_was_attempted(db_path):
+    from bot_modules.economy.game_rewards import pay_cat_catch
+
+    bot: Any = _Bot(db_path, [_member(1)])
+    kw = dict(coins=11, rarity="epic", doubled=False, occurrence="1")
+    assert await pay_cat_catch(bot, GUILD, 1, **kw) is None       # economy off
+    _enable(db_path)
+    assert await pay_cat_catch(bot, 9999, 1, **kw) is None        # guild not cached
+    assert await pay_cat_catch(bot, GUILD, 42, **kw) is None      # member unresolvable
+    assert await pay_cat_catch(bot, GUILD, 1, **kw) == 11         # credited
+    assert _bal(db_path, 1) == 11
+
+
+async def test_cat_catch_clipped_by_the_cap_reports_zero_not_none(db_path):
+    # 0 is "handled, the cap zeroed it" — the caller keeps the claim so a
+    # replay can never pay a catch the cap deliberately clipped; None is
+    # "never attempted" and releases it.
+    from bot_modules.economy.game_rewards import pay_cat_catch
+
+    _enable(db_path, cat_catch_daily_cap=11)
+    bot: Any = _Bot(db_path, [_member(1)])
+    kw = dict(coins=11, rarity="epic", doubled=False)
+    assert await pay_cat_catch(bot, GUILD, 1, occurrence="1", **kw) == 11
+    assert await pay_cat_catch(bot, GUILD, 1, occurrence="2", **kw) == 0
+    assert _bal(db_path, 1) == 11
 
 
 async def test_cah_score_payout_filters_bots_and_unresolvable(db_path):

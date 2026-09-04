@@ -28,7 +28,14 @@ from bot_modules.cogs.games_legitlibs.classic_logic import (
     store_round1_fills,
     store_rescue_fills,
 )
-from bot_modules.cogs.games_legitlibs.validation import lobby_is_full
+from bot_modules.cogs.games_legitlibs.classic_logic import tier_clamp_note
+from bot_modules.cogs.games_legitlibs.distribution import unique_contributors
+from bot_modules.cogs.games_legitlibs.validation import (
+    QUIPLASH_PLAYER_MAX,
+    QUIPLASH_PLAYER_MIN,
+    lobby_is_full,
+    player_range,
+)
 
 
 # ── Sample template ──────────────────────────────────────────────────
@@ -150,6 +157,99 @@ def test_remove_player_safe_on_empty_payload():
 )
 def test_lobby_is_full(players, player_max, expected):
     assert lobby_is_full(players, player_max) is expected
+
+
+# ── player_range ─────────────────────────────────────────────────────
+# The derived range (each player fills 5–10 blanks) is a Classic-mode fact:
+# round-robin hands out the blanks, so a 5-blank story really is a
+# one-player Classic. In Quiplash everyone fills every blank, so the ideal
+# template is short and the derived cap is meaningless — a 5-blank template
+# saved as player_max 1, auto-joined the host and let nobody else in
+# (trivia-tail-83). Quiplash gets a fixed, generous range instead.
+
+
+def _template_with(blank_count: int) -> dict:
+    """A template as the dashboard would save it: range derived from blanks."""
+    import math
+    return {
+        "blanks": [{"id": f"b{i}", "pos": "noun"} for i in range(1, blank_count + 1)],
+        "player_min": math.ceil(blank_count / 10),
+        "player_max": max(1, blank_count // 5),
+    }
+
+
+@pytest.mark.parametrize(
+    "blank_count,mode,expected",
+    [
+        pytest.param(5, "classic", (1, 1), id="5-blank-classic-keeps-derived"),
+        pytest.param(25, "classic", (3, 5), id="25-blank-classic-keeps-derived"),
+        pytest.param(5, "quiplash", (QUIPLASH_PLAYER_MIN, QUIPLASH_PLAYER_MAX),
+                     id="5-blank-quiplash-ignores-cap"),
+        pytest.param(25, "quiplash", (QUIPLASH_PLAYER_MIN, QUIPLASH_PLAYER_MAX),
+                     id="25-blank-quiplash-ignores-cap"),
+    ],
+)
+def test_player_range_is_mode_aware(blank_count, mode, expected):
+    assert player_range(_template_with(blank_count), mode) == expected
+
+
+def test_player_range_quiplash_is_a_real_room():
+    """A whole game night fits: Clapback averages ~6 players and the old
+    ceiling was 25 // 5 = 5 for any template at all."""
+    assert QUIPLASH_PLAYER_MAX >= 8
+    assert QUIPLASH_PLAYER_MIN == 2
+
+
+def test_player_range_classic_unset_ceiling_stays_unset():
+    lo, hi = player_range({"player_min": 2, "player_max": None, "blanks": []}, "classic")
+    assert (lo, hi) == (2, None)
+
+
+# ── tier_clamp_note ──────────────────────────────────────────────────
+# The spec promised an ephemeral warning when a host asks for a tier above
+# the channel's cap; the modes only logged it (trivia-tail-93). The slash
+# entry now sends this note.
+
+
+@pytest.mark.parametrize(
+    "requested,max_tier,expect_note",
+    [
+        pytest.param(2, 4, False, id="under-cap"),
+        pytest.param(4, 4, False, id="at-cap"),
+        pytest.param(4, 2, True, id="over-cap"),
+    ],
+)
+def test_tier_clamp_note(requested, max_tier, expect_note):
+    note = tier_clamp_note(requested, max_tier)
+    if not expect_note:
+        assert note is None
+        return
+    assert note is not None
+    assert "Spicy" in note          # the tier it will play at, by name
+    assert "Unhinged" in note       # the tier that was asked for
+    assert "<@" not in note
+
+
+# ── payout roster ────────────────────────────────────────────────────
+# A Classic reveal pays the people who put a word in, not everyone who
+# pressed Join (trivia-tail-95): two members could join, press nothing for
+# five minutes and collect the participation reward.
+
+
+@pytest.mark.parametrize(
+    "fills,expected",
+    [
+        pytest.param({}, [], id="nobody-filled-nobody-paid"),
+        pytest.param({"a": {"value": "x", "by": 1}}, [1], id="one-contributor"),
+        pytest.param(
+            {"a": {"value": "x", "by": 1}, "b": {"value": "y", "by": 2},
+             "c": {"value": "z", "by": 1}},
+            [1, 2], id="dedupes-and-keeps-order",
+        ),
+    ],
+)
+def test_classic_payout_roster_is_the_contributors(fills, expected):
+    assert unique_contributors(fills) == expected
 
 
 # ── claim_start ──────────────────────────────────────────────────────

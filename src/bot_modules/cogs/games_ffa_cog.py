@@ -9,12 +9,15 @@ if TYPE_CHECKING:
 import discord
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import GAME_ICONS
+from bot_modules.games.constants import GAME_ICONS, play_description
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
     EVENT_REPLY_POSTED,
 )
+from bot_modules.core.branding import apply_section_spacing, safe_resolve_accent
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
+    GameEnd,
     finish_launch_response,
     create_game,
     get_active_game_by_id,
@@ -27,6 +30,7 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.launch_guard import launch_refusal, no_tag_match_message
 from bot_modules.games.command_groups import play
+from bot_modules.games_ffa.logic import note_reply, recap_summary
 from bot_modules.games_ffa.prompts import label_for_kind
 from bot_modules.games.utils.question_source import (
     get_ffa_prompt,
@@ -39,6 +43,7 @@ from bot_modules.services.quote_renderer import render_quote_card, THEMES
 # tables, which share the same SQLite file as the games DB.
 from bot_modules.services.confessions_service import (
     init_db as init_confessions_db,
+    clear_anon_identities,
     get_or_assign_anon_identity,
     get_ephemeral_anon_identity,
     anon_name_from_index,
@@ -65,13 +70,25 @@ _DEFAULT_EMBED_COLOR = discord.Color(0xE85A9B)
 
 MAX_EMBED_DESCRIPTION = 4096
 
+# Embed mode serves truths unless the host asks for dares: a third of the
+# bank's dares want a voice note, a photo or a nickname change, none of which
+# an anonymous text box can deliver (anon-tail-70). ``/games play ffa
+# kind:dare`` and the banner card (open chat, no box) still draw them.
+EMBED_DEFAULT_KIND = "truth"
+
+# How many characters of a prompt the close recap quotes per line.
+_RECAP_PROMPT_CHARS = 90
+
 REPLY_HELP = (
     "🎭 **Replying to a Truth or Dare**\n"
     "Your reply is posted by the bot with no name attached.\n\n"
     "• **Reply Anonymously** — you keep the *same* anonymous nickname for this "
     "prompt, so people can follow your back-and-forth.\n"
     "• **Reply as Someone New** — you get a *fresh* nickname every time, so "
-    "even your own replies can't be linked together.\n\n"
+    "even your own replies can't be linked together.\n"
+    "• **Next** (host or mod) pulls another prompt; **Close** ends the game "
+    "with a recap of which prompts drew the most replies, and pays everyone "
+    "who replied.\n\n"
     "Mods can still see who actually sent a reply (logged for safety)."
 )
 
@@ -128,6 +145,101 @@ def build_ffa_embed(
     return embed
 
 
+def build_recap_embed(summary: dict, *, color: discord.Color) -> discord.Embed:
+    """The host's close card: replies per prompt and the busiest prompt.
+
+    Names nobody — the replies were anonymous and so is the recap; the only
+    member-shaped number is how many distinct people replied.
+    """
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['ffa']} Anonymous Truth or Dare — Recap",
+        color=color,
+    )
+    lines = []
+    for label, text, count in summary["per_prompt"]:
+        quoted = text if len(text) <= _RECAP_PROMPT_CHARS else text[: _RECAP_PROMPT_CHARS - 1].rstrip() + "…"
+        noun = "reply" if count == 1 else "replies"
+        lines.append(f"**{label.title()}** — {discord.utils.escape_markdown(quoted)} · {count} {noun}")
+    embed.add_field(name="Prompts", value="\n".join(lines)[:1024] or "—", inline=False)
+    busiest = summary.get("busiest")
+    if busiest is not None:
+        label, text, count = busiest
+        quoted = text if len(text) <= _RECAP_PROMPT_CHARS else text[: _RECAP_PROMPT_CHARS - 1].rstrip() + "…"
+        embed.add_field(
+            name="🔥 Busiest Prompt",
+            value=f"{discord.utils.escape_markdown(quoted)} ({count} replies)",
+            inline=False,
+        )
+    embed.add_field(name="Total Replies", value=str(summary["total_replies"]), inline=True)
+    embed.add_field(name="Repliers", value=str(len(summary["repliers"])), inline=True)
+    embed.set_footer(text="Free For All")
+    apply_section_spacing(embed)
+    return embed
+
+
+async def finish_ffa_game(bot, db, game_id: str, channel) -> GameEnd | None:
+    """The host's Close: retire every prompt's buttons, post the recap, drop
+    the prompts' anonymous-alias rows, and pay the repliers.
+
+    Until 2026-09-04 an embed-mode game never resolved — no button, no recap,
+    and ``ffa`` sat in ``NO_ROSTER_TYPES`` so even the 24h sweep paid nobody
+    (anon-tail-70). Each ``prompts`` entry now records its ``repliers``; that
+    list is the roster here and the one ``game_roster`` rebuilds for the
+    sweep and ``/games end``. Returns what ``end_game`` archived, or None
+    when another path already ended the game.
+    """
+    bot.active_views.pop(game_id, None)
+    payload = await get_game_payload(db, game_id)
+    entries = [e for e in (payload.get("prompts") or []) if isinstance(e, dict)]
+
+    # Every prompt message carries its own live view; take the buttons off
+    # each so a late reply can't land on a closed game. Best-effort — a
+    # prompt deleted mid-game is simply skipped.
+    for entry in entries:
+        mid = entry.get("message_id")
+        if not mid:
+            continue
+        try:
+            msg = await channel.fetch_message(int(mid))
+            await msg.edit(view=None)
+        except Exception:
+            log.debug("ffa: could not retire prompt %s on close", mid, exc_info=True)
+
+    guild = getattr(channel, "guild", None)
+    summary = recap_summary(entries)
+    roster = list(summary["repliers"]) if summary else []
+    if summary is None or summary["total_replies"] == 0:
+        await channel.send(
+            f"{GAME_ICONS['ffa']} Anonymous Truth or Dare closed — no replies came in, "
+            "so there's nothing to recap."
+        )
+    else:
+        color = await safe_resolve_accent(bot, guild, default=_DEFAULT_EMBED_COLOR, log_label="ffa")
+        embed = build_recap_embed(summary, color=color)
+        if guild is not None:
+            from bot_modules.economy.game_rewards import append_payout_footer
+            await append_payout_footer(bot, embed, guild.id, "ffa")
+        await channel.send(embed=embed)
+
+    # The prompts can no longer be replied to, so their user → alias rows
+    # have nothing left to serve (anon-tail-69).
+    if guild is not None:
+        try:
+            clear_anon_identities(
+                bot.ctx.db_path, guild.id,
+                [int(e["message_id"]) for e in entries if e.get("message_id")],
+            )
+        except Exception:
+            log.exception("ffa: failed to clear anonymous identities for game %s", game_id)
+
+    log.info("Game %s (ffa) closed — %d repliers, %d prompts", game_id, len(roster), len(entries))
+    return await end_game(
+        db, game_id,
+        player_count=len(roster), round_count=len(entries), payload=payload,
+        bot=bot, player_ids=roster, reason="ended",
+    )
+
+
 def _find_prompt_entry(payload: dict, message_id: int) -> dict | None:
     """The per-message ``prompts`` entry for ``message_id`` (or None).
 
@@ -145,8 +257,9 @@ def _find_prompt_entry(payload: dict, message_id: int) -> dict | None:
 # Embed mode (── /games play ffa ──)
 # Standard embed with anonymous replies posted back into the channel and a
 # live reply-count footer. Stateful: the view is bound to the embed message
-# and re-registered on restart via recover_game. Games auto-close after 24h
-# (see the cleanup sweep in __main__) or via /games config game-end.
+# and re-registered on restart via recover_game. The host's Close button
+# ends the game with a recap and pays the repliers (finish_ffa_game); the
+# 24h cleanup sweep and /games end archive and pay the same roster.
 # ---------------------------------------------------------------------------
 
 class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
@@ -231,11 +344,14 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
 
         # Bump THIS message's running count and refresh its own footer. Each
         # posted prompt tracks replies independently, so a reply to an earlier
-        # prompt never disturbs a later one's count.
+        # prompt never disturbs a later one's count. The replier id goes in
+        # too — the roster the close pays; it is never rendered.
+        replier_id = interaction.user.id
+
         def _bump(payload):
             entry = _find_prompt_entry(payload, root_id)
             if entry is not None:
-                entry["reply_count"] = int(entry.get("reply_count", 0)) + 1
+                note_reply(entry, replier_id)
 
         payload = await modify_payload(view.db, view.game_id, _bump)
         try:
@@ -270,8 +386,9 @@ class FFAEmbedView(discord.ui.View):
     """Stateful persistent view bound to a single FFA embed message.
 
     Carries the anonymous-reply buttons (identity keyed by the embed message
-    id) and the state needed to keep the reply-count footer in sync. Games are
-    closed by the 24h cleanup sweep or /games config game-end, not a button.
+    id) and the state needed to keep the reply-count footer in sync. The host
+    (or a mod) ends the game with **Close** — recap, alias clean-up, payout;
+    the 24h cleanup sweep and /games end archive and pay the same roster.
     Re-registered after a restart by :meth:`FFACog.recover_game`.
     """
 
@@ -411,7 +528,7 @@ class FFAEmbedView(discord.ui.View):
             p["label"] = label
             p["seen"] = [*seen, text]
             p.setdefault("prompts", []).append(
-                {"message_id": new_msg.id, "prompt": text, "label": label, "reply_count": 0}
+                {"message_id": new_msg.id, "prompt": text, "label": label, "reply_count": 0, "repliers": []}
             )
 
         await modify_payload(self.db, self.game_id, _advance)
@@ -425,6 +542,36 @@ class FFAEmbedView(discord.ui.View):
     )
     async def reply_help(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message(REPLY_HELP, ephemeral=True)
+
+    @discord.ui.button(
+        label="Close",
+        emoji="🏁",
+        style=discord.ButtonStyle.secondary,
+        custom_id="ffa_embed_close",
+        row=1,
+    )
+    async def close_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Host or mod, behind the usual confirm popup: the ending the game
+        never had (anon-tail-70) — see :func:`finish_ffa_game`."""
+        log.info("%s pressed Close in #%s", interaction.user.display_name, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message(
+                "❌ Only the host or a mod can close the game.", ephemeral=True
+            )
+            return
+        if not await self._guard_active(interaction):
+            return
+        channel = self._game_msg.channel if self._game_msg else interaction.channel
+
+        async def _confirmed(confirm: discord.Interaction) -> None:
+            if not await get_active_game_by_id(self.db, self.game_id):
+                await confirm.followup.send("This game has already been closed.", ephemeral=True)
+                return
+            await finish_ffa_game(self.bot, self.db, self.game_id, channel)
+
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to end this game?", view=ConfirmCloseView(_confirmed), ephemeral=True,
+        )
 
 
 class FFACog(commands.Cog):
@@ -443,17 +590,17 @@ class FFACog(commands.Cog):
 
     @app_commands.command(
         name="ffa",
-        description="Post a Truth or Dare and collect anonymous replies!",
+        description=play_description("ffa"),
     )
     @app_commands.describe(
-        kind="Truth, Dare, or a random pick (default: random)",
+        kind="Truth (default), Dare, or a random pick — dares need a room that can act them out",
         tags="Comma-separated tags to filter the prompt bank",
         prompt="Write your own prompt instead of pulling a random one (optional)",
     )
     async def ffa(
         self,
         interaction: discord.Interaction,
-        kind: Literal["random", "truth", "dare"] = "random",
+        kind: Literal["random", "truth", "dare"] = EMBED_DEFAULT_KIND,
         tags: str = "",
         prompt: str | None = None,
     ):
@@ -461,7 +608,7 @@ class FFACog(commands.Cog):
 
     @app_commands.command(
         name="ffa_banner",
-        description="Drop a Truth or Dare prompt card in the channel!",
+        description=play_description("ffa_banner"),
     )
     @app_commands.describe(
         kind="Truth, Dare, or a random pick (default: random)",
@@ -499,10 +646,14 @@ class FFACog(commands.Cog):
 
         # ffa is not bank-only (a host prompt or an untagged draw always
         # works), so the guard skips its bank; a tag filter with no match is
-        # still refused here, with the guard's copy.
+        # still refused here, with the guard's copy. The kind rides along:
+        # ``kind:dare tags:lily`` where every lily row is a truth is a miss
+        # here, not a launch that comes back empty and blames permissions
+        # (anon-tail-76).
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if tag_list and not (prompt or "").strip() and not await has_matching_questions(
-            self.db, "ffa", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
+            self.db, "ffa", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel),
+            kind=kind if kind in ("truth", "dare") else None,
         ):
             await interaction.response.send_message(no_tag_match_message(tag_list), ephemeral=True)
             return
@@ -526,9 +677,13 @@ class FFACog(commands.Cog):
             perms_hint=f"I couldn't start the game here. Please grant me {perms}",
         )
 
-    async def _resolve_prompt(self, channel, options: dict):
-        """Resolve (kind, tags, (label, text)) for a launch. (label, text) is None on miss."""
-        kind = (options.get("kind") or "random").lower()
+    async def _resolve_prompt(self, channel, options: dict, *, default_kind: str = "random"):
+        """Resolve (kind, tags, (label, text)) for a launch. (label, text) is None on miss.
+
+        ``default_kind`` is what a launch with no ``kind`` draws — embed mode
+        passes :data:`EMBED_DEFAULT_KIND` (truth), the banner stays random.
+        """
+        kind = (options.get("kind") or default_kind).lower()
         tags = list(options.get("tags") or [])
         custom = (options.get("prompt") or "").strip()
         if custom:
@@ -551,8 +706,9 @@ class FFACog(commands.Cog):
         """Embed mode (default). Standard embed + in-channel anonymous replies.
 
         Interaction-free (slash command + scheduler). Returns game_id, or None.
+        A launch that names no ``kind`` draws truths (anon-tail-70).
         """
-        kind, tags, picked = await self._resolve_prompt(channel, options)
+        kind, tags, picked = await self._resolve_prompt(channel, options, default_kind=EMBED_DEFAULT_KIND)
         if picked is None:
             log.info("ffa embed launch: no prompt for kind=%s tags=%s in channel %s", kind, tags, channel.id)
             return None
@@ -595,7 +751,7 @@ class FFACog(commands.Cog):
 
         def _seed(p):
             p.setdefault("prompts", []).append(
-                {"message_id": msg.id, "prompt": text, "label": label, "reply_count": 0}
+                {"message_id": msg.id, "prompt": text, "label": label, "reply_count": 0, "repliers": []}
             )
 
         await modify_payload(self.db, game_id, _seed)
@@ -667,7 +823,8 @@ class FFACog(commands.Cog):
             },
         )
         log.info("Game %s (ffa/banner) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
-        await update_session(self.db, channel.id, game_id, [host_id])
+        # A card is not a game night: no roster, no session — the row is
+        # archived at once for the play stats and nothing else.
         await end_game(self.db, game_id)
         return game_id
 

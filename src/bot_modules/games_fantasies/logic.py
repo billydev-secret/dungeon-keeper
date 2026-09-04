@@ -20,11 +20,24 @@ of free-form text entries, then per-entry binary voting (✅ Same vs
 * :func:`compute_recap_summary` — picks the headline entries (most
   shared, most polarizing, biggest outlier) for the final recap, plus
   the de-duplicated voter set.
+* :func:`active_voters` / :func:`everyone_has_voted` — the vote-complete
+  auto-advance (2026-09-04, anon-tail-71): an entry's vote closes on the
+  **Seconds per Entry** timer (:data:`DEFAULT_ENTRY_SECONDS`; 0 = host-paced,
+  the timer itself is ``games/utils/round_pacing.RoundPacing``) or as soon
+  as everyone the round is waiting on has voted.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
+
+# Seconds an entry stays open for votes when the dashboard dial is unset;
+# 0 on the dial means host-paced (Next only), as for WYR/NHIE/MLT.
+DEFAULT_ENTRY_SECONDS = 45
+
+# The one ephemeral line for a self-vote — shared with Hot Takes.
+SELF_VOTE_REFUSAL = "❌ You can't vote on your own entry!"
 
 # The two categories. One submit button carries each, so these are the
 # only values ``add_entry`` ever stores — no parsing stands between a
@@ -210,3 +223,37 @@ def roster_from_results(results: list[dict[str, Any]]) -> list[int]:
             roster.add(int(r["author"]))
         roster.update(int(v) for v in r.get("voters") or [])
     return sorted(roster)
+
+
+def active_voters(
+    entries: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    exclude: int | None = None,
+) -> set[int]:
+    """The room an entry is waiting on: everyone who submitted this round
+    plus everyone who has voted on an earlier entry this game, minus the
+    entry's own author (who may not vote on it).
+    """
+    room: set[int] = set()
+    for e in entries:
+        if isinstance(e, dict) and e.get("user_id") is not None:
+            room.add(int(e["user_id"]))
+    for r in results:
+        if isinstance(r, dict):
+            room.update(int(v) for v in r.get("voters") or [])
+    if exclude is not None:
+        room.discard(int(exclude))
+    return room
+
+
+def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
+    """True when every expected voter has voted — the vote-complete auto-advance.
+
+    An empty expected set never advances; the timer or Next handles that
+    entry.
+    """
+    expected_set = {int(u) for u in expected}
+    if not expected_set:
+        return False
+    return expected_set <= {int(u) for u in voted}

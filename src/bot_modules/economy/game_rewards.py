@@ -245,11 +245,15 @@ async def pay_cat_catch(
     rarity: str,
     doubled: bool,
     occurrence: str,
-) -> int:
+) -> int | None:
     """Credit a Cat Bot catch: ``coins`` (rarity-tiered, blessed already folded)
     plus the ``cat_catch`` quest trigger. Returns the coins **actually
     credited**, which is what the caller should log — with a cap in play that
-    is not ``coins``.
+    is not ``coins`` — or ``None`` when no payout was even attempted (guild
+    not in the cache, member unresolvable, economy off, a failure). The
+    distinction matters to the caller's claim (photo-external-109): a catch
+    the daily cap clipped to 0 was *handled* and stays claimed, one that
+    could not be attempted gets its claim released so a replay can pay it.
 
     ``coins`` is the value the guild's ``catcatch_coins_*`` dials produced;
     ``cat_catch_daily_cap`` then clips it to the member's remaining allowance
@@ -266,10 +270,10 @@ async def pay_cat_catch(
     try:
         guild = bot.get_guild(guild_id)
         if guild is None:
-            return 0
+            return None
         member = guild.get_member(int(user_id))
         if member is None or member.bot or coins < 1:
-            return 0
+            return None
 
         db_path = bot.ctx.db_path
 
@@ -279,7 +283,7 @@ async def pay_cat_catch(
 
         settings = await asyncio.to_thread(_load)
         if not settings.enabled:
-            return 0
+            return None
 
         booster = member_is_booster(bot, guild_id, user_id)
 
@@ -324,7 +328,7 @@ async def pay_cat_catch(
         return credited
     except Exception:
         log.exception("pay_cat_catch failed for guild %s", guild_id)
-        return 0
+        return None
 
 
 async def pay_mention_award(
@@ -409,8 +413,12 @@ async def pay_cah_game_by_score(
     occurrence: str | None = None,
     game_key: str = "cah",
     host_id: int | None = None,
-) -> None:
+) -> int:
     """Credit a finished external game proportional to each player's score.
+    Returns the coins credited in total (shares plus the host bounty), 0 on
+    every no-op path — the caller releases its once-ever claim on a 0 so a
+    transient no-op (guild not cached, economy briefly off, cap at 0 while
+    tuning) can be replayed rather than burning the game (photo-external-109).
 
     Replaces the flat participation/win payout for score-carrying external
     games: the top scorer (the *Game over!* winner) earns
@@ -429,16 +437,17 @@ async def pay_cah_game_by_score(
     dropped, so a winner who can't be resolved never creates a phantom payout.
 
     ``game_key`` scopes the quest ``occurrence`` and defaults to CAH, which
-    this started life as. Gamebot Anagrams passes ``"anagrams"``, Wordle
-    ``"wordle"``, Co-ordle ``"coordle"`` — all sharing the same
-    ``reward_cah_win_max`` cap, one dial for "an external game win", since they
-    all pay by score *ratio* and the absolute point scales (5 vs 900 vs 6)
-    cancel out.
+    this started life as. Gamebot Anagrams passes ``"anagrams"``, Survey Says
+    ``"survey_says"``, Wisecracks ``"wisecracks"``, Wordle ``"wordle"``,
+    Co-ordle ``"coordle"`` — all sharing the same ``reward_cah_win_max`` cap,
+    one dial for "an external game win", since they all pay by score *ratio*
+    and the absolute point scales (5 vs 900 vs 6) cancel out.
     """
+    total = 0
     try:
         guild = bot.get_guild(guild_id)
         if guild is None:
-            return
+            return 0
 
         def _coerce(raw: object) -> int | None:
             try:
@@ -458,11 +467,11 @@ async def pay_cah_game_by_score(
             if uid is not None and score is not None and _valid(uid):
                 numeric_scores[uid] = score
         if not numeric_scores:
-            return
+            return 0
 
         top_score = max(numeric_scores.values())
         if top_score <= 0:
-            return
+            return 0
 
         participants = sorted(numeric_scores)
         if winner_id is None or isinstance(winner_id, (str, bytes, int)):
@@ -484,14 +493,15 @@ async def pay_cah_game_by_score(
 
         settings = await asyncio.to_thread(_load)
         if not settings.enabled:
-            return
+            return 0
         cap = settings.reward_cah_win_max
         if cap <= 0:
-            return
+            return 0
 
         boosters = {uid: member_is_booster(bot, guild_id, uid) for uid in participants}
 
-        def _credit() -> None:
+        def _credit() -> int:
+            paid = 0
             with open_db(db_path) as conn:
                 for uid in participants:
                     share = round(cap * numeric_scores[uid] / top_score)
@@ -499,7 +509,7 @@ async def pay_cah_game_by_score(
                         continue
                     kind = "game_win" if uid in winners else "game_participation"
                     try:
-                        apply_credit(
+                        paid += apply_credit(
                             conn, guild_id, uid, share, kind,
                             meta={"score": numeric_scores[uid], "top_score": top_score},
                             booster=boosters[uid], multiplier=settings.booster_multiplier,
@@ -509,8 +519,9 @@ async def pay_cah_game_by_score(
                             "%s score payout failed for user %s (guild %s)",
                             game_key, uid, guild_id,
                         )
+            return paid
 
-        await asyncio.to_thread(_credit)
+        total += await asyncio.to_thread(_credit)
 
         scoped = f"{game_key}:{occurrence}" if occurrence is not None else None
         await _fire_triggers(
@@ -520,13 +531,14 @@ async def pay_cah_game_by_score(
             await _fire_triggers(
                 bot, guild, settings, "game_win", sorted(winners), boosters, scoped
             )
-        await pay_host_bounty(
+        total += await pay_host_bounty(
             bot, guild_id, settings, host_id,
             participants=participants, boosters=boosters,
             game_type=game_key, occurrence=occurrence,
         )
     except Exception:
         log.exception("pay_cah_game_by_score failed for guild %s", guild_id)
+    return total
 
 
 def resolve_named_scores(
