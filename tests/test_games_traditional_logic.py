@@ -242,6 +242,43 @@ def test_select_next_question_target_recounts_after_each_call():
     assert second_uid != uid
 
 
+def test_select_next_question_target_never_picks_an_excluded_uid_even_when_least_asked():
+    """The no-contact gate: an excluded player is dropped BEFORE the
+    least-asked filter, so being the least-asked player in the room can
+    never pull them back in. User 2 has been asked nothing and would win on
+    the weighting alone; excluded, the pick falls to user 1 every time."""
+    prefs = {"1": ["sfw_truth", "sfw_dare"], "2": ["sfw_dare"]}
+    asked = {"1:nsfw_truth": "Q", "1:nsfw_dare": "Q"}
+    for seed in range(20):
+        result = select_next_question_target(
+            prefs, asked, rng=random.Random(seed), excluded={2}
+        )
+        assert result is not None
+        assert result[0] == "1"
+
+
+@pytest.mark.parametrize("excluded", [{"2"}, {2}], ids=["str-ids", "int-ids"])
+def test_select_next_question_target_excluded_accepts_int_or_str_ids(excluded):
+    """``no_contact_partners`` hands back ints; the payload keys are strs.
+    Either spelling must exclude."""
+    prefs = {"2": ["sfw_dare"]}
+    assert select_next_question_target(prefs, {}, excluded=excluded) is None
+
+
+def test_select_next_question_target_returns_none_when_only_excluded_remain():
+    """With every open pair belonging to an excluded player the picker
+    reports exhaustion — the cog then sends its ordinary "all asked" reply,
+    which is exactly what makes the refusal indistinguishable."""
+    prefs = {"1": ["sfw_truth"], "2": ["sfw_dare"]}
+    asked = {"1:sfw_truth": "Q"}
+    assert select_next_question_target(prefs, asked, excluded={2}) is None
+
+
+def test_select_next_question_target_empty_excluded_changes_nothing():
+    prefs = {"1": ["sfw_truth"]}
+    assert select_next_question_target(prefs, {}, excluded=set()) == ("1", "sfw_truth")
+
+
 # ── summarize_asked_by_category ──────────────────────────────────────
 
 
@@ -669,3 +706,100 @@ def test_host_view_lays_its_buttons_out_two_per_row():
         2: ["Ask Question", "Bank Round"],
         3: ["❓ Help", "End Game"],
     }
+
+
+# ── Ask Question wiring: the no-contact list reaches the picker ──────
+#
+# The picker's ``excluded`` parameter is only a gate if the button actually
+# passes the presser's no-contact partners into it. One wiring test proves
+# the glue; the selection rule itself is covered above.
+
+from types import SimpleNamespace  # noqa: E402
+
+import bot_modules.cogs.games_traditional_cog as traditional_cog  # noqa: E402
+from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.services.games_db import GamesDb  # noqa: E402
+from bot_modules.services.no_contact_service import add_pair  # noqa: E402
+
+
+class _AskResponse:
+    def __init__(self) -> None:
+        self.messages: list[tuple] = []
+        self.modals: list = []
+
+    async def send_message(self, content=None, **kwargs):
+        self.messages.append((content, kwargs))
+
+    async def send_modal(self, modal):
+        self.modals.append(modal)
+
+
+class _AskGuild:
+    def __init__(self, members: dict[int, str]) -> None:
+        self.id = 77
+        self._members = {
+            uid: SimpleNamespace(id=uid, display_name=name, mention=f"<@{uid}>")
+            for uid, name in members.items()
+        }
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+
+async def _ask_view(sync_db_path, prefs, asked, *, pair=None):
+    bot = SimpleNamespace(
+        games_db=GamesDb(sync_db_path),
+        active_views={},
+        ctx=SimpleNamespace(db_path=sync_db_path),
+    )
+    if pair is not None:
+        add_pair(sync_db_path, 77, pair[0], pair[1], created_by=99)
+    payload = {
+        "participants": [int(u) for u in prefs],
+        "prefs": prefs,
+        "asked": asked,
+    }
+    game_id = await create_game(bot.games_db, 4242, 1, "traditional", payload=payload)
+    view = traditional_cog.TraditionalHostView(game_id, 1, bot.games_db, bot)
+    guild = _AskGuild({1: "Host", 2: "Bee", 3: "Cat"})
+    interaction = SimpleNamespace(
+        user=guild.get_member(1),
+        guild=guild,
+        guild_id=77,
+        channel=SimpleNamespace(id=4242, name="games", guild=guild),
+        response=_AskResponse(),
+    )
+    return view, interaction
+
+
+async def test_ask_question_skips_the_pressers_no_contact_partner(monkeypatch, sync_db_path):
+    """Host 1 and player 2 are a no-contact pair; player 2 is the least-asked
+    (never asked) player. Ask Question must seat player 3 instead — the
+    question modal is addressed to them, never to the blocked partner."""
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view(
+        sync_db_path,
+        prefs={"2": ["sfw_truth"], "3": ["sfw_dare"]},
+        asked={"3:sfw_truth": "Q"},
+        pair=(1, 2),
+    )
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    assert interaction.response.messages == []
+    assert [m.target_id for m in interaction.response.modals] == ["3"]
+
+
+async def test_ask_question_with_only_the_blocked_partner_open_uses_the_ordinary_exhausted_reply(
+    monkeypatch, sync_db_path
+):
+    """When the blocked partner is the only player left to ask, the presser
+    sees exactly what they would see once everyone had been asked — not a
+    message that reveals the pair."""
+    monkeypatch.setattr(traditional_cog, "is_host_or_mod", lambda *_: True)
+    view, interaction = await _ask_view(
+        sync_db_path, prefs={"2": ["sfw_truth"]}, asked={}, pair=(1, 2),
+    )
+    await view.ask_question.callback(interaction)  # type: ignore[arg-type]
+    assert interaction.response.modals == []
+    (content, kwargs), = interaction.response.messages
+    assert content == "All player/category combinations have been asked!"
+    assert kwargs.get("ephemeral") is True

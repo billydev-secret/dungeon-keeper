@@ -279,8 +279,24 @@ async def start_room_game(
 
     db = getattr(bot, "games_db", None)
     if db is not None:
-        from bot_modules.games.utils.game_manager import get_active_game
+        from bot_modules.games.constants import SCHEDULE_BASE_GAME_TYPE
+        from bot_modules.games.utils.game_manager import (
+            check_game_enabled,
+            get_active_game,
+        )
 
+        # The dashboard's enable dial: the slash entry and the scheduler both
+        # read it, and a rotation launch is no less a launch. A display
+        # variant honours its base game's toggle, as the scheduler does.
+        enable_type = SCHEDULE_BASE_GAME_TYPE.get(game_key, game_key)
+        if not await check_game_enabled(db, enable_type, guild.id):
+            log.info(
+                "Rotation: %s is disabled in guild %s; not launching it in %s",
+                game_key,
+                guild.id,
+                channel_id,
+            )
+            return None
         if await get_active_game(db, channel_id) is not None:
             log.info(
                 "Rotation: %s already has a game running; not launching %s",

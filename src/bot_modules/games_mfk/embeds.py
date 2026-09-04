@@ -11,7 +11,11 @@ Two embed shapes are exposed:
   Join toggle (only the participant list changes).
 * :func:`build_assignments_embed` — the post-close embed listing each
   player's three randomly-drawn targets with the call-to-action
-  ("Reply with your <Marry, Fornicate, Kiss> picks!").
+  ("Reply with your <Marry, Fornicate, Kiss> picks!"). Every member is
+  *named* through a ``name_fn`` (``services/name_resolver``), never
+  ``<@id>``-mentioned — an embed field *name* doesn't resolve mentions
+  at all, so a mention there is a literal ``<@123…>`` to every reader.
+  The ping lives in message ``content``, where a mention belongs.
 
 The slot-line formatter (:func:`format_assignment_value`) is split out
 so tests can assert on the bold-name layout without constructing a
@@ -25,6 +29,7 @@ import discord
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games_mfk.logic import DEFAULT_LABELS
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def _title_for(labels: list[str]) -> str:
@@ -88,16 +93,19 @@ def format_assignment_value(target_names: list[str]) -> str:
 
 
 def build_assignments_embed(
-    player_assignments: list[tuple[str, list[str]]],
+    assignments: dict[int, list[int]],
     labels: list[str] | None = None,
     color: "discord.Color | None" = None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Build the post-close embed announcing each player's three targets.
 
-    ``player_assignments`` is a list of ``(player_mention,
-    [target_name_a, target_name_b, target_name_c])`` tuples — the cog
-    resolves both the mentions and the target display names against
-    the live guild before calling.
+    ``assignments`` is the ``{player_id: [target_ids]}`` map from
+    ``assign_targets``; the row header is the player's resolved name and
+    the value their targets' names, all through ``name_fn`` (the resolver
+    from ``build_name_fn``). The default keeps an un-wired caller rendering
+    a mention rather than crashing — the cog always passes one.
 
     ``labels`` matches the call sent to :func:`build_lobby_embed`; the
     embed title/footer track the host's chosen categories.
@@ -114,10 +122,10 @@ def build_assignments_embed(
     # A Discord embed allows at most 25 fields; the lobby is capped at
     # MAX_PARTICIPANTS join-side, but slice defensively so a stale/over-
     # sized roster can never 400 the assignments message.
-    for player_mention, target_names in player_assignments[:25]:
+    for player_id, targets in list(assignments.items())[:25]:
         embed.add_field(
-            name=player_mention,
-            value=format_assignment_value(target_names),
+            name=name_fn(player_id),
+            value=format_assignment_value([name_fn(uid) for uid in targets]),
             inline=False,
         )
     embed.set_footer(text=f"{GAME_ICONS['mfk']} {title_str}")

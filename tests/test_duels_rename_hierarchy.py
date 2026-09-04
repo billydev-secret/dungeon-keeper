@@ -167,6 +167,7 @@ async def test_nick_submit_skips_rename_when_loser_outranks_bot(monkeypatch):
     cog._db_get_game = _async_return(game)
     cog._check_bot_can_nick = _async_return(None)  # has Manage Nicknames
     cog._check_no_active_nick = _async_return([])
+    cog._refuse_rename_across_pair = _async_return(False)  # not a no-contact pair
     # The crux: the loser outranks the bot.
     cog._unrenameable_members = MagicMock(return_value=[loser])
     set_state = MagicMock()

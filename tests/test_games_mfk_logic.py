@@ -11,6 +11,7 @@ Discord.
 from __future__ import annotations
 
 import random
+import re
 
 import pytest
 
@@ -29,6 +30,19 @@ from bot_modules.games_mfk.logic import (
     serialize_assignments,
     toggle_participant,
 )
+
+_MENTION = re.compile(r"<@!?\d+>")
+
+
+def _named(uid: int) -> str:
+    return f"Member{uid}"
+
+
+def _seen(embed) -> str:
+    parts = [embed.title or "", embed.description or "", embed.footer.text or ""]
+    for f in embed.fields:
+        parts += [f.name or "", f.value or ""]
+    return "\n".join(parts)
 
 
 # ── toggle_participant ───────────────────────────────────────────────
@@ -212,6 +226,38 @@ def test_assign_targets_deterministic_with_seeded_rng():
     assert out1 == out2
 
 
+# ── assign_targets: the no-contact gate ──────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [pytest.param({(1, 2)}, id="stored-order"), pytest.param({(2, 1)}, id="reversed")],
+)
+def test_assign_targets_never_hands_a_no_contact_pair_to_each_other(forbidden):
+    """Neither member of a blocked pair ever appears in the other's three."""
+    for seed in range(40):
+        out = assign_targets([1, 2, 3, 4, 5, 6], rng=random.Random(seed), forbidden_pairs=forbidden)
+        assert 2 not in out[1] and 1 not in out[2]
+        for player_id, targets in out.items():
+            assert player_id not in targets
+            assert len(targets) == TARGETS_PER_PLAYER
+
+
+def test_assign_targets_silently_gives_fewer_names_when_the_pool_is_too_small():
+    """Four players, one blocked pair: the two blocked members can only be
+    shown two names each — no error, no message, just a shorter list."""
+    out = assign_targets([1, 2, 3, 4], rng=random.Random(0), forbidden_pairs={(1, 2)})
+    assert set(out[1]) == {3, 4}
+    assert set(out[2]) == {3, 4}
+    assert len(out[3]) == 3 and len(out[4]) == 3
+
+
+def test_assign_targets_unrelated_players_are_unaffected_by_a_pair():
+    out = assign_targets([1, 2, 3, 4, 5], rng=random.Random(3), forbidden_pairs={(1, 2)})
+    for player_id in (3, 4, 5):
+        assert len(out[player_id]) == TARGETS_PER_PLAYER
+
+
 # ── serialize_assignments ────────────────────────────────────────────
 
 
@@ -297,23 +343,19 @@ def test_format_assignment_value_separates_with_middle_dot():
 
 
 def test_build_assignments_embed_one_field_per_player():
-    assignments = [
-        ("<@1>", ["Bob", "Carol", "Dan"]),
-        ("<@2>", ["Alice", "Carol", "Dan"]),
-    ]
-    embed = build_assignments_embed(assignments)
+    embed = build_assignments_embed({1: [2, 3, 4], 2: [1, 3, 4]}, name_fn=_named)
     assert len(embed.fields) == 2
 
 
 def test_build_assignments_embed_title_mentions_three_names():
-    embed = build_assignments_embed([], labels=DEFAULT_LABELS)
+    embed = build_assignments_embed({}, labels=DEFAULT_LABELS)
     assert embed.title is not None
     assert "Your Three Names" in embed.title
 
 
 def test_build_assignments_embed_description_lists_categories():
     """The CTA in the description mentions the actual categories."""
-    embed = build_assignments_embed([], labels=["Cruise", "Wedding", "Vacation"])
+    embed = build_assignments_embed({}, labels=["Cruise", "Wedding", "Vacation"])
     assert embed.description is not None
     assert "Cruise" in embed.description
     assert "Wedding" in embed.description
@@ -321,28 +363,35 @@ def test_build_assignments_embed_description_lists_categories():
 
 
 def test_build_assignments_embed_custom_labels_in_title():
-    embed = build_assignments_embed([], labels=["A", "B", "C"])
+    embed = build_assignments_embed({}, labels=["A", "B", "C"])
     assert embed.title is not None
     assert "A, B, C" in embed.title
 
 
 def test_build_assignments_embed_field_value_includes_bold_names():
-    embed = build_assignments_embed([("<@1>", ["Bob", "Carol", "Dan"])])
+    embed = build_assignments_embed({1: [2, 3, 4]}, name_fn=_named)
     field = embed.fields[0]
     assert field.value is not None
-    assert "**Bob**" in field.value
-    assert "**Carol**" in field.value
-    assert "**Dan**" in field.value
+    assert "**Member2**" in field.value
+    assert "**Member3**" in field.value
+    assert "**Member4**" in field.value
 
 
-def test_build_assignments_embed_field_name_is_player_mention():
-    embed = build_assignments_embed([("<@99>", ["X", "Y", "Z"])])
-    field = embed.fields[0]
-    assert field.name == "<@99>"
+def test_build_assignments_embed_field_name_is_the_resolved_display_name():
+    """Embed field *names* never resolve mentions at all — a ``<@id>`` there
+    is a literal string to every reader. The row header is the display name."""
+    embed = build_assignments_embed({99: [1, 2, 3]}, name_fn=_named)
+    assert embed.fields[0].name == "Member99"
+    assert not _MENTION.search(_seen(embed))
+
+
+def test_build_assignments_embed_defaults_to_a_mention_for_an_unwired_caller():
+    text = _seen(build_assignments_embed({99: [1, 2, 3]}))
+    assert "<@99>" in text and "**<@1>**" in text
 
 
 def test_build_assignments_embed_has_footer():
-    embed = build_assignments_embed([])
+    embed = build_assignments_embed({})
     assert embed.footer.text is not None
 
 
@@ -383,7 +432,8 @@ from unittest.mock import AsyncMock  # noqa: E402
 import bot_modules.cogs.games_mfk_cog as mfk_cog  # noqa: E402
 from bot_modules.games.utils.game_manager import create_game  # noqa: E402
 from bot_modules.services.games_db import GamesDb  # noqa: E402
-from tests.fakes import FakeUser, fake_interaction  # noqa: E402
+from bot_modules.services.no_contact_service import add_pair  # noqa: E402
+from tests.fakes import FakeGuild, FakeMember, FakeUser, fake_interaction  # noqa: E402
 
 
 class _SpyBot:
@@ -422,3 +472,47 @@ def test_lobby_embed_renders_the_start_countdown():
 def test_lobby_embed_omits_the_countdown_when_none_was_set():
     embed = build_lobby_embed("Alice", [])
     assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+# ── Close & Assign: the no-contact gate and the resolved names ───────
+
+
+def _guild_of(*uids: int) -> FakeGuild:
+    guild = FakeGuild(id=9001)
+    for uid in uids:
+        guild.members[uid] = FakeMember(id=uid, name=f"user{uid}", display_name=f"Member{uid}")
+    return guild
+
+
+async def _close(monkeypatch, sync_db_path, participants: list[int]):
+    spy = AsyncMock()
+    monkeypatch.setattr(mfk_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    guild = _guild_of(*participants)
+    gid = await create_game(
+        bot.games_db, 100, participants[0], "mfk",
+        payload={"participants": list(participants)},
+    )
+    view = mfk_cog.MFKView(gid, participants[0], bot.games_db, bot)  # type: ignore[arg-type]
+    interaction = fake_interaction(user=guild.members[participants[0]], guild=guild)
+    await view.close_assign.callback(interaction)
+    return interaction, spy
+
+
+async def test_close_assign_never_hands_a_no_contact_pair_to_each_other(monkeypatch, sync_db_path):
+    add_pair(sync_db_path, 9001, 1, 2, created_by=1, protected_user_id=1)
+    for _ in range(10):
+        _, spy = await _close(monkeypatch, sync_db_path, [1, 2, 3, 4, 5])
+        assert spy.await_args is not None
+        assignments = spy.await_args.kwargs["payload"]["assignments"]
+        assert 2 not in assignments["1"] and 1 not in assignments["2"]
+        assert spy.await_args.kwargs["player_ids"] == [1, 2, 3, 4, 5]
+
+
+async def test_close_assign_embed_names_players_and_pings_in_content(monkeypatch, sync_db_path):
+    interaction, _ = await _close(monkeypatch, sync_db_path, [1, 2, 3, 4])
+    call = interaction.followup.send.await_args
+    assert "<@1>" in call.kwargs["content"]
+    embed = call.kwargs["embed"]
+    assert [f.name for f in embed.fields] == ["Member1", "Member2", "Member3", "Member4"]
+    assert not _MENTION.search(_seen(embed))

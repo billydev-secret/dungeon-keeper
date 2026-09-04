@@ -135,11 +135,19 @@ class LegitLibsAIPrepBody(BaseModel):
 
 
 def _norm_tags(raw) -> list[str]:
-    """Dedupe + strip a list of tag strings, preserving first-seen order."""
+    """Lowercase, strip and dedupe a list of tag strings, preserving first-seen order.
+
+    Lowercasing happens before the dedupe so ``["Nsfw", "nsfw"]`` collapses to
+    one tag. Tags are matched case-insensitively at draw time
+    (``question_source._parse_tags``), and the bank's NSFW gate keys on the
+    literal ``"nsfw"`` — storing anything else would let a row tagged
+    ``"Nsfw"`` serve in an age-unrestricted channel, which is exactly what an
+    earlier bulk import did.
+    """
     out: list[str] = []
     seen: set[str] = set()
     for t in (raw or []):
-        t = str(t).strip()
+        t = str(t).strip().lower()
         if t and t not in seen:
             seen.add(t)
             out.append(t)
@@ -707,10 +715,12 @@ async def list_bank_tags(
                 ).fetchall()
             else:
                 rows = conn.execute("SELECT tags FROM games_question_bank").fetchall()
+            # Lowercased so a legacy row stored before tags were normalised
+            # on save doesn't offer a second spelling of the same tag.
             seen: set[str] = set()
             for (raw,) in rows:
                 for t in _parse_tags_col(raw):
-                    t = t.strip()
+                    t = t.strip().lower()
                     if t:
                         seen.add(t)
             return {"tags": sorted(seen)}

@@ -21,6 +21,7 @@ from bot_modules.games.constants import (
     BRAND_COLOR,
     SUCCESS_COLOR,
 )
+from bot_modules.services.name_resolver import NameFn, mention
 
 from .logic import (
     ChannelResolver,
@@ -67,14 +68,16 @@ def build_channel_list_embed(
 def build_game_status_embed(
     row: Any,
     color: "discord.Color | None" = None,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Embed shown for ``/games game-status``.
 
     ``row`` is the ``games_active_games`` row (or None when no game is
     running in the channel). Color is the neutral meadow gold in both
-    branches — the title carries the state.
+    branches — the title carries the state. ``name_fn`` names the host
+    (see :func:`describe_active_game`).
     """
-    title, description = describe_active_game(row)
+    title, description = describe_active_game(row, name_fn)
     if color is None:
         color = discord.Color(BRAND_COLOR)
     return discord.Embed(

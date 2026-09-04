@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,8 @@ from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
 )
+from bot_modules.services.name_resolver import build_name_fn, mention
+from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
@@ -108,36 +111,42 @@ class MFKView(discord.ui.View):
             return
 
         await interaction.response.defer()
+        guild = interaction.guild
 
-        # Each player gets 3 random names from the pool (not themselves)
-        assignments = assign_targets(participants)
+        # Each player gets 3 random names from the pool (not themselves, and
+        # not anyone the no-contact list keeps them apart from — a blocked
+        # pair is dropped from each other's sample in both directions, and a
+        # pool too small to fill three names after that simply shows fewer).
+        forbidden: set[tuple[int, int]] = set()
+        if guild is not None:
+            forbidden = await asyncio.to_thread(
+                no_contact_pairs_among, self.bot.ctx.db_path, guild.id, participants
+            )
+        assignments = assign_targets(participants, forbidden_pairs=forbidden)
 
-        # Resolve mentions + target display names against the live guild
-        player_assignments: list[tuple[str, list[str]]] = []
-        mentions: list[str] = []
-        for player_id, trio in assignments.items():
-            player = interaction.guild.get_member(player_id) if interaction.guild else None
-            player_str = player.mention if player else str(player_id)
-            if player:
-                mentions.append(player.mention)
-            target_names: list[str] = []
-            for uid in trio:
-                m = interaction.guild.get_member(uid) if interaction.guild else None
-                target_names.append(m.display_name if m else str(uid))
-            player_assignments.append((player_str, target_names))
-
-        color = await safe_resolve_accent(self.bot, interaction.guild, log_label="mfk")
-        embed = build_assignments_embed(player_assignments, labels=self.labels, color=color)
-        if interaction.guild:
+        # The card names members through the resolver — an embed field NAME
+        # never resolves a mention, so <@id> there is a literal string to
+        # every reader. The ping goes in content, where mentions belong.
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=guild.id if guild is not None else 0,
+            user_ids=list(participants),
+        )
+        color = await safe_resolve_accent(self.bot, guild, log_label="mfk")
+        embed = build_assignments_embed(
+            assignments, labels=self.labels, color=color, name_fn=name_fn
+        )
+        if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
-            await append_payout_footer(self.bot, embed, interaction.guild.id, "mfk")
+            await append_payout_footer(self.bot, embed, guild.id, "mfk")
 
         self.stop()
         disable_all_items(self)
 
         await interaction.edit_original_response(view=self)
 
-        unique_mentions = list(dict.fromkeys(mentions))
+        unique_mentions = [mention(uid) for uid in dict.fromkeys(assignments)]
         try:
             await interaction.followup.send(
                 content=" ".join(unique_mentions),

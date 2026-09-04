@@ -889,12 +889,17 @@ def test_build_scoreboard_embed_no_bye_omits_bye_field():
 
 def test_build_scoreboard_embed_with_bye_includes_bye_field():
     payload = {"scores": {"1": 100, "2": 50, "3": 0}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3])
+    embed = build_scoreboard_embed(
+        payload, 1, 5, bye_players=[3], name_resolver=_name_resolver
+    )
     field_names = [f.name for f in embed.fields]
     assert "Bye" in field_names
     bye_field = next(f for f in embed.fields if f.name == "Bye")
     assert bye_field.value is not None
-    assert "<@3>" in bye_field.value
+    # A name, never a <@id>: an embed mention renders as digits to anyone whose
+    # client hasn't cached that member.
+    assert "User3" in bye_field.value
+    assert "<@3>" not in bye_field.value
 
 
 def test_build_scoreboard_embed_bye_field_shows_the_actual_award():
@@ -918,14 +923,27 @@ def test_build_scoreboard_embed_bye_award_defaults_to_fifty_for_old_records():
 
 def test_build_scoreboard_embed_sorts_scores_highest_first():
     payload = {"scores": {"1": 30, "2": 100, "3": 50}}
-    embed = build_scoreboard_embed(payload, 2, 5, bye_players=None)
+    embed = build_scoreboard_embed(
+        payload, 2, 5, bye_players=None, name_resolver=_name_resolver
+    )
     sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
     assert sb_field.value is not None
     # Player 2 (100) should appear before player 3 (50) before player 1 (30)
     lines = sb_field.value.splitlines()
-    assert "<@2>" in lines[0]
-    assert "<@3>" in lines[1]
-    assert "<@1>" in lines[2]
+    assert "User2" in lines[0]
+    assert "User3" in lines[1]
+    assert "User1" in lines[2]
+    assert "<@" not in sb_field.value
+
+
+def test_build_scoreboard_embed_default_resolver_keeps_a_mention():
+    """An un-wired caller still renders (as a mention) rather than crashing;
+    the AST test below is what forces the cog to wire a resolver."""
+    embed = build_scoreboard_embed({"scores": {"1": 30}}, 2, 5, bye_players=[2])
+    sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
+    bye_field = next(f for f in embed.fields if f.name == "Bye")
+    assert "<@1>" in (sb_field.value or "")
+    assert "<@2>" in (bye_field.value or "")
 
 
 def test_build_scoreboard_embed_final_round_uses_no_remaining_text():
@@ -1320,9 +1338,13 @@ def test_admit_pending_players_handles_no_queue():
 
 def test_build_scoreboard_embed_renders_multiple_byes():
     payload = {"scores": {"1": 10, "2": 5}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3, 4], bye_award=40)
+    embed = build_scoreboard_embed(
+        payload, 1, 5, bye_players=[3, 4], bye_award=40,
+        name_resolver=_name_resolver,
+    )
     field = next(f for f in embed.fields if f.name == "Byes")
-    assert "<@3>" in (field.value or "") and "<@4>" in (field.value or "")
+    assert "User3" in (field.value or "") and "User4" in (field.value or "")
+    assert "<@" not in (field.value or "")
     assert "+40" in (field.value or "") and "each" in (field.value or "")
 
 
@@ -1340,9 +1362,11 @@ def test_build_submit_embed_names_the_benched_player():
     embed = build_submit_embed(
         prompt="p", round_num=1, total_rounds=3, deadline_str="⏰ 60s",
         answers_in=0, total_players=4, bye_player=7,
+        name_resolver=_name_resolver,
     )
     field = next(f for f in embed.fields if "Sitting out" in (f.name or ""))
-    assert "<@7>" in (field.value or "")
+    assert "User7" in (field.value or "")
+    assert "<@7>" not in (field.value or "")
 
 
 def test_build_submit_embed_omits_the_field_with_no_bye():
@@ -1425,3 +1449,40 @@ def test_admit_player_now_recognises_a_second_press_while_queued():
     assert admit_player_now(payload, 3, 10) == "already-queued"
 
     assert payload["pending_players"] == [3]
+
+
+# ── every render site in the cog passes a resolver ───────────────────────────
+
+
+def test_every_clapback_render_site_passes_a_resolver():
+    """``build_submit_embed`` and ``build_scoreboard_embed`` default their
+    resolver to ``mention``, so a render site that forgets to pass one silently
+    reintroduces digits-in-the-scoreboard and no builder test above would
+    notice. This walks the cog and requires every call to a name-taking builder
+    to hand a resolver over."""
+    import ast
+    import inspect
+    import pathlib
+
+    from bot_modules.cogs import games_clapback_cog
+    from bot_modules.games_clapback import embeds as clapback_embeds
+
+    needs = {
+        name
+        for name, fn in inspect.getmembers(clapback_embeds, inspect.isfunction)
+        if "name_resolver" in inspect.signature(fn).parameters
+    }
+    assert {"build_submit_embed", "build_scoreboard_embed"} <= needs
+    # Explicit utf-8: the CI runner is Windows, where the default is cp1252.
+    source = pathlib.Path(inspect.getfile(games_clapback_cog)).read_text(
+        encoding="utf-8"
+    )
+    missed = [
+        f"games_clapback_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in needs
+        and not any(kw.arg == "name_resolver" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_resolver: " + ", ".join(missed)

@@ -11,7 +11,13 @@ Two embed shapes are exposed:
   Add-Me toggle (only the participant list changes).
 * :func:`build_pairings_embed` — the post-close embed listing each
   ``giver → receiver`` mapping with the closing "deliver your
-  compliment" call-to-action.
+  compliment" call-to-action. Members are *named* through a ``name_fn``
+  (``services/name_resolver``), never ``<@id>``-mentioned: an embed
+  mention is resolved by the reading client from its own cache and shows
+  as a bare number to anyone who hasn't seen that member, and once the
+  15-second ping is gone this card is the only record of who compliments
+  whom. The ping itself lives in message ``content``, where a mention
+  belongs.
 
 The line-formatter (:func:`format_pairing_line`) is split out so the
 pairings text can be assembled deterministically in tests without
@@ -24,6 +30,7 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def build_lobby_embed(
@@ -60,22 +67,28 @@ def build_lobby_embed(
     return embed
 
 
-def format_pairing_line(giver_mention: str, receiver_mention: str) -> str:
+def format_pairing_line(giver_name: str, receiver_name: str) -> str:
     """Format a single ``giver → receiver`` line for the pairings embed.
 
     Centralised so the arrow symbol/spacing can be tweaked in one place
     and so tests can assert on the line shape without rebuilding an
     embed.
     """
-    return f"{giver_mention} → {receiver_mention}"
+    return f"{giver_name} → {receiver_name}"
 
 
-def build_pairings_embed(pairing_lines: list[str], color: "discord.Color | None" = None) -> discord.Embed:
+def build_pairings_embed(
+    pairings: dict[int, int],
+    color: "discord.Color | None" = None,
+    *,
+    name_fn: NameFn = mention,
+) -> discord.Embed:
     """Build the post-close embed announcing the pairings.
 
-    ``pairing_lines`` are the pre-formatted ``giver → receiver`` strings
-    from :func:`format_pairing_line` — the cog renders the mentions
-    against the live guild before assembling the list.
+    ``pairings`` is the ``{giver_id: receiver_id}`` map from
+    ``generate_pairings``; every id is rendered through ``name_fn`` (the
+    resolver from ``build_name_fn``). The default keeps an un-wired caller
+    rendering a mention rather than crashing — the cog always passes one.
 
     The trailing call-to-action ("Reply to deliver your compliment!") is
     appended unconditionally so even a 2-player game has the prompt.
@@ -86,7 +99,10 @@ def build_pairings_embed(pairing_lines: list[str], color: "discord.Color | None"
         title=f"{GAME_ICONS['compliment']} Compliment Pairings",
         color=color,
     )
-    body = "\n".join(pairing_lines)
+    body = "\n".join(
+        format_pairing_line(name_fn(giver), name_fn(receiver))
+        for giver, receiver in pairings.items()
+    )
     embed.description = f"{body}\n\n💛 Reply to deliver your compliment!"
     embed.set_footer(text=f"{GAME_ICONS['compliment']} Spin the Compliment")
     return embed

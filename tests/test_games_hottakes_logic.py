@@ -446,3 +446,31 @@ async def test_run_voting_pays_voters_and_authors(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 9]
     assert call.kwargs["bot"] is bot
+
+
+# ── the 'voting is starting' line names nobody ─────────────────────
+
+from bot_modules.games_hottakes.logic import build_voting_start_message  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("takes", "count_phrase"),
+    [
+        pytest.param([{"text": "t1", "user_id": 123456789}], "1 take ", id="one"),
+        pytest.param(
+            [{"text": "t1", "user_id": 123456789}, {"text": "t2", "user_id": 987654321}],
+            "2 takes ",
+            id="two",
+        ),
+    ],
+)
+def test_voting_start_message_carries_no_submitter(takes, count_phrase):
+    """The lobby promises every take is anonymous. The old start line
+    @-mentioned every submitter, which attributed a lone take outright and
+    made two a coin flip — the ping notification outlives delete_after."""
+    msg = build_voting_start_message(takes)
+    assert "<@" not in msg
+    for take in takes:
+        assert str(take["user_id"]) not in msg
+    assert count_phrase in msg
+    assert "voting is starting" in msg

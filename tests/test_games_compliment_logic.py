@@ -11,6 +11,7 @@ up Discord.
 from __future__ import annotations
 
 import random
+import re
 
 import pytest
 
@@ -103,6 +104,28 @@ def test_generate_pairings_two_player_swap():
     """Two players can only swap — every call returns ``{a: b, b: a}``."""
     pairings = generate_pairings([1, 2])
     assert pairings == {1: 2, 2: 1} or pairings == {2: 1, 1: 2}
+
+
+# ── generate_pairings: the no-contact gate ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [pytest.param({(1, 2)}, id="stored-order"), pytest.param({(2, 1)}, id="reversed")],
+)
+def test_generate_pairings_never_pairs_a_no_contact_pair_in_either_direction(forbidden):
+    """A blocked pair is never giver->receiver *or* receiver->giver."""
+    for _ in range(40):
+        pairings = generate_pairings([1, 2, 3, 4, 5], forbidden)
+        assert pairings[1] != 2 and pairings[2] != 1
+        assert set(pairings) == {1, 2, 3, 4, 5}
+        assert sorted(pairings.values()) == [1, 2, 3, 4, 5]
+
+
+def test_generate_pairings_returns_empty_when_the_pool_cannot_be_paired():
+    """Two players who are a no-contact pair: {} — the cog then refuses with
+    its ordinary "need at least 2 players" copy, not a new message."""
+    assert generate_pairings([1, 2], {(1, 2)}) == {}
 
 
 # ── serialize_pairings ───────────────────────────────────────────────
@@ -201,35 +224,55 @@ def test_format_pairing_line_preserves_raw_strings():
 
 # ── build_pairings_embed ─────────────────────────────────────────────
 
+_MENTION = re.compile(r"<@!?\d+>")
+
+
+def _named(uid: int) -> str:
+    return f"Member{uid}"
+
+
+def _seen(embed) -> str:
+    parts = [embed.title or "", embed.description or "", embed.footer.text or ""]
+    for f in embed.fields:
+        parts += [f.name or "", f.value or ""]
+    return "\n".join(parts)
+
 
 def test_build_pairings_embed_title_and_color():
-    embed = build_pairings_embed(["<@1> → <@2>"])
+    embed = build_pairings_embed({1: 2, 2: 1})
     assert embed.title is not None
     assert "Compliment Pairings" in embed.title
 
 
-def test_build_pairings_embed_joins_lines_with_newlines():
-    lines = ["A → B", "B → C", "C → A"]
-    embed = build_pairings_embed(lines)
+def test_build_pairings_embed_lists_every_pairing_as_a_line():
+    embed = build_pairings_embed({1: 2, 2: 3, 3: 1}, name_fn=_named)
     assert embed.description is not None
-    for line in lines:
+    for line in ("Member1 → Member2", "Member2 → Member3", "Member3 → Member1"):
         assert line in embed.description
 
 
+def test_build_pairings_embed_names_members_never_mentions_them():
+    """An embed mention is resolved by the *reading* client from its own
+    cache, so it degrades to a bare number for anyone who hasn't seen the
+    member. The pairings card is the only record once the ping is gone."""
+    embed = build_pairings_embed({1: 2, 2: 1}, name_fn=_named)
+    assert not _MENTION.search(_seen(embed))
+    assert "Member1" in _seen(embed) and "Member2" in _seen(embed)
+
+
+def test_build_pairings_embed_defaults_to_a_mention_for_an_unwired_caller():
+    text = _seen(build_pairings_embed({1: 2, 2: 1}))
+    assert "<@1> → <@2>" in text
+
+
 def test_build_pairings_embed_appends_call_to_action():
-    embed = build_pairings_embed(["A → B"])
+    embed = build_pairings_embed({1: 2, 2: 1})
     assert embed.description is not None
     assert "deliver your compliment" in embed.description.lower()
 
 
-def test_build_pairings_embed_handles_single_pair():
-    embed = build_pairings_embed(["A → B"])
-    assert embed.description is not None
-    assert "A → B" in embed.description
-
-
 def test_build_pairings_embed_has_footer():
-    embed = build_pairings_embed(["A → B"])
+    embed = build_pairings_embed({1: 2, 2: 1})
     assert embed.footer.text is not None
     assert "Spin the Compliment" in embed.footer.text
 
@@ -273,7 +316,8 @@ from unittest.mock import AsyncMock  # noqa: E402
 import bot_modules.cogs.games_compliment_cog as compliment_cog  # noqa: E402
 from bot_modules.games.utils.game_manager import create_game  # noqa: E402
 from bot_modules.services.games_db import GamesDb  # noqa: E402
-from tests.fakes import FakeUser, fake_interaction  # noqa: E402
+from bot_modules.services.no_contact_service import add_pair  # noqa: E402
+from tests.fakes import FakeGuild, FakeMember, FakeUser, fake_interaction  # noqa: E402
 
 
 class _SpyBot:
@@ -313,3 +357,65 @@ def test_lobby_embed_renders_the_start_countdown():
 def test_lobby_embed_omits_the_countdown_when_none_was_set():
     embed = build_lobby_embed("Alice", [])
     assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+# ── Close & Generate: the no-contact gate and the resolved names ─────
+
+
+def _guild_of(*uids: int) -> FakeGuild:
+    guild = FakeGuild(id=9001)
+    for uid in uids:
+        guild.members[uid] = FakeMember(id=uid, name=f"user{uid}", display_name=f"Member{uid}")
+    return guild
+
+
+async def _close(monkeypatch, sync_db_path, participants: list[int]):
+    spy = AsyncMock()
+    monkeypatch.setattr(compliment_cog, "end_game", spy)
+    monkeypatch.setattr(compliment_cog, "audit_anonymous", AsyncMock())
+    bot = _SpyBot(sync_db_path)
+    guild = _guild_of(*participants)
+    gid = await create_game(
+        bot.games_db, 100, participants[0], "compliment",
+        payload={"participants": list(participants)},
+    )
+    view = compliment_cog.ComplimentView(gid, participants[0], bot.games_db, bot)  # type: ignore[arg-type]
+    interaction = fake_interaction(user=guild.members[participants[0]], guild=guild)
+    interaction.followup.send = AsyncMock(return_value=SimpleNamespace(delete=AsyncMock(), id=5))
+    await view.close_generate.callback(interaction)
+    return interaction, spy
+
+
+async def test_close_generate_never_pairs_a_no_contact_pair(monkeypatch, sync_db_path):
+    add_pair(sync_db_path, 9001, 1, 2, created_by=1, protected_user_id=1)
+    for _ in range(10):
+        interaction, spy = await _close(monkeypatch, sync_db_path, [1, 2, 3, 4])
+        assert spy.await_args is not None
+        pairings = spy.await_args.kwargs["payload"]["pairings"]
+        assert pairings["1"] != 2 and pairings["2"] != 1
+        assert set(pairings) == {"1", "2", "3", "4"}
+
+
+@pytest.mark.parametrize("pool", [[1, 2], [1, 2, 3]], ids=["two", "three"])
+async def test_close_generate_refuses_an_unpairable_pool_with_the_ordinary_copy(monkeypatch, sync_db_path, pool):
+    """A pool the no-contact pair leaves unpairable (two players, or three —
+    every derangement of three joins every pair in one direction) gets the
+    same 'need at least 2 players' reply a one-player pool gets."""
+    add_pair(sync_db_path, 9001, 1, 2, created_by=1, protected_user_id=1)
+    interaction, spy = await _close(monkeypatch, sync_db_path, pool)
+    interaction.response.send_message.assert_awaited_once_with(
+        "Need at least 2 players in the pool!", ephemeral=True
+    )
+    spy.assert_not_awaited()
+    interaction.followup.send.assert_not_awaited()
+
+
+async def test_close_generate_embed_names_members_and_pings_in_content(monkeypatch, sync_db_path):
+    interaction, _ = await _close(monkeypatch, sync_db_path, [1, 2, 3])
+    calls = interaction.followup.send.await_args_list
+    ping = next(c for c in calls if c.kwargs.get("content"))
+    card = next(c for c in calls if c.kwargs.get("embed") is not None)
+    assert "<@1>" in ping.kwargs["content"]
+    text = _seen(card.kwargs["embed"])
+    assert not _MENTION.search(text)
+    assert "Member1" in text and "Member2" in text and "Member3" in text

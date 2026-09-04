@@ -10,9 +10,8 @@ Covers:
   ``RiskyRollState.resolve()`` round closer (all six ``RoundResult``
   branches), and the two derived ``PendingQuestionState`` accessors.
 - ``services/risky_roll/formatters.py`` — content + embed builders.
-  The two async Discord helpers (``get_text_channel``,
-  ``post_rolloff_embed``) are out of scope: they're network calls
-  with no pure logic worth mocking.
+  The async Discord helper (``get_text_channel``) is out of scope:
+  it's a network call with no pure logic worth mocking.
 - ``services/risky_roll/state.py`` — module-level globals, lock
   cache identity, default constants.
 - ``services/risky_roll/store.py`` — sqlite round-trip integration
@@ -38,7 +37,6 @@ from bot_modules.services.risky_roll.formatters import (
     build_pending_prompt_content,
     build_pending_question_summary,
     build_question_reply_content,
-    build_rolloff_embed,
     format_lowest_rolloff_note,
     format_user_mentions,
     resolve_embed_accent,
@@ -937,26 +935,6 @@ def test_build_how_to_play_content_mentions_each_special_rule():
     text = build_how_to_play_content()
     assert "69" in text and "100" in text and "1" in text
     assert "Roll" in text
-
-
-# ── formatters.build_rolloff_embed ───────────────────────────────────
-
-
-def test_build_rolloff_embed_lists_all_rounds_and_winner():
-    rounds = [{1: 50, 2: 50}, {1: 80, 2: 5}]
-    embed = build_rolloff_embed([1, 2], rounds, winner_id=1)
-    by_name = _embed_field_map(embed)
-    # Two round fields + winner field
-    assert any(name.startswith("Round 1") for name in by_name)
-    assert any(name.startswith("Round 2") for name in by_name)
-    # Winner field labels as "Rolloff Winner" for highest pick
-    assert any("Rolloff Winner" in name for name in by_name)
-
-
-def test_build_rolloff_embed_uses_lowest_label_when_pick_lowest():
-    embed = build_rolloff_embed([1, 2], [{1: 50, 2: 5}], winner_id=2, pick_lowest=True)
-    by_name = _embed_field_map(embed)
-    assert any("Selected Lowest" in name for name in by_name)
 
 
 # ── state module-level globals ──────────────────────────────────────

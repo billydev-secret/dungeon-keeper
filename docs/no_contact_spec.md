@@ -78,6 +78,13 @@ low-frequency, so every check is a direct indexed read.
 | DM requests | Consent suppressed; new requests refused | `dm_perms_cog` |
 | Risky Rolls | The dice: a draw that would seat a pair as asker/answerer is redrawn, and a round that cannot be made safe refuses to close. Plus the 69 room ping | `risky_roll/logic.py`, `risky_roll/views.py` |
 | Economy transfers | `/bank pay`'s public receipt *and* the recipient's notification; `/bank gift`'s notification. The money and the perk still move | `economy/transfers.py`, `economy_cog.finalize_pay` / `finalize_gift` |
+| Spin the Compliment | The pairing: a blocked pair is a forbidden edge of the derangement in both directions. A pool with no valid pairing left is refused with the ordinary "Need at least 2 players in the pool!" | `games_compliment/logic.generate_pairings`, `games/utils/derangement.py`, `games_compliment_cog` |
+| Marry-Fornicate-Kiss | The assignments: blocked members are dropped from each other's three-name sample, so a player silently gets fewer names — the same shape a small pool produces | `games_mfk/logic.assign_targets`, `games_mfk_cog` |
+| Most Likely To | The vote: a blocked voter→target pick is dropped, not stored. The voter gets the ordinary "✅ Voted for …" ack, the results card shows counts only, and no event row is written | `games_mlt/logic.record_vote`, `games_mlt_cog` |
+| Truth or Dare (traditional) | **Ask Question**: the presser's blocked partners are excluded from the target pool before the least-asked weighting (keyed on the presser, not the host — a mod can ask too). When only they remain, the press gets the ordinary "All player/category combinations have been asked!" | `games_traditional/logic.select_next_question_target`, `games_traditional_cog` |
+| Duel challenge | `/games <duel> challenge @user`: refused with the existing "You two already have a game in progress." line, before the rate limit so it costs no strike. **Records an attempt** (surface `duel_challenge`) | `duels/base_duel.py`, `BaseGame._blocked_pair` |
+| Group-game lobby join | A joiner who holds a pair with anyone already seated (host included) gets the lobby's own "You're on cooldown for this game." | `duels/base_game.py`, `BaseGame._blocked_with_any` |
+| Name the Loser | The winner's press and the modal submit are both refused with the "already serving a nickname sentence" line; the win stands and the game concludes at `NO_NICK_SET` with no rename | `duels/base_game.py`, `BaseGame._refuse_rename_across_pair` |
 
 Features that hold their own connection (Pen Pals' matching pass, Voice
 Master's permission build) consult the list through
@@ -85,17 +92,24 @@ Master's permission build) consult the list through
 `no_contact_pairs` directly, so the table's shape stays owned by one module —
 adding an expiry or soft-delete column is a change in one place, not a grep.
 
-Only the first four surfaces record an **attempt** event. The last five are
-gated without one. For Pen Pals, Voice Master and DM requests that is because
-the gate extends an existing predicate running inside matching loops and
-permission syncs; there is no single moment there that means "he tried", and
-recording per iteration would bury the real attempts. Risky Rolls is the
-stronger case: nobody ever submits anything aimed at a blocked person, because
-the pairing never forms. He pressed a dice button aimed at nobody, and a log
-line saying so would be a record of the bot's own arithmetic, not of an
-attempt. Economy transfers are the weakest case of all for a log line: paying
-someone is not an attempt to contact them, and `econ_ledger` already records
-the transfer under the mods' eyes. They are enforced just as strictly — they
+Only the first six surfaces and the duel challenge record an **attempt**
+event. The rest are gated without one. For Pen Pals, Voice Master and DM
+requests that is because the gate extends an existing predicate running inside
+matching loops and permission syncs; there is no single moment there that
+means "he tried", and recording per iteration would bury the real attempts.
+Risky Rolls is the stronger case: nobody ever submits anything aimed at a
+blocked person, because the pairing never forms. He pressed a dice button aimed
+at nobody, and a log line saying so would be a record of the bot's own
+arithmetic, not of an attempt. Spin the Compliment, MFK, a lobby join and Name
+the Loser are the same shape — the game's own arithmetic put two people
+together, nobody aimed anything — and an MLT vote or a Traditional Ask press
+is one click in a game whose whole point is picking someone, so logging it
+would fill the mod feed with ordinary play. The duel challenge is the
+exception because it is the one game surface where a member types the other's
+name: `A picks B` on purpose, so it is logged with surface `duel_challenge`.
+Economy transfers are the weakest case of all for a log line: paying someone
+is not an attempt to contact them, and `econ_ledger` already records the
+transfer under the mods' eyes. They are enforced just as strictly — they
 simply produce no log lines.
 
 `dm_consent_pairs` rows are **suppressed, not deleted**: `_is_mutual` returns
@@ -126,6 +140,18 @@ anything would have been *publicly visible*:
   the sender's ephemeral receipt is the real one, balance and all. Only the
   recipient's DM — the part carrying his name and his memo — is withheld. See
   "Economy transfers" below for why the money is not held back with it.
+- **A refusal the surface already makes** for the party games and duels: a
+  compliment pool that cannot be paired safely gets the "need at least 2
+  players" line, a duel challenge gets "already have a game in progress", a
+  lobby join gets "on cooldown", Name the Loser gets "already serving a
+  sentence", Traditional's Ask gets "all combinations asked". Each is an
+  outcome the presser has met before and cannot pin on anyone; none is a new
+  string. See "Party games and duels" below for the choice at each surface.
+- **Fake success with nothing to fake** for MLT: the blocked vote is dropped
+  and the voter gets the same "✅ Voted" ack as everyone else, and since the
+  results card shows counts only there is no hole to notice. MFK is the same
+  in the other direction — the blocked member is simply absent from the
+  sample, which a small pool produces anyway.
 
 Three further leaks are closed away from the send paths:
 
@@ -255,6 +281,47 @@ The dice are genuinely biased for that pair, which is unauditable and
 therefore safe, but it is a real change to a game of chance and belongs in
 writing rather than in folklore.
 
+### Party games and duels: ordinary refusals borrowed, not invented
+
+Compliment, MFK, MLT, Traditional's Ask Question, and every game on
+`BaseGame` (the three duels and the three group games) gained the gate on
+2026-09-02, after a sweep found rule 1 quietly failing in all of them. Each
+uses a refusal the surface *already* produced; the rule of thumb was "pick the
+ordinary outcome nobody else in the room can check", because a lie the card
+contradicts is a tell:
+
+- **Compliment / MFK move the gate to the draw**, like Risky Rolls: a blocked
+  pair is a forbidden edge of the derangement (both directions) and is dropped
+  from each other's MFK sample. `random_derangement` solves the constrained
+  case constructively (randomised backtracking with a forward check) rather
+  than re-rolling Sattolo draws, because a bounded retry cannot tell "unlucky"
+  from "impossible" and Sattolo's single-cycle shape can never produce some
+  valid arrangements. When no valid pairing exists the helper returns `{}` —
+  the same answer as a one-player pool — so the cog's "Need at least 2 players
+  in the pool!" covers both and nobody learns which fired.
+- **MLT drops the vote**: `record_vote` skips a blocked pick and hands back the
+  same `changed` flag an ordinary vote would, so the ephemeral ack is
+  byte-identical. The results card shows counts, so a missing vote is
+  invisible; a lone voter's dropped pick simply reads as "No votes cast."
+- **Traditional excludes before it weights**: the presser's partners leave the
+  target pool *before* the least-asked filter, so a blocked player's low count
+  can never pull them back in. Exhaustion reuses the existing "All
+  player/category combinations have been asked!" reply.
+- **Duel challenge** borrows the pair-already-playing line, placed after the
+  guild-wide enabled/allowed checks (so "game in progress" is believable) and
+  before the rate limit (so a refusal costs no strike).
+- **Lobby join** borrows the cooldown line rather than "full" or "no longer
+  open": a cooldown is a private condition nobody else can check, where the
+  lobby card visibly contradicts the other two. It runs before the nickname
+  preflight so a refused joiner never reaches it.
+- **Name the Loser** borrows the sentence-in-progress line — the one place the
+  spec accepts a small lie the loser could in theory disprove, because the
+  alternative was letting the winner compose a name for someone they are kept
+  apart from. The win stands (`NO_NICK_SET`), and the check runs both at the
+  press and again under the lock on modal submit, so a modal opened before the
+  pair existed still applies no rename. `_sentence_in_progress_copy` is shared
+  with the genuine sentence path so the two strings can never drift apart.
+
 ## Alerts
 
 Fires when one member of a pair `@mention`s **or replies to** the other. The
@@ -312,3 +379,14 @@ harasser benefits from, and the one he might pressure her into.
   round in front of it).
 - `tests/cogs/test_risky_no_contact.py` — wiring: the draw consults the list,
   and an unsafe round refuses to close *before* `resolve` runs.
+- `tests/test_derangement.py` — a forbidden pair never appears in either
+  direction, impossible constraints return `{}`, and the constrained result is
+  still random.
+- `tests/test_games_compliment_logic.py`, `tests/test_games_mfk_logic.py`,
+  `tests/test_games_mlt_logic.py`, `tests/test_games_traditional_logic.py` —
+  each party game's gate at the logic layer plus one wiring assertion: the
+  blocked outcome is neither recorded nor distinguishable from the ordinary
+  one.
+- `tests/test_duels_no_contact.py` — the challenge line and that it costs no
+  rate-limit strike, the lobby cooldown line, and Name the Loser refused at
+  both the press and the submit.

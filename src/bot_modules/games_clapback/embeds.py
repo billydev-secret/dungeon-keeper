@@ -21,6 +21,7 @@ from bot_modules.games_clapback.logic import (
 )
 from bot_modules.services.embeds import COLOR_BLURPLE, COLOR_GREEN
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import mention
 
 ICON = GAME_ICONS["clapback"]
 
@@ -96,6 +97,7 @@ def build_submit_embed(
     total_players: int,
     bye_player: Any = None,
     color: "discord.Color | None" = None,
+    name_resolver: NameResolver = mention,
 ) -> discord.Embed:
     """Build the per-round submission prompt embed.
 
@@ -106,7 +108,10 @@ def build_submit_embed(
     ``bye_player`` is whoever is benched this round, decided before the
     prompt goes out. Naming them on the embed is half of the fix for players
     discovering they'd sat out only once the round was over; ``total_players``
-    should already exclude them.
+    should already exclude them. They are named through ``name_resolver`` —
+    a ``<@id>`` inside an embed renders as digits to any client that hasn't
+    cached that member — which defaults to a mention only so an un-wired
+    caller still renders; the cog's render-site test forces it to be passed.
     """
     if color is None:
         color = FALLBACK_COLOR
@@ -123,7 +128,8 @@ def build_submit_embed(
         embed.add_field(
             name="🪑 Sitting out",
             value=(
-                f"<@{bye_player}> — odd number of players, so no answer needed "
+                f"**{name_resolver(int(bye_player))}** — odd number of players, "
+                f"so no answer needed "
                 f"this round. You're paid the round's average and you can still "
                 f"vote."
             ),
@@ -313,11 +319,14 @@ def build_scoreboard_embed(
     bye_award: int | None = None,
     final: bool = False,
     color: "discord.Color | None" = None,
+    name_resolver: NameResolver = mention,
 ) -> discord.Embed:
     """Build the between-round (or final) scoreboard embed.
 
-    Score field renders ``<@pid>`` mentions ranked highest-first with
-    medal emojis for the top three. ``bye_award`` is what the bye
+    Score field renders players by name (via ``name_resolver`` — never a
+    ``<@id>``, which an embed shows as digits to any client that hasn't
+    cached that member) ranked highest-first with medal emojis for the
+    top three. ``bye_award`` is what the bye
     player was actually paid this round (the field's average); it
     falls back to 50 for round records written before the award became
     dynamic. The ``final`` flag is preserved
@@ -333,7 +342,7 @@ def build_scoreboard_embed(
     lines = []
     for i, (pid, pts) in enumerate(sorted_scores):
         prefix = medals[i] if i < 3 else f"{i + 1}."
-        lines.append(f"{prefix} <@{pid}> — **{pts}** pts")
+        lines.append(f"{prefix} **{name_resolver(int(pid))}** — **{pts}** pts")
 
     remaining = total_rounds - round_num
     title = f"{ICON} Round {round_num} Complete"
@@ -360,7 +369,7 @@ def build_scoreboard_embed(
         else [bye_players]
     )
     if byes:
-        who = ", ".join(f"<@{b}>" for b in byes)
+        who = ", ".join(f"**{name_resolver(int(b))}**" for b in byes)
         pts = 50 if bye_award is None else bye_award
         each = " each" if len(byes) > 1 else ""
         embed.add_field(

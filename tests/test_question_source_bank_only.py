@@ -88,11 +88,31 @@ def test_filtered_miss_returns_none(getter, game_type):
 
 
 @pytest.mark.parametrize("getter,game_type", SINGLE_VALUE_GETTERS)
-def test_nsfw_row_excluded_without_channel_opt_in(getter, game_type):
+@pytest.mark.parametrize(
+    "stored_tag",
+    [
+        pytest.param("nsfw", id="lower"),
+        # The 08-28 import wrote "Nsfw"; a case-sensitive gate served every one
+        # of those rows in age-unrestricted channels.
+        pytest.param("Nsfw", id="title"),
+        pytest.param("NSFW", id="upper"),
+        pytest.param(" nsfw ", id="padded"),
+    ],
+)
+def test_nsfw_row_excluded_without_channel_opt_in(getter, game_type, stored_tag):
     """NSFW stays gated on the channel flag; an excluded row is still a miss."""
-    db = _FakeDB([(game_type, ["nsfw"], "spicy")])
+    db = _FakeDB([(game_type, [stored_tag], "spicy")])
     assert _run(getter(db)) is None
     assert _run(getter(db, allow_nsfw=True)) == "spicy"
+
+
+@pytest.mark.parametrize("getter,game_type", SINGLE_VALUE_GETTERS)
+def test_tag_filter_matches_case_insensitively(getter, game_type):
+    """A stored "Silly" row is a hit for a requested "silly" (and vice versa)."""
+    db = _FakeDB([(game_type, ["Silly"], "a banked question")])
+    assert _run(getter(db, tags=["silly"])) == "a banked question"
+    db = _FakeDB([(game_type, ["silly"], "a banked question")])
+    assert _run(getter(db, tags=["SILLY"])) == "a banked question"
 
 
 def test_wyr_splits_bank_row_into_two_options():

@@ -11,10 +11,11 @@ Two reusable pieces are extracted:
   removes ``user_id`` from the lobby's participant list and returns the
   human-readable action ("added to" / "removed from") that the cog
   echoes back in an ephemeral reply.
-* :func:`generate_pairings` — a thin wrapper around the shared Sattolo
-  derangement helper. It's exposed here so tests don't need to import
-  the shared util directly, and so the cog has one place to swap the
-  algorithm if the rules ever change.
+* :func:`generate_pairings` — a thin wrapper around the shared
+  derangement helper, carrying the no-contact pairs for the pool so a
+  blocked pair is never giver→receiver in either direction. It's exposed
+  here so tests don't need to import the shared util directly, and so
+  the cog has one place to swap the algorithm if the rules ever change.
 
 ``serialize_pairings`` and :func:`pairing_ids` are tiny dict
 transformations the cog used to inline; pulling them out makes the
@@ -23,6 +24,7 @@ end-game payload handoff testable.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from bot_modules.games.utils.derangement import random_derangement
@@ -45,18 +47,27 @@ def toggle_participant(payload: dict[str, Any], user_id: int) -> str:
     return "added to"
 
 
-def generate_pairings(participants: list[int]) -> dict[int, int]:
+def generate_pairings(
+    participants: list[int],
+    forbidden_pairs: Iterable[tuple[int, int]] | None = None,
+) -> dict[int, int]:
     """Return ``{giver_id: receiver_id}`` for the close-and-generate step.
 
-    Thin wrapper around the shared Sattolo derangement helper. Kept here
-    so the cog imports from its sibling module rather than reaching into
-    ``games.utils`` directly, and so future variants (forbidden pairs,
-    weighted matching) can swap in without touching the cog.
+    Thin wrapper around the shared derangement helper. Kept here so the
+    cog imports from its sibling module rather than reaching into
+    ``games.utils`` directly, and so future variants (weighted matching)
+    can swap in without touching the cog.
 
-    Returns an empty dict when fewer than 2 participants are supplied —
-    matching the shared helper's contract.
+    ``forbidden_pairs`` is the no-contact set for the pool, as
+    ``no_contact_pairs_among`` returns it (``(low, high)`` tuples); a
+    blocked pair is never paired in either direction.
+
+    Returns an empty dict when fewer than 2 participants are supplied, and
+    also when the forbidden pairs leave no valid pairing — the cog treats
+    both the same way (its ordinary "need at least 2 players" refusal),
+    so the protected member can't tell which one fired.
     """
-    return random_derangement(participants)
+    return random_derangement(participants, forbidden_pairs)
 
 
 def serialize_pairings(pairings: dict[int, int]) -> dict[str, int]:

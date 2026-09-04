@@ -19,12 +19,15 @@ import collections
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import discord
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.db_utils import open_db
+from bot_modules.services import no_contact_service
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.economy.game_rewards import pay_game_rewards
 from bot_modules.services import economy_wager_service as wager_svc
@@ -497,12 +500,107 @@ class BaseGame(commands.Cog):
 
     # ── Nickname-stake flow (one winner names one loser) ──────────────────────
 
+    # ── No-contact gate ───────────────────────────────────────────────────────
+    #
+    # Every surface that puts two members in contact consults the no-contact
+    # list (CLAUDE.md, docs/no_contact_spec.md). A challenge publicly pings
+    # its target and makes them answer in-channel, a lobby seats the joiner
+    # next to everyone already in, and a win lets one member rename the
+    # other for a day — so all three go through here, and every game that
+    # subclasses BaseGame inherits the gate. The refusal at each surface is
+    # an ordinary outcome that surface already produces, never a new
+    # "blocked" line: the blocked party must not be able to tell.
+
+    def _no_contact_db_path(self) -> Path:
+        """The main DB, where ``no_contact_pairs`` lives. Same file as the
+        games DB in prod; the fallback keeps a bot fake without ``ctx`` on
+        the real table rather than silently on no table at all."""
+        ctx = getattr(self.bot, "ctx", None)
+        return ctx.db_path if ctx is not None else self.db.db_path
+
+    async def _blocked_pair(
+        self,
+        guild_id: int,
+        actor_id: int,
+        target_id: int,
+        *,
+        record_surface: str | None = None,
+    ) -> bool:
+        """Whether these two hold a no-contact pair, in either direction.
+
+        ``record_surface`` also logs an attempt event for staff — used only
+        where the actor aimed something at the target on purpose (a
+        challenge). A lobby join or a Name-the-Loser press is the game's own
+        arithmetic putting two people together, not an attempt, and is
+        gated without a log line (the Risky Rolls reasoning in the spec).
+        """
+        db_path = self._no_contact_db_path()
+        if record_surface:
+            return await asyncio.to_thread(
+                no_contact_service.check_and_record,
+                db_path, guild_id,
+                actor_id=actor_id, target_id=target_id, surface=record_surface,
+            )
+        return await asyncio.to_thread(
+            no_contact_service.is_no_contact, db_path, guild_id, actor_id, target_id
+        )
+
+    async def _blocked_with_any(
+        self, guild_id: int, user_id: int, others: "list[int] | set[int]"
+    ) -> bool:
+        """Whether ``user_id`` holds a pair with anyone in ``others`` (one read)."""
+        ids = {int(u) for u in others} - {int(user_id)}
+        if not ids:
+            return False
+        db_path = self._no_contact_db_path()
+
+        def _read() -> bool:
+            with open_db(db_path) as conn:
+                partners = no_contact_service.no_contact_partners_conn(
+                    conn, guild_id, user_id
+                )
+            return bool(partners & ids)
+
+        return await asyncio.to_thread(_read)
+
+    @staticmethod
+    def _sentence_in_progress_copy(loser_name: str) -> str:
+        """The winner's ephemeral when the loser can't be renamed because a
+        nickname sentence is already running. Shared with the no-contact
+        gate, which borrows it as its ordinary-looking refusal — so the two
+        can never drift apart."""
+        return (
+            f"**{loser_name}** is already serving a nickname sentence from "
+            "another game. Your win stands, but a new nickname can't be applied until "
+            "that one expires."
+        )
+
+    async def _refuse_rename_across_pair(
+        self, interaction: discord.Interaction, game: Any
+    ) -> bool:
+        """Conclude at NO_NICK_SET with the sentence-in-progress line when the
+        winner and loser hold a pair. True when the caller must return."""
+        if not await self._blocked_pair(game.guild_id, game.winner_id, game.loser_id):
+            return False
+        guild = interaction.guild
+        loser = guild.get_member(game.loser_id) if guild else None
+        name = loser.display_name if loser else "The loser"
+        await interaction.response.send_message(
+            self._sentence_in_progress_copy(name), ephemeral=True
+        )
+        await self._db_set_state(game.id, "NO_NICK_SET")
+        return True
+
     async def _handle_set_nick(self, interaction: discord.Interaction, game_id: int) -> None:
         game = await self._db_get_game(game_id)
         if not game or game.state != "RESOLVED":
             await interaction.response.send_message(
                 "A nickname has already been set for this game.", ephemeral=True
             )
+            return
+        # Before the modal, not after: the winner never gets to compose a
+        # name for someone they are kept apart from.
+        if await self._refuse_rename_across_pair(interaction, game):
             return
         await interaction.response.send_modal(NicknameModal(game_id, self._handle_nick_submit))
 
@@ -525,6 +623,10 @@ class BaseGame(commands.Cog):
             await interaction.response.send_message(
                 "❌ Only the winner can set the nickname.", ephemeral=True
             )
+            return
+        # Gated again under the lock: a modal opened before the pair existed
+        # still applies no rename.
+        if await self._refuse_rename_across_pair(interaction, game):
             return
 
         guild: discord.Guild = interaction.guild  # type: ignore[assignment]
@@ -594,10 +696,7 @@ class BaseGame(commands.Cog):
         existing_sentence = await self._check_no_active_nick(guild, [loser])
         if existing_sentence:
             await interaction.response.send_message(
-                f"**{loser.display_name}** is already serving a nickname sentence from "
-                "another game. Your win stands, but a new nickname can't be applied until "
-                "that one expires.",
-                ephemeral=True,
+                self._sentence_in_progress_copy(loser.display_name), ephemeral=True
             )
             await self._db_set_state(game_id, "NO_NICK_SET")
             return
@@ -945,6 +1044,16 @@ class BaseGame(commands.Cog):
             if len(game.roster) >= max_players:
                 await interaction.response.send_message(
                     f"The lobby is full ({max_players}).", ephemeral=True
+                )
+                return
+            # A joiner kept apart from anyone already seated (host included)
+            # gets the lobby's own cooldown line: a private condition nobody
+            # else can check, unlike "full" or "no longer open" which the
+            # card visibly contradicts. Before the nickname preflight, so a
+            # refused joiner never reaches it.
+            if await self._blocked_with_any(game.guild_id, uid, game.roster):
+                await interaction.response.send_message(
+                    "You're on cooldown for this game.", ephemeral=True
                 )
                 return
 

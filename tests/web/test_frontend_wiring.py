@@ -564,3 +564,33 @@ def test_income_sources_panel_edits_only_faucets_the_route_returns():
         "Income Sources inputs whose value the route never returns — each one "
         f"renders 0 and zeroes the real setting on Save: {sorted(edited - served)}"
     )
+
+
+def test_every_data_f_field_a_panel_reads_is_one_it_renders():
+    """A save handler must only read inputs its own template still draws.
+
+    From the 2026-09-02 games deep review (rotation-rooms-155): the Feature
+    Rotation panel's Save Settings handler kept reading
+    ``[data-f="tz_offset_hours"]`` after the input moved to Server Settings.
+    ``querySelector`` returned null, ``.value`` threw, and every Save died
+    before the PUT — no toast, no request, and the rotation could never be
+    switched on. The panel-load suite mounts panels without pressing buttons,
+    so nothing caught it. This sweep catches the drift at the source: a
+    ``[data-f=…]`` selector in a panel must match a ``data-f="…"`` attribute
+    that the same panel renders.
+    """
+    read_re = re.compile(r"""querySelector(?:All)?\(\s*['"`]\[data-f=\\?["']([A-Za-z0-9_-]+)\\?["']\]""")
+    rendered_re = re.compile(r"""(?<!\[)data-f=\\?["']([A-Za-z0-9_-]+)\\?["']""")
+    seen = 0
+    bad: list[tuple[str, str]] = []
+    for path in _panel_files():
+        text = path.read_text(encoding="utf-8")
+        reads = set(read_re.findall(text))
+        seen += len(reads)
+        rendered = set(rendered_re.findall(text))
+        bad.extend((path.name, name) for name in sorted(reads - rendered))
+    assert seen, "data-f scrape found nothing — the pattern must have drifted"
+    assert not bad, (
+        "panels read data-f inputs their template no longer renders — the save "
+        f"handler throws on a null querySelector before any request is sent: {bad}"
+    )

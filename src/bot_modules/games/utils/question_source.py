@@ -104,11 +104,21 @@ async def has_clapback_prompts(db) -> bool:
 
 
 def _parse_tags(tags_json) -> set[str]:
-    """Parse a row's JSON tags column into a set, tolerating bad data."""
+    """Parse a row's JSON tags column into a lowercased set, tolerating bad data.
+
+    Tags are matched case-insensitively: the NSFW gate in
+    :func:`_filter_bank_rows` compares against the literal ``"nsfw"``, and a
+    row stored as ``"Nsfw"`` (as one bulk import once wrote it) must still be
+    recognised as adult. The dashboard lowercases on save too, so this is the
+    read-side half of the same rule.
+    """
     try:
-        return set(json.loads(tags_json or "[]"))
+        raw = json.loads(tags_json or "[]")
     except (json.JSONDecodeError, TypeError):
         return set()
+    if not isinstance(raw, list):
+        return set()
+    return {t for t in (str(tag).strip().lower() for tag in raw) if t}
 
 
 def _recency_key(last_served_at: str | None) -> tuple[int, str]:
@@ -147,7 +157,7 @@ def _filter_bank_rows(
 ) -> list[tuple[int, str, str | None]]:
     """Apply the shared nsfw/tag rules to raw bank rows.
 
-    Tag rules (in precedence order):
+    Tag rules (in precedence order; all tag comparisons are case-insensitive):
       1. Rows tagged 'nsfw' are excluded unless *allow_nsfw* is True. NSFW is
          gated on the Discord channel's age-restriction flag (see
          :func:`channel_allows_nsfw`); a requested tag cannot re-enable it.
@@ -157,6 +167,7 @@ def _filter_bank_rows(
 
     Returns ``(question_id, question_text, last_served_at)`` triples.
     """
+    requested = {t for t in (str(tag).strip().lower() for tag in requested) if t}
     out: list[tuple[int, str, str | None]] = []
     for qid, text, tags_json, last_served_at in rows:
         row_tags = _parse_tags(tags_json)

@@ -5,9 +5,9 @@ These functions accept plain dicts/primitives and return
 with no network and no mocks of the Bot/Guild API.
 
 The one embed shape :func:`build_session_recap_embed` is the recap
-view shown by ``/session-recap``. The cog resolves player mentions and
-highlight strings against the live guild before calling so this layer
-stays pure.
+view shown by ``/session-recap``. The cog builds a ``name_fn`` for the
+players and resolves highlight strings against the live guild before
+calling so this layer stays pure.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import discord
 
 from bot_modules.games.constants import BRAND_COLOR
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def build_session_recap_embed(
@@ -24,13 +25,17 @@ def build_session_recap_embed(
     duration_str: str,
     highlights: list[str],
     color: "discord.Color | None" = None,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Build the ``/session-recap`` embed.
 
-    ``player_ids`` are rendered as raw ``<@id>`` mentions inside the
-    field value — Discord resolves them at display time. ``highlights``
-    are the pre-formatted strings from :func:`build_highlights`; only
-    the first 8 are shown to keep the embed under field-length limits.
+    ``player_ids`` are rendered by name through ``name_fn`` — never as a
+    ``<@id>``, which an embed shows as digits to any client that hasn't
+    cached that member (a departed player, for everyone). The default is
+    a mention only so an un-wired caller still renders; the cog's
+    render-site test forces it to pass one. ``highlights`` are the
+    pre-formatted strings from :func:`build_highlights`; only the first
+    8 are shown to keep the embed under field-length limits.
 
     Empty ``player_ids`` and empty ``highlights`` both skip their
     respective fields so a sparse session doesn't render dashes.
@@ -48,7 +53,7 @@ def build_session_recap_embed(
     if player_ids:
         embed.add_field(
             name="🏆 Players",
-            value=", ".join(f"<@{uid}>" for uid in player_ids[:10]),
+            value=", ".join(name_fn(int(uid)) for uid in player_ids[:10]),
             inline=False,
         )
 

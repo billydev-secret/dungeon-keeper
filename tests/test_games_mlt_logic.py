@@ -16,6 +16,7 @@ import pytest
 
 from bot_modules.games_mlt.embeds import (
     build_closed_embed,
+    build_final_standings_embed,
     build_join_embed,
     build_results_embed,
     build_round_embed,
@@ -34,6 +35,7 @@ from bot_modules.games_mlt.logic import (
     lobby_is_full,
     pop_next_prompt,
     queue_prompt,
+    record_vote,
     remove_player,
     tally_votes,
 )
@@ -50,6 +52,10 @@ def _unspaced(value: str | None) -> str:
     text = value or ""
     return text[: -len(SECTION_SPACER)] if text.endswith(SECTION_SPACER) else text
 
+
+
+def _named(uid: int) -> str:
+    return f"Member{uid}"
 
 
 # ── add_player / remove_player ───────────────────────────────────────
@@ -574,6 +580,78 @@ def test_build_results_embed_renders_vote_counts():
     assert "2 votes" in embed.description
 
 
+def test_build_results_embed_names_players_through_name_fn():
+    """A ``<@id>`` inside an embed renders as a bare number for any viewer
+    whose client hasn't cached that member — the crown line must carry a
+    resolved name, never a mention."""
+    embed = build_results_embed(
+        prompt="x", round_num=1, tally={1: 2, 2: 0}, name_fn=_named
+    )
+    assert embed.description is not None
+    assert "Member1" in embed.description
+    assert "Member2" in embed.description
+    assert "<@" not in embed.description
+
+
+def test_build_final_standings_embed_names_players_through_name_fn():
+    embed = build_final_standings_embed({"1": 2, "2": 1}, name_fn=_named)
+    assert embed.description is not None
+    assert "Member1" in embed.description
+    assert "Member2" in embed.description
+    assert "<@" not in embed.description
+
+
+def test_every_mlt_render_site_passes_a_resolver():
+    """``name_fn`` defaults to ``mention`` so an un-wired caller still renders;
+    that is exactly why the wiring needs its own guard — a render site that
+    forgets the resolver reintroduces the bare-number bug and no builder
+    test would notice."""
+    import ast
+    import inspect
+    import pathlib
+
+    import bot_modules.cogs.games_mlt_cog as cog_module
+    import bot_modules.games_mlt.embeds as embeds_module
+
+    needs = {
+        name
+        for name, fn in inspect.getmembers(embeds_module, inspect.isfunction)
+        if "name_fn" in inspect.signature(fn).parameters
+    }
+    source = pathlib.Path(inspect.getfile(cog_module)).read_text(encoding="utf-8")
+    missed = [
+        f"games_mlt_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in needs
+        and not any(kw.arg == "name_fn" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_fn: " + ", ".join(missed)
+
+
+# ── record_vote (the no-contact gate) ────────────────────────────────
+
+
+def test_record_vote_counts_an_ordinary_pick():
+    votes: dict[int, int] = {}
+    assert record_vote(votes, 1, 2, blocked=False) == (True, False)
+    assert votes == {1: 2}
+    assert record_vote(votes, 1, 3, blocked=False) == (True, True)
+    assert votes == {1: 3}
+
+
+def test_record_vote_drops_a_blocked_pick_but_reports_the_same_change_flag():
+    """A no-contact pair's vote is never stored — the results only show
+    counts, so a dropped vote is invisible — while the ``changed`` flag
+    comes back exactly as it would for a counted vote, so the voter's
+    ephemeral ack reads identically either way."""
+    votes = {1: 2}
+    assert record_vote(votes, 1, 3, blocked=True) == (False, True)
+    assert votes == {1: 2}
+    assert record_vote({}, 1, 3, blocked=True) == (False, False)
+
+
 # ── sanity / integration ─────────────────────────────────────────────
 
 
@@ -719,3 +797,65 @@ def test_add_player_respects_a_configured_ceiling():
     assert add_player(players, 4, 3) is False
     assert players == [1, 2, 3]
     assert add_player(players, 4, 4) is True
+
+
+# ── vote select wiring: the no-contact list reaches record_vote ─────────
+
+from bot_modules.services.no_contact_service import add_pair  # noqa: E402
+
+
+class _VoteResponse:
+    def __init__(self) -> None:
+        self.messages: list[tuple] = []
+
+    async def send_message(self, content=None, **kwargs):
+        self.messages.append((content, kwargs))
+
+
+class _VoteGuild:
+    def __init__(self, members: dict[int, str]) -> None:
+        self.id = 77
+        self._members = {
+            uid: SimpleNamespace(id=uid, display_name=name) for uid, name in members.items()
+        }
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+
+async def _vote(sync_db_path, *, voter: int, target: int, pair=None):
+    bot = _SpyBot(sync_db_path)
+    if pair is not None:
+        add_pair(sync_db_path, 77, pair[0], pair[1], created_by=99)
+    gid = await create_game(
+        bot.games_db, 100, 1, "mlt",
+        payload={"rounds": {"1": {"prompt": "x", "votes": {}}}, "players": [1, 2, 3]},
+    )
+    guild = _VoteGuild({1: "Ann", 2: "Bee", 3: "Cat"})
+    view = mlt_cog.MLTVoteView(
+        gid, 1, "x", 1, [1, 2, 3], bot.games_db, bot, "Ann", guild, AsyncMock(),
+    )
+    interaction = SimpleNamespace(
+        user=guild.get_member(voter),
+        guild=guild,
+        guild_id=77,
+        channel=SimpleNamespace(id=100, name="games", guild=guild),
+        data={"values": [str(target)]},
+        response=_VoteResponse(),
+    )
+    await view._vote_select_callback(interaction)  # type: ignore[arg-type]
+    return view, interaction
+
+
+async def test_vote_select_records_an_ordinary_vote(sync_db_path):
+    view, interaction = await _vote(sync_db_path, voter=1, target=2)
+    assert view.votes == {1: 2}
+    assert interaction.response.messages[0][0] == "✅ Voted for **Bee**"
+
+
+async def test_vote_select_drops_a_no_contact_vote_behind_the_ordinary_ack(sync_db_path):
+    """Voter 1 and target 2 are a no-contact pair: the pick is not stored,
+    yet the voter sees the same ack an ordinary vote gets."""
+    view, interaction = await _vote(sync_db_path, voter=1, target=2, pair=(1, 2))
+    assert view.votes == {}
+    assert interaction.response.messages[0][0] == "✅ Voted for **Bee**"

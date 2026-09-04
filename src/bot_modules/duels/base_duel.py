@@ -25,6 +25,7 @@ from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.no_contact_logic import SURFACE_DUEL_CHALLENGE
 
 
 from . import db as duels_db
@@ -90,6 +91,20 @@ class BaseDuel(BaseGame):
         if allowlist and interaction.channel_id not in allowlist:
             await interaction.response.send_message(
                 f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel.", ephemeral=True
+            )
+            return
+
+        # No-contact gate (see BaseGame._blocked_pair). After the guild-wide
+        # checks so the refusal is believable — "game in progress" where the
+        # game is switched off or not allowed here would read as a bug — and
+        # before the rate limit, so an ordinary refusal costs no strike.
+        # The copy is the existing pair-already-playing line: an outcome
+        # the challenger has seen before and cannot pin on anyone.
+        if await self._blocked_pair(
+            guild.id, challenger.id, target.id, record_surface=SURFACE_DUEL_CHALLENGE
+        ):
+            await interaction.response.send_message(
+                "You two already have a game in progress.", ephemeral=True
             )
             return
 

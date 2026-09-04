@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,6 +10,7 @@ import discord
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
+from bot_modules.services.name_resolver import NameFn, build_name_fn
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
@@ -47,6 +49,37 @@ from bot_modules.games_ttl.logic import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _recap_resolvers(
+    guild, name_fn: NameFn
+) -> tuple[Callable[[str], str], Callable[[str], str | None]]:
+    """The two resolvers the Final Results recap takes, kept apart on purpose.
+
+    The embed's ``name_resolver`` goes through ``name_fn`` — a resolved
+    display name, since a ``<@id>`` inside an embed renders as a bare number
+    for any viewer whose client hasn't cached that member. The
+    ``mention_resolver`` feeds the winner ping in message ``content=``, the
+    one place a mention is resolved server-side and so belongs; it returns
+    ``None`` for a member who has left, so they are named but never pinged.
+    """
+
+    def _name(uid_str: str) -> str:
+        try:
+            return name_fn(int(uid_str))
+        except (TypeError, ValueError):
+            return uid_str
+
+    def _mention(uid_str: str) -> str | None:
+        if guild is None:
+            return None
+        try:
+            m = guild.get_member(int(uid_str))
+        except (TypeError, ValueError):
+            m = None
+        return m.mention if m else None
+
+    return _name, _mention
 
 
 class SubmitStatementsModal(discord.ui.Modal):
@@ -545,23 +578,18 @@ class TTLCog(commands.Cog):
 
         stats = compute_recap_winners(scores, played_ids)
 
-        def _name_resolver(uid_str: str) -> str:
-            if guild is None:
-                return uid_str
-            try:
-                m = guild.get_member(int(uid_str))
-            except (TypeError, ValueError):
-                m = None
-            return m.mention if m else uid_str
-
-        def _mention_resolver(uid_str: str) -> str | None:
-            if guild is None:
-                return None
-            try:
-                m = guild.get_member(int(uid_str))
-            except (TypeError, ValueError):
-                m = None
-            return m.mention if m else None
+        winner_ids = sorted({
+            int(uid)
+            for key in ("best_liar", "most_honest", "best_guesser")
+            for uid in stats.get(key, [])
+        })
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=getattr(guild, "id", 0),
+            user_ids=winner_ids,
+        )
+        _name_resolver, _mention_resolver = _recap_resolvers(guild, name_fn)
 
         embed, mentions = build_recap_embed(stats, _name_resolver, _mention_resolver, color=accent)
         if guild:

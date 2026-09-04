@@ -12,6 +12,7 @@ from discord import app_commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_session.embeds import build_session_recap_embed
 from bot_modules.games_session.logic import build_highlights, format_duration
+from bot_modules.services.name_resolver import build_name_fn
 
 
 class SessionCog(commands.Cog):
@@ -99,12 +100,21 @@ class SessionCog(commands.Cog):
             if guild
             else None
         )
+        # Built once over the whole roster: only ids the member cache misses
+        # (players who have since left) cost a query.
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=interaction.guild_id or 0,
+            user_ids=[int(uid) for uid in player_ids],
+        )
         embed = build_session_recap_embed(
             game_count=len(game_ids),
             player_ids=player_ids,
             duration_str=duration_str,
             highlights=highlights,
             color=color,
+            name_fn=name_fn,
         )
         await interaction.followup.send(embed=embed)
 

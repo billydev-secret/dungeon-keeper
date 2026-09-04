@@ -96,12 +96,23 @@ def test_describe_active_game_with_row_includes_all_fields():
         "host_id": 12345,
         "game_id": "abc-def",
     }
-    title, body = describe_active_game(row)
+    title, body = describe_active_game(row, name_fn=lambda uid: f"User{uid}")
     assert title == "Active Game"
     assert "traditional" in body
     assert "open" in body
-    assert "<@12345>" in body
+    # Mod-facing: the host's name with the id alongside, never a <@id> (an
+    # embed mention renders as digits to a client that hasn't cached them).
+    assert "User12345 (`12345`)" in body
+    assert "<@12345>" not in body
     assert "abc-def" in body
+
+
+def test_describe_active_game_default_resolver_keeps_a_mention():
+    """An un-wired caller still renders; the AST test below forces the cog
+    to pass a resolver."""
+    row = {"game_type": "wyr", "state": "open", "host_id": 7, "game_id": "g"}
+    _title, body = describe_active_game(row)
+    assert "<@7> (`7`)" in body
 
 
 # ── describe_force_end ───────────────────────────────────────────────
@@ -229,11 +240,35 @@ def test_build_game_status_embed_renders_row_fields():
         "host_id": 42,
         "game_id": "xx-yy",
     }
-    embed = build_game_status_embed(row)
+    embed = build_game_status_embed(row, name_fn=lambda uid: f"User{uid}")
     assert embed.title == "Active Game"
     assert "wyr" in embed.description
     assert "playing" in embed.description
-    assert "<@42>" in embed.description
+    assert "User42 (`42`)" in (embed.description or "")
+    assert "<@42>" not in (embed.description or "")
+
+
+def test_game_status_render_site_passes_a_resolver():
+    """``name_fn`` defaults to ``mention``; the cog must hand a resolver over
+    or the mod card shows the host as digits."""
+    import ast
+    import inspect
+    import pathlib
+
+    from bot_modules.cogs import games_config_cog
+
+    source = pathlib.Path(inspect.getfile(games_config_cog)).read_text(
+        encoding="utf-8"
+    )
+    missed = [
+        f"games_config_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "build_game_status_embed"
+        and not any(kw.arg == "name_fn" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_fn: " + ", ".join(missed)
 
 
 def test_build_force_end_embed_uses_error_color():

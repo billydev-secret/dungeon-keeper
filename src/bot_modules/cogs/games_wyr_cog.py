@@ -8,6 +8,7 @@ import discord
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
+from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
 from discord.ext import commands
 from discord import app_commands
 from bot_modules.games.command_groups import play
@@ -142,6 +143,10 @@ class WYRRoundView(discord.ui.View):
         self.votes_a: list[int] = []
         self.votes_b: list[int] = []
         self.revealed = False
+        # Voter names only render once revealed; Reveal Voters swaps this for
+        # a real resolver (prefetched over the voters) before flipping the
+        # flag, so the mention fallback never reaches a rendered embed.
+        self._name_fn: NameFn = mention
         self._updater = LiveBarUpdater()
         self._closed = False
         self.queued_questions: list[tuple[str, str]] = []
@@ -158,6 +163,7 @@ class WYRRoundView(discord.ui.View):
             closed=closed,
             revealed=self.revealed,
             color=self.accent,
+            name_fn=self._name_fn,
         )
 
     async def _audit_vote(
@@ -242,6 +248,17 @@ class WYRRoundView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host or a mod can reveal voters.", ephemeral=True)
             return
+        # Resolve the voters' names before revealing: a <@id> inside the
+        # embed would show as a bare number to anyone who hasn't cached
+        # that member. Later voters are present members, so the resolver's
+        # live-cache step covers them with no further prefetch.
+        guild = interaction.guild
+        self._name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=guild.id if guild else 0,
+            user_ids=self.votes_a + self.votes_b,
+        )
         self.revealed = True
         button.disabled = True
         await interaction.response.edit_message(embed=self._build_embed(), view=self)

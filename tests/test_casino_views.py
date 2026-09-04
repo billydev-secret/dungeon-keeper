@@ -434,3 +434,62 @@ async def test_back_re_renders_the_picker_a_hub_ladder_replaced():
     assert kwargs["content"] == "How dangerous do you want it?"
     assert kwargs["embed"] is None
     assert len(kwargs["view"].children) == len(logic.MINES_BOMB_CHOICES)
+
+
+# ── a closed table refuses at the picker, not only on the hub ─────────
+
+from bot_modules.core.db_utils import open_db  # noqa: E402
+from bot_modules.services.casino_service import save_casino_settings  # noqa: E402
+
+
+def _db_cog(db_path) -> tuple[CasinoCog, AsyncMock]:
+    ctx = SimpleNamespace(open_db=lambda: open_db(db_path))
+    cog = CasinoCog(SimpleNamespace(ctx=ctx))  # type: ignore[arg-type]
+    picker = AsyncMock()
+    cog._open_amount_picker = picker  # type: ignore[method-assign]
+    return cog, picker
+
+
+def _table_press():
+    return SimpleNamespace(
+        guild=SimpleNamespace(id=900),
+        user=SimpleNamespace(id=31),
+        message=None,
+        response=SimpleNamespace(
+            send_message=AsyncMock(), is_done=lambda: False
+        ),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+
+@pytest.mark.parametrize(
+    ("game", "open"),
+    [
+        pytest.param("slots", True, id="slots-open"),
+        pytest.param("slots", False, id="slots-closed"),
+        pytest.param("mines", True, id="mines-open"),
+        pytest.param("mines", False, id="mines-closed"),
+    ],
+)
+async def test_a_bet_picker_reads_the_tables_own_dial(sync_db_path, game, open):
+    """The hub drops a closed table's button, but a hub rendered before the
+    admin unticked it still carries one — so the picker checks the same dial
+    rather than trusting the button that opened it."""
+    with open_db(sync_db_path) as conn:
+        save_casino_settings(conn, 900, {f"{game}_enabled": open})
+    cog, picker = _db_cog(sync_db_path)
+    interaction = _table_press()
+
+    if game == "mines":
+        await cog.open_mines_bet_picker(interaction, 3)  # type: ignore[arg-type]
+    else:
+        await cog.open_bet_picker(interaction, game)  # type: ignore[arg-type]
+
+    if open:
+        picker.assert_awaited_once()
+        interaction.response.send_message.assert_not_awaited()
+    else:
+        picker.assert_not_awaited()
+        args, kwargs = interaction.response.send_message.await_args
+        assert args[0] == "❌ That table is closed right now."
+        assert kwargs["ephemeral"] is True

@@ -491,12 +491,12 @@ def test_build_recap_embed_mention_resolver_none_for_left_user_drops_from_pings(
     }
     embed, mentions = build_recap_embed(
         stats,
-        name_resolver=lambda u: u,  # fallback bare uid
+        name_resolver=lambda u: f"Departed{u}",  # known_users still names them
         mention_resolver=lambda u: None,  # user left the guild
     )
     by_name = {(f.name or ""): _unspaced(f.value) for f in embed.fields}
     assert "🤥 Best Liar" in by_name
-    assert "1" in by_name["🤥 Best Liar"]
+    assert "Departed1" in by_name["🤥 Best Liar"]
     assert mentions == set()
 
 
@@ -654,3 +654,51 @@ def test_modal_never_edits_without_explicit_origin_message():
     # the message explicitly handed to it.
     modal = _modal()
     assert modal._origin_message is None
+
+
+# ── Final Results wiring: names in the embed, mentions only in content ──
+#
+# The recap builder takes whatever resolver the cog hands it. The cog used to
+# hand it ``member.mention`` — a ``<@id>`` that renders as a bare number for
+# any viewer whose client hasn't cached the member — while the ping in
+# ``content=`` (resolved server-side) is the one place a mention belongs.
+
+from types import SimpleNamespace  # noqa: E402
+
+from bot_modules.cogs.games_ttl_cog import _recap_resolvers  # noqa: E402
+from bot_modules.services.name_resolver import build_name_fn  # noqa: E402
+
+
+class _RecapGuild:
+    def __init__(self, members: dict[int, str]) -> None:
+        self.id = 77
+        self._members = {
+            uid: SimpleNamespace(id=uid, display_name=name, mention=f"<@{uid}>")
+            for uid, name in members.items()
+        }
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+
+async def test_recap_resolvers_name_the_embed_and_ping_only_in_content(sync_db_path):
+    guild = _RecapGuild({1: "Alice", 2: "Bob"})
+    name_fn = await build_name_fn(
+        guild=guild, db_path=sync_db_path, guild_id=77, user_ids=[1, 2, 9]  # type: ignore[arg-type]
+    )
+    name_resolver, mention_resolver = _recap_resolvers(guild, name_fn)
+
+    stats = {
+        "best_liar": ["1"], "most_fooled_count": 3,
+        "most_honest": ["2"], "least_fooled_count": 0,
+        "best_guesser": ["9"], "max_correct": 1,
+    }
+    embed, mentions = build_recap_embed(stats, name_resolver, mention_resolver)
+    by_name = {(f.name or ""): (f.value or "") for f in embed.fields}
+    assert "Alice" in by_name["🤥 Best Liar"]
+    assert "Bob" in by_name["🪞 Open Book"]
+    assert "<@1>" not in by_name["🤥 Best Liar"]
+    # A member nobody can name any more is the one case a mention is the
+    # honest fallback inside the embed; they are still never pinged.
+    assert "<@9>" in by_name["🎯 Best Guesser"]
+    assert mentions == {"<@1>", "<@2>"}

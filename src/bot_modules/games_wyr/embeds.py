@@ -9,6 +9,13 @@ both options, and live vote bars. The cog edits the same message across
 states (open → round-over → closed) by re-calling this builder with the
 right ``closed`` flag. :func:`build_closed_embed` is a small wrapper
 that produces the final "CLOSED" variant used by the close-game flow.
+
+A revealed round names its voters through a ``name_fn``
+(``services/name_resolver.build_name_fn``): a ``<@id>`` inside an embed
+is resolved by the *reading* client from its own cache, so it renders as
+a bare number for any viewer who hasn't seen that member. The default
+``mention`` keeps an un-wired caller rendering; the cog is required to
+pass a real resolver (a test walks its render sites).
 """
 
 from __future__ import annotations
@@ -21,6 +28,7 @@ from bot_modules.games.constants import (
 )
 from bot_modules.games.utils.live_bar import build_bar
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def build_wyr_embed(
@@ -34,12 +42,14 @@ def build_wyr_embed(
     closed: bool = False,
     revealed: bool = False,
     color: discord.Color | None = None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Build the main WYR round embed.
 
     ``closed`` flips the title suffix to ``— ROUND OVER``; ``revealed``
-    appends voter mentions under each option's bar. Both flags can
-    combine.
+    lists each option's voters by name (via ``name_fn``) under its bar.
+    Both flags can combine.
 
     Per the 2026-07-21 embed-color ruling, WYR (a voting game with no
     single winner) always uses the guild accent — pass it via ``color``.
@@ -67,8 +77,8 @@ def build_wyr_embed(
     b_label = f"🅱️ {bar_b} {pct_b} ({len(votes_b)})"
 
     if revealed:
-        a_names = ", ".join(f"<@{uid}>" for uid in votes_a) if votes_a else "—"
-        b_names = ", ".join(f"<@{uid}>" for uid in votes_b) if votes_b else "—"
+        a_names = ", ".join(name_fn(uid) for uid in votes_a) if votes_a else "—"
+        b_names = ", ".join(name_fn(uid) for uid in votes_b) if votes_b else "—"
         a_label += f"\n{a_names}"
         b_label += f"\n{b_names}"
 
@@ -89,6 +99,8 @@ def build_closed_embed(
     round_num: int,
     revealed: bool = False,
     color: discord.Color | None = None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Build the final ``CLOSED`` embed used by the close-game flow.
 
@@ -110,6 +122,7 @@ def build_closed_embed(
         closed=True,
         revealed=revealed,
         color=color,
+        name_fn=name_fn,
     )
     embed.title = f"{GAME_ICONS['wyr']} Would You Rather — Closed"
     return embed

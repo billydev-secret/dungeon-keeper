@@ -267,7 +267,7 @@ All movement goes through `services/casino_service.py`:
 | `channel_id` | 0 | **Master switch** — 0 = casino closed (ships dark) |
 | `min_bet` / `max_bet` | 5 / 100 | max 0 = no ceiling |
 | `daily_wager_cap` | 500 | per member per guild-local day; 0 = uncapped |
-| `{game}_enabled` ×10 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike |
+| `{game}_enabled` ×10 | true | closed tables refuse bets + drop off the panel — embed line, hub **button** (`build_hub_view` pares the sent copy; the full view stays registered for stale panels) and How It Works field alike. A stale panel's button still opens nothing: `open_bet_picker` / `open_mines_bet_picker` re-read the dial and answer `❌ That table is closed right now.` ephemerally before any ladder is shown (the same copy `take_stake` gives a bet that slips past) |
 | `jackpot_enabled` | true | the progressive pot (armed only while the casino is) |
 | `jackpot_cut_pct` | 5 | % of each fully-lost stake skimmed into the pot — every skimmed coin is escrowed rather than burned, so this trades sink strength for pot drama (was 25 until 2026-07-25; see [reviews/2026-07-25-economy-casino-sources-sinks.md](reviews/2026-07-25-economy-casino-sources-sinks.md)) |
 | `jackpot_seed` | 100 | what the pot resets to after a win (minted on claim) |

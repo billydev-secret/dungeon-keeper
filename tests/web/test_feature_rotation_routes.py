@@ -208,3 +208,18 @@ def test_an_option_value_outside_its_choice_list_is_dropped(open_client, fake_ct
     room = open_client.get("/api/feature-rotation").json()["rooms"][0]
     assert room["launch_game"] == "ama"
     assert room["launch_options"] == {"format": "panel"}
+
+
+def test_put_config_keeps_a_string_snowflake_exact(open_client, fake_ctx):
+    """The panel sends the announce channel as a string, like every other
+    panel sends a snowflake: a real channel id is above 2^53, so a JS
+    ``Number()`` rounds it and the saved channel is silently a different one
+    (found by the Save-button browser scenario, rotation-rooms-155). The
+    route's int field has to accept that string and store it exactly."""
+    big = "900000000000000001"
+    res = open_client.put(
+        "/api/feature-rotation/config",
+        json={"enabled": True, "announce_channel_id": big, "announce_hour": 9, "rooms_per_day": 1},
+    )
+    assert res.status_code == 200, res.text
+    assert open_client.get("/api/feature-rotation").json()["config"]["announce_channel_id"] == big

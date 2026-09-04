@@ -21,6 +21,7 @@ the other 18 game cogs can copy: every one of them has the same
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from typing import Any
 
 CATEGORIES: tuple[str, ...] = ("sfw_truth", "sfw_dare", "nsfw_truth", "nsfw_dare")
@@ -123,21 +124,34 @@ def select_next_question_target(
     prefs: dict[str, list[str]],
     asked: dict[str, str],
     rng: random.Random | None = None,
+    *,
+    excluded: Iterable[int | str] | None = None,
 ) -> tuple[str, str] | None:
     """Pick the next ``(user_id, category)`` to ask.
 
     Implements the cog's selection rule:
 
     1. Build the list of available (player, category) pairs.
-    2. Look up each candidate's total asked-count.
-    3. Keep only candidates whose player has the minimum asked-count.
-    4. Choose one of the remainder uniformly at random.
+    2. Drop every player in ``excluded``.
+    3. Look up each candidate's total asked-count.
+    4. Keep only candidates whose player has the minimum asked-count.
+    5. Choose one of the remainder uniformly at random.
+
+    ``excluded`` is the no-contact gate (``docs/no_contact_spec.md``): the
+    cog passes the asker's no-contact partners, so the bot never seats a
+    blocked pair for a directed question. It is applied *before* the
+    least-asked weighting, so an excluded player's low count can never
+    pull them back in. Int or str ids both work — ``no_contact_partners``
+    hands back ints, the payload keys are strs.
 
     Returns ``None`` when no eligible pair exists (either no prefs or
     every combination has already been asked). ``rng`` is injected so
     tests can pin the tiebreak; defaults to the module ``random``.
     """
-    available = available_targets(prefs, asked)
+    dropped = {str(uid) for uid in (excluded or ())}
+    available = [
+        (uid, cat) for uid, cat in available_targets(prefs, asked) if uid not in dropped
+    ]
     if not available:
         return None
 

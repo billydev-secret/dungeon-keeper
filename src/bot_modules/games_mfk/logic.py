@@ -17,9 +17,10 @@ Three reusable pieces are extracted:
   list of exactly 3 labels or ``None`` (with a friendly error string)
   when validation fails.
 * :func:`assign_targets` — the close-and-assign engine. Given the
-  participant list and an injectable RNG, produce ``{player_id:
-  [target_a, target_b, target_c]}`` where each player's three targets
-  are drawn from the rest of the pool with no self-pairing.
+  participant list, an injectable RNG and the pool's no-contact pairs,
+  produce ``{player_id: [target_a, target_b, target_c]}`` where each
+  player's three targets are drawn from the rest of the pool with no
+  self-pairing and no blocked member in either direction.
 
 ``serialize_assignments`` is a tiny dict transform that the cog used to
 inline; pulling it out makes the end-game payload handoff testable.
@@ -28,6 +29,7 @@ inline; pulling it out makes the end-game payload handoff testable.
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from typing import Any
 
 DEFAULT_LABELS: list[str] = ["Marry", "Fornicate", "Kiss"]
@@ -97,6 +99,7 @@ def parse_labels(options: str | None) -> tuple[list[str] | None, str | None]:
 def assign_targets(
     participants: list[int],
     rng: random.Random | None = None,
+    forbidden_pairs: Iterable[tuple[int, int]] | None = None,
 ) -> dict[int, list[int]]:
     """Assign each participant three random targets from the rest of the pool.
 
@@ -104,9 +107,17 @@ def assign_targets(
 
     1. For each player, build the list of all other participants
        (everyone except themselves — players never get assigned to
-        marry/fornicate/kiss themselves).
+        marry/fornicate/kiss themselves — and except anyone the
+        no-contact list keeps them apart from).
     2. Sample ``TARGETS_PER_PLAYER`` (3) targets uniformly without
        replacement using ``rng.sample``.
+
+    ``forbidden_pairs`` is the pool's no-contact set as
+    ``no_contact_pairs_among`` returns it (``(low, high)`` tuples). A
+    blocked pair is excluded from each other's sample in both directions.
+    When that leaves a player with fewer than three candidates they simply
+    get fewer names — silently, so the shorter list reads as an ordinary
+    small-pool outcome rather than announcing that a pair exists.
 
     Raises ``ValueError`` when fewer than :data:`MIN_PARTICIPANTS` (4)
     participants are supplied — there aren't enough other players to
@@ -122,10 +133,17 @@ def assign_targets(
             f"(got {len(participants)})."
         )
     chooser = rng if rng is not None else random
+    banned = {(a, b) if a < b else (b, a) for a, b in (forbidden_pairs or ())}
     assignments: dict[int, list[int]] = {}
     for player_id in participants:
-        others = [p for p in participants if p != player_id]
-        assignments[player_id] = chooser.sample(others, TARGETS_PER_PLAYER)
+        others = [
+            p for p in participants
+            if p != player_id
+            and ((player_id, p) if player_id < p else (p, player_id)) not in banned
+        ]
+        assignments[player_id] = chooser.sample(
+            others, min(TARGETS_PER_PLAYER, len(others))
+        )
     return assignments
 
 

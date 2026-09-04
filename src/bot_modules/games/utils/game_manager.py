@@ -250,6 +250,34 @@ async def check_game_enabled(db, game_type: str, guild_id: int) -> bool:
     return row is None or bool(row[0])
 
 
+CHANNEL_NOT_ALLOWED_MSG = (
+    "This channel isn't set up for games. An admin can enable it from the web dashboard."
+)
+CHANNEL_BUSY_MSG = "There's already a game running in this channel — wait for it to finish."
+
+
+async def relaunch_refusal(
+    db, game_type: str, channel_id: int | None, guild_id: int, *, label: str
+) -> str | None:
+    """Why a recap's Play Again / Run Again must not relaunch, or None if it may.
+
+    The relaunch button is a second front door to ``cog.launch``. It used to be
+    the only door with no guard on it, so a host could keep a game an admin
+    had just switched off on the dashboard alive from the recap card
+    indefinitely. This runs the slash entry's checks — allowed channel, the
+    enabled dial, no game already running here — and hands back that door's
+    own refusal copy, so a refused press reads exactly like a refused slash
+    command. ``label`` is the game's display name for the disabled line.
+    """
+    if not await check_allowed_channel(db, channel_id):
+        return CHANNEL_NOT_ALLOWED_MSG
+    if not await check_game_enabled(db, game_type, guild_id):
+        return f"{label} is currently disabled on this server."
+    if await get_active_game(db, channel_id) is not None:
+        return CHANNEL_BUSY_MSG
+    return None
+
+
 async def get_game_options(db, game_type: str, guild_id: int) -> dict:
     row = await db.fetchone(
         "SELECT options FROM games_game_config WHERE guild_id = ? AND game_type = ?",

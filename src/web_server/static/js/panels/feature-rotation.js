@@ -238,9 +238,9 @@ function renderSettings(container, data) {
   host.querySelector("[data-save-settings]").addEventListener("click", async () => {
     const body = {
       enabled: host.querySelector('[data-f="enabled"]').value === "1",
-      announce_channel_id: Number(host.querySelector('[data-f="announce_channel_id"]').value || 0),
+      // A snowflake is above 2^53: Number() would round it to a different channel.
+      announce_channel_id: String(host.querySelector('[data-f="announce_channel_id"]').value || "0"),
       announce_hour: Number(host.querySelector('[data-f="announce_hour"]').value),
-      tz_offset_hours: Number(host.querySelector('[data-f="tz_offset_hours"]').value),
       rooms_per_day: Number(host.querySelector('[data-f="rooms_per_day"]').value),
     };
     try {

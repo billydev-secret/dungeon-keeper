@@ -232,6 +232,9 @@ def _derby_show(
     )
 
 
+# The service's own refusal for a switched-off table, with the denial mark.
+TABLE_CLOSED_MSG = "❌ That table is closed right now."
+
 _ROULETTE_UI = _WindowUI(
     key="roulette",
     label="Roulette",
@@ -1100,12 +1103,28 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             ),
         )
 
+    async def _table_open(self, guild_id: int, game: str) -> bool:
+        """The per-table dial, read at the picker rather than trusted from
+        the button: the hub drops a closed table's button, but a hub rendered
+        before the admin unticked it still carries one."""
+
+        def _read() -> bool:
+            with self.bot.ctx.open_db() as conn:
+                return svc.game_enabled(
+                    svc.load_casino_settings(conn, guild_id), game
+                )
+
+        return await asyncio.to_thread(_read)
+
     async def open_bet_picker(
         self, interaction: discord.Interaction, game: str,
         side: str | None = None,
     ) -> None:
         guild = interaction.guild
         if guild is None:
+            return
+        if not await self._table_open(guild.id, game):
+            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
             return
         label, last, options = await self._bet_context(
             guild.id, interaction.user.id, game
@@ -2057,6 +2076,9 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     ) -> None:
         guild = interaction.guild
         if guild is None:
+            return
+        if not await self._table_open(guild.id, "mines"):
+            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
             return
         label, last, options = await self._bet_context(
             guild.id, interaction.user.id, "mines"

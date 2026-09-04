@@ -58,6 +58,22 @@ def add_take(payload: dict[str, Any], user_id: int, text: str) -> int:
     return len(takes)
 
 
+def build_voting_start_message(takes: list[dict[str, Any]]) -> str:
+    """The public "voting is starting" line posted when the host opens voting.
+
+    Every take is anonymous — the lobby says so — so this line names nobody:
+    it counts the takes and nothing else. It once @-mentioned every submitter,
+    which attributed a lone take outright and made two a coin flip, and the
+    mention notification outlived the message's ``delete_after``.
+    """
+    count = len(takes)
+    noun = "take" if count == 1 else "takes"
+    return (
+        f"🔥 **Hot Takes voting is starting!** "
+        f"{count} {noun} to rate — get ready to vote!"
+    )
+
+
 def shuffle_takes(
     takes: list[dict[str, Any]], rng: random.Random | None = None
 ) -> list[dict[str, Any]]:

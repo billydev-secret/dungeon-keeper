@@ -18,13 +18,15 @@ Four distinct embed shapes are exposed:
   publicly after the votes are tallied; the top-voted player(s) get
   a crown prefix.
 
-``guild`` is passed through to :func:`resolve_name`; callers can
-pass ``None`` (e.g. tests) and IDs render as their string form.
+The results and standings embeds name players through a ``name_fn``
+(``services/name_resolver.build_name_fn``): a ``<@id>`` inside an embed is
+resolved by the *reading* client from its own cache, so it renders as a
+bare number for any viewer who hasn't seen that member. The default
+``mention`` keeps an un-wired caller rendering; the cog is required to
+pass a real resolver (a test walks its render sites).
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 import discord
 
@@ -37,6 +39,7 @@ from bot_modules.games.constants import (
 )
 from bot_modules.games.utils.game_manager import resolve_name
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.services.name_resolver import NameFn, mention
 
 
 def build_join_embed(
@@ -142,8 +145,9 @@ def build_results_embed(
     prompt: str,
     round_num: int,
     tally: dict[int, int],
-    guild: Any = None,
     color: discord.Color | None = None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Build the per-round results embed shown after votes are tallied.
 
@@ -151,6 +155,8 @@ def build_results_embed(
     get a 👑 crown prefix (multiple crowns appear on a tie). When
     ``tally`` is empty (no votes were cast) the description renders a
     placeholder so the embed is never blank.
+
+    ``name_fn`` turns a user id into embed-ready (already escaped) text.
 
     This is a voting-round result, not a win/loss, so it takes the guild
     accent when ``color`` is supplied and falls back to the phase color
@@ -164,11 +170,8 @@ def build_results_embed(
     max_votes = sorted_tally[0][1] if sorted_tally else 0
     lines: list[str] = []
     for uid, count in sorted_tally:
-        name = resolve_name(guild, uid) if guild is not None else str(uid)
         crown = "👑 " if count == max_votes and count > 0 else "   "
-        lines.append(
-            f"{crown}**{discord.utils.escape_markdown(name)}** — {count} votes"
-        )
+        lines.append(f"{crown}**{name_fn(uid)}** — {count} votes")
     embed.description = "\n".join(lines) if lines else "No votes cast."
     embed.set_footer(
         text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num} Results"
@@ -178,15 +181,17 @@ def build_results_embed(
 
 def build_final_standings_embed(
     crowns: dict,
-    guild: Any = None,
     color: discord.Color | None = None,
+    *,
+    name_fn: NameFn = mention,
 ) -> discord.Embed:
     """Final cumulative-crown standings shown when a game ends.
 
     ``crowns`` maps ``str(user_id) -> crown count``. Players are ranked by
     crown count; ties at the top all get 👑. Cumulative standings are not a
     win/loss outcome, so this takes the guild accent when ``color`` is
-    supplied and falls back to the phase color otherwise.
+    supplied and falls back to the phase color otherwise. ``name_fn`` turns
+    a user id into embed-ready (already escaped) text.
     """
     embed = discord.Embed(
         title=f"{GAME_ICONS['mlt']} Most Likely To — Final Standings",
@@ -202,10 +207,9 @@ def build_final_standings_embed(
     top = items[0][1]
     lines: list[str] = []
     for rank, (uid, count) in enumerate(items, start=1):
-        name = resolve_name(guild, uid) if guild is not None else str(uid)
         prefix = "👑 " if count == top else f"{rank}. "
         plural = "crown" if count == 1 else "crowns"
-        lines.append(f"{prefix}**{discord.utils.escape_markdown(name)}** — {count} {plural}")
+        lines.append(f"{prefix}**{name_fn(uid)}** — {count} {plural}")
     embed.description = "\n".join(lines)
     embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To • Final crown tally")
     return embed

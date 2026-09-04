@@ -36,6 +36,7 @@ from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     sign_off_game_chore,
     finish_launch_response,
+    relaunch_refusal,
     check_allowed_channel,
     check_game_enabled,
     create_game,
@@ -571,6 +572,15 @@ class RushmoreRecapView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host or a mod can restart.", ephemeral=True)
+            return
+        # Same gate as the slash entry: an admin who unticks the game on the
+        # dashboard mid-evening must not be overridden by the recap card.
+        refusal = await relaunch_refusal(
+            self.cog.db, "rushmore", interaction.channel_id,
+            interaction.guild_id or 0, label="Mt. Rushmore Draft",
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
         disable_all_items(self)
         assert interaction.message

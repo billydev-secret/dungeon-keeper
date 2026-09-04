@@ -22,6 +22,7 @@ from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
+    relaunch_refusal,
     get_game_options,
     create_game,
     update_game_message,
@@ -526,6 +527,15 @@ class ClapbackRecapView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
+        # Same gate as the slash entry: an admin who unticks the game on the
+        # dashboard mid-evening must not be overridden by the recap card.
+        refusal = await relaunch_refusal(
+            self.cog.db, "clapback", interaction.channel_id,
+            interaction.guild_id or 0, label="Clapback",
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
+            return
         self.stop()
         disable_all_items(self)
         await interaction.response.edit_message(view=self)
@@ -551,6 +561,13 @@ class ClapbackRecapView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
+            return
+        refusal = await relaunch_refusal(
+            self.cog.db, "clapback", interaction.channel_id,
+            interaction.guild_id or 0, label="Clapback",
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
         channel = interaction.channel
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
@@ -980,6 +997,7 @@ class ClapbackCog(commands.Cog):
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
+        guild = getattr(channel, "guild", None)
         embed = build_submit_embed(
             prompt=prompt,
             round_num=round_num,
@@ -989,6 +1007,7 @@ class ClapbackCog(commands.Cog):
             total_players=len(players),
             bye_player=bye_player,
             color=self._accents.get(game_id),
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
@@ -996,7 +1015,6 @@ class ClapbackCog(commands.Cog):
 
         # Ping the active players so nobody misses a new round starting. Only
         # user mentions go in the content, so no @everyone/@role pings.
-        guild = getattr(channel, "guild", None)
         content = None
         if guild:
             mentions = " ".join(
@@ -1222,9 +1240,11 @@ class ClapbackCog(commands.Cog):
         self, game_id, channel, payload, round_num, total_rounds, host_id,
         bye_players, bye_award=None,
     ):
+        guild = getattr(channel, "guild", None)
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=False, color=self._accents.get(game_id),
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
@@ -1251,9 +1271,11 @@ class ClapbackCog(commands.Cog):
         self, game_id, channel, payload, round_num, total_rounds,
         bye_players, bye_award=None, final=False,
     ):
+        guild = getattr(channel, "guild", None)
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=final, color=self._accents.get(game_id),
+            name_resolver=lambda uid: resolve_name(guild, uid),
         )
         await channel.send(embed=embed)
 

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -11,6 +12,8 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.db_utils import open_db
+from bot_modules.services.no_contact_service import no_contact_partners_conn
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
@@ -202,7 +205,20 @@ class TraditionalHostView(discord.ui.View):
             await interaction.response.send_message("No players have joined yet!", ephemeral=True)
             return
 
-        choice = select_next_question_target(prefs, asked)
+        # The no-contact gate. The bot picks who answers and the presser writes
+        # a directed question at them, so the two must not be a blocked pair.
+        # Keyed on the presser, not the host — a mod can ask too. When the
+        # only open player is the blocked partner the picker reports
+        # exhaustion and the presser sees the ordinary "all asked" reply.
+        guild_id = interaction.guild_id or 0
+        actor_id = interaction.user.id
+
+        def _partners() -> set[int]:
+            with open_db(self.bot.ctx.db_path) as conn:
+                return no_contact_partners_conn(conn, guild_id, actor_id)
+
+        excluded = await asyncio.to_thread(_partners)
+        choice = select_next_question_target(prefs, asked, excluded=excluded)
         if choice is None:
             await interaction.response.send_message(
                 "All player/category combinations have been asked!", ephemeral=True

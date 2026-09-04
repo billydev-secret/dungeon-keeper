@@ -207,21 +207,73 @@ def test_build_wyr_embed_counts_votes_in_labels():
     assert "(1)" in votes_field  # B count
 
 
-def test_build_wyr_embed_revealed_lists_voter_mentions():
-    embed = build_wyr_embed("Alice", "fly", "swim", [1, 2], [3], False, 1, revealed=True)
+def _named(uid: int) -> str:
+    return f"Member{uid}"
+
+
+def test_build_wyr_embed_revealed_lists_voter_names():
+    """Reveal Voters names each voter through ``name_fn`` — a ``<@id>`` in
+    an embed shows as a bare number to anyone whose client hasn't cached
+    that member, so the reveal must carry resolved names."""
+    embed = build_wyr_embed(
+        "Alice", "fly", "swim", [1, 2], [3], False, 1, revealed=True, name_fn=_named
+    )
     votes_field = _field_by_name(embed)["Votes"]
-    assert "<@1>" in votes_field
-    assert "<@2>" in votes_field
-    assert "<@3>" in votes_field
+    assert "Member1" in votes_field
+    assert "Member2" in votes_field
+    assert "Member3" in votes_field
+    assert "<@" not in votes_field
+
+
+def test_build_wyr_embed_hides_voters_until_revealed():
+    embed = build_wyr_embed("Alice", "fly", "swim", [1, 2], [3], False, 1, name_fn=_named)
+    assert "Member" not in _field_by_name(embed)["Votes"]
 
 
 def test_build_wyr_embed_revealed_uses_dash_when_a_side_empty():
     """No voters on a side renders as an em-dash placeholder, not blank."""
-    embed = build_wyr_embed("Alice", "fly", "swim", [], [5], False, 1, revealed=True)
+    embed = build_wyr_embed(
+        "Alice", "fly", "swim", [], [5], False, 1, revealed=True, name_fn=_named
+    )
     votes_field = _field_by_name(embed)["Votes"]
     # The A side has no voters -> dash placeholder
     assert "—" in votes_field
-    assert "<@5>" in votes_field
+    assert "Member5" in votes_field
+
+
+def test_build_closed_embed_threads_name_fn_through():
+    embed = build_closed_embed(
+        "Alice", "fly", "swim", [1], [], False, 1, revealed=True, name_fn=_named
+    )
+    assert "Member1" in _field_by_name(embed)["Votes"]
+
+
+def test_every_wyr_render_site_passes_a_resolver():
+    """``name_fn`` defaults to ``mention`` so an un-wired caller still renders;
+    the wiring therefore needs its own guard, or a render site that forgets
+    the resolver silently brings the bare-number bug back."""
+    import ast
+    import inspect
+    import pathlib
+
+    import bot_modules.cogs.games_wyr_cog as cog_module
+    import bot_modules.games_wyr.embeds as embeds_module
+
+    needs = {
+        name
+        for name, fn in inspect.getmembers(embeds_module, inspect.isfunction)
+        if "name_fn" in inspect.signature(fn).parameters
+    }
+    source = pathlib.Path(inspect.getfile(cog_module)).read_text(encoding="utf-8")
+    missed = [
+        f"games_wyr_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in needs
+        and not any(kw.arg == "name_fn" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_fn: " + ", ".join(missed)
 
 
 def test_build_wyr_embed_anonymous_badge_in_footer():
