@@ -577,7 +577,7 @@ class RushmoreRecapView(discord.ui.View):
         # dashboard mid-evening must not be overridden by the recap card.
         refusal = await relaunch_refusal(
             self.cog.db, "rushmore", interaction.channel_id,
-            interaction.guild_id or 0, label="Mt. Rushmore Draft",
+            interaction.guild_id or 0,
         )
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)

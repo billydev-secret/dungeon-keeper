@@ -14,7 +14,6 @@ hold a full Discord id.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
@@ -679,64 +678,10 @@ async def run_tasks_now(request: Request, user: AuthenticatedUser = _ADMIN):
 
 
 # ── weekly clock ──────────────────────────────────────────────────────
-
-# Task key → (label, weekday, config hour key, config last-fired-week key).
-# Order is the week's own order: Wednesday opens it, Saturday nudges,
-# Tuesday closes it.
-WEEKLY_TASKS: dict[str, tuple[str, int, str, str]] = {
-    "slate": ("Slate post", 2, "slate_hour", "last_slate_week"),
-    "lastcall": ("Last call", 5, "lastcall_hour", "last_lastcall_week"),
-    "reckoning": ("The Reckoning", 1, "reckoning_hour", "last_reckoned_week"),
-}
-
-# Only the two idempotent posts can be re-armed from the panel. The
-# Reckoning pays weekly-win coins in the transaction that marks the week
-# reckoned (spec §5), so resetting *its* week would pay everyone twice.
-RESETTABLE_TASKS = frozenset({"slate", "lastcall"})
-
-
-def next_weekly_moment(
-    now: float, offset_hours: float, target_dow: int, target_hour: int
-) -> float:
-    """Epoch of the next (weekday, hour) in the guild's local clock, strictly
-    after ``now`` — the "next due" a task shows when it isn't due yet."""
-    tz = timezone(timedelta(hours=offset_hours))
-    local = datetime.fromtimestamp(now, tz)
-    candidate = local.replace(hour=target_hour, minute=0, second=0, microsecond=0)
-    candidate += timedelta(days=(target_dow - local.weekday()) % 7)
-    if candidate <= local:
-        candidate += timedelta(days=7)
-    return candidate.timestamp()
-
-
-def weekly_clock_rows(
-    config: dict, now: float, offset_hours: float, *, week: int | None,
-    due: dict[str, int | None],
-) -> list[dict]:
-    """The Season card's read-only Weekly clock, one row per task: which
-    week it last fired for, whether the poll loop would fire it on its next
-    tick (``due``: the tasks module's own due decisions), and otherwise the
-    next guild-local moment its gate opens. This is the operator's only view
-    of the clock on a real season — the force-run button lives on the
-    Simulator card by design (first-look #4)."""
-    rows = []
-    for key, (label, dow, hour_key, fired_key) in WEEKLY_TASKS.items():
-        hour = int(config.get(hour_key) or 0)
-        fired_week = int(config.get(fired_key) or 0)
-        rows.append({
-            "task": key,
-            "label": label,
-            "hour": hour,
-            "weekday": dow,
-            "fired_week": fired_week,
-            # Already spent for the current pick week — the Week 1 shape the
-            # dashboard could not show before (2026-09-02 review).
-            "spent": week is not None and fired_week >= week,
-            "due_week": due.get(key),
-            "next_ts": next_weekly_moment(now, offset_hours, dow, hour),
-            "resettable": key in RESETTABLE_TASKS,
-        })
-    return rows
+#
+# The clock itself — which task fires on which day, what "spent" means, the
+# re-arm rule — lives in ``bot_modules.survivor.tasks`` beside the
+# due-functions the poll loop runs. These two handlers are glue.
 
 
 @router.get("/survivor/clock")
@@ -749,7 +694,6 @@ async def weekly_clock(request: Request, _: AuthenticatedUser = _ADMIN):
 
         from bot_modules.core.db_utils import get_tz_offset_hours
         from bot_modules.survivor import tasks
-        from bot_modules.survivor.logic import pick_week
 
         now = time.time()
         with ctx.open_db() as conn:
@@ -757,15 +701,8 @@ async def weekly_clock(request: Request, _: AuthenticatedUser = _ADMIN):
             if season is None:
                 raise svc.SeasonError("No live season.")
             offset = get_tz_offset_hours(conn, guild_id)
-            week = pick_week(conn, season["season_year"], now)
-            due = {
-                "slate": tasks.slate_due(conn, season, now, offset),
-                "lastcall": tasks.lastcall_due(conn, season, now, offset),
-                "reckoning": tasks.reckoning_due(conn, season, now, offset),
-            }
-        return weekly_clock_rows(
-            season["config"], now, offset, week=week, due=due,
-        ), week, offset
+            rows, week = tasks.weekly_clock(conn, season, now, offset)
+        return rows, week, offset
 
     rows, week, offset = await _service_call(run_query(_q))
     return {"week": week, "offset_hours": offset, "tasks": rows}
@@ -776,34 +713,23 @@ async def reset_weekly_task(
     request: Request, task: str, user: AuthenticatedUser = _ADMIN
 ):
     """Re-arm one weekly post for the current pick week: the slate or the
-    last call fires again at its next gate (or on the next tick if the gate
-    is already open). The Reckoning is refused — it pays coins."""
-    if task not in RESETTABLE_TASKS:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "Only the slate and the last call can be re-armed.",
-        )
+    last call fires again at its next gate. The Reckoning (and any unknown
+    task) is refused by ``tasks.rearm_weekly_task`` — it pays coins."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
-    label, _dow, _hour_key, fired_key = WEEKLY_TASKS[task]
 
     def _q():
         import time
 
-        from bot_modules.survivor.logic import pick_week
+        from bot_modules.survivor import tasks
 
         with ctx.open_db() as conn:
             season = svc.get_active_season(conn, guild_id)
             if season is None:
                 raise svc.SeasonError("No live season.")
-            week = pick_week(conn, season["season_year"], time.time())
-            before = int(season["config"].get(fired_key) or 0)
-            if week is None or before < week:
-                raise svc.SeasonError(
-                    f"{label} hasn't fired for the current week — nothing to reset."
-                )
-            after = max(week - 1, 0)
-            svc.update_config(conn, season["id"], {fired_key: after})
+            week, before, after = tasks.rearm_weekly_task(
+                conn, season, task, time.time()
+            )
             write_audit(
                 conn, guild_id=guild_id, action="survivor_task_reset",
                 actor_id=int(user.user_id),
@@ -811,9 +737,9 @@ async def reset_weekly_task(
                        "was": before, "via": "web"},
             )
             conn.commit()
-        return week, before, after
+        return tasks.WEEKLY_TASKS[task][0], week, before, after
 
-    week, before, after = await _service_call(run_query(_q))
+    label, week, before, after = await _service_call(run_query(_q))
     await _mirror_mod_log(
         ctx, guild_id, action="weekly task re-armed",
         summary=f"{label} will fire again for week {week} "

@@ -503,69 +503,6 @@ def test_manual_settle_validation(authed_client, fake_ctx, web_db, body, match):
 
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
-from web_server.routes.survivor import (  # noqa: E402
-    next_weekly_moment,
-    weekly_clock_rows,
-)
-
-# A Thursday 10:00 in a UTC-7 guild.
-_THU_10 = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc).timestamp()
-_PT = -7.0
-
-
-def _local(ts: float) -> datetime:
-    return datetime.fromtimestamp(ts, timezone(timedelta(hours=_PT)))
-
-
-@pytest.mark.parametrize(
-    ("dow", "hour", "expected"),
-    [
-        # Next Wednesday 9am: six days on.
-        pytest.param(2, 9, (2026, 9, 16, 9), id="wed-next-week"),
-        # Saturday 6pm: still ahead this week.
-        pytest.param(5, 18, (2026, 9, 12, 18), id="sat-this-week"),
-        # Thursday 9am already passed today → next Thursday.
-        pytest.param(3, 9, (2026, 9, 17, 9), id="today-hour-passed"),
-        # Thursday 11am still ahead today.
-        pytest.param(3, 11, (2026, 9, 10, 11), id="today-hour-ahead"),
-    ],
-)
-def test_next_weekly_moment_is_guild_local_and_strictly_ahead(dow, hour, expected):
-    got = _local(next_weekly_moment(_THU_10, _PT, dow, hour))
-    assert (got.year, got.month, got.day, got.hour) == expected
-    assert got.minute == 0 and got.weekday() == dow
-
-
-def test_weekly_clock_rows_flag_spent_and_due_and_resettable():
-    config = {
-        "slate_hour": 9, "lastcall_hour": 18, "reckoning_hour": 9,
-        "last_slate_week": 1, "last_lastcall_week": 1, "last_reckoned_week": 0,
-    }
-    rows = weekly_clock_rows(
-        config, _THU_10, _PT, week=1,
-        due={"slate": None, "lastcall": None, "reckoning": 1},
-    )
-    by = {r["task"]: r for r in rows}
-    assert [r["task"] for r in rows] == ["slate", "lastcall", "reckoning"]
-    # The Week 1 shape: both posts already spent for the current pick week.
-    assert by["slate"]["spent"] and by["lastcall"]["spent"]
-    assert by["slate"]["fired_week"] == 1
-    assert not by["reckoning"]["spent"]
-    assert by["reckoning"]["due_week"] == 1
-    # Only the two idempotent posts can be re-armed; the Reckoning pays coins.
-    assert by["slate"]["resettable"] and by["lastcall"]["resettable"]
-    assert not by["reckoning"]["resettable"]
-    assert _local(by["slate"]["next_ts"]).weekday() == 2
-    assert _local(by["lastcall"]["next_ts"]).hour == 18
-
-
-def test_weekly_clock_rows_without_a_pick_week_is_never_spent():
-    rows = weekly_clock_rows(
-        {"last_slate_week": 3}, _THU_10, _PT, week=None, due={},
-    )
-    assert not any(r["spent"] for r in rows)
-    assert all(r["due_week"] is None for r in rows)
-
 
 def _seed_week1_game(fake_ctx, kickoff: datetime) -> None:
     """A single week-1 game so pick_week resolves to 1."""

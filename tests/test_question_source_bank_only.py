@@ -29,6 +29,7 @@ from bot_modules.games.utils.question_source import (
     get_price_scenario,
     get_rushmore_topic,
     get_wyr_question,
+    normalise_tags,
 )
 
 
@@ -143,3 +144,21 @@ def test_module_has_no_ai_generation_surface():
     for gone in ("get_ai_config", "_ai_generate", "_system", "_load_config", "_parse_wyr"):
         assert not hasattr(question_source, gone), f"{gone} should have been removed"
     assert not hasattr(question_source, "generate_text")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(None, [], id="none-is-empty"),
+        pytest.param([], [], id="empty"),
+        # The 08-28 import wrote "Nsfw"; the gate matches the literal "nsfw".
+        pytest.param(["Nsfw", " Spicy", "NSFW"], ["nsfw", "spicy"], id="case-space-dedupe"),
+        pytest.param(["", "  ", "a"], ["a"], id="drops-empties"),
+        pytest.param(("Dare", "nsfw", "dare"), ["dare", "nsfw"], id="first-seen-order"),
+        pytest.param([1, "1"], ["1"], id="non-strings-coerced"),
+    ],
+)
+def test_normalise_tags_is_the_one_rule(raw, expected):
+    """Every tag reader and writer (bank draw, dashboard save/read/filter,
+    the prod fix script) shares this rule, so it is pinned once here."""
+    assert normalise_tags(raw) == expected

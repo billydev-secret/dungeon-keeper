@@ -43,7 +43,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from bot_modules.core.db_utils import open_db_immediate  # noqa: E402
+from bot_modules.games.utils.question_source import normalise_tags  # noqa: E402
+from bot_modules.services.survivor_service import get_season  # noqa: E402
 from bot_modules.survivor.logic import week_first_kickoff  # noqa: E402
+from bot_modules.survivor.tasks import rearm_weekly_task  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "dungeonkeeper.db"
 
@@ -89,12 +92,13 @@ def step_survivor(conn: sqlite3.Connection, apply: bool) -> int:
         print(f"  survivor: season {r['id']} {r['name']!r} ({r['status']}): {marks} -> 0/0 "
               f"(week-1 kickoff in {(float(first_kick) - now) / 86400:.1f} days)")
         if apply:
-            cfg["last_slate_week"] = 0
-            cfg["last_lastcall_week"] = 0
-            conn.execute(
-                "UPDATE survivor_seasons SET config = ? WHERE id = ?",
-                (json.dumps(cfg), r["id"]),
-            )
+            # The dashboard's own re-arm rule (tasks.rearm_weekly_task):
+            # with Week 1 still ahead, "the week before" is 0 for both.
+            season = get_season(conn, int(r["id"]))
+            assert season is not None
+            for task, key in (("slate", "last_slate_week"), ("lastcall", "last_lastcall_week")):
+                if marks[key]:
+                    rearm_weekly_task(conn, season, task, now)
         changed += 1
     if not changed:
         print("  survivor: nothing to reset")
@@ -129,11 +133,7 @@ def step_tags(conn: sqlite3.Connection, apply: bool) -> int:
         except json.JSONDecodeError:
             print(f"  tags: row {r['question_id']} has unparseable tags {r['tags']!r}; skipped")
             continue
-        lowered: list[str] = []
-        for t in tags:
-            t = str(t).strip().lower()
-            if t and t not in lowered:
-                lowered.append(t)
+        lowered = normalise_tags(tags)
         if lowered == tags:
             continue
         print(f"  tags: row {r['question_id']} ({r['game_type']}) {tags} -> {lowered}")

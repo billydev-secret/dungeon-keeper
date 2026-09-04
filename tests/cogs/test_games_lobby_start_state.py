@@ -78,6 +78,9 @@ async def test_clapback_start_retires_the_joining_state(sync_db_path):
         async def _run_game(self, *a, **k):
             return None
 
+        async def _forbidden_pairs(self, guild, user_ids):
+            return set()
+
     view = cog_mod.ClapbackJoinView(gid, HOST, db, None, _Cog(), config)
     await view.start_game.callback(_Interaction())
 

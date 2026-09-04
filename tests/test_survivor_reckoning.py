@@ -8,12 +8,13 @@ due logic over guild-local clocks, and the streak rules as decided
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.survivor_service import (
+    SeasonError,
     create_season,
     eliminate_player,
     get_season,
@@ -311,6 +312,117 @@ def test_lastcall_due_saturday(db):
         assert tasks.lastcall_due(conn, season, sat_evening - 14 * DAY, 0.0) is None
         # The Saturday before the opener's week is not this week's Saturday.
         assert tasks.lastcall_due(conn, season, sat_evening - 7 * DAY, 0.0) is None
+
+
+# ── weekly clock (the dashboard's operator view) ───────────────────────
+
+# A Thursday 10:00 in a UTC-7 guild.
+_THU_10 = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc).timestamp()
+_PT = -7.0
+
+
+def _local(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, timezone(timedelta(hours=_PT)))
+
+
+@pytest.mark.parametrize(
+    ("dow", "hour", "expected"),
+    [
+        # Next Wednesday 9am: six days on.
+        pytest.param(2, 9, (2026, 9, 16, 9), id="wed-next-week"),
+        # Saturday 6pm: still ahead this week.
+        pytest.param(5, 18, (2026, 9, 12, 18), id="sat-this-week"),
+        # Thursday 9am already passed today → next Thursday.
+        pytest.param(3, 9, (2026, 9, 17, 9), id="today-hour-passed"),
+        # Thursday 11am still ahead today.
+        pytest.param(3, 11, (2026, 9, 10, 11), id="today-hour-ahead"),
+    ],
+)
+def test_next_weekly_moment_is_guild_local_and_strictly_ahead(dow, hour, expected):
+    got = _local(tasks.next_weekly_moment(_THU_10, _PT, dow, hour))
+    assert (got.year, got.month, got.day, got.hour) == expected
+    assert got.minute == 0 and got.weekday() == dow
+
+
+def test_weekly_tasks_use_the_loops_own_days():
+    # The dashboard's clock and the poll loop's gates are the same constants.
+    assert [t[1] for t in tasks.WEEKLY_TASKS.values()] == [
+        tasks.WEDNESDAY, tasks.SATURDAY, tasks.TUESDAY,
+    ]
+
+
+def test_weekly_clock_rows_flag_spent_and_due_and_resettable():
+    config = {
+        "slate_hour": 9, "lastcall_hour": 18, "reckoning_hour": 9,
+        "last_slate_week": 1, "last_lastcall_week": 1, "last_reckoned_week": 0,
+    }
+    rows = tasks.weekly_clock_rows(
+        config, _THU_10, _PT, week=1,
+        due={"slate": None, "lastcall": None, "reckoning": 1},
+    )
+    by = {r["task"]: r for r in rows}
+    assert [r["task"] for r in rows] == ["slate", "lastcall", "reckoning"]
+    # The Week 1 shape: both posts already spent for the current pick week.
+    assert by["slate"]["spent"] and by["lastcall"]["spent"]
+    assert by["slate"]["fired_week"] == 1
+    assert not by["reckoning"]["spent"]
+    assert by["reckoning"]["due_week"] == 1
+    # Only the two idempotent posts can be re-armed; the Reckoning pays coins.
+    assert by["slate"]["resettable"] and by["lastcall"]["resettable"]
+    assert not by["reckoning"]["resettable"]
+    assert _local(by["slate"]["next_ts"]).weekday() == 2
+    assert _local(by["lastcall"]["next_ts"]).hour == 18
+
+
+def test_weekly_clock_rows_without_a_pick_week_is_never_spent():
+    rows = tasks.weekly_clock_rows(
+        {"last_slate_week": 3}, _THU_10, _PT, week=None, due={},
+    )
+    assert not any(r["spent"] for r in rows)
+    assert all(r["due_week"] is None for r in rows)
+
+
+def test_weekly_clock_reads_the_due_functions_and_the_pick_week(db):
+    # NOW is the Wednesday of Week 1's frame at 12:00 UTC (slate_hour 9):
+    # the slate is due on the next tick, the other two are not.
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        rows, week = tasks.weekly_clock(conn, season, NOW, 0.0)
+    assert week == 1
+    by = {r["task"]: r for r in rows}
+    assert by["slate"]["due_week"] == 1 and not by["slate"]["spent"]
+    assert by["lastcall"]["due_week"] is None
+    assert by["reckoning"]["due_week"] is None
+
+
+def test_rearm_weekly_task_resets_to_the_week_before(db):
+    with open_db(db) as conn:
+        season = _cfg_season(conn, last_slate_week=1)
+        assert tasks.slate_due(conn, season, NOW, 0.0) is None
+        assert tasks.rearm_weekly_task(conn, season, "slate", NOW) == (1, 1, 0)
+        season = get_season(conn, season["id"])
+        assert season["config"]["last_slate_week"] == 0
+        # Re-armed: the loop would post it again on its next tick.
+        assert tasks.slate_due(conn, season, NOW, 0.0) == 1
+
+
+@pytest.mark.parametrize(
+    ("task", "overrides", "needle"),
+    [
+        # The Reckoning pays coins in the transaction that marks the week.
+        pytest.param("reckoning", {"last_reckoned_week": 1}, "Only the slate",
+                     id="reckoning-refused"),
+        pytest.param("bogus", {}, "Only the slate", id="unknown-refused"),
+        pytest.param("lastcall", {}, "nothing to reset", id="not-fired-yet"),
+    ],
+)
+def test_rearm_weekly_task_refuses(db, task, overrides, needle):
+    with open_db(db) as conn:
+        season = _cfg_season(conn, **overrides)
+        before = dict(season["config"])
+        with pytest.raises(SeasonError, match=needle):
+            tasks.rearm_weekly_task(conn, season, task, NOW)
+        assert get_season(conn, season["id"])["config"] == before
 
 
 # ── the slate as weekly mini-announcement (2026-08-18) ─────────────────

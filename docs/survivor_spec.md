@@ -174,8 +174,10 @@ Route id `survivor` (bare feature name, per CLAUDE.md's frozen-id convention).
 - **Weekly clock** *(added 2026-09-02)* — read-only rows on the Season card
   for the slate, the last call and the Reckoning: which week each last fired
   for, whether it is due on the next tick, and otherwise the next guild-local
-  moment its gate opens (`GET /survivor/clock`, from the tasks module's own
-  due decisions). A slate or last call already fired for the current pick
+  moment its gate opens (`GET /survivor/clock`; the clock itself —
+  `weekly_clock`, `rearm_weekly_task`, the task→day table — lives in
+  `survivor/tasks.py` beside the due-functions the loop runs, and the route
+  is glue). A slate or last call already fired for the current pick
   week gets a confirm-gated **Reset this week** (`POST
   /survivor/tasks/{slate|lastcall}/reset`, audited + mod-log) that re-arms it;
   the Reckoning is never resettable — it pays weekly-win coins in the

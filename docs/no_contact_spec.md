@@ -80,6 +80,7 @@ low-frequency, so every check is a direct indexed read.
 | Economy transfers | `/bank pay`'s public receipt *and* the recipient's notification; `/bank gift`'s notification. The money and the perk still move | `economy/transfers.py`, `economy_cog.finalize_pay` / `finalize_gift` |
 | Spin the Compliment | The pairing: a blocked pair is a forbidden edge of the derangement in both directions. A pool with no valid pairing left is refused with the ordinary "Need at least 2 players in the pool!" | `games_compliment/logic.generate_pairings`, `games/utils/derangement.py`, `games_compliment_cog` |
 | Marry-Fornicate-Kiss | The assignments: blocked members are dropped from each other's three-name sample; a pool that then can't give everyone three names draws nothing and gets the ordinary "need at least 4 players" refusal (a shorter list would name the pair — every ordinary pool of four gives everyone three) | `games_mfk/logic.assign_targets`, `games_mfk_cog` |
+| Clapback | The bracket: a blocked pair is never a head-to-head matchup. Both bracket functions take the round's pairs; when the only pairing left would seat the pair, one of the two is that round's bye — paid the round average and announced like any bye. A member kept apart from every other player doesn't count toward `MIN_PLAYERS`, so Start refuses with the ordinary "Need at least 3 players" line | `games_clapback/logic.pick_round_bye` / `create_matchups` / `playable_players`, `games_clapback_cog._forbidden_pairs` |
 | Most Likely To | The vote: a blocked voter→target pick is dropped, not stored. The voter gets the ordinary "✅ Voted for …" ack, the results card shows counts only, and no event row is written | `games_mlt/logic.record_vote`, `games_mlt_cog` |
 | Truth or Dare (traditional) | **Ask Question**: the presser's blocked partners are excluded from the target pool before the least-asked weighting (keyed on the presser, not the host — a mod can ask too). When only they remain, the press gets the ordinary "All player/category combinations have been asked!" | `games_traditional/logic.select_next_question_target`, `games_traditional_cog` |
 | Duel challenge | `/games <duel> challenge @user`: refused with the existing "You two already have a game in progress." line, before the rate limit so it costs no strike. **Records an attempt** (surface `duel_challenge`) | `duels/base_duel.py`, `BaseGame._blocked_pair` |
@@ -302,6 +303,27 @@ contradicts is a tell:
   valid arrangements. When no valid pairing exists the helper returns `{}` —
   the same answer as a one-player pool — so the cog's "Need at least 2 players
   in the pool!" covers both and nobody learns which fired.
+- **Clapback moves the gate into the bracket** (added 2026-09-04, after the
+  ship review found the vote and reveal cards placing a pair's answers side by
+  side under both names — with three players the round-robin *guaranteed* it).
+  `pick_round_bye` and `create_matchups` both take the round's no-contact
+  pairs (`no_contact_pairs_among`, read fresh at each use because the service
+  keeps no cache on purpose) and never seat one. Everything the gate does is a
+  **bye**, and Clapback already pays and announces byes: a player blocked from
+  every other submitter is the bye; three players who include a pair bench one
+  of the two (fewest-byes-first between them, so it alternates) instead of the
+  round-robin; an odd field's rotation bye is chosen so the rest can still be
+  paired; and the pairing itself is a constrained draw that keeps the
+  duplicate-answer avoidance. A round the gate leaves with nothing safe to vote
+  on is skipped with the ordinary "Not enough answers this round" line. At
+  Start, `playable_players` drops anyone with no allowed opponent before the
+  `MIN_PLAYERS` check, and the refusal is the ordinary short-lobby line with
+  the *roster* count — a lobby of three where one member holds pairs with both
+  others reads "Need at least 3 players … Currently: 3", which is contradictory
+  but identical to what the host would see if the count were right, and the
+  only alternative was a lobby where one player sits out every round. Known
+  soft tell, accepted: a pair in a three-player game sees a bye in a game size
+  that otherwise never has one.
 - **MLT drops the vote**: `record_vote` skips a blocked pick and hands back the
   same `changed` flag an ordinary vote would, so the ephemeral ack is
   byte-identical. The results card shows counts, so a missing vote is
@@ -390,6 +412,13 @@ harasser benefits from, and the one he might pressure her into.
   each party game's gate at the logic layer plus one wiring assertion: the
   blocked outcome is neither recorded nor distinguishable from the ordinary
   one.
+- `tests/test_games_clapback_logic.py` (the no-contact gate section) — a pair
+  is never a matchup for three, four, odd and contrived rosters, a property
+  check over random rosters, and that the draw is unchanged with nothing
+  forbidden; `tests/cogs/test_games_clapback_cog.py` — Start counts only
+  playable members and refuses with the ordinary line, and one round of a
+  three-player game benches one of the pair and seats the other against the
+  third.
 - `tests/test_duels_no_contact.py` — the challenge line and that it costs no
   rate-limit strike, the lobby cooldown line, and Name the Loser refused at
   both the press and the submit.

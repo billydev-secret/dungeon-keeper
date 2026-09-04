@@ -1,6 +1,6 @@
 # Clapback — functional spec
 
-**Status: Reference** — matches current behavior as of 2026-08-30.
+**Status: Reference** — matches current behavior as of 2026-09-04.
 
 Head-to-head comedy party game. Everyone answers the same prompt, answers are
 bracketed into one-on-one matchups, and the room votes the funnier one.
@@ -39,7 +39,12 @@ clamped by `logic.clamp_config_values`:
 | `anonymous` | false | hides author names on the reveal |
 | `tags` | — | restricts the bank draw |
 
-Player bounds are `MIN_PLAYERS = 3` / `MAX_PLAYERS = 16`.
+Player bounds are `MIN_PLAYERS = 3` / `MAX_PLAYERS = 16`. **Start** counts
+the roster through `logic.playable_players` — anyone the no-contact list keeps
+apart from every other player can never be seated, so they don't count — and
+refuses with the ordinary "Need at least 3 players to start Clapback.
+Currently: *n*." line (roster count) when that leaves fewer than three. See
+§3.4.
 
 ## 2. Round flow
 
@@ -60,9 +65,9 @@ force a second bye).
 
 ### 2.1 The bye is chosen up front (`logic.pick_round_bye`)
 
-`pick_round_bye(player_ids, bye_history, rng)` runs against the **roster**
-before the prompt posts, and returns `None` for an even field or exactly 3
-players (§3.1). The benched player is then left out of the round-start ping and
+`pick_round_bye(player_ids, bye_history, rng, forbidden_pairs)` runs against
+the **roster** before the prompt posts, and returns `None` for an even field or
+exactly 3 players (§3.1) — unless the no-contact gate needs a bye (§3.4). The benched player is then left out of the round-start ping and
 the `Answers In` denominator, is named on the submit embed and in the ping, and
 their Submit button refuses with an explanation. `round_bye` is stored on the
 payload so the button gate survives a reload.
@@ -95,6 +100,9 @@ of two things happens, from `payload["phase"]`:
   the round boundary, where `logic.admit_pending_players` folds them in. There
   is nothing to write mid-vote, and the matchups on screen are already set.
 
+A joiner is covered by the no-contact gate without any extra step: the
+submitters' pairs are read after the window closes (§3.4).
+
 Either way they start on **0 points**, seeded into `scores`, `clapbacks` *and*
 `scores_checkpoint` — the checkpoint is what a crash-resume rolls back to, and
 a joiner missing from it is rolled off the scoreboard. Anyone over
@@ -110,11 +118,14 @@ watching a prompt they had a clapback for sit the round out.
 
 ## 3. Bracketing (`logic.create_matchups`)
 
-Signature: `create_matchups(answers, bye_history=None, rng=None)` →
-`(matchups, bye_player_id)`. `rng` is injected so tests pin the shuffle order.
+Signature: `create_matchups(answers, bye_history=None, rng=None,
+forbidden_pairs=None)` → `(matchups, byes)`. `rng` is injected so tests pin the
+shuffle order. `byes` is a list: at most one id in ordinary play (§3.2), more
+only when the no-contact gate has to bench someone (§3.4), and empty alongside
+an empty `matchups` when the round has nothing safe to vote on.
 
 **Every submitter appears in the result exactly once** — either in one pair or
-as the bye. This is the invariant the rest of the rules work inside.
+in `byes`. This is the invariant the rest of the rules work inside.
 
 ### 3.1 Three players → round-robin
 
@@ -166,6 +177,45 @@ matchup, never a player dropped from the round.
 > players and four identical answers this silently ran a single matchup and left
 > four players out of the round — roughly half of all shuffles. Regression test:
 > `test_create_matchups_never_drops_a_player_when_dupes_are_unavoidable`.
+
+### 3.4 The no-contact gate
+
+A matchup puts two answers side by side under two names on the vote and reveal
+cards, so it is a contact surface under [no_contact_spec.md](no_contact_spec.md).
+The cog reads the no-contact pairs among the people in play
+(`no_contact_pairs_among`, in a thread) **at each use** — over the roster before
+`pick_round_bye`, over the submitters before `create_matchups` — rather than once
+per game: the service keeps no cache on purpose, a stale read fails toward
+seating the pair, and reading at the second point is also what covers a **Join
+now** joiner with no bookkeeping. Both functions take the set as
+`forbidden_pairs` (any id type, either way round) and **never seat a forbidden
+pair**. Everything the gate does is a bye, and a bye is paid the round average
+and announced the same way whatever caused it, so nothing on screen says why.
+In order:
+
+- A submitter the list keeps apart from **every** other submitter is a bye (and
+  is pre-benched at roster level, so they are never asked to write).
+- **Three players who include a pair do not round-robin** — the round-robin is
+  the one bracket shape that guarantees the pair meets. One of the two is the
+  bye, fewest-byes-first *between them* (so it alternates across the game and
+  the third player never sits), and the other two play one matchup. This is the
+  known soft tell: a three-player game otherwise never has a bye.
+- An odd field's rotation bye (§3.2) is the most overdue player whose absence
+  still leaves a fully pairable field, so the gate never forces a second bye
+  where one will do.
+- The pairing is drawn by a randomised backtracking search over the same ten
+  shuffles, still minimising duplicate answers (§3.3); the search is bounded
+  (`MAX_PAIRING_NODES`). Only in the contrived case where no full safe pairing
+  exists — a forbidden cluster dense enough that the leftovers can face nobody —
+  is the largest safe pairing used and the rest benched as extra byes; that is
+  the one way `byes` grows past one, and the one place the gate can force the
+  same two players to meet again sooner than the shuffle otherwise would.
+- A round with no safe matchup at all returns `([], [])` and the cog skips it
+  with the ordinary "Not enough answers this round — moving on!" — nobody is
+  paid a bye for a round that never ran.
+
+With nothing forbidden the gate is inert and the draw is byte-for-byte the
+pre-gate one (`test_create_matchups_without_forbidden_pairs_is_unchanged`).
 
 ## 4. Scoring
 

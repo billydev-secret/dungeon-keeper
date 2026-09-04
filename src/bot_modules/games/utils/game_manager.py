@@ -11,6 +11,7 @@ from typing import Any
 import discord
 
 from bot_modules.core.utils import disable_all_items
+from bot_modules.games.constants import GAME_NAMES
 
 log = logging.getLogger(__name__)
 
@@ -257,22 +258,26 @@ CHANNEL_BUSY_MSG = "There's already a game running in this channel — wait for 
 
 
 async def relaunch_refusal(
-    db, game_type: str, channel_id: int | None, guild_id: int, *, label: str
+    db, game_type: str, channel_id: int | None, guild_id: int, *,
+    label: str | None = None,
 ) -> str | None:
     """Why a recap's Play Again / Run Again must not relaunch, or None if it may.
 
     The relaunch button is a second front door to ``cog.launch``. It used to be
     the only door with no guard on it, so a host could keep a game an admin
     had just switched off on the dashboard alive from the recap card
-    indefinitely. This runs the slash entry's checks — allowed channel, the
-    enabled dial, no game already running here — and hands back that door's
-    own refusal copy, so a refused press reads exactly like a refused slash
-    command. ``label`` is the game's display name for the disabled line.
+    indefinitely. This runs the two checks the slash entry runs — allowed
+    channel and the enabled dial, in that entry's own copy — **plus** a
+    busy check (no game already running in this channel) that the slash
+    entries do not yet have; platform-28 / common-lib A.1 unify the two
+    doors. ``label`` is the game's display name for the disabled line and
+    defaults to ``GAME_NAMES[game_type]``.
     """
     if not await check_allowed_channel(db, channel_id):
         return CHANNEL_NOT_ALLOWED_MSG
     if not await check_game_enabled(db, game_type, guild_id):
-        return f"{label} is currently disabled on this server."
+        name = label or GAME_NAMES.get(game_type, game_type)
+        return f"{name} is currently disabled on this server."
     if await get_active_game(db, channel_id) is not None:
         return CHANNEL_BUSY_MSG
     return None

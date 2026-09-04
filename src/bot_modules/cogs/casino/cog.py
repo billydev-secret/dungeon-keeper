@@ -233,7 +233,7 @@ def _derby_show(
 
 
 # The service's own refusal for a switched-off table, with the denial mark.
-TABLE_CLOSED_MSG = "❌ That table is closed right now."
+TABLE_CLOSED_MSG = f"❌ {svc.TABLE_CLOSED}"
 
 _ROULETTE_UI = _WindowUI(
     key="roulette",
@@ -972,12 +972,14 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
 
     async def _bet_context(
         self, guild_id: int, user_id: int, game: str
-    ) -> tuple[str, int | None, list[logic.BetOption]]:
-        """(limits label, last-bet prefill, ladder) for a bet surface.
+    ) -> tuple[str, int | None, list[logic.BetOption], svc.CasinoSettings]:
+        """(limits label, last-bet prefill, ladder, settings) for a bet surface.
 
-        One read serves both halves: the ladder needs the balance and the
-        daily cap to know what the player can actually stake, and the modal
-        behind Custom… needs the same numbers for its label.
+        One read serves every half: the ladder needs the balance and the
+        daily cap to know what the player can actually stake, the modal
+        behind Custom… needs the same numbers for its label, and the
+        settings come back so a picker can check its table's own dial
+        (``svc.game_enabled``) without a second trip to the database.
         """
 
         def _read() -> tuple[svc.CasinoSettings, int, int, int]:
@@ -998,7 +1000,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             cap_left=max(0, cap - used) if cap > 0 else None,
             last_bet=last,
         )
-        return self._limits_label(settings, used, cap), last, options
+        return self._limits_label(settings, used, cap), last, options, settings
 
     async def _show_step(
         self,
@@ -1103,19 +1105,6 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             ),
         )
 
-    async def _table_open(self, guild_id: int, game: str) -> bool:
-        """The per-table dial, read at the picker rather than trusted from
-        the button: the hub drops a closed table's button, but a hub rendered
-        before the admin unticked it still carries one."""
-
-        def _read() -> bool:
-            with self.bot.ctx.open_db() as conn:
-                return svc.game_enabled(
-                    svc.load_casino_settings(conn, guild_id), game
-                )
-
-        return await asyncio.to_thread(_read)
-
     async def open_bet_picker(
         self, interaction: discord.Interaction, game: str,
         side: str | None = None,
@@ -1123,12 +1112,15 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        if not await self._table_open(guild.id, game):
-            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
-            return
-        label, last, options = await self._bet_context(
+        label, last, options, settings = await self._bet_context(
             guild.id, interaction.user.id, game
         )
+        # The per-table dial, read at the picker rather than trusted from
+        # the button: the hub drops a closed table's button, but a hub
+        # rendered before the admin unticked it still carries one.
+        if not svc.game_enabled(settings, game):
+            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
+            return
         title = self._MODAL_TITLES.get(game, "Casino")
         on_cancel = None
         if side is not None:
@@ -1182,7 +1174,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        label, last, options = await self._bet_context(
+        label, last, options, _settings = await self._bet_context(
             guild.id, interaction.user.id, "roulette"
         )
         cancel, expiry = self._window_step_handlers(guild, _ROULETTE_UI, round_id)
@@ -2077,12 +2069,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        if not await self._table_open(guild.id, "mines"):
-            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
-            return
-        label, last, options = await self._bet_context(
+        label, last, options, settings = await self._bet_context(
             guild.id, interaction.user.id, "mines"
         )
+        if not svc.game_enabled(settings, "mines"):   # see open_bet_picker
+            await safe_ephemeral(interaction, TABLE_CLOSED_MSG)
+            return
         await self._open_amount_picker(
             interaction,
             partial(
@@ -2373,7 +2365,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                         f"<#{settings.channel_id}>."
                     )
                 if not getattr(settings, ui.enabled_attr):
-                    return _RoundOpen(err="That table is closed right now.")
+                    return _RoundOpen(err=svc.TABLE_CLOSED)
                 if ui.live_player_round(conn, guild.id, uid) is not None:
                     return _RoundOpen(err=ui.already_open_note)
                 round_id = ui.open_round(
@@ -2725,7 +2717,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        label, last, options = await self._bet_context(
+        label, last, options, _settings = await self._bet_context(
             guild.id, interaction.user.id, "derby"
         )
         cancel, expiry = self._window_step_handlers(guild, _DERBY_UI, round_id)
@@ -2770,7 +2762,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        label, last, options = await self._bet_context(
+        label, last, options, _settings = await self._bet_context(
             guild.id, interaction.user.id, "baccarat"
         )
         cancel, expiry = self._window_step_handlers(guild, _BACCARAT_UI, round_id)
@@ -2816,7 +2808,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        label, last, options = await self._bet_context(
+        label, last, options, _settings = await self._bet_context(
             guild.id, interaction.user.id, "dice"
         )
         cancel, expiry = self._window_step_handlers(guild, _DICE_UI, round_id)
@@ -2862,7 +2854,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = interaction.guild
         if guild is None:
             return
-        label, last, options = await self._bet_context(
+        label, last, options, _settings = await self._bet_context(
             guild.id, interaction.user.id, "keno"
         )
         cancel, expiry = self._window_step_handlers(guild, _KENO_UI, round_id)

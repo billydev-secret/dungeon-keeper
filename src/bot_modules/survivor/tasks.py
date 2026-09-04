@@ -26,7 +26,7 @@ import discord
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.services.dm_branding import send_branded_dm
-from bot_modules.services.survivor_service import get_season, update_config
+from bot_modules.services.survivor_service import SeasonError, get_season, update_config
 from bot_modules.survivor import logic, reckoning
 from bot_modules.survivor.views import SlatePickButton, swap_member_roles
 
@@ -157,6 +157,107 @@ def reckoning_due(
     if force:
         return week
     return week if past_weekly_moment(now, offset, TUESDAY, hour) else None
+
+
+# ── weekly clock (the dashboard's operator view) ───────────────────────
+
+# Task key → (label, weekday, config hour key, config last-fired-week key).
+# Order is the week's own order: Wednesday opens it, Saturday nudges,
+# Tuesday closes it. It lives beside the due-functions so the clock the
+# dashboard renders and the clock the loop runs on are the same clock.
+WEEKLY_TASKS: dict[str, tuple[str, int, str, str]] = {
+    "slate": ("Slate post", WEDNESDAY, "slate_hour", "last_slate_week"),
+    "lastcall": ("Last call", SATURDAY, "lastcall_hour", "last_lastcall_week"),
+    "reckoning": ("The Reckoning", TUESDAY, "reckoning_hour", "last_reckoned_week"),
+}
+
+# Only the two idempotent posts can be re-armed. The Reckoning pays
+# weekly-win coins in the transaction that marks the week reckoned (spec
+# §5), so resetting *its* week would pay everyone twice.
+RESETTABLE_TASKS = frozenset({"slate", "lastcall"})
+
+
+def next_weekly_moment(
+    now: float, offset_hours: float, target_dow: int, target_hour: int
+) -> float:
+    """Epoch of the next (weekday, hour) in the guild's local clock, strictly
+    after ``now`` — the "next due" a task shows when it isn't due yet."""
+    tz = timezone(timedelta(hours=offset_hours))
+    local = datetime.fromtimestamp(now, tz)
+    candidate = local.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    candidate += timedelta(days=(target_dow - local.weekday()) % 7)
+    if candidate <= local:
+        candidate += timedelta(days=7)
+    return candidate.timestamp()
+
+
+def weekly_clock_rows(
+    config: dict, now: float, offset_hours: float, *, week: int | None,
+    due: dict[str, int | None],
+) -> list[dict]:
+    """The Season card's read-only Weekly clock, one row per task: which
+    week it last fired for, whether the poll loop would fire it on its next
+    tick (``due``: this module's own due decisions), and otherwise the next
+    guild-local moment its gate opens. This is the operator's only view of
+    the clock on a real season — the force-run button lives on the
+    Simulator card by design (first-look #4)."""
+    rows = []
+    for key, (label, dow, hour_key, fired_key) in WEEKLY_TASKS.items():
+        hour = int(config.get(hour_key) or 0)
+        fired_week = int(config.get(fired_key) or 0)
+        rows.append({
+            "task": key,
+            "label": label,
+            "hour": hour,
+            "weekday": dow,
+            "fired_week": fired_week,
+            # Already spent for the current pick week — the Week 1 shape the
+            # dashboard could not show before (2026-09-02 review).
+            "spent": week is not None and fired_week >= week,
+            "due_week": due.get(key),
+            "next_ts": next_weekly_moment(now, offset_hours, dow, hour),
+            "resettable": key in RESETTABLE_TASKS,
+        })
+    return rows
+
+
+def weekly_clock(
+    conn: sqlite3.Connection, season: dict, now: float, offset: float,
+) -> tuple[list[dict], int | None]:
+    """``(rows, pick_week)`` for the dashboard's Weekly clock — the rows
+    from :func:`weekly_clock_rows`, fed by the same due-functions the poll
+    loop runs, so what the panel says is due is what the next tick fires."""
+    week = logic.pick_week(conn, season["season_year"], now)
+    due = {
+        "slate": slate_due(conn, season, now, offset),
+        "lastcall": lastcall_due(conn, season, now, offset),
+        "reckoning": reckoning_due(conn, season, now, offset),
+    }
+    return weekly_clock_rows(season["config"], now, offset, week=week, due=due), week
+
+
+def rearm_weekly_task(
+    conn: sqlite3.Connection, season: dict, task: str, now: float,
+) -> tuple[int, int, int]:
+    """Re-arm one weekly post for the current pick week, so the slate or the
+    last call fires again at its next gate (or on the next tick if the gate
+    is already open). Returns ``(week, last-fired before, last-fired after)``;
+    the re-arm rule is ``max(week - 1, 0)``, the week before the one being
+    re-armed. Raises :class:`SeasonError` for the Reckoning (it pays coins)
+    or an unknown task, and when the task hasn't fired for the current week
+    (nothing to reset). Does not commit."""
+    if task not in RESETTABLE_TASKS:
+        raise SeasonError("Only the slate and the last call can be re-armed.")
+    label, _dow, _hour_key, fired_key = WEEKLY_TASKS[task]
+    week = logic.pick_week(conn, season["season_year"], now)
+    before = int(season["config"].get(fired_key) or 0)
+    if week is None or before < week:
+        raise SeasonError(
+            f"{label} hasn't fired for the current week — nothing to reset."
+        )
+    after = max(week - 1, 0)
+    update_config(conn, season["id"], {fired_key: after})
+    return week, before, after
 
 
 # ── posting glue ───────────────────────────────────────────────────────

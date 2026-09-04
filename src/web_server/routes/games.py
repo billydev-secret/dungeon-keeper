@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from bot_modules.games.constants import GAME_NAMES
+from bot_modules.games.utils.question_source import normalise_tags
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
@@ -134,26 +135,6 @@ class LegitLibsAIPrepBody(BaseModel):
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def _norm_tags(raw) -> list[str]:
-    """Lowercase, strip and dedupe a list of tag strings, preserving first-seen order.
-
-    Lowercasing happens before the dedupe so ``["Nsfw", "nsfw"]`` collapses to
-    one tag. Tags are matched case-insensitively at draw time
-    (``question_source._parse_tags``), and the bank's NSFW gate keys on the
-    literal ``"nsfw"`` — storing anything else would let a row tagged
-    ``"Nsfw"`` serve in an age-unrestricted channel, which is exactly what an
-    earlier bulk import did.
-    """
-    out: list[str] = []
-    seen: set[str] = set()
-    for t in (raw or []):
-        t = str(t).strip().lower()
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-    return out
-
-
 #: Recognised for reading, export and import, but closed to new bank rows: no
 #: code path ever draws them. ``ama`` questions come from members during the
 #: round, so a curated AMA bank row can never be served. Kept out of
@@ -212,11 +193,10 @@ def _validate_traditional_tags(game_type: str, tags: list[str]) -> None:
 
 
 def _parse_tags_col(raw) -> list[str]:
-    """Parse a stored JSON tags column into a lowercased list, tolerating bad data.
-
-    Lowercased on read for the same reason ``question_source._parse_tags``
-    is: a legacy row stored as ``"Nsfw"`` must match the ``"nsfw"`` chip the
-    tag list now offers, and count as adult in the stats.
+    """Parse a stored JSON tags column into a normalised list, tolerating bad
+    data — the same ``normalise_tags`` rule the bank draw reads with, so a
+    legacy row stored as ``"Nsfw"`` matches the ``"nsfw"`` chip the tag list
+    offers and counts as adult in the stats.
     """
     try:
         val = json.loads(raw or "[]")
@@ -224,7 +204,7 @@ def _parse_tags_col(raw) -> list[str]:
         return []
     if not isinstance(val, list):
         return []
-    return [t for t in (str(x).strip().lower() for x in val) if t]
+    return normalise_tags(val)
 
 
 # ── Stats ────────────────────────────────────────────────────────────────────
@@ -353,7 +333,7 @@ async def list_bank(
             # pagination is recomputed from the filtered set. With multiple
             # requested tags, match="all" keeps rows having every tag (AND);
             # match="any" keeps rows sharing at least one tag (OR).
-            requested = {t for t in (str(x).strip().lower() for x in (tag or [])) if t}
+            requested = set(normalise_tags(tag))
             any_match = match == "any"
             items = []
             for r in rows:
@@ -399,7 +379,7 @@ async def create_question(
     _check_bank_type(body.game_type)
 
     ctx = get_ctx(request)
-    tags = _norm_tags(body.tags)
+    tags = normalise_tags(body.tags)
     _validate_traditional_tags(body.game_type, tags)
     tags_json = json.dumps(tags)
 
@@ -439,7 +419,7 @@ async def update_question(
                 sets.append("question_text = ?")
                 params.append(body.question_text.strip())
             if body.tags is not None:
-                tags = _norm_tags(body.tags)
+                tags = normalise_tags(body.tags)
                 _validate_traditional_tags(existing[0], tags)
                 sets.append("tags = ?")
                 params.append(json.dumps(tags))
@@ -500,7 +480,7 @@ async def bulk_add_questions(
         raise HTTPException(status_code=400, detail="No non-empty lines provided")
 
     ctx = get_ctx(request)
-    tags = _norm_tags(body.tags)
+    tags = normalise_tags(body.tags)
     _validate_traditional_tags(body.game_type, tags)
     tags_json = json.dumps(tags)
 
@@ -589,7 +569,7 @@ async def import_from_pool(
     if not body.question_ids:
         raise HTTPException(status_code=400, detail="No questions selected")
 
-    override = _norm_tags(body.tags) if body.tags is not None else None
+    override = normalise_tags(body.tags) if body.tags is not None else None
     if body.game_type == "traditional" or override is not None:
         _validate_traditional_tags(body.game_type, override or [])
 
@@ -681,7 +661,7 @@ async def import_bank(
             continue
         # Old exports without a "tags" key default to []. Legacy "category":"nsfw"
         # is still honored as the nsfw tag for backward compatibility.
-        tags = _norm_tags(entry.get("tags", []))
+        tags = normalise_tags(entry.get("tags", []))
         if not tags and entry.get("category") == "nsfw":
             tags = ["nsfw"]
         _validate_traditional_tags(gt, tags)
