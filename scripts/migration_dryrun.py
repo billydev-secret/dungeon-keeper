@@ -53,6 +53,17 @@ def snapshot(live: Path, dest: Path) -> None:
         src.close()
 
 
+def _remove(db: Path) -> None:
+    """Delete a snapshot and its write-ahead sidecars.
+
+    ``unlink`` on the .db alone leaves ``-wal`` and ``-shm`` behind — the
+    migrations run in WAL mode, so the sidecars are tens of megabytes and every
+    dry-run leaked them into the cache directory.
+    """
+    for suffix in ("", "-wal", "-shm"):
+        db.with_name(db.name + suffix).unlink(missing_ok=True)
+
+
 def applied(db: Path) -> set[str]:
     """Migration filenames already recorded in the database.
 
@@ -126,7 +137,7 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001 - the whole point is to report it
         print(f"\nFAILED against the live schema: {type(exc).__name__}: {exc}",
               file=sys.stderr)
-        print(f"Snapshot kept for inspection: {tmp}", file=sys.stderr)
+        print(f"Snapshot kept for inspection (with its -wal/-shm): {tmp}", file=sys.stderr)
         return 1
 
     still = [p.name for p in pending if p.name not in applied(tmp)]
@@ -143,7 +154,7 @@ def main() -> int:
     if args.keep:
         print(f"\nSnapshot kept: {tmp}")
     else:
-        tmp.unlink(missing_ok=True)
+        _remove(tmp)
     return 0
 
 
