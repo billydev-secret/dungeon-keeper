@@ -63,24 +63,34 @@ later stage fails, because a go/no-go is more useful complete than early.
    A release-sized range is much larger than a feature branch, so expect it to take
    longer than the same scan does in `/dk-ship` and to have more to say.
 
-6. **What the restart will actually do to the database.** Migrations apply on boot,
-   which makes them the riskiest part of going live:
+6. **What the restart will actually do to the database**, by rehearsing it:
 
-       sqlite3 "file:dungeonkeeper.db?mode=ro" "SELECT name FROM schema_version;"
-       ls src/migrations/*.sql
+       python scripts/migration_dryrun.py
 
-   List every migration on disk that is not in `schema_version` — those run at the
-   next start, in order. **Read each one** and call out anything destructive
-   (`DROP`, `DELETE`, `ALTER ... DROP COLUMN`, a rewrite that discards rows). A
-   pending destructive migration is a reason to take a snapshot first:
+   Migrations run at boot, so a migration that passes against a fresh test schema
+   and fails against production's actual columns takes the bot down at the moment
+   new code reaches members. This snapshots the live database (via sqlite3's backup
+   API — a `cp` of a WAL database is very often malformed), applies everything
+   `schema_version` has not recorded, and reports. The live file is never written.
 
-       sqlite3 dungeonkeeper.db ".backup '/home/ben/backups/pre-restart-$(date +%F).db'"
+   It flags destructive statements (`DROP TABLE`, `DROP COLUMN`, `DELETE FROM`) and
+   prints the `.backup` line to run before restarting when it finds one. A
+   destructive migration is not a blocker — several are deliberate — but it is the
+   difference between restarting with a backup and restarting without one.
 
-   Use the backup API, never `cp` — a copy of the live WAL database is malformed.
+7. **Dials that do nothing:**
 
-7. **Report go / no-go.** One short verdict, then the detail: how many commits are
+       python scripts/config_key_audit.py
+
+   Read-only. Lists config keys stored in the database that no code reads — a
+   branch whose reader never merged, or a feature deleted while its rows outlived
+   it. Each is a dial someone can set, and change nothing by setting. Keys built as
+   a prefix plus a settings-dataclass field are understood, so this reports about a
+   dozen rather than the hundred-odd a naive string search claims.
+
+8. **Report go / no-go.** One short verdict, then the detail: how many commits are
    shipping, what failed if anything, the pending migrations and whether any is
-   destructive, and any standards findings. Say plainly whether anything found is a
+   destructive, any dead config keys, and any standards findings. Say plainly whether anything found is a
    blocker or a note.
 
    Close by reminding the user that **they** restart, and that a batch this size is
