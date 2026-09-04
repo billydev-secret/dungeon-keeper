@@ -38,15 +38,24 @@ _LOCAL = {
 
 
 def _declared() -> set[str]:
-    root = re.search(r"^:root\s*\{(.*?)^\}", (_STATIC / "app.css").read_text(encoding="utf-8"), re.S | re.M)
-    assert root, "could not find the :root block in app.css"
+    root = re.search(
+        r"^:root\s*\{(.*?)^\}", (_STATIC / "tokens.css").read_text(encoding="utf-8"), re.S | re.M
+    )
+    assert root, "could not find the :root block in tokens.css"
     return set(_DECL.findall(root.group(1)))
 
 
 def _assets() -> list[Path]:
+    # HTML is in scope because a `style=` attribute is a colour decision like
+    # any other, and the sweep not reading it is how manual.html kept seven
+    # `color: var(--muted)` paragraphs pointing at a token that had been
+    # deleted along with its inline <style> block — silently rendering them in
+    # body ink on the one page whose job is long-form reading.
     return sorted(
         p
-        for p in list(_STATIC.rglob("*.css")) + list(_STATIC.rglob("*.js"))
+        for p in list(_STATIC.rglob("*.css"))
+        + list(_STATIC.rglob("*.js"))
+        + list(_STATIC.rglob("*.html"))
         if "vendor" not in p.parts and "node_modules" not in p.parts
     )
 
@@ -63,7 +72,7 @@ def test_every_var_reference_names_a_declared_token():
     assert not offenders, (
         f"{len(offenders)} reference(s) to undefined custom properties. Either "
         "use the token that already carries this meaning, or declare the new "
-        "one in :root in app.css:\n" + "\n".join(offenders)
+        "one in :root in tokens.css:\n" + "\n".join(offenders)
     )
 
 
@@ -71,5 +80,7 @@ def test_the_sweep_actually_reads_panel_js():
     """Guard the guard: the bug above lived in JS, so JS must be in scope."""
     names = {p.name for p in _assets()}
     assert "app.css" in names
+    assert "tokens.css" in names
+    assert "manual.html" in names, "an inline style= attribute is unguarded again"
     assert "config-helpers.js" in names
     assert any(p.parts[-2] == "panels" for p in _assets()), "panel JS not swept"

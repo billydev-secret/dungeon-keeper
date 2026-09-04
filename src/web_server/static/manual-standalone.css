@@ -1,0 +1,387 @@
+/* ═══════════════════════════════════════════════════════════════
+   Standalone guide chrome — /static/manual.html only.
+
+   The guide has two renderings and they now share one stylesheet:
+
+     dashboard Help panel   tokens.css + help-panel.css   (help.js)
+     standalone page        tokens.css + help-panel.css + this file
+
+   help-panel.css owns every *content* shape — headings, prose,
+   .cmd-block, .perm-*, .callout-*, tables, lists, .steps and
+   .qr-table. This file owns only what the standalone page has and
+   the panel does not: the page frame, the sidebar TOC, the cover,
+   the print button, and print styles.
+
+   Do not restyle a content shape here. If a rule would apply to
+   something inside the guide's prose it belongs in help-panel.css,
+   so both renderings get it — that split is what
+   tests/web/test_manual_stylesheet_split.py enforces.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Page base ─────────────────────────────────────────────────
+   manual.html does not load app.css (4,500 lines of panel rules
+   for a documentation page), so the handful of global rules the
+   page actually needs are restated here from app.css's own base. */
+* { box-sizing: border-box; }
+
+html,
+body {
+  margin: 0;
+  font-family: var(--sans);
+  font-size: var(--t-3);
+  line-height: 1.55;
+  background: var(--bg);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+a { font: inherit; color: inherit; }
+a { text-decoration: none; }
+
+/* Same gold ring as the dashboard: --blurple is 2.74:1 on --bg, under the
+   3:1 floor WCAG 1.4.11 sets for a focus indicator. This page has a search
+   box, a print button and ~113 TOC links, so the ring is load-bearing. */
+:focus-visible {
+  outline: 2px solid var(--gold-solid);
+  outline-offset: 1px;
+  border-radius: var(--r-sm);
+}
+
+/* ── Layout ────────────────────────────────────────────────────── */
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.content {
+  flex: 1;
+  min-width: 0;
+  padding: var(--s-7) var(--s-7) var(--s-7) var(--s-6);
+}
+
+/* No max-width here on purpose. .content is also .dk-help, which already caps
+   the column at 920px, and that cap is the right one for reading: widening it
+   to fill a desktop window ran the measure past 120 characters a line. One
+   value, both renderings. */
+
+/* ── Sidebar TOC ───────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  flex-shrink: 0;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--rule);
+  padding: var(--s-5) 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar-title {
+  font-family: var(--display);
+  font-size: var(--t-1);
+  font-weight: 700;
+  font-stretch: 96%;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  padding: 0 var(--s-4) var(--s-3);
+}
+
+.sidebar nav ul { list-style: none; margin: 0; padding: 0; }
+
+.sidebar nav li a {
+  display: block;
+  padding: var(--s-1) var(--s-4);
+  font-size: var(--t-2);
+  color: var(--ink-dim);
+  border-left: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+/* Gold marks the current item, matching the dashboard rail's accent-as-
+   structure rather than introducing a second "you are here" colour. */
+.sidebar nav li a:hover,
+.sidebar nav li a.active {
+  color: var(--ink-bright);
+  border-left-color: var(--gold-solid);
+  background: var(--gold-soft);
+  text-decoration: none;
+}
+
+.sidebar nav li.section-header { margin-top: var(--s-4); }
+
+.sidebar nav li.section-header a {
+  font-family: var(--display);
+  font-stretch: 106%;
+  font-weight: 600;
+  color: var(--ink);
+  font-size: var(--t-3);
+}
+
+/* ── TOC search ────────────────────────────────────────────────── */
+.toc-search { padding: 0 var(--s-4) var(--s-3); }
+
+.toc-search input {
+  width: 100%;
+  padding: var(--s-1) var(--s-3);
+  font-family: var(--sans);
+  font-size: var(--t-2);
+  border: 1px solid var(--rule);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--ink);
+}
+
+.toc-search input:focus { outline: none; border-color: var(--gold-solid); }
+.sidebar nav li.toc-hidden { display: none; }
+
+.toc-no-results {
+  padding: var(--s-1) var(--s-4);
+  font-size: var(--t-2);
+  color: var(--ink-mute);
+  display: none;
+}
+
+/* ── Print button ──────────────────────────────────────────────── */
+/* help-panel.css hides .print-bar — printing is a standalone concern and the
+   panel has no print view. Showing it back needs to out-specify that rule:
+   a bare `.print-bar` (0,1,0) loses to `.dk-help .print-bar` (0,2,0) and the
+   button silently disappears, which is exactly what it did. */
+.content.dk-help .print-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--s-5);
+}
+
+/* Outlined, not filled. The house rule reserves the one filled button for
+   the obvious next step; "print this" is a utility on a page whose purpose
+   is reading, so it stays quiet. */
+.btn-print {
+  background: transparent;
+  color: var(--ink-dim);
+  border: 1px solid var(--rule);
+  padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-sm);
+  font-size: var(--t-2);
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.btn-print:hover { color: var(--ink-bright); border-color: var(--gold-solid); }
+
+/* ── Cover ─────────────────────────────────────────────────────── */
+.cover {
+  text-align: center;
+  padding: var(--s-6) 0 var(--s-7);
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: var(--s-7);
+}
+
+/* A glyph, not type — sized as the graphic it is, so it is not read as an
+   invented step on the type scale. */
+.cover-icon {
+  font-size: 48px;
+  line-height: 1;
+  display: block;
+  margin-bottom: var(--s-4);
+}
+
+/* --t-6 is the top of the scale. Archivo's width axis gives the title the
+   presence a larger size would have, without inventing one. */
+.cover h1 {
+  font-family: var(--display);
+  font-size: var(--t-6);
+  font-stretch: 125%;
+  font-weight: 800;
+  color: var(--ink-bright);
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.cover .subtitle {
+  font-size: var(--t-4);
+  color: var(--ink-dim);
+  margin-top: var(--s-2);
+}
+
+.cover .meta {
+  margin-top: var(--s-5);
+  font-size: var(--t-2);
+  color: var(--ink-mute);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-3) var(--s-6);
+}
+
+.cover .meta span { display: flex; align-items: center; gap: var(--s-1); }
+
+/* ── Document heading hierarchy ────────────────────────────────────
+   The one place the two renderings genuinely cannot match, and it is
+   structural rather than cosmetic.
+
+   The Help panel shows ONE section at a time under a panel header that
+   already prints that section's title. So help-panel.css hides the h2,
+   hides its number, and demotes h3 to an 11px uppercase eyebrow — correct
+   there, because the header is carrying the level above it.
+
+   The standalone page is all 32 sections and 81 subsections in one scroll
+   with no header carrying anything. It needs three legible levels and the
+   section numbers the sidebar TOC refers to. So h2 and h3 are restored to
+   document scale here: 20 / 16 / 14 against a 14px body, every one a step
+   on the scale.
+
+   These override help-panel.css and must stay in this file — putting them
+   in the shared sheet would break the panel. */
+.content.dk-help > h2:first-child { display: block; }
+
+.content.dk-help h2 {
+  font-family: var(--display);
+  font-size: var(--t-5);
+  font-stretch: 106%;
+  font-weight: 700;
+  color: var(--ink-bright);
+  margin: var(--s-7) 0 var(--s-4);
+  padding-bottom: var(--s-2);
+  border-bottom: 1px solid var(--rule);
+  scroll-margin-top: var(--s-4);
+}
+
+/* The number is how the TOC and the cross-references address a section, so
+   the standalone page shows it. The panel, which is only ever on one
+   section, hides it. */
+.content.dk-help h2 .section-num {
+  display: inline-block;
+  background: var(--gold-soft);
+  color: var(--gold-solid);
+  font-family: var(--mono);
+  font-size: var(--t-2);
+  font-weight: 700;
+  padding: 0 var(--s-2);
+  border-radius: var(--r-sm);
+  margin-right: var(--s-3);
+  vertical-align: middle;
+}
+
+/* A real subsection heading, not the panel's eyebrow label: no uppercase,
+   no trailing rule, no flex row. */
+.content.dk-help h3 {
+  display: block;
+  font-family: var(--display);
+  font-size: var(--t-4);
+  font-stretch: 106%;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--ink-bright);
+  margin: var(--s-6) 0 var(--s-3);
+  scroll-margin-top: var(--s-4);
+}
+
+.content.dk-help h3::after { content: none; }
+
+/* help-panel.css zeroes the top margin of the h3 that opens a section — in the
+   panel that h3 sits directly under the panel header, so leading there would
+   read as a gap. On the standalone page the same h3 ("I'm a member") is mid-
+   document with a paragraph above it, and it was rendering flush against that
+   paragraph: `.dk-help > p:first-of-type + h3` is (0,2,2) and out-specifies
+   `.content.dk-help h3` at (0,2,1), so the shorthand's margin-top lost. Restore
+   it at a specificity that wins. */
+.content.dk-help > h3:first-child,
+.content.dk-help > p:first-child + h3,
+.content.dk-help > p:first-of-type + h3 { margin-top: var(--s-6); }
+
+/* ── Measure ───────────────────────────────────────────────────────
+   Prose was running 134 characters a line on a desktop window — roughly
+   double a comfortable measure, on the one page whose entire job is being
+   read at length. The Help panel never had this problem because a panel
+   column is already narrow; a full-width document page has nothing holding
+   the line short, so the constraint belongs here.
+
+   Deliberately only *top-level* prose. A blanket `p` rule also catches the
+   paragraphs inside callouts and table cells, which are already inside a
+   narrow box — it wraps their text early and leaves dead space against the
+   right edge of the callout. Structural blocks (callouts, tables, command
+   blocks) keep the full column and prose runs at ~77 characters against it. */
+.content.dk-help > p,
+.content.dk-help > ul > li,
+.content.dk-help > ol > li { max-width: 54ch; }
+
+/* ── Responsive ────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .layout { display: block; }
+
+  .sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    max-height: 45vh;
+    border-right: none;
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .content { padding: var(--s-5) var(--s-4); }
+  .cover { padding: var(--s-5) 0 var(--s-6); }
+  .cover .meta { flex-direction: column; gap: var(--s-2); align-items: center; }
+}
+
+/* ── Print ─────────────────────────────────────────────────────────
+   The screen theme is dark because the guide should look like the tool it
+   documents. Printing it that way would be unreadable and unusable — so
+   print re-declares the tokens light and the whole document follows,
+   content shapes in help-panel.css included, without a single per-element
+   print override. */
+@media print {
+  :root {
+    color-scheme: light;
+
+    --bg: #fff;
+    --bg-alt: #fff;
+    --bg-rail: #eee;
+    --bg-card: #fff;
+    --bg-card-hover: #fff;
+    --bg-input: #fff;
+    --ink: #000;
+    --ink-bright: #000;
+    --ink-dim: #333;
+    --ink-mute: #555;
+    --rule: #bbb;
+    --rule-soft: #ddd;
+    --gold-solid: #7d5800;
+    --gold-soft: #f5efdc;
+    --blurple: #2040a0;
+    --blurple-soft: #dce6ff;
+    --blurple-text: #2040a0;
+    --green: #1a6b3c;
+    --green-soft: #e8f5ee;
+    --green-text: #1a6b3c;
+    --red-soft: #fbeaea;
+    --red-text: #9a1c1f;
+  }
+
+  .sidebar,
+  .print-bar { display: none !important; }
+
+  .layout { display: block; }
+  .content { padding: 0; }
+  .content.dk-help { max-width: 100%; }
+  body { font-size: 11pt; }
+
+  .content.dk-help h2 { page-break-after: avoid; font-size: 14pt; }
+  .content.dk-help h3 { page-break-after: avoid; font-size: 11pt; }
+  .dk-help .cmd-block,
+  .dk-help .callout { page-break-inside: avoid; }
+  .dk-help table { page-break-inside: auto; }
+  .dk-help tr { page-break-inside: avoid; }
+  .dk-help tr:hover td { background: transparent !important; }
+  .dk-help a { color: #000; text-decoration: none; }
+  .dk-help .perm { border: 1px solid currentcolor; }
+  .section-break { page-break-before: always; }
+  .cover { page-break-after: always; border-bottom: none; }
+}

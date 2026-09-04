@@ -2,8 +2,10 @@
 
 What the dashboard is made of, visually, and the rules that keep 142 panels
 looking like one tool. `dashboard_ia.md` owns *where a page lives*; this owns
-*what it looks like once you're on it*. Everything here is in
-`src/web_server/static/app.css`.
+*what it looks like once you're on it*. The palette, the type and spacing
+scales and the two typefaces live in `src/web_server/static/tokens.css`; the
+rules that use them are in `app.css`, with `help-panel.css` for the user
+guide's content shapes.
 
 ## The palette does not change
 
@@ -432,6 +434,51 @@ painted onto nominal categories that aren't ordered at all — both read as
 and both are still present in a few older per-panel colour choices that
 predate this pass (see Known-unresolved).
 
+## The user guide is a surface, not an exception
+
+`static/manual.html` is served two ways: standalone at `/static/manual.html`,
+and parsed by `help.js` into the Help panel. For a long time it was neither —
+it carried a 428-line inline `<style>` block that redefined ~45 selectors
+`help-panel.css` already owned, in a light palette of its own built from 31
+hardcoded hexes and a private token set (`--brand`, `--muted`, `--surface`).
+Two renderings, two definitions, and the two had drifted apart at every
+heading level. (A `.matrix` rule existed in one copy and not the other; it
+turned out to be dead in both — nothing in `src/` carries the class — and was
+deleted rather than shared, which is the more useful lesson about what a
+duplicated stylesheet hides.)
+
+It drifted **because it was inline**. stylelint globs `static/**/*.css` and
+the token-hygiene and contrast sweeps read `.css` and `.js` — so every guard
+built for exactly this failure skipped the one file most likely to hit it.
+That is the general lesson: a style block inside an HTML file is outside the
+system, whatever it contains.
+
+The split now is:
+
+| sheet | owns | loaded by |
+|---|---|---|
+| `tokens.css` | the faces and the one `:root` | both surfaces |
+| `help-panel.css` | every *content* shape, scoped under `.dk-help` | both surfaces |
+| `manual-standalone.css` | page frame, sidebar TOC, cover, print | the standalone page only |
+
+Two things are worth keeping in mind if you touch it.
+
+**The headings are the one honest divergence.** The panel shows one section
+under a header that already prints its title, so it hides the `h2`, hides the
+section number and demotes `h3` to an eyebrow label. The standalone page is 32
+sections in one scroll with no header carrying anything, so it restores
+document-scale headings (20/16/14) and the numbers its sidebar refers to.
+Those overrides are scoped to `.content`, which only the standalone page has;
+`tests/web/test_manual_stylesheet_split.py` fails if one is written unscoped,
+and fails if the standalone sheet restyles any other shared shape.
+
+**Print re-declares the tokens rather than overriding elements.** The guide is
+dark on screen because it documents a dark tool, and unreadable that way on
+paper. `@media print` in `manual-standalone.css` sets `--bg`, `--ink`, `--rule`
+and the rest to light values, and the whole document follows — content shapes
+in `help-panel.css` included — without a single per-element print rule. It is
+the cheapest demonstration that the token layer does what it claims.
+
 ## Known-unresolved
 
 - **The collapsed rail cannot identify a page.** Collapsed to 56px the label is
@@ -451,6 +498,8 @@ predate this pass (see Known-unresolved).
   pass did fix (which produced two measurable collisions — see the Charts
   section above). Worth a pass of their own if the dashboard ever gets a
   proper reserved status palette; today each panel picks its own.
-- **Dark-only.** There is no `prefers-color-scheme` rule in `app.css` and a
+- **Dark-only.** There is no `prefers-color-scheme` rule anywhere and a
   light theme is not planned. With the token system in place it would be a
-  contained job rather than a rewrite.
+  contained job rather than a rewrite — the guide's print block (see "The user
+  guide is a surface, not an exception" above) is a worked example of the shape
+  it would take.

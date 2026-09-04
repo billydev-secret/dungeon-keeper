@@ -196,10 +196,11 @@ def _contrast(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
 
 def _token(name: str) -> str:
     """Read a colour token's value straight out of :root, so the test tracks
-    the stylesheet rather than a copy of it that can drift."""
-    css = (_STATIC / "app.css").read_text(encoding="utf-8")
+    the stylesheet rather than a copy of it that can drift. :root lives in
+    tokens.css, which app.css and the standalone guide both load."""
+    css = (_STATIC / "tokens.css").read_text(encoding="utf-8")
     m = re.search(rf"--{re.escape(name)}:\s*(#[0-9a-fA-F]{{6,8}})\s*;", css)
-    assert m, f"token --{name} not found in app.css"
+    assert m, f"token --{name} not found in tokens.css"
     return m.group(1)
 
 

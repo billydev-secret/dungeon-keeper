@@ -1,0 +1,168 @@
+/* ═══════════════════════════════════════════════════════════════
+   Design tokens — the single :root for every surface this server
+   serves. Extracted from app.css so a page can have the palette,
+   the type scale and the spacing scale without pulling in 4,500
+   lines of panel rules.
+
+   Loaded by:
+     index.html   → tokens.css, then app.css   (the dashboard)
+     manual.html  → tokens.css, then help-panel.css, then
+                    manual-standalone.css      (the standalone guide)
+
+   help-panel.css consumes 33 of these and is shared by both the
+   Help panel and the standalone guide, which is why the tokens had
+   to stop living inside app.css. Adding a token here makes it
+   available everywhere; tests/web/test_css_token_hygiene.py reads
+   this file to decide whether a var() names something real.
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ══════════════════════════════════════════════════════════════════
+   Typefaces — self-hosted, so the dashboard makes no third-party
+   request at page load. Provenance and licence: static/fonts/README.md.
+
+   Until this landed the stack began with "gg sans", which is Discord's
+   proprietary face and ships with no browser: every page ever served
+   actually rendered in Noto Sans or Helvetica. Public Sans is the
+   closest openly-licensed match to that intended register.
+
+   Archivo is variable on BOTH weight and width, and the width axis is
+   load-bearing — the nav rail marks the section you are in by setting
+   its header wider rather than by colouring it. Colour is spoken for
+   here (semantic red/green), and width survives greyscale and every
+   form of colour blindness. Swapping Archivo for a non-variable face
+   would silently drop that signal.
+   ══════════════════════════════════════════════════════════════════ */
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url("fonts/archivo-var-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Archivo";
+  font-style: normal;
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-display: swap;
+  src: url("fonts/archivo-var-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/publicsans-var-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Public Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("fonts/publicsans-var-latin-ext.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* Primary palette (mockup) */
+  --bg:            #313338;
+  --bg-alt:        #2b2d31;
+  --bg-rail:       #1e1f22;
+  --bg-floor:      #111214;
+  --bg-card:       #2b2d31;
+  --bg-card-hover: #35373c;
+  --bg-input:      #1e1f22;
+  --hover:         #35373c;
+  --active:        #404249;
+  --rule:          #3f4147;
+  --rule-soft:     #2d2f34;
+  --ink:           #dbdee1;
+  --ink-bright:    #f2f3f5;
+  --ink-dim:       #b5bac1;
+  /* Lightened from #80848e (3.4–4.4:1) to clear WCAG AA 4.5:1 on every
+     surface it's used against (--bg 4.53, --bg-card 4.95, --bg-rail 5.91). */
+  --ink-mute:      #979ba3;
+  --gold:          #e6b84cb3;
+  --gold-solid:    #e6b84c;
+  --gold-soft:     #e6b84c1a;
+  --green:         #23a55a;
+  --green-soft:    #23a55a1a;
+  --yellow:        #f0b232;
+  --red:           #f23f43;
+  --red-soft:      #f23f431a;
+  /* Text tiers for status copy. The saturated --red/--green are for borders,
+     badges and fills; as 13-14px text on --bg they measure 3.35:1 and 3.97:1,
+     under the WCAG AA 4.5:1 floor. These lightened pairs measure 4.86:1 and
+     6.45:1 on --bg — use them wherever the colour carries meaning as text. */
+  --red-text:      #f87a7d;
+  --green-text:    #4ad17f;
+  /* Warning-tier text, same split as the pair above. --yellow (#f0b232) is
+     86% saturated and stays that way for fills and swatches -- the Discord
+     idle dot, ticket priority bars, sparklines -- where the intensity is the
+     signal and desaturating it costs recognisability. As small text it was
+     simply loud: every use is soft caution, never top severity (that is
+     --red). This calmer amber clears WCAG AA 4.5:1 on every surface it sits
+     on: .badge-warning's own pill 4.67, .home-mod-warn 5.40, --bg 6.60,
+     --bg-card 7.21, --bg-rail 8.61. */
+  --yellow-text:   #d7b77f;
+  --blurple:       #5865f2;
+  /* Tint + text tier for the blurple, same split as the red/green pairs above.
+     They exist so the guide's MOD badge is a token rather than a literal: the
+     print block in manual-standalone.css re-declares the tokens light, and a
+     hardcoded #a8b3ff is the one thing that cannot follow it. */
+  --blurple-soft:  #5865f229;
+  --blurple-text:  #a8b3ff;
+  --plum:          #c07aa1;
+  --plum-soft:     #c07aa11a;
+  /* Seam colour for the nav rail's spine — gold at 16%, the one place
+     the accent does structural rather than decorative work. */
+  --gold-seam:     #e6b84c29;
+
+  /* Body/UI face. "gg sans" is gone: it never loaded anywhere. */
+  --sans: "Public Sans", "Noto Sans", "Helvetica Neue", helvetica, arial, sans-serif;
+  /* Display face, used with restraint — rail, panel titles, group labels. */
+  --display: "Archivo", "Public Sans", "Helvetica Neue", helvetica, arial, sans-serif;
+  --mono: "ui-monospace", "SFMono-Regular", menlo, consolas, monospace;
+
+  /* ── Type scale ──────────────────────────────────────────────────
+     Six steps replacing the 17 ad-hoc sizes this file grew. New work
+     picks a step; it does not invent a size. */
+  --t-1: 11px;    /* eyebrows, tallies, rail section headers */
+  --t-2: 12.5px;  /* help text, subtitles, table meta */
+  --t-3: 14px;    /* UI text — labels, inputs, nav items, body */
+  --t-4: 16px;    /* group legends, card titles */
+  --t-5: 20px;    /* panel titles */
+  --t-6: 28px;    /* stat numbers */
+
+  /* ── Spacing scale ───────────────────────────────────────────────
+     Eight steps replacing 22 ad-hoc values. The house rule is compact
+     rows, airy sections: 8–12 between dials inside a group, 24–32
+     between groups, so the whitespace itself carries the grouping. */
+  --s-0: 2px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+  /* Tells the browser to render NATIVE control chrome in dark mode: the
+     up/down spinners on <input type="number">, checkbox and radio glyphs,
+     scrollbars, date pickers, and the focus ring's default colour.
+
+     Without this the page was dark but every native widget on it was drawn
+     with light-mode chrome — most visibly ~125 number-input spinner arrows
+     across 48 panels rendering as pale grey on a dark field. No amount of
+     `background`/`color` CSS fixes those; they are painted by the browser,
+     not by us, and `color-scheme` is the only switch. */
+  color-scheme: dark;
+
+  --r-sm: 4px;
+  --r:    8px;
+  --sidebar-w:           240px;
+  --sidebar-collapsed-w: 56px;
+}

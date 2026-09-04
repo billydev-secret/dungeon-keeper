@@ -150,7 +150,7 @@
   vertical-align: middle;
 }
 .dk-help .perm-all   { background: var(--green-soft);            color: var(--green-text); }
-.dk-help .perm-mod   { background: rgba(88, 101, 242, 0.16);      color: #a8b3ff; }
+.dk-help .perm-mod   { background: var(--blurple-soft);          color: var(--blurple-text); }
 .dk-help .perm-admin { background: var(--red-soft);              color: var(--red-text); }
 .dk-help .perm-owner { background: var(--gold-soft);             color: var(--gold-solid); }
 
@@ -207,6 +207,18 @@
   color: var(--ink);
 }
 .dk-help tr:last-child td { border-bottom: none; }
+
+/* On a phone, a three-column command table cannot fit and must not push the
+   page sideways with it — the house rule is that wide content scrolls inside
+   its own container while the body never scrolls horizontally. `display:
+   block` turns the table into that container. Scoped to narrow widths so the
+   table keeps filling its column everywhere else. */
+@media (max-width: 700px) {
+  .dk-help table {
+    display: block;
+    overflow-x: auto;
+  }
+}
 .dk-help tr:hover td { background: var(--bg-card-hover); }
 .dk-help td code,
 .dk-help td a code { color: var(--gold-solid); }
@@ -257,7 +269,13 @@
   padding: var(--s-3);
   border-bottom: 1px solid var(--rule);
 }
-.dk-help .qr-table td:nth-child(2) { white-space: nowrap; }
+/* This column used to be `white-space: nowrap`, which pushed the Quick
+   Reference table to 1503px and scrolled the whole page sideways — at every
+   width, desktop included, not just on a phone. The column holds command
+   flows, not short labels, so it was never a nowrap candidate. Letting it
+   wrap takes the standalone guide's horizontal overflow to zero on desktop
+   and tablet, and the panel gets the same fix for free. */
+.dk-help .qr-table td:nth-child(2) { white-space: normal; }
 
 /* Hide print bar (it's a standalone-page concern) */
 .dk-help .print-bar { display: none; }
