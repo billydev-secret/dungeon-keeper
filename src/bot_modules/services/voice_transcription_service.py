@@ -101,26 +101,74 @@ def _get_model(model_name: str) -> Any:
         return _cache[model_name]
 
 
-#: Discord message content caps at 2000 characters. A long note has to be cut
-#: somewhere, and the cut is announced rather than silent — a transcript that
-#: simply stops mid-sentence reads like a transcription failure.
+#: Discord message content caps at 2000 characters; this is the per-message
+#: budget with headroom, and it counts the whole message — the speaker prefix
+#: included, which is why both fitters take that prefix rather than trusting
+#: the slack to absorb it.
 MAX_TRANSCRIPT_CHARS = 1900
 _TRUNCATED_NOTE = "\n\n*(transcript truncated — the recording was longer than one message)*"
 
 
-def fit_transcript(text: str, limit: int = MAX_TRANSCRIPT_CHARS) -> str:
-    """Trim a transcript to one Discord message, saying so when it trims.
+def _cut(text: str, limit: int) -> tuple[str, str]:
+    """Split *text* at *limit*, preferring a word boundary in the last fifth.
 
-    Cuts on a word boundary where there is one in the last fifth of the budget,
-    so the visible text ends on a whole word rather than mid-syllable.
+    Returns ``(head, rest)`` — ``head`` never exceeds *limit*, and *rest* opens
+    on a word rather than on the space the cut landed in. A single word longer
+    than the whole budget has no boundary to find and is cut mid-word, which is
+    the only way it can be shown at all.
     """
-    if len(text) <= limit:
-        return text
     head = text[:limit]
     space = head.rfind(" ")
     if space > limit * 0.8:
         head = head[:space]
-    return head.rstrip() + _TRUNCATED_NOTE
+    return head.rstrip(), text[len(head):].lstrip()
+
+
+def fit_transcript(
+    text: str, limit: int = MAX_TRANSCRIPT_CHARS, prefix: str = ""
+) -> str:
+    """Trim a transcript to one Discord message, saying so when it trims.
+
+    The truncation note is paid for out of the budget rather than added on top,
+    so the returned message — prefix and all — is never longer than *limit*.
+
+    Used by the automatic listener, which posts one message per voice note by
+    design: an auto-post nobody asked for shouldn't be able to fill a channel.
+    The on-demand context menu splits instead; see :func:`split_transcript`.
+    """
+    budget = max(1, limit - len(prefix))
+    if len(text) <= budget:
+        return prefix + text
+    head, _ = _cut(text, max(1, budget - len(_TRUNCATED_NOTE)))
+    return prefix + head + _TRUNCATED_NOTE
+
+
+def split_transcript(
+    text: str, limit: int = MAX_TRANSCRIPT_CHARS, prefix: str = ""
+) -> list[str]:
+    """Spread a transcript over as many messages as it takes, losing nothing.
+
+    There is no cap on the number of parts: someone who explicitly asked for a
+    transcript wants the whole thing, and a cut long note reads like a
+    transcription failure. Only the first part carries *prefix* — repeating
+    ``📝 **Name:**`` on each one would read as several separate notes rather
+    than one continued.
+
+    Empty (or whitespace-only) text yields no messages at all, so a caller
+    never posts a bare prefix with nothing after it.
+    """
+    limit = max(1, limit)
+    parts: list[str] = []
+    rest = text.strip()
+    while rest:
+        head, budget = (prefix, limit - len(prefix)) if not parts else ("", limit)
+        budget = max(1, budget)
+        if len(rest) <= budget:
+            parts.append(head + rest)
+            break
+        chunk, rest = _cut(rest, budget)
+        parts.append(head + chunk)
+    return parts
 
 
 def transcribe_file(path: Path, model_name: str = DEFAULT_MODEL) -> str:

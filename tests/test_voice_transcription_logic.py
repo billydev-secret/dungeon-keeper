@@ -11,10 +11,15 @@ import pytest
 from types import SimpleNamespace
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.cogs.voice_transcription_cog import _audio_attachment, format_transcript
+from bot_modules.cogs.voice_transcription_cog import (
+    _audio_attachment,
+    format_transcript,
+    transcript_prefix,
+)
 from bot_modules.services.voice_transcription_service import (
     MAX_TRANSCRIPT_CHARS,
     fit_transcript,
+    split_transcript,
     get_config,
     set_config,
 )
@@ -158,6 +163,129 @@ def test_the_cut_lands_on_a_word_boundary():
 def test_the_limit_is_the_boundary_not_an_approximation():
     assert fit_transcript("x" * MAX_TRANSCRIPT_CHARS) == "x" * MAX_TRANSCRIPT_CHARS
     assert "truncated" in fit_transcript("x" * (MAX_TRANSCRIPT_CHARS + 1))
+
+
+def test_the_speaker_prefix_comes_out_of_the_one_message_budget():
+    """The header is part of the message Discord measures, so it must be paid for.
+
+    Sending prefix + a full-budget body was 1900 characters of transcript plus
+    a header on top -- fine until a long display name pushed the whole thing
+    over the 2000 cap and Discord rejected the post outright.
+    """
+    prefix = transcript_prefix("A" * 32)
+    assert len(fit_transcript("word " * 2000, prefix=prefix)) <= MAX_TRANSCRIPT_CHARS
+    assert fit_transcript("hi", prefix=prefix).startswith(prefix)
+
+
+# ── split_transcript ─────────────────────────────────────────────────────────
+
+
+def _rejoin(parts, prefix=""):
+    """The parts' words back as one string, so nothing lost can hide in them."""
+    body = [p[len(prefix):] if i == 0 else p for i, p in enumerate(parts)]
+    return " ".join(" ".join(body).split())
+
+
+def test_a_transcript_that_fits_stays_one_message():
+    assert split_transcript("walk the site") == ["walk the site"]
+
+
+def test_a_long_transcript_spans_messages_instead_of_being_cut():
+    text = "word " * 2000
+    parts = split_transcript(text)
+    assert len(parts) > 1
+    assert all(len(p) <= MAX_TRANSCRIPT_CHARS for p in parts)
+    assert not any("truncated" in p for p in parts)
+
+
+def test_splitting_loses_nothing():
+    text = "word " * 2000
+    assert _rejoin(split_transcript(text)) == text.strip()
+
+
+def test_there_is_no_cap_on_the_number_of_parts():
+    """An explicit press wants the whole note, however long the recording ran."""
+    parts = split_transcript("word " * 20_000)
+    assert len(parts) > 10
+    assert _rejoin(parts) == ("word " * 20_000).strip()
+
+
+def test_only_the_first_part_carries_the_speaker_header():
+    prefix = transcript_prefix("Billy")
+    parts = split_transcript("alpha " * 2000, prefix=prefix)
+    assert parts[0].startswith(prefix)
+    assert not any(p.startswith(prefix) for p in parts[1:])
+    assert all("Billy" not in p for p in parts[1:])
+
+
+def test_the_header_is_paid_for_out_of_the_first_part():
+    prefix = transcript_prefix("A" * 32)
+    parts = split_transcript("alpha " * 2000, prefix=prefix)
+    assert all(len(p) <= MAX_TRANSCRIPT_CHARS for p in parts)
+    assert _rejoin(parts, prefix) == ("alpha " * 2000).strip()
+
+
+def test_the_parts_break_on_word_boundaries():
+    parts = split_transcript("alpha " * 2000)
+    assert all(p.startswith("alpha") and p.endswith("alpha") for p in parts)
+
+
+@pytest.mark.parametrize(
+    "length,expected_parts",
+    [
+        pytest.param(MAX_TRANSCRIPT_CHARS - 1, 1, id="just-under"),
+        pytest.param(MAX_TRANSCRIPT_CHARS, 1, id="exactly-the-limit"),
+        pytest.param(MAX_TRANSCRIPT_CHARS + 1, 2, id="one-over"),
+    ],
+)
+def test_the_split_point_is_the_boundary_not_an_approximation(length, expected_parts):
+    assert len(split_transcript("x" * length)) == expected_parts
+
+
+def test_one_unbroken_word_longer_than_the_budget_is_cut_mid_word():
+    """There is no boundary to find, and showing it beats showing nothing."""
+    parts = split_transcript("x" * 4000)
+    assert len(parts) == 3
+    assert all(len(p) <= MAX_TRANSCRIPT_CHARS for p in parts)
+    assert "".join(parts) == "x" * 4000
+
+
+def test_an_empty_transcript_yields_no_messages():
+    """Otherwise a caller posts a bare speaker header with nothing after it."""
+    assert split_transcript("") == []
+    assert split_transcript("   \n  ", prefix=transcript_prefix("Billy")) == []
+
+
+def test_a_split_inside_markdown_is_not_repaired():
+    """Pinned, not fixed: Whisper writes prose, so the emphasis is the speaker's.
+
+    A ``*`` that lands either side of a break renders literally rather than as
+    emphasis. Balancing it would mean rewriting what someone said, so the split
+    leaves the characters exactly as they were spoken.
+    """
+    text = "**" + ("word " * 500) + "**"
+    parts = split_transcript(text)
+    assert len(parts) > 1
+    assert parts[0].startswith("**")
+    assert "".join(parts).count("*") == 4
+
+
+def test_the_two_posting_paths_take_the_split_and_the_fit():
+    """The one bit of wiring worth pinning: on-demand splits, automatic fits.
+
+    The automatic listener posted raw text for its whole life -- over the cap,
+    Discord rejected the message and the note transcribed to nothing.
+    """
+    import inspect
+
+    from bot_modules.cogs import voice_transcription_cog as cog
+
+    menu = inspect.getsource(cog.VoiceTranscriptionCog._transcribe_context_menu)
+    assert "split_transcript(" in menu and "fit_transcript(" not in menu
+
+    listener = inspect.getsource(cog.VoiceTranscriptionCog._on_message)
+    assert "fit_transcript(" in listener
+    assert "channel.send(format_transcript" not in listener
 
 
 def test_the_menu_is_user_installable_and_allowed_in_dms():

@@ -22,6 +22,7 @@ from bot_modules.services.voice_transcription_service import (
     fit_transcript,
     get_config,
     is_available,
+    split_transcript,
     transcribe_file,
 )
 
@@ -88,8 +89,8 @@ async def _transcribe_attachment(
         tmp_path.unlink(missing_ok=True)
 
 
-def format_transcript(speaker: str, text: str) -> str:
-    """The standalone post that replaces the voice message.
+def transcript_prefix(speaker: str) -> str:
+    """What the standalone post opens with, and what its budget must pay for.
 
     It carries the speaker's name because it is no longer a reply: once the
     audio can be deleted, a reply would render as a dangling "original message
@@ -97,7 +98,12 @@ def format_transcript(speaker: str, text: str) -> str:
     whose note it was. The name is markdown-escaped -- a display name holding
     ``*`` or ``_`` would otherwise reformat the transcript after it.
     """
-    return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** {text}"
+    return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** "
+
+
+def format_transcript(speaker: str, text: str) -> str:
+    """One transcript message: the speaker prefix and the text after it."""
+    return transcript_prefix(speaker) + text
 
 
 class VoiceTranscriptionCog(commands.Cog):
@@ -170,10 +176,12 @@ class VoiceTranscriptionCog(commands.Cog):
             )
             return
 
+        # An explicit press asks for the whole note, so a long one spans as
+        # many messages as it takes rather than being cut. Only the first
+        # carries the speaker header; the rest read as one continued note.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        await interaction.followup.send(
-            format_transcript(speaker, fit_transcript(text))
-        )
+        for part in split_transcript(text, prefix=transcript_prefix(speaker)):
+            await interaction.followup.send(part)
 
     def _menu_model(self, interaction: discord.Interaction) -> str:
         """The guild's chosen model in a guild, the default in a DM.
@@ -234,8 +242,15 @@ class VoiceTranscriptionCog(commands.Cog):
         if not text:
             return
 
+        # Unlike the on-demand press, an automatic post stays to one message:
+        # nobody asked for it, so it should not be able to fill a channel. The
+        # fit is what keeps it postable at all -- sending the raw text made
+        # Discord reject any note over the 2000-character cap outright, so a
+        # long note auto-transcribed to nothing at all.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        await message.channel.send(format_transcript(speaker, text))
+        await message.channel.send(
+            fit_transcript(text, prefix=transcript_prefix(speaker))
+        )
 
         # Only after the transcript is safely posted, and only on success: a
         # failed transcribe returns above, so the audio is never destroyed
