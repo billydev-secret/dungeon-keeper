@@ -9,8 +9,11 @@ High-leverage pieces:
 
 * :func:`create_matchups` — pairs submitted answers head-to-head,
   handling 3-player round-robin, odd-count byes (fewest-byes-first
-  rotation), and duplicate-answer avoidance. ``rng`` is injected so
-  tests can pin the order.
+  rotation), duplicate-answer avoidance, and the no-contact gate (a
+  forbidden pair is never a matchup; see :func:`create_matchups`).
+  ``rng`` is injected so tests can pin the order.
+* :func:`playable_players` — the roster the Start button counts against
+  ``MIN_PLAYERS``: anyone with at least one opponent the list allows.
 * :func:`calculate_bye_award` — what sitting out a round is worth.
 * :func:`calculate_matchup_score` — counts votes and returns scores,
   winner, and the clapback (unanimous, 2+ votes) flag for a single
@@ -23,6 +26,7 @@ High-leverage pieces:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from itertools import combinations
 from typing import Any
 
@@ -168,10 +172,156 @@ def vote_button_label(side: str, answer: str, max_length: int = VOTE_LABEL_MAX) 
     return f"{side}: {flat}"
 
 
+# ── The no-contact gate ──────────────────────────────────────────────────────
+#
+# A vote card puts two answers side by side under two names, so a matchup is
+# a contact surface (docs/no_contact_spec.md). The cog hands both bracket
+# functions the pairs ``no_contact_pairs_among`` returns for the people in
+# play, and neither ever seats such a pair. When the only pairing left would
+# be forbidden, one of the two is the bye — paid like any bye, announced like
+# any bye — so nothing on screen says why.
+
+Pair = tuple[str, str]
+
+#: Bound on the constrained pairing search in :func:`_safe_pairing`. With
+#: sixteen players and a handful of forbidden pairs a full pairing falls out
+#: of the first descent; the cap only matters for a contrived dense case,
+#: where the best pairing found so far is used and the rest are byes.
+MAX_PAIRING_NODES = 5_000
+
+
+def _pair_key(a: Any, b: Any) -> Pair:
+    """One canonical key per pair, in the str form answers are keyed by."""
+    sa, sb = str(a), str(b)
+    return (sa, sb) if sa < sb else (sb, sa)
+
+
+def _forbidden_keys(forbidden_pairs: Iterable[tuple[Any, Any]] | None) -> set[Pair]:
+    """Normalise ``forbidden_pairs`` to :func:`_pair_key` form.
+
+    The no-contact service returns ``(low, high)`` int tuples while answers
+    and ``bye_history`` are keyed by ``str(uid)``, so the pairs are re-keyed
+    here and a caller may pass either type, either way round.
+    """
+    return {
+        _pair_key(a, b) for a, b in (forbidden_pairs or ()) if str(a) != str(b)
+    }
+
+
+def _blocked(a: Any, b: Any, banned: set[Pair]) -> bool:
+    return _pair_key(a, b) in banned
+
+
+def _isolated(ids: list[Any], banned: set[Pair]) -> list[Any]:
+    """Everyone with no opponent the list allows among ``ids``."""
+    return [
+        p for p in ids
+        if all(_blocked(p, q, banned) for q in ids if str(q) != str(p))
+    ]
+
+
+def _has_forbidden_pair(ids: list[Any], banned: set[Pair]) -> bool:
+    return any(_blocked(a, b, banned) for a, b in combinations(ids, 2))
+
+
+def _safe_pairing(
+    order: list[Any], banned: set[Pair], max_nodes: int = MAX_PAIRING_NODES,
+) -> list[tuple[Any, Any]]:
+    """The largest pairing of ``order`` that seats no forbidden pair.
+
+    Backtracking over ``order`` — pair the first unseated player with the
+    first allowed partner, recurse, and try the next partner if that dead-
+    ends — so the result is a random full pairing when ``order`` is shuffled
+    and one exists, which is what an unconstrained shuffle-and-pair-adjacent
+    produces. A player is left out only when no partner leads anywhere,
+    which is how the contrived case (a forbidden set that admits no full
+    pairing) still yields the most matchups possible. The node cap keeps
+    that case bounded; the best pairing seen by then is returned.
+    """
+    target = len(order) // 2
+    best: list[tuple[Any, Any]] = []
+    nodes = 0
+
+    def walk(remaining: list[Any], acc: list[tuple[Any, Any]]) -> bool:
+        nonlocal best, nodes
+        if len(acc) > len(best):
+            best = list(acc)
+        if len(best) >= target or nodes >= max_nodes:
+            return True
+        if len(remaining) < 2:
+            return False
+        nodes += 1
+        first, rest = remaining[0], remaining[1:]
+        for i, partner in enumerate(rest):
+            if _blocked(first, partner, banned):
+                continue
+            acc.append((first, partner))
+            if walk(rest[:i] + rest[i + 1:], acc):
+                return True
+            acc.pop()
+        # Nobody seats ``first`` — only reachable when no full pairing
+        # exists from here, so the search keeps going for the biggest one.
+        return walk(rest, acc)
+
+    walk(list(order), [])
+    return best
+
+
+def _matchable(ids: list[Any], banned: set[Pair]) -> bool:
+    """Whether ``ids`` admits a full pairing that seats no forbidden pair."""
+    if len(ids) % 2:
+        return False
+    if not banned:
+        return True
+    return len(_safe_pairing(ids, banned)) * 2 == len(ids)
+
+
+def _rotation_bye(ids: list[Any], history: list[Any], banned: set[Pair]) -> Any:
+    """Fewest byes so far wins the bye — ``ids`` is already shuffled, so the
+    first of a tied group is a random pick among everyone equally overdue.
+
+    With forbidden pairs in play the bye must also leave a field that can
+    still be paired: benching an overdue player whose absence strands two
+    people who may only face each other would just force another bye. The
+    first candidate in rotation order whose removal leaves a full safe
+    pairing takes it; if none does (contrived), the rotation's own pick
+    stands and :func:`create_matchups` benches whoever is left over.
+    """
+    ordered = sorted(ids, key=history.count)
+    if not banned:
+        return ordered[0]
+    for candidate in ordered:
+        if _matchable([p for p in ids if p != candidate], banned):
+            return candidate
+    return ordered[0]
+
+
+def playable_players(
+    players: list[Any], forbidden_pairs: Iterable[tuple[Any, Any]] | None,
+) -> list[Any]:
+    """The roster members who have at least one opponent the list allows.
+
+    This is what the Start button holds against ``MIN_PLAYERS``: a member
+    every other player is kept apart from can never be seated, so a lobby
+    that only reaches the minimum by counting them has no game in it. The
+    refusal it produces is the ordinary "Need at least N players" line — the
+    count printed is the roster's, so the message is byte-identical to the
+    one a genuinely short lobby gets.
+    """
+    banned = _forbidden_keys(forbidden_pairs)
+    if not banned:
+        return list(players)
+    return [
+        p for p in players
+        if any(not _blocked(p, q, banned) for q in players if str(q) != str(p))
+    ]
+
+
 def pick_round_bye(
     player_ids: list[Any],
     bye_history: list[Any] | None = None,
     rng: random.Random | None = None,
+    forbidden_pairs: Iterable[tuple[Any, Any]] | None = None,
 ) -> Any:
     """Who sits the coming round out, decided *before* the prompt goes out.
 
@@ -192,25 +342,47 @@ def pick_round_bye(
     ``player_ids`` should be the same id type used as ``answers`` keys and in
     ``bye_history`` (strings in production) — ``history.count`` is what makes
     the rotation work, and it will not match across types.
+
+    ``forbidden_pairs`` is the roster's no-contact set (as
+    ``no_contact_pairs_among`` returns it; any id type, either way round).
+    It changes three things, each the same rule :func:`create_matchups`
+    applies after the window: a player the list keeps apart from *everyone*
+    else on the roster is the bye (nobody can be seated opposite them, so
+    they should not be asked to write); three players who include a pair
+    bench one of the two rather than run the round-robin that would seat
+    them; and an odd field's bye is picked so the remainder can still be
+    paired safely. An even field that pairs safely has no bye, as before.
     """
     ids = list(player_ids)
-    if len(ids) == 3 or len(ids) % 2 == 0:
-        return None
     chooser = rng if rng is not None else random
     chooser.shuffle(ids)
     history = list(bye_history or [])
-    return min(ids, key=history.count)
+    banned = _forbidden_keys(forbidden_pairs)
+    if banned:
+        isolated = _isolated(ids, banned)
+        if isolated:
+            return min(isolated, key=history.count)
+    if len(ids) == 3 and not _has_forbidden_pair(ids, banned):
+        return None
+    if len(ids) % 2 == 0:
+        return None
+    return _rotation_bye(ids, history, banned)
 
 
 def create_matchups(
     answers: dict[str, str],
     bye_history: list[Any] | None = None,
     rng: random.Random | None = None,
-) -> tuple[list[dict[str, Any]], Any]:
+    forbidden_pairs: Iterable[tuple[Any, Any]] | None = None,
+) -> tuple[list[dict[str, Any]], list[Any]]:
     """Pair submitted answers for head-to-head voting.
 
-    Returns ``(matchups, bye_player_id)``. Every submitter appears in
-    the result exactly once — either in a pair or as the bye.
+    Returns ``(matchups, byes)``. Every submitter appears in the result
+    exactly once — either in a pair or in ``byes``. In ordinary play
+    ``byes`` holds at most one id (an odd count); only the no-contact gate
+    below can add more, and an empty ``matchups`` means nothing could be
+    voted on at all (``byes`` is then empty too — nobody is paid for a
+    round that never ran; the cog skips it as a short round).
 
     Bye rotation: ``bye_history`` is every bye handed out this game, in
     order (the same id can appear more than once in a long game). The
@@ -236,54 +408,110 @@ def create_matchups(
 
     ``rng`` is injected so tests can pin the shuffle order; defaults to
     the module-level :mod:`random` in production.
+
+    No-contact gate: ``forbidden_pairs`` is the submitters' no-contact set
+    (as ``no_contact_pairs_among`` returns it; any id type, either way
+    round) and no such pair is ever a matchup. In order:
+
+    * a submitter the list keeps apart from *every* other submitter is a
+      bye — nobody can sit opposite them;
+    * three submitters who include a pair do not round-robin (that would
+      seat the pair): one of the two is the bye, fewest-byes-first between
+      them, and the other two play one matchup;
+    * an odd field's rotation bye is the most overdue player whose absence
+      still leaves a fully pairable field;
+    * the pairing itself is drawn by :func:`_safe_pairing` — still ten
+      shuffles, still the fewest duplicate answers — and, in the contrived
+      case where no full safe pairing exists, the largest safe one with
+      the leftovers as byes. A round with no safe matchup at all returns
+      ``([], [])``.
+
+    Everything the gate does is a bye, and a bye is paid and announced the
+    same way whatever caused it, so the card never says why. With nothing
+    forbidden the gate is inert and the draw is byte-for-byte the one above.
     """
     chooser = rng if rng is not None else random
     player_ids = list(answers.keys())
     chooser.shuffle(player_ids)
+    history = list(bye_history or [])
+    banned = _forbidden_keys(forbidden_pairs)
 
-    bye_player: Any = None
+    byes: list[Any] = []
+    if banned:
+        isolated = _isolated(player_ids, banned)
+        for p in isolated:
+            player_ids.remove(p)
+        byes.extend(isolated)
+        if len(player_ids) < 2:
+            return [], []
 
     # Small games (3 players): round-robin every pair so each player
-    # competes twice and the round has real action.
-    if len(player_ids) == 3:
+    # competes twice and the round has real action — unless one of those
+    # pairs is forbidden, in which case the odd-count rule below benches
+    # one of the two instead.
+    if len(player_ids) == 3 and not _has_forbidden_pair(player_ids, banned):
         pairs: list[dict[str, Any]] = []
         for a, b in combinations(player_ids, 2):
             pairs.append({"pair": [a, b], "votes": {}, "winner": None})
         chooser.shuffle(pairs)
-        return pairs, None
+        return pairs, byes
 
     if len(player_ids) % 2 == 1:
         # Fewest byes so far wins the bye. player_ids is already
-        # shuffled, so min() picking the first of a tied group is a
-        # random choice among everyone equally overdue.
-        history = list(bye_history or [])
-        bye_player = min(player_ids, key=history.count)
+        # shuffled, so the first of a tied group is a random choice
+        # among everyone equally overdue.
+        bye_player = _rotation_bye(player_ids, history, banned)
         player_ids.remove(bye_player)
+        byes.append(bye_player)
 
     # Same-answer pairings are ugly to vote on, so shuffle a few times
     # and keep the least-duplicated complete pairing we saw.
     best_matchups: list[dict[str, Any]] = []
     best_dupes: int | None = None
+    if not banned:
+        for _ in range(10):
+            chooser.shuffle(player_ids)
+            pairs = []
+            dupes = 0
+            for i in range(0, len(player_ids), 2):
+                a, b = player_ids[i], player_ids[i + 1]
+                if answers[str(a)].strip().lower() == answers[str(b)].strip().lower():
+                    dupes += 1
+                pairs.append({
+                    "pair": [a, b],
+                    "votes": {},
+                    "winner": None,
+                })
+            if dupes == 0:
+                return pairs, byes
+            if best_dupes is None or dupes < best_dupes:
+                best_dupes = dupes
+                best_matchups = pairs
+        return best_matchups, byes
+
+    # Constrained draw: the same ten shuffles, each turned into the largest
+    # safe pairing that order allows. More matchups beat fewer duplicates.
+    best_pairs: list[tuple[Any, Any]] = []
     for _ in range(10):
         chooser.shuffle(player_ids)
-        pairs = []
-        dupes = 0
-        for i in range(0, len(player_ids), 2):
-            a, b = player_ids[i], player_ids[i + 1]
-            if answers[str(a)].strip().lower() == answers[str(b)].strip().lower():
-                dupes += 1
-            pairs.append({
-                "pair": [a, b],
-                "votes": {},
-                "winner": None,
-            })
-        if dupes == 0:
-            return pairs, bye_player
-        if best_dupes is None or dupes < best_dupes:
-            best_dupes = dupes
-            best_matchups = pairs
-
-    return best_matchups, bye_player
+        safe = _safe_pairing(player_ids, banned)
+        dupes = sum(
+            1 for a, b in safe
+            if answers[str(a)].strip().lower() == answers[str(b)].strip().lower()
+        )
+        if best_dupes is None or (len(safe), -dupes) > (len(best_pairs), -best_dupes):
+            best_pairs, best_dupes = safe, dupes
+        if len(safe) * 2 == len(player_ids) and dupes == 0:
+            break
+    seated = {str(p) for pair in best_pairs for p in pair}
+    # Only the contrived no-full-pairing case leaves anyone here.
+    byes.extend(p for p in player_ids if str(p) not in seated)
+    if not best_pairs:
+        return [], []
+    return (
+        [{"pair": [a, b], "votes": {}, "winner": None} for a, b in best_pairs],
+        byes,
+    )
 
 
 def calculate_bye_award(

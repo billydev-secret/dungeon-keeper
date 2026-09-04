@@ -356,7 +356,7 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>The Games pages on the <a href="/#/games-logs">web dashboard</a></strong>
-        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
+        <p>Game hosts and admins get a full editing suite under the dashboard's <strong>Games</strong> section: a <em>Question Bank</em> (browse, edit, bulk-import, and export prompts for every game &mdash; tags are saved in lowercase, so <code>nsfw</code>, <code>Nsfw</code> and <code>NSFW</code> are one tag, and a prompt tagged <code>nsfw</code> in any spelling is only ever served in an age-restricted channel), per-game enable/disable and option panels, game <em>Scheduling</em>, and the <em>LegitLibs</em> template editor. Access is admin-only by default; grant a <strong>Game Host</strong> role on <a href="/#/games-config">Games &rarr; Global Config</a> to open it to trusted members.</p>
       </div>
     </div>
 
@@ -565,17 +565,18 @@
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="survivor" class="section-break"><span class="section-num">9</span> Survivor</h2>
     <div class="callout callout-info">
-      <span class="callout-icon">🏗️</span>
+      <span class="callout-icon">🏈</span>
       <div class="callout-body">
-        <strong>Launching for the 2026 NFL season</strong>
-        <p>Survivor is being built right now, targeting Week&nbsp;1 (September&nbsp;10). Everything below describes how the game will work; the commands and buttons go live when the season announcement posts. Until then this page is a preview, not a promise you can click.</p>
+        <strong>Live for the 2026 NFL season</strong>
+        <p>Enrollment is open now and the commands and buttons below all work. The season opens with the Week&nbsp;1 kickoff on <strong>Wednesday, September&nbsp;9 at 5:20pm PT</strong> &mdash; a short first week, so the Wednesday-night teams lock a day earlier than you might expect; check the lock time on your pick confirmation. <span class="cmd-name">/games help</span> points at the Survivor channel while the door is open.</p>
+        <p><strong>Still to come</strong>, each before the week it first matters: wipeout handling (a week that kills everyone), double-pick weeks, the Accord, the endgame payouts and the Sole Survivor ceremony, and per-category notification toggles. Until those ship, the endgame section below describes intent, not rules in force.</p>
       </div>
     </div>
     <p>An NFL pick&rsquo;em survival pool that runs the length of the football season. Pick one NFL team to win each week, straight up. No team twice all season. If your team loses, you&rsquo;re out &mdash; last one standing takes the coin pot. Your picks are <strong>secret until the weekly reveal</strong>: the bot never shows anyone what you picked, but table talk is legal and lying is encouraged.</p>
 
     <h4>The weekly rhythm</h4>
     <ul>
-      <li><strong>Wednesday</strong> &mdash; the channel&rsquo;s one pinned panel reposts to the bottom with the week-open ping: the week&rsquo;s games, standings, who&rsquo;s still alive and who&rsquo;s been eliminated by name, and the pick and join buttons. Between Wednesdays the panel keeps itself at the bottom of the channel &mdash; chat above it, and it re-posts itself underneath. Big pools show the first 30 names in each list and a count of the rest.</li>
+      <li><strong>Wednesday</strong> &mdash; the channel&rsquo;s one panel reposts to the bottom with the week-open ping: the week&rsquo;s games, standings, who&rsquo;s still alive and who&rsquo;s been eliminated by name, and the pick and join buttons. Between Wednesdays the panel keeps itself at the bottom of the channel &mdash; chat above it, and it re-posts itself underneath. Big pools show the first 30 names in each list and a count of the rest.</li>
       <li><strong>Pick any time before your team kicks off.</strong> Each pick locks at <em>that game&rsquo;s</em> kickoff &mdash; until then you can change freely, and picking a Sunday team keeps your options open longer than a Thursday one.</li>
       <li><strong>Saturday evening</strong> &mdash; if you haven&rsquo;t picked, the bot DMs you a nudge with the pick button right on it. A per-category notification toggle ships shortly after launch; until it does, closed DMs simply fall back to a channel mention (also carrying the button).</li>
       <li><strong>Tuesday morning</strong> &mdash; <strong>the Reckoning</strong>: one post reveals everyone&rsquo;s picks, who survived, and who fell &mdash; each elimination stated plainly with the team that caused it.</li>
@@ -595,19 +596,19 @@
     <h4>Death is not the end</h4>
     <p>The eliminated get the 👻 Ghost role and keep picking every week with the same rules &mdash; the longest streak of correct picks after death wins a side-pot at season&rsquo;s end. Skipping a week resets your streak; your burned teams stay burned, so early ghosts are rich in teams and late ghosts scrape.</p>
 
-    <h4>The endgame</h4>
-    <p>The last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot.</p>
+    <h4>The endgame <span class="muted">(still to come)</span></h4>
+    <p>The plan: the last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot. None of this is in the bot yet &mdash; it lands before the season reaches it.</p>
 
     <h4>Commands</h4>
     <ul>
-      <li><span class="cmd-name">/survivor pick [team]</span> &mdash; make or change this week&rsquo;s pick. With a team, the autocomplete only offers what you can legally take &mdash; unburned, playing this week, not yet kicked off. Without one, you get a two-menu panel (AFC / NFC) instead: no syntax, just pick.</li>
+      <li><span class="cmd-name">/survivor pick [team]</span> &mdash; make or change this week&rsquo;s pick. With a team, the autocomplete only offers what you can legally take &mdash; unburned, playing this week, not yet kicked off. Without one, you get a two-menu panel (AFC / NFC) instead: no syntax, just pick. Kickoff times in the menus are <em>server time</em> (the panel says so); the confirmation shows the lock in your own clock.</li>
       <li><span class="cmd-name">/survivor status</span> &mdash; private: your pick and its lock time, your satchel (🟢 turns 🟡 when you&rsquo;re under a dozen teams), your strikes.</li>
       <li><span class="cmd-name">/survivor board</span> &mdash; public: the living with weeks survived, the graveyard with week of death, both pots, and the most-burned teams.</li>
       <li><span class="cmd-name">/survivor history [member]</span> &mdash; revealed picks only, week by week &mdash; each line shows the matchup (both teams) and how it ended. Nothing current ever leaks. The panel&rsquo;s <strong>📜 My History</strong> button is the personal version: private to you, so it also shows your current still-hidden pick.</li>
     </ul>
-    <p>Joining happens through the <strong>🏈 Join the Season</strong> button on the channel&rsquo;s pinned panel &mdash; an ephemeral confirm shows the entry cost (and your balance, if it isn&rsquo;t free) before anything is charged.</p>
+    <p>Joining happens through the <strong>🏈 Join the Season</strong> button on the channel panel &mdash; it keeps itself at the bottom of the Survivor channel &mdash; and an ephemeral confirm shows the entry cost (and your balance, if it isn&rsquo;t free) before anything is charged.</p>
 
-    <p class="muted">Admins: the season is run entirely from the dashboard panel (Games &rarr; Survivor) &mdash; season creation, every rule dial, posting the pinned announcement, and roster corrections. Manual game-settling lives on the same panel (for the rare stuck result &mdash; and a correction on a wrong result unwinds strikes and resurrects the wrongly eliminated); the Reckoning preview arrives with the Reckoning itself. Survivor has no admin commands in Discord at all.</p>
+    <p class="muted">Admins: the season is run entirely from the dashboard panel (Games &rarr; Survivor) &mdash; season creation, every rule dial, posting the channel panel (never pinned: it keeps itself at the channel bottom), and roster corrections. The Season card&rsquo;s <strong>Weekly clock</strong> shows, in server-local hours, which week the slate, the last call and the Reckoning each last fired for and when each next fires; a slate or last call that has already fired for the current week can be reset there (with a confirm) so it posts again. Manual game-settling lives on the same panel (for the rare stuck result &mdash; and a correction on a wrong result unwinds strikes and resurrects the wrongly eliminated), as does the Reckoning preview. Survivor has no admin commands in Discord at all.</p>
 
     <h2 id="mahjong" class="section-break"><span class="section-num">10</span> Meadow Mahjong</h2>
     <p>Card-driven American-style mahjong, played entirely in Discord with real coin stakes. You win a hand by matching your fourteen tiles, tile for tile, to one of the hands on the season&rsquo;s <strong>Meadow Card</strong> &mdash; an original set of patterns that rotates with the seasons. Open your panel with <span class="cmd-name">/mahjong</span>: it shows the card in season, the allowed stakes, and your balance, with buttons to open a table, study the card, check your record, set how much help you want, and &mdash; if any of this is new &mdash; a <strong>How to Play</strong> summary of a whole hand from sitting down to declaring Mahjong.</p>
@@ -1185,14 +1186,23 @@
 
     <p>Adding someone stops contact <strong>both ways</strong>, across every feature that can carry it:
       whispers and whisper replies, AMA questions and the DM you'd get when one is answered,
-      confession replies, Guess Who, Pen Pals matching, voice rooms, DM requests, Risky Rolls, and
-      the notifications from <code>/bank pay</code> and <code>/bank gift</code>.
-      If a feature can pass a message between two people, it is covered.</p>
+      confession replies, Guess Who, Pen Pals matching, voice rooms, DM requests, Risky Rolls,
+      the party games that put one member's name in front of another (Spin the Compliment's
+      pairings, Marry-Fornicate-Kiss's three names, Most Likely To votes, Clapback's head-to-head
+      matchups, and the host's <em>Ask Question</em> in Truth or Dare), every duel challenge and
+      group-game lobby
+      (Pressure Cooker, Quickdraw, Hot Potato, Chicken, Musical Chairs), the <em>Name the Loser</em>
+      rename a duel win earns, and the notifications from <code>/bank pay</code> and
+      <code>/bank gift</code>. If a feature can pass a message between two people, it is covered.</p>
 
     <p>Some of that is invisible on purpose. In <a href="#games">Risky Rolls</a>, for instance, the
       dice simply never pair the two of you up to ask and answer — there is no error, no missing
-      message, and nothing for either of you to notice. If they pay you or gift you a perk, the coins
-      or the perk still arrive, but you are never sent the note naming them.</p>
+      message, and nothing for either of you to notice. Spin the Compliment, Marry-Fornicate-Kiss
+      and Clapback work the same way: the draw just never puts the two of you together (in Clapback,
+      one of you sits that round out as the bye, paid like any bye). If they pay you or gift
+      you a perk, the coins or the perk still arrive, but you are never sent the note naming them.
+      Where a refusal has to be shown at all — a duel challenge, a lobby join — it is one of the
+      ordinary replies that surface already gives everyone, never a message that names you.</p>
 
     <h3 id="no-contact-privacy">They are not told, and they cannot tell</h3>
 

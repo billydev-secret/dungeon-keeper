@@ -248,6 +248,12 @@ def wagered_today(
     return int(row["wagered"]) if row else 0
 
 
+#: The one member-facing sentence for a switched-off table, wherever a
+#: press finds one: the stake choke point, the private-round opener and the
+#: bet pickers all say it, and the cog renders it behind the ``❌`` mark.
+TABLE_CLOSED = "That table is closed right now."
+
+
 def take_stake(
     conn: sqlite3.Connection,
     guild_id: int,
@@ -292,7 +298,7 @@ def take_stake(
     if channel_id is not None and channel_id != settings.channel_id:
         return f"The casino has moved — find it in <#{settings.channel_id}>."
     if not game_enabled(settings, game):
-        return "That table is closed right now."
+        return TABLE_CLOSED
     unit = econ.currency_plural
     if enforce_bet_limits:
         if amount < settings.min_bet:

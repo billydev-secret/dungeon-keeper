@@ -234,20 +234,36 @@ def test_build_session_recap_embed_omits_players_field_when_empty():
     assert "🏆 Players" not in by_name
 
 
-def test_build_session_recap_embed_renders_mentions_for_players():
-    embed = build_session_recap_embed(1, [42, 99], "5m", [])
+def _name_fn(uid: int) -> str:
+    return f"User{uid}"
+
+
+def test_build_session_recap_embed_renders_names_for_players():
+    """Players are named through the resolver, never as ``<@id>``: an embed
+    mention renders as digits to anyone whose client hasn't cached that
+    member, and the recap is the card members screenshot."""
+    embed = build_session_recap_embed(1, [42, 99], "5m", [], name_fn=_name_fn)
+    by_name = {f.name: f.value or "" for f in embed.fields}
+    assert "User42" in by_name["🏆 Players"]
+    assert "User99" in by_name["🏆 Players"]
+    assert "<@" not in by_name["🏆 Players"]
+
+
+def test_build_session_recap_embed_default_resolver_keeps_a_mention():
+    """An un-wired caller still renders rather than crashing; the AST test
+    below is what forces the cog to wire a resolver."""
+    embed = build_session_recap_embed(1, [42], "5m", [])
     by_name = {f.name: f.value or "" for f in embed.fields}
     assert "<@42>" in by_name["🏆 Players"]
-    assert "<@99>" in by_name["🏆 Players"]
 
 
 def test_build_session_recap_embed_truncates_player_list_to_ten():
     ids = list(range(1, 20))  # 19 players
-    embed = build_session_recap_embed(5, ids, "30m", [])
+    embed = build_session_recap_embed(5, ids, "30m", [], name_fn=_name_fn)
     by_name = {f.name: f.value or "" for f in embed.fields}
-    assert "<@10>" in by_name["🏆 Players"]
+    assert "User10" in by_name["🏆 Players"]
     # The 11th and beyond shouldn't appear
-    assert "<@11>" not in by_name["🏆 Players"]
+    assert "User11" not in by_name["🏆 Players"]
     # But unique count still reflects the full list
     assert by_name["👥 Unique Players"] == "19"
 
@@ -283,6 +299,38 @@ def test_build_session_recap_embed_has_footer_and_title():
     assert "Session Recap" in embed.title
     assert embed.footer.text is not None
     assert "Session Recap" in embed.footer.text
+
+
+def test_every_session_render_site_passes_a_resolver():
+    """``name_fn`` defaults to ``mention``, so a render site that forgets to
+    pass one silently reintroduces digits in the recap. This walks the cog and
+    requires every call to a name-taking builder to hand a resolver over."""
+    import ast
+    import inspect
+    import pathlib
+
+    from bot_modules.cogs import games_session_cog
+    from bot_modules.games_session import embeds as session_embeds
+
+    needs = {
+        name
+        for name, fn in inspect.getmembers(session_embeds, inspect.isfunction)
+        if "name_fn" in inspect.signature(fn).parameters
+    }
+    assert "build_session_recap_embed" in needs
+    # Explicit utf-8: the CI runner is Windows, where the default is cp1252.
+    source = pathlib.Path(inspect.getfile(games_session_cog)).read_text(
+        encoding="utf-8"
+    )
+    missed = [
+        f"games_session_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in needs
+        and not any(kw.arg == "name_fn" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_fn: " + ", ".join(missed)
 
 
 # ── session timestamps stay naive UTC ────────────────────────────────

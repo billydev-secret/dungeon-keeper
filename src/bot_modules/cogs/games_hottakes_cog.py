@@ -42,6 +42,7 @@ from bot_modules.games_hottakes.logic import (
     VOTE_LABELS,
     VOTE_VALUES,
     add_take,
+    build_voting_start_message,
     shuffle_takes,
     tally_votes,
 )
@@ -146,19 +147,16 @@ class HotTakesSubmitView(discord.ui.View):
         channel = interaction.channel
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
 
-        # Ping submitters
-        if interaction.guild:
-            submitter_ids = {t["user_id"] for t in takes}
-            mentions = [
-                member.mention
-                for uid in submitter_ids
-                if (member := interaction.guild.get_member(uid))
-            ]
-            if mentions:
-                await channel.send(
-                    f"🔥 **Hot Takes voting is starting!** {' '.join(mentions)} — get ready to vote!",
-                    delete_after=15,
-                )
+        # A public heads-up that names nobody: takes are anonymous, and
+        # @-mentioning the submitters here (as this once did) gave them away.
+        try:
+            await channel.send(
+                build_voting_start_message(takes),
+                delete_after=15,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.warning("hottakes: voting heads-up failed in #%s", channel_name(channel))
 
         try:
             await self.cog._run_voting(

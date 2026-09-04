@@ -17,21 +17,42 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.services.dm_branding import send_branded_dm
-from bot_modules.services.survivor_service import update_config
+from bot_modules.services.survivor_service import SeasonError, get_season, update_config
 from bot_modules.survivor import logic, reckoning
 from bot_modules.survivor.views import SlatePickButton, swap_member_roles
 
 log = logging.getLogger("dungeonkeeper.survivor")
 
 WEDNESDAY, SATURDAY, TUESDAY = 2, 5, 1
+
+# survivor-172: ``pick_week`` returns Week 1 from the moment the schedule
+# ingests, which for a season created in August is weeks before any game.
+# The slate and last call only fire once the week's own Tue–Mon frame has
+# opened (``week_imminent``) — a state guard like the once-per-week keys,
+# so it holds under ``force`` too (the dashboard button must not recreate
+# the prod defect). It is the frame, not a day count, on purpose:
+# ``past_weekly_moment`` treats every day after the target as "missed,
+# catch up now", so a 7-day window that opened on a Thursday posted the
+# slate that Thursday and DM'd the last call the Saturday before the
+# opener, then burned both once-per-week keys (code review, 2026-09-04).
+
+# survivor-185: role reconcile is drift repair, not a 60-second duty. Once
+# an hour per season (plus whenever a decision fired or an admin forced the
+# pass), and a member whose swap failed is left alone for an hour rather
+# than producing a traceback and an API call every tick.
+RECONCILE_INTERVAL = 3600.0
+ROLE_FAILURE_BACKOFF = 3600.0
+_reconciled_at: dict[int, float] = {}          # season id → last pass
+_role_failures: dict[tuple[int, int], float] = {}  # (season, user) → when
 
 CONDOLENCE = (
     "Your run ended in Week {week}. 🪦\n"
@@ -73,12 +94,36 @@ def past_weekly_moment(
     return frame > target or hour >= target_hour
 
 
+def week_frame_opens(first_kickoff: float, offset_hours: float) -> float:
+    """Epoch of the guild-local Tuesday midnight that opens the Tue–Mon
+    frame (see ``past_weekly_moment``) containing ``first_kickoff``."""
+    tz = timezone(timedelta(hours=offset_hours))
+    local = datetime.fromtimestamp(first_kickoff, tz)
+    back = (local.weekday() - TUESDAY) % 7
+    start = (local - timedelta(days=back)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return start.timestamp()
+
+
+def week_imminent(
+    conn: sqlite3.Connection, season: dict, week: int, now: float, offset: float
+) -> bool:
+    """``now`` is inside (or past) the weekly frame the week's first
+    non-postponed kickoff falls in — the Wednesday slate and Saturday last
+    call of *that* frame are the ones meant for it."""
+    first = logic.week_first_kickoff(conn, season["season_year"], week)
+    return first is not None and now >= week_frame_opens(first, offset)
+
+
 def slate_due(
     conn: sqlite3.Connection, season: dict, now: float, offset: float,
     *, force: bool = False,
 ) -> int | None:
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_slate_week") or 0) >= week:
+        return None
+    if not week_imminent(conn, season, week, now, offset):
         return None
     hour = int(season["config"]["slate_hour"])
     if force:
@@ -92,6 +137,8 @@ def lastcall_due(
 ) -> int | None:
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_lastcall_week") or 0) >= week:
+        return None
+    if not week_imminent(conn, season, week, now, offset):
         return None
     hour = int(season["config"]["lastcall_hour"])
     if force:
@@ -110,6 +157,107 @@ def reckoning_due(
     if force:
         return week
     return week if past_weekly_moment(now, offset, TUESDAY, hour) else None
+
+
+# ── weekly clock (the dashboard's operator view) ───────────────────────
+
+# Task key → (label, weekday, config hour key, config last-fired-week key).
+# Order is the week's own order: Wednesday opens it, Saturday nudges,
+# Tuesday closes it. It lives beside the due-functions so the clock the
+# dashboard renders and the clock the loop runs on are the same clock.
+WEEKLY_TASKS: dict[str, tuple[str, int, str, str]] = {
+    "slate": ("Slate post", WEDNESDAY, "slate_hour", "last_slate_week"),
+    "lastcall": ("Last call", SATURDAY, "lastcall_hour", "last_lastcall_week"),
+    "reckoning": ("The Reckoning", TUESDAY, "reckoning_hour", "last_reckoned_week"),
+}
+
+# Only the two idempotent posts can be re-armed. The Reckoning pays
+# weekly-win coins in the transaction that marks the week reckoned (spec
+# §5), so resetting *its* week would pay everyone twice.
+RESETTABLE_TASKS = frozenset({"slate", "lastcall"})
+
+
+def next_weekly_moment(
+    now: float, offset_hours: float, target_dow: int, target_hour: int
+) -> float:
+    """Epoch of the next (weekday, hour) in the guild's local clock, strictly
+    after ``now`` — the "next due" a task shows when it isn't due yet."""
+    tz = timezone(timedelta(hours=offset_hours))
+    local = datetime.fromtimestamp(now, tz)
+    candidate = local.replace(hour=target_hour, minute=0, second=0, microsecond=0)
+    candidate += timedelta(days=(target_dow - local.weekday()) % 7)
+    if candidate <= local:
+        candidate += timedelta(days=7)
+    return candidate.timestamp()
+
+
+def weekly_clock_rows(
+    config: dict, now: float, offset_hours: float, *, week: int | None,
+    due: dict[str, int | None],
+) -> list[dict]:
+    """The Season card's read-only Weekly clock, one row per task: which
+    week it last fired for, whether the poll loop would fire it on its next
+    tick (``due``: this module's own due decisions), and otherwise the next
+    guild-local moment its gate opens. This is the operator's only view of
+    the clock on a real season — the force-run button lives on the
+    Simulator card by design (first-look #4)."""
+    rows = []
+    for key, (label, dow, hour_key, fired_key) in WEEKLY_TASKS.items():
+        hour = int(config.get(hour_key) or 0)
+        fired_week = int(config.get(fired_key) or 0)
+        rows.append({
+            "task": key,
+            "label": label,
+            "hour": hour,
+            "weekday": dow,
+            "fired_week": fired_week,
+            # Already spent for the current pick week — the Week 1 shape the
+            # dashboard could not show before (2026-09-02 review).
+            "spent": week is not None and fired_week >= week,
+            "due_week": due.get(key),
+            "next_ts": next_weekly_moment(now, offset_hours, dow, hour),
+            "resettable": key in RESETTABLE_TASKS,
+        })
+    return rows
+
+
+def weekly_clock(
+    conn: sqlite3.Connection, season: dict, now: float, offset: float,
+) -> tuple[list[dict], int | None]:
+    """``(rows, pick_week)`` for the dashboard's Weekly clock — the rows
+    from :func:`weekly_clock_rows`, fed by the same due-functions the poll
+    loop runs, so what the panel says is due is what the next tick fires."""
+    week = logic.pick_week(conn, season["season_year"], now)
+    due = {
+        "slate": slate_due(conn, season, now, offset),
+        "lastcall": lastcall_due(conn, season, now, offset),
+        "reckoning": reckoning_due(conn, season, now, offset),
+    }
+    return weekly_clock_rows(season["config"], now, offset, week=week, due=due), week
+
+
+def rearm_weekly_task(
+    conn: sqlite3.Connection, season: dict, task: str, now: float,
+) -> tuple[int, int, int]:
+    """Re-arm one weekly post for the current pick week, so the slate or the
+    last call fires again at its next gate (or on the next tick if the gate
+    is already open). Returns ``(week, last-fired before, last-fired after)``;
+    the re-arm rule is ``max(week - 1, 0)``, the week before the one being
+    re-armed. Raises :class:`SeasonError` for the Reckoning (it pays coins)
+    or an unknown task, and when the task hasn't fired for the current week
+    (nothing to reset). Does not commit."""
+    if task not in RESETTABLE_TASKS:
+        raise SeasonError("Only the slate and the last call can be re-armed.")
+    label, _dow, _hour_key, fired_key = WEEKLY_TASKS[task]
+    week = logic.pick_week(conn, season["season_year"], now)
+    before = int(season["config"].get(fired_key) or 0)
+    if week is None or before < week:
+        raise SeasonError(
+            f"{label} hasn't fired for the current week — nothing to reset."
+        )
+    after = max(week - 1, 0)
+    update_config(conn, season["id"], {fired_key: after})
+    return week, before, after
 
 
 # ── posting glue ───────────────────────────────────────────────────────
@@ -157,8 +305,17 @@ def idle_reason(conn: sqlite3.Connection, season: dict, now: float) -> str:
             f"no schedule ingested for {year} — generate or ingest one "
             "before any weekly task can be due"
         )
-    if logic.pick_week(conn, year, now) is None:
+    week = logic.pick_week(conn, year, now)
+    if week is None:
         return f"no open week in {year} right now — the season is between weeks"
+    offset = get_tz_offset_hours(conn, season["guild_id"])
+    if not week_imminent(conn, season, week, now, offset):
+        first = logic.week_first_kickoff(conn, year, week) or now
+        days = int((first - now) // 86400)
+        return (
+            f"Week {week}'s first kickoff is {days} days out — the slate and "
+            "last call wait for the Tuesday that opens its week"
+        )
     return "already run for this week — the once-per-week state still holds"
 
 
@@ -241,7 +398,9 @@ async def run_weekly_tasks(
                     bot, db_path, season, lastcall_wk, now
                 )
                 (fired if ok else blocked).append("last call")
-            await reconcile_roles(bot, db_path, season)
+            await reconcile_roles(
+                bot, db_path, season, now, force=force or bool(fired),
+            )
         except Exception as exc:
             failed = str(exc) or exc.__class__.__name__
             log.exception(
@@ -265,16 +424,31 @@ async def run_weekly_tasks(
     return report
 
 
-async def reconcile_roles(bot, db_path: Path, season: dict) -> None:
-    """Life-state role repair, every decision pass: alive players hold the
-    Survivor role, ghosts the Ghost role (2026-08-18, Billy's #10).
+async def reconcile_roles(
+    bot, db_path: Path, season: dict, now: float | None = None,
+    *, force: bool = True,
+) -> None:
+    """Life-state role repair: alive players hold the Survivor role, ghosts
+    the Ghost role (2026-08-18, Billy's #10).
 
     swap_member_roles is idempotent and checks the gateway role cache before
     calling Discord, so a no-drift pass costs zero API calls — this exists
     for the drift cases: a join that crashed after charging but before its
     grant (the a41e70e2 bug left exactly that), a mod removing a role by
     hand, a member rejoining after a leave. Best-effort per member; a
-    failure is logged by the swap itself and never blocks the pass."""
+    failure never blocks the pass.
+
+    Cadence (survivor-185): once per ``RECONCILE_INTERVAL`` per season
+    unless ``force`` (a decision fired, or an admin pressed run-now). A
+    member whose swap failed — a role above the bot, Manage Roles lost — is
+    skipped for ``ROLE_FAILURE_BACKOFF`` and warned about once per backoff,
+    instead of a traceback and an API call every 60-second tick. The memory
+    is in-process; a restart just retries once, which is harmless."""
+    now = time.time() if now is None else now
+    last = _reconciled_at.get(season["id"], 0.0)
+    if not force and now - last < RECONCILE_INTERVAL:
+        return
+    _reconciled_at[season["id"]] = now
 
     def _q():
         with open_db(db_path) as conn:
@@ -288,10 +462,43 @@ async def reconcile_roles(bot, db_path: Path, season: dict) -> None:
             ]
 
     for user_id, player_status in await asyncio.to_thread(_q):
-        await swap_member_roles(
+        key = (season["id"], user_id)
+        failed_at = _role_failures.get(key)
+        if failed_at is not None and now - failed_at < ROLE_FAILURE_BACKOFF:
+            continue
+        note = await swap_member_roles(
             bot, season["guild_id"], season["config"], user_id,
             to_ghost=player_status != "alive",
         )
+        if note and note.startswith("role swap failed"):
+            _role_failures[key] = now
+            log.warning(
+                "survivor: role reconcile for %s in season %s: %s — "
+                "retrying in an hour", user_id, season["id"], note,
+            )
+        else:
+            _role_failures.pop(key, None)
+
+
+async def confirm_leavers(bot, guild, suspects: list[int]) -> set[int]:
+    """§6.14 with a cache guard (survivor-174): a suspected leaver dies only
+    when the member cache is trustworthy — the bot is ready and the guild
+    fully chunked — AND ``fetch_member`` says NotFound. A partial cache
+    after a re-IDENTIFY, or any other API answer, keeps the player."""
+    if not suspects or not bot.is_ready() or not getattr(guild, "chunked", False):
+        return set()
+    gone: set[int] = set()
+    for user_id in suspects:
+        try:
+            await guild.fetch_member(user_id)
+        except discord.NotFound:
+            gone.add(user_id)
+        except discord.HTTPException as exc:
+            log.warning(
+                "survivor: could not confirm whether %s left (%s) — kept",
+                user_id, exc,
+            )
+    return gone
 
 
 async def post_reckoning(
@@ -305,29 +512,55 @@ async def post_reckoning(
     guild = channel.guild
     present = {m.id for m in guild.members}
 
-    def _q():
+    def _suspects():
         with open_db(db_path) as conn:
-            # §6.14: leavers die at the Reckoning, so this post reports them.
-            reckoning.eliminate_leavers(conn, season, week, present)
-            # The weekly prize pays in the same transaction that marks the
-            # week reckoned — once per week structurally, never in a preview.
-            paid = reckoning.pay_weekly_wins(conn, season, week)
-            data = reckoning.build_reckoning_data(conn, season, week, now)
-            if paid:
-                data["weekly_win"] = {
-                    "count": len(paid), "amount": paid[0][1],
-                }
-            update_config(conn, season["id"], {
-                "last_reckoned_week": week,
-                "last_reckoned_at": int(now),
-            })
-            conn.commit()
+            return reckoning.suspected_leavers(conn, season, present)
+
+    gone = await confirm_leavers(bot, guild, await asyncio.to_thread(_suspects))
+
+    def _apply(conn: sqlite3.Connection) -> dict:
+        """The week's writes: leavers (§6.14), the weekly prize, the mark.
+        Run twice on purpose — once rolled back to build the post, once
+        for real after Discord accepted it (survivor-173)."""
+        reckoning.eliminate_leavers(conn, season, week, present, confirmed=gone)
+        paid = reckoning.pay_weekly_wins(conn, season, week)
+        data = reckoning.build_reckoning_data(conn, season, week, now)
+        if paid:
+            data["weekly_win"] = {"count": len(paid), "amount": paid[0][1]}
+        update_config(conn, season["id"], {
+            "last_reckoned_week": week,
+            "last_reckoned_at": int(now),
+        })
+        return data
+
+    def _preview():
+        with open_db(db_path) as conn:
+            data = _apply(conn)
             from bot_modules.services.economy_service import load_econ_settings
 
             settings = load_econ_settings(conn, season["guild_id"])
+            # Nothing is paid or marked until the post is up: the send comes
+            # first, and a Forbidden used to lose the week's post forever
+            # (retrying by resetting the mark would have double-paid).
+            conn.rollback()
         return data, settings
 
-    data, settings = await asyncio.to_thread(_q)
+    def _commit() -> bool:
+        # The write lock first, then the mark re-read under it: the loop's
+        # tick and the dashboard's run-now share no lock, and between
+        # ``reckoning_due`` and here sit an API call per suspect and the
+        # send itself — long enough for a second pass to reach the same
+        # point. Whichever lands second finds the week marked and pays
+        # nothing (code review, 2026-09-04).
+        with open_db_immediate(db_path) as conn:
+            fresh = get_season(conn, season["id"])
+            marked = int((fresh or season)["config"].get("last_reckoned_week") or 0)
+            if marked >= week:
+                return False
+            _apply(conn)
+        return True
+
+    data, settings = await asyncio.to_thread(_preview)
 
     def name_of(user_id: int) -> str:
         member = guild.get_member(user_id)
@@ -342,7 +575,21 @@ async def post_reckoning(
         color=color,
     )
     content, allowed = _pings(bot, season)
-    await channel.send(content=content or None, embed=embed, allowed_mentions=allowed)
+    try:
+        await channel.send(
+            content=content or None, embed=embed, allowed_mentions=allowed
+        )
+    except discord.HTTPException as exc:
+        # Blocked, not fired: the week stays unreckoned and unpaid, so the
+        # next pass retries the post — and the run report says why.
+        log.warning("survivor: Reckoning post failed for week %s: %s", week, exc)
+        return False
+    if not await asyncio.to_thread(_commit):
+        log.warning(
+            "survivor: week %s of season %s was reckoned by a parallel pass "
+            "while this one was posting — the second card is a duplicate",
+            week, season["id"],
+        )
 
     # §2.6 as amended 2026-08-18: standings live on the ONE panel, which
     # gets refreshed here instead of posting a separate board.
@@ -378,7 +625,20 @@ async def post_slate(
     from bot_modules.survivor.views import PanelError, repost_panel
 
     content, allowed = _pings(bot, season)
+
+    def _first_kickoff():
+        with open_db(db_path) as conn:
+            return logic.week_first_kickoff(conn, season["season_year"], week)
+
+    # survivor-183: name the first kickoff relatively, so a short week (the
+    # Wednesday-night opener locks three teams the same day) is obvious.
+    first = await asyncio.to_thread(_first_kickoff)
     ping = f"Week {week} is open — pick a team to win. ⬇️"
+    if first is not None and first > now:
+        ping = (
+            f"Week {week} is open — first kickoff <t:{int(first)}:R>. "
+            "Pick a team to win. ⬇️"
+        )
     if content:
         ping = f"{content} {ping}"
 
@@ -426,22 +686,7 @@ async def send_last_call(
                 ).fetchall()
             ]
             offset = get_tz_offset_hours(conn, season["guild_id"])
-            early = conn.execute(
-                "SELECT home, away, kickoff_utc FROM nfl_games "
-                "WHERE season_year = ? AND week = ? AND status = 'scheduled' "
-                "ORDER BY kickoff_utc LIMIT 3",
-                (season["season_year"], week),
-            ).fetchall()
-            # §6.3: name games that kick before Sunday afternoon local —
-            # the international-morning trap.
-            early_lines = []
-            for r in early:
-                ts = logic.kickoff_ts(r["kickoff_utc"])
-                dow, hour = local_parts(ts, offset)
-                if now < ts and (dow == SATURDAY or (dow == 6 and hour < 13)):
-                    early_lines.append(
-                        f"{r['away']} @ {r['home']} kicks <t:{int(ts)}:R>"
-                    )
+            early_lines = early_game_lines(conn, season, week, now, offset)
             update_config(conn, season["id"], {"last_lastcall_week": week})
             conn.commit()
         return pickless, early_lines
@@ -480,6 +725,34 @@ async def send_last_call(
             ),
         )
     return True
+
+
+def early_game_lines(
+    conn: sqlite3.Connection, season: dict, week: int, now: float, offset: float
+) -> list[str]:
+    """§6.3: the next three games still to kick, kept only when they kick
+    before Sunday afternoon local — the international-morning trap. The
+    future filter runs in SQL *before* the LIMIT (survivor-180): a kicked
+    game still marked 'scheduled' (an ESPN outage, a Saturday game under
+    way) used to steal a slot from the Sunday-morning game the DM exists
+    to name. ``kickoff_utc`` is always ``isoformat()`` in UTC (ESPN ingest
+    and the simulator both), so the string comparison is chronological."""
+    now_iso = datetime.fromtimestamp(now, timezone.utc).replace(
+        microsecond=0
+    ).isoformat()
+    early = conn.execute(
+        "SELECT home, away, kickoff_utc FROM nfl_games "
+        "WHERE season_year = ? AND week = ? AND status = 'scheduled' "
+        "AND kickoff_utc > ? ORDER BY kickoff_utc LIMIT 3",
+        (season["season_year"], week, now_iso),
+    ).fetchall()
+    lines = []
+    for r in early:
+        ts = logic.kickoff_ts(r["kickoff_utc"])
+        dow, hour = local_parts(ts, offset)
+        if now < ts and (dow == SATURDAY or (dow == 6 and hour < 13)):
+            lines.append(f"{r['away']} @ {r['home']} kicks <t:{int(ts)}:R>")
+    return lines
 
 
 def pick_view(season_id: int) -> discord.ui.View:

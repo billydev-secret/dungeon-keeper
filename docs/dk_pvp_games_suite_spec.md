@@ -283,6 +283,28 @@ chosen nick and to custom stakes)
   join another nickname-mode game until it expires.
 - **One game per pair (duel):** a pair already mid-game can't start a second.
 
+**No-contact list** (`docs/no_contact_spec.md`; `BaseGame._blocked_pair`,
+`_blocked_with_any`, `_refuse_rename_across_pair`, so every game on `BaseGame` inherits
+all three gates). Each refusal is an ordinary outcome the surface already produced, never a
+new "blocked" line, so the blocked party cannot tell:
+
+- **Challenge:** a challenger who holds a pair with the target gets the existing
+  "You two already have a game in progress." ephemeral — placed after the guild-wide
+  enabled/allowed checks so it reads as believable, and before the rate limit so it costs no
+  strike. This is the one duel surface that **records an attempt** (surface
+  `duel_challenge`): the challenger typed the other's name on purpose.
+- **Lobby join:** a joiner who holds a pair with anyone already seated (host included) gets
+  the lobby's own "You're on cooldown for this game." — a private condition nobody else can
+  check, where "full" or "no longer open" would be contradicted by the card. Runs before the
+  nickname preflight.
+- **Name the Loser:** when winner and loser hold a pair, both the button press and the modal
+  submit (re-checked under the lock, so a modal opened before the pair existed still applies
+  nothing) get the "already serving a nickname sentence" line. The win stands and the game
+  concludes at `NO_NICK_SET` with no rename; the string is shared with the genuine
+  sentence-in-progress path (`_sentence_in_progress_copy`) so the two can never drift.
+
+Tests: `tests/test_duels_no_contact.py`.
+
 **Bot permission preflight** (nickname mode, checked at challenge/lobby/join time so failures
 surface before play, not after)
 

@@ -677,6 +677,78 @@ async def run_tasks_now(request: Request, user: AuthenticatedUser = _ADMIN):
     return {"ok": True, "report": report}
 
 
+# ── weekly clock ──────────────────────────────────────────────────────
+#
+# The clock itself — which task fires on which day, what "spent" means, the
+# re-arm rule — lives in ``bot_modules.survivor.tasks`` beside the
+# due-functions the poll loop runs. These two handlers are glue.
+
+
+@router.get("/survivor/clock")
+async def weekly_clock(request: Request, _: AuthenticatedUser = _ADMIN):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.core.db_utils import get_tz_offset_hours
+        from bot_modules.survivor import tasks
+
+        now = time.time()
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            offset = get_tz_offset_hours(conn, guild_id)
+            rows, week = tasks.weekly_clock(conn, season, now, offset)
+        return rows, week, offset
+
+    rows, week, offset = await _service_call(run_query(_q))
+    return {"week": week, "offset_hours": offset, "tasks": rows}
+
+
+@router.post("/survivor/tasks/{task}/reset")
+async def reset_weekly_task(
+    request: Request, task: str, user: AuthenticatedUser = _ADMIN
+):
+    """Re-arm one weekly post for the current pick week: the slate or the
+    last call fires again at its next gate. The Reckoning (and any unknown
+    task) is refused by ``tasks.rearm_weekly_task`` — it pays coins."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        import time
+
+        from bot_modules.survivor import tasks
+
+        with ctx.open_db() as conn:
+            season = svc.get_active_season(conn, guild_id)
+            if season is None:
+                raise svc.SeasonError("No live season.")
+            week, before, after = tasks.rearm_weekly_task(
+                conn, season, task, time.time()
+            )
+            write_audit(
+                conn, guild_id=guild_id, action="survivor_task_reset",
+                actor_id=int(user.user_id),
+                extra={"season_id": season["id"], "task": task, "week": week,
+                       "was": before, "via": "web"},
+            )
+            conn.commit()
+        return tasks.WEEKLY_TASKS[task][0], week, before, after
+
+    label, week, before, after = await _service_call(run_query(_q))
+    await _mirror_mod_log(
+        ctx, guild_id, action="weekly task re-armed",
+        summary=f"{label} will fire again for week {week} "
+        f"(last-fired week {before} → {after})",
+        user=user,
+    )
+    return {"ok": True, "task": task, "week": week, "fired_week": after}
+
+
 # ── announcement ──────────────────────────────────────────────────────
 
 
@@ -685,7 +757,9 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
     """Post (or repost) THE channel panel — the one updating message
     (decided 2026-08-18): season pitch, current week's slate, standings
     line, join + pick buttons. Reposting retires the previous copy; weekly
-    reposts with the ping are the Wednesday task's job."""
+    reposts with the ping are the Wednesday task's job. Never pinned: the
+    panel is sticky, and a pin lasted only until the next chat message
+    (2026-09-02)."""
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -721,7 +795,7 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
     from bot_modules.survivor.views import PanelError, repost_panel
 
     try:
-        message, pinned, retired = await repost_panel(
+        message, retired = await repost_panel(
             ctx.bot, ctx.db_path, season["id"]
         )
     except PanelError as exc:
@@ -744,14 +818,12 @@ async def post_announcement(request: Request, user: AuthenticatedUser = _ADMIN):
         ctx, guild_id,
         action="panel posted",
         summary=f"in <#{message.channel.id}>"
-        + ("" if pinned else " (pin failed)")
         + (" · previous copy retired" if retired else ""),
         user=user,
     )
     return {
         "ok": True,
         "message_id": str(message.id),
-        "pinned": pinned,
         "retired_previous": retired,
         "warning": warning,
     }

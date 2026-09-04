@@ -13,6 +13,8 @@ Two embeds:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import discord
 
 from bot_modules.games.constants import GAME_ICONS, GAME_NAMES, BRAND_COLOR
@@ -25,7 +27,11 @@ from bot_modules.games_help.logic import (
 from bot_modules.core.branding import apply_section_spacing
 
 
-def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
+def build_help_embed(
+    color: "discord.Color | None" = None,
+    *,
+    extra_lines: Iterable[str] = (),
+) -> discord.Embed:
     """Build the ``/games-help`` embed.
 
     Iterates ``GAME_ICONS`` (the canonical game registry) so any game
@@ -34,6 +40,11 @@ def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
     entries fall back to ``"/<key>"`` and an empty description rather
     than crashing — but the alignment test in
     ``tests/test_games_help_logic.py`` ensures they're always present.
+
+    ``extra_lines`` (channel-native games with no ``/games play`` entry,
+    e.g. Survivor while its door is open) are folded into the Other
+    Commands block rather than given fields of their own: the registry
+    plus that block already sit at Discord's 25-field ceiling.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -56,7 +67,7 @@ def build_help_embed(color: "discord.Color | None" = None) -> discord.Embed:
 
     embed.add_field(
         name="⚙️ Other Commands",
-        value=OTHER_COMMANDS_VALUE,
+        value="\n".join([OTHER_COMMANDS_VALUE, *extra_lines]),
         inline=False,
     )
 

@@ -1,7 +1,7 @@
 """Survivor member-facing views: the Join button and the pick panel.
 
 The Join button is a DynamicItem — it survives restarts via the dynamic-items
-registry, so the pinned season announcement keeps working across deploys.
+registry, so the channel panel keeps working across deploys.
 The pick panel is the §2.4 secondary flow: an ephemeral AFC/NFC dual select
 (Discord's 25-option cap vs up to 32 legal teams early season), so casuals
 never touch slash-command syntax.
@@ -36,7 +36,10 @@ log = logging.getLogger("dungeonkeeper.survivor")
 def kickoff_label(ts: float, offset_hours: float) -> str:
     """Guild-local short label for a select option — autocomplete and select
     labels can't render Discord timestamps, so this is the one place we
-    format a clock by hand (§6.6: stored UTC, rendered local)."""
+    format a clock by hand (§6.6: stored UTC, rendered local). The zone is
+    named in the label itself: a bare "Sun 10:00 AM" reads as the member's
+    own clock, and a member three zones east would think they had until
+    1pm (2026-09-02 review)."""
     local = datetime.fromtimestamp(
         ts, timezone(timedelta(hours=offset_hours))
     )
@@ -44,7 +47,18 @@ def kickoff_label(ts: float, offset_hours: float) -> str:
     # runs on a Windows runner where it raises.
     hour12 = ((local.hour - 1) % 12) + 1
     ampm = "AM" if local.hour < 12 else "PM"
-    return f"{local.strftime('%a')} {hour12}:{local.minute:02d} {ampm}"
+    return f"{local.strftime('%a')} {hour12}:{local.minute:02d} {ampm} server time"
+
+
+def pick_panel_content(week: int) -> str:
+    """The one line above the AFC/NFC selects — shared by the slate button
+    and bare ``/survivor pick`` so the two doors can't drift. Says once that
+    the kickoff clocks in the menus are the server's, not the reader's."""
+    return (
+        f"Week {week} — pick a team to **win**. Locks at that game's "
+        "kickoff; hidden until the results post. Kickoff times are server "
+        "time."
+    )
 
 
 def _game_option(game: logic.OpenGame, offset_hours: float) -> discord.SelectOption:
@@ -164,7 +178,7 @@ class JoinSeasonButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"survivor_join:(?P<season_id>\d+)",
 ):
-    """The 🏈 Join button on the pinned season announcement (§2.2)."""
+    """The 🏈 Join button on the channel panel (§2.2)."""
 
     def __init__(self, season_id: int) -> None:
         super().__init__(
@@ -220,7 +234,7 @@ class JoinSeasonButton(
         season, entered, balance, settings, fate = await asyncio.to_thread(_q)
         if season is None or settings is None:
             await interaction.response.send_message(
-                "This season has ended — the pin outlived it.", ephemeral=True
+                "This season has ended — the panel outlived it.", ephemeral=True
             )
             return
         if entered:
@@ -458,8 +472,7 @@ class SlatePickButton(
             )
             return
         await interaction.response.send_message(
-            f"Week {week} — pick a team to **win**. Locks at that game's "
-            "kickoff; hidden until the results post.",
+            pick_panel_content(week),
             view=PickPanel(bot, season, user_id, week, games, offset),  # pyright: ignore[reportArgumentType]
             ephemeral=True,
         )
@@ -711,7 +724,7 @@ def panel_view(season_id: int, *, join_open: bool) -> discord.ui.View:
 
 
 async def refresh_panel(bot, db_path, season_id: int) -> None:
-    """Best-effort in-place edit of the pinned panel (joins, settles)."""
+    """Best-effort in-place edit of the channel panel (joins, settles)."""
     built = await build_live_panel(bot, db_path, season_id)
     if built is None:
         return
@@ -742,11 +755,17 @@ async def repost_panel(
     *,
     content: str | None = None,
     allowed_mentions: discord.AllowedMentions | None = None,
-) -> tuple[discord.Message, bool, bool]:
-    """Post the panel fresh at the channel bottom, pin it, retire the
-    previous copy, and store the new ids. The Wednesday week-open repost
-    passes ping ``content``; the dashboard post passes none. Returns
-    (message, pinned, retired_previous); raises PanelError when it can't.
+) -> tuple[discord.Message, bool]:
+    """Post the panel fresh at the channel bottom, retire the previous copy,
+    and store the new ids. The Wednesday week-open repost passes ping
+    ``content``; the dashboard post passes none. Returns
+    (message, retired_previous); raises PanelError when it can't.
+
+    The panel is deliberately NOT pinned (2026-09-02): it is a sticky panel,
+    and the sticky machinery replaces this exact message on the next chat
+    message — sending unpinned and deleting the pinned copy — so a pin
+    lasted only until someone spoke and left a "pinned a message" notice
+    behind every Wednesday. The panel's home is the channel bottom.
     """
     built = await build_live_panel(bot, db_path, season_id)
     if built is None:
@@ -770,23 +789,6 @@ async def repost_panel(
         )
     except (discord.Forbidden, discord.HTTPException) as exc:
         raise PanelError(f"Couldn't post the panel: {exc}") from exc
-    try:
-        await message.pin(reason="Survivor channel panel")
-        pinned = True
-        # The weekly repost would otherwise leave a "pinned a message"
-        # system notice every Wednesday — sweep it, best-effort.
-        try:
-            async for recent in channel.history(limit=5):
-                if (
-                    recent.type == discord.MessageType.pins_add
-                    and recent.author.id == getattr(bot.user, "id", 0)
-                ):
-                    await recent.delete()
-                    break
-        except (discord.Forbidden, discord.HTTPException):
-            pass
-    except (discord.Forbidden, discord.HTTPException):
-        pinned = False
 
     # Retire the previous copy in the channel it actually lives in.
     old_message_id = int(config.get("announcement_message_id") or 0)
@@ -816,4 +818,4 @@ async def repost_panel(
             conn.commit()
 
     await asyncio.to_thread(_store)
-    return message, pinned, retired
+    return message, retired

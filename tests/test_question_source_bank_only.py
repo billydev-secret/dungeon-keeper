@@ -29,6 +29,7 @@ from bot_modules.games.utils.question_source import (
     get_price_scenario,
     get_rushmore_topic,
     get_wyr_question,
+    normalise_tags,
 )
 
 
@@ -88,11 +89,31 @@ def test_filtered_miss_returns_none(getter, game_type):
 
 
 @pytest.mark.parametrize("getter,game_type", SINGLE_VALUE_GETTERS)
-def test_nsfw_row_excluded_without_channel_opt_in(getter, game_type):
+@pytest.mark.parametrize(
+    "stored_tag",
+    [
+        pytest.param("nsfw", id="lower"),
+        # The 08-28 import wrote "Nsfw"; a case-sensitive gate served every one
+        # of those rows in age-unrestricted channels.
+        pytest.param("Nsfw", id="title"),
+        pytest.param("NSFW", id="upper"),
+        pytest.param(" nsfw ", id="padded"),
+    ],
+)
+def test_nsfw_row_excluded_without_channel_opt_in(getter, game_type, stored_tag):
     """NSFW stays gated on the channel flag; an excluded row is still a miss."""
-    db = _FakeDB([(game_type, ["nsfw"], "spicy")])
+    db = _FakeDB([(game_type, [stored_tag], "spicy")])
     assert _run(getter(db)) is None
     assert _run(getter(db, allow_nsfw=True)) == "spicy"
+
+
+@pytest.mark.parametrize("getter,game_type", SINGLE_VALUE_GETTERS)
+def test_tag_filter_matches_case_insensitively(getter, game_type):
+    """A stored "Silly" row is a hit for a requested "silly" (and vice versa)."""
+    db = _FakeDB([(game_type, ["Silly"], "a banked question")])
+    assert _run(getter(db, tags=["silly"])) == "a banked question"
+    db = _FakeDB([(game_type, ["silly"], "a banked question")])
+    assert _run(getter(db, tags=["SILLY"])) == "a banked question"
 
 
 def test_wyr_splits_bank_row_into_two_options():
@@ -123,3 +144,21 @@ def test_module_has_no_ai_generation_surface():
     for gone in ("get_ai_config", "_ai_generate", "_system", "_load_config", "_parse_wyr"):
         assert not hasattr(question_source, gone), f"{gone} should have been removed"
     assert not hasattr(question_source, "generate_text")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        pytest.param(None, [], id="none-is-empty"),
+        pytest.param([], [], id="empty"),
+        # The 08-28 import wrote "Nsfw"; the gate matches the literal "nsfw".
+        pytest.param(["Nsfw", " Spicy", "NSFW"], ["nsfw", "spicy"], id="case-space-dedupe"),
+        pytest.param(["", "  ", "a"], ["a"], id="drops-empties"),
+        pytest.param(("Dare", "nsfw", "dare"), ["dare", "nsfw"], id="first-seen-order"),
+        pytest.param([1, "1"], ["1"], id="non-strings-coerced"),
+    ],
+)
+def test_normalise_tags_is_the_one_rule(raw, expected):
+    """Every tag reader and writer (bank draw, dashboard save/read/filter,
+    the prod fix script) shares this rule, so it is pinned once here."""
+    assert normalise_tags(raw) == expected

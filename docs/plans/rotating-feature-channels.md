@@ -443,7 +443,11 @@ Two economy details worth recording. The launch is hosted by **nobody**
 auto-launched game pays no host bounty — a real member there would collect one
 every featured day for hosting nothing. And a launch is **refused** rather than
 stomping a game already running in the room, checking both
-`games_active_games` and the game's registered busy-check.
+`games_active_games` and the game's registered busy-check. It also reads the
+game's dashboard **enable dial** first (`check_game_enabled`, a display variant
+following its base game via `SCHEDULE_BASE_GAME_TYPE`, exactly as the scheduler
+does) and logs + returns `None` when the game is switched off — the rotation
+was the one launch door that skipped it (2026-09-02).
 
 ### 2. Scheduled games skip a hidden room
 

@@ -8,12 +8,13 @@ due logic over guild-local clocks, and the streak rules as decided
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.services.survivor_service import (
+    SeasonError,
     create_season,
     eliminate_player,
     get_season,
@@ -242,6 +243,19 @@ def _cfg_season(conn, **overrides):
         pytest.param(0, 12, True, id="wednesday-after-hour"),
         pytest.param(-1, 12, False, id="tuesday-not-yet"),
         pytest.param(2, 12, True, id="friday-catchup"),
+        # survivor-172: a season created weeks before Week 1 must not post
+        # the Week 1 slate on the first Wednesday it sees — pick_week is 1
+        # from the moment the schedule ingests, so the guard is the frame:
+        # the Tue–Mon week the first kickoff falls in has to have opened.
+        pytest.param(-21, 12, False, id="three-weeks-early-not-imminent"),
+        pytest.param(-7, 12, False, id="eight-days-out-not-imminent"),
+        pytest.param(-14, 12, False, id="two-weeks-early-not-imminent"),
+        # The week BEFORE the opener: past_weekly_moment reads every day
+        # after Wednesday as "missed, catch up", so a day-count window
+        # opening mid-week posted the slate a week early (review 2026-09-04).
+        pytest.param(-6, 12, False, id="thursday-before-not-imminent"),
+        pytest.param(-3, 12, False, id="sunday-before-not-imminent"),
+        pytest.param(-1, 0, False, id="tuesday-of-the-week-not-yet"),
     ],
 )
 def test_slate_due_frame(db, dow_offset_days, hour, due):
@@ -250,6 +264,20 @@ def test_slate_due_frame(db, dow_offset_days, hour, due):
         now = NOW + dow_offset_days * DAY
         got = tasks.slate_due(conn, season, now, 0.0)
         assert (got == 1) is due
+
+
+def test_slate_proximity_guard_holds_under_force_and_explains(db):
+    # The proximity guard is state, not clock: the dashboard's run-now
+    # button (force=True) two weeks early must not recreate the prod
+    # defect, and idle_reason says why nothing was due.
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        early = NOW - 14 * DAY
+        assert tasks.slate_due(conn, season, early, 0.0, force=True) is None
+        assert tasks.lastcall_due(conn, season, early, 0.0, force=True) is None
+        assert "first kickoff" in tasks.idle_reason(conn, season, early)
+        # The Wednesday before the opener is the real week-open.
+        assert tasks.slate_due(conn, season, NOW, 0.0) == 1
 
 
 def test_slate_due_once_per_week(db):
@@ -279,6 +307,122 @@ def test_lastcall_due_saturday(db):
         sat_evening = NOW + 3 * DAY + 7 * HOUR  # Sat 19:00 UTC, hour 18 due
         assert tasks.lastcall_due(conn, season, NOW, 0.0) is None  # Wednesday
         assert tasks.lastcall_due(conn, season, sat_evening, 0.0) == 1
+        # survivor-172: the Saturday two weeks before the opener is not a
+        # last call — nobody can be late for a week that hasn't opened.
+        assert tasks.lastcall_due(conn, season, sat_evening - 14 * DAY, 0.0) is None
+        # The Saturday before the opener's week is not this week's Saturday.
+        assert tasks.lastcall_due(conn, season, sat_evening - 7 * DAY, 0.0) is None
+
+
+# ── weekly clock (the dashboard's operator view) ───────────────────────
+
+# A Thursday 10:00 in a UTC-7 guild.
+_THU_10 = datetime(2026, 9, 10, 17, 0, tzinfo=timezone.utc).timestamp()
+_PT = -7.0
+
+
+def _local(ts: float) -> datetime:
+    return datetime.fromtimestamp(ts, timezone(timedelta(hours=_PT)))
+
+
+@pytest.mark.parametrize(
+    ("dow", "hour", "expected"),
+    [
+        # Next Wednesday 9am: six days on.
+        pytest.param(2, 9, (2026, 9, 16, 9), id="wed-next-week"),
+        # Saturday 6pm: still ahead this week.
+        pytest.param(5, 18, (2026, 9, 12, 18), id="sat-this-week"),
+        # Thursday 9am already passed today → next Thursday.
+        pytest.param(3, 9, (2026, 9, 17, 9), id="today-hour-passed"),
+        # Thursday 11am still ahead today.
+        pytest.param(3, 11, (2026, 9, 10, 11), id="today-hour-ahead"),
+    ],
+)
+def test_next_weekly_moment_is_guild_local_and_strictly_ahead(dow, hour, expected):
+    got = _local(tasks.next_weekly_moment(_THU_10, _PT, dow, hour))
+    assert (got.year, got.month, got.day, got.hour) == expected
+    assert got.minute == 0 and got.weekday() == dow
+
+
+def test_weekly_tasks_use_the_loops_own_days():
+    # The dashboard's clock and the poll loop's gates are the same constants.
+    assert [t[1] for t in tasks.WEEKLY_TASKS.values()] == [
+        tasks.WEDNESDAY, tasks.SATURDAY, tasks.TUESDAY,
+    ]
+
+
+def test_weekly_clock_rows_flag_spent_and_due_and_resettable():
+    config = {
+        "slate_hour": 9, "lastcall_hour": 18, "reckoning_hour": 9,
+        "last_slate_week": 1, "last_lastcall_week": 1, "last_reckoned_week": 0,
+    }
+    rows = tasks.weekly_clock_rows(
+        config, _THU_10, _PT, week=1,
+        due={"slate": None, "lastcall": None, "reckoning": 1},
+    )
+    by = {r["task"]: r for r in rows}
+    assert [r["task"] for r in rows] == ["slate", "lastcall", "reckoning"]
+    # The Week 1 shape: both posts already spent for the current pick week.
+    assert by["slate"]["spent"] and by["lastcall"]["spent"]
+    assert by["slate"]["fired_week"] == 1
+    assert not by["reckoning"]["spent"]
+    assert by["reckoning"]["due_week"] == 1
+    # Only the two idempotent posts can be re-armed; the Reckoning pays coins.
+    assert by["slate"]["resettable"] and by["lastcall"]["resettable"]
+    assert not by["reckoning"]["resettable"]
+    assert _local(by["slate"]["next_ts"]).weekday() == 2
+    assert _local(by["lastcall"]["next_ts"]).hour == 18
+
+
+def test_weekly_clock_rows_without_a_pick_week_is_never_spent():
+    rows = tasks.weekly_clock_rows(
+        {"last_slate_week": 3}, _THU_10, _PT, week=None, due={},
+    )
+    assert not any(r["spent"] for r in rows)
+    assert all(r["due_week"] is None for r in rows)
+
+
+def test_weekly_clock_reads_the_due_functions_and_the_pick_week(db):
+    # NOW is the Wednesday of Week 1's frame at 12:00 UTC (slate_hour 9):
+    # the slate is due on the next tick, the other two are not.
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        rows, week = tasks.weekly_clock(conn, season, NOW, 0.0)
+    assert week == 1
+    by = {r["task"]: r for r in rows}
+    assert by["slate"]["due_week"] == 1 and not by["slate"]["spent"]
+    assert by["lastcall"]["due_week"] is None
+    assert by["reckoning"]["due_week"] is None
+
+
+def test_rearm_weekly_task_resets_to_the_week_before(db):
+    with open_db(db) as conn:
+        season = _cfg_season(conn, last_slate_week=1)
+        assert tasks.slate_due(conn, season, NOW, 0.0) is None
+        assert tasks.rearm_weekly_task(conn, season, "slate", NOW) == (1, 1, 0)
+        season = get_season(conn, season["id"])
+        assert season["config"]["last_slate_week"] == 0
+        # Re-armed: the loop would post it again on its next tick.
+        assert tasks.slate_due(conn, season, NOW, 0.0) == 1
+
+
+@pytest.mark.parametrize(
+    ("task", "overrides", "needle"),
+    [
+        # The Reckoning pays coins in the transaction that marks the week.
+        pytest.param("reckoning", {"last_reckoned_week": 1}, "Only the slate",
+                     id="reckoning-refused"),
+        pytest.param("bogus", {}, "Only the slate", id="unknown-refused"),
+        pytest.param("lastcall", {}, "nothing to reset", id="not-fired-yet"),
+    ],
+)
+def test_rearm_weekly_task_refuses(db, task, overrides, needle):
+    with open_db(db) as conn:
+        season = _cfg_season(conn, **overrides)
+        before = dict(season["config"])
+        with pytest.raises(SeasonError, match=needle):
+            tasks.rearm_weekly_task(conn, season, task, NOW)
+        assert get_season(conn, season["id"])["config"] == before
 
 
 # ── the slate as weekly mini-announcement (2026-08-18) ─────────────────
@@ -510,6 +654,7 @@ def test_idle_reason_names_the_gap_between_weeks(db):
 class _FakeMember:
     def __init__(self, uid, fail=False):
         self.id = uid
+        self.display_name = f"P{uid}"
         self._fail = fail
         self.sent = []
 
@@ -682,3 +827,302 @@ def test_money_renders_in_the_guilds_own_denomination():
         buyin=1, late_entry="gauntlet", gauntlet_mode=False, settings=nuts
     )
     assert "🥜 **1** Nut to enter" in line  # singular at 1
+
+
+# ── last call names the games still to come (survivor-180) ────────────
+#
+# The early-games list used to LIMIT 3 in SQL and only then drop games that
+# had already kicked, so a kicked-but-unsettled Thursday game (an ESPN
+# outage, a late-season Saturday game in progress) stole a slot from the
+# Sunday-morning game the DM exists to name. The filter now runs first.
+
+
+def test_early_game_lines_filter_future_kickoffs_before_truncating(db):
+    # Saturday 19:00 UTC; Week 1 has three kicked-but-still-'scheduled'
+    # games ahead of one Sunday 09:30 game (the international trap).
+    sat = NOW + 3 * DAY + 7 * HOUR
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        for gid, ts in (("g-fri", sat - DAY), ("g-sat-am", sat - 8 * HOUR)):
+            conn.execute(
+                "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+                " kickoff_utc) VALUES (?, 1, ?, 'DAL', 'NYG', ?)",
+                (YEAR, gid, _iso(ts)),
+            )
+        conn.execute(
+            "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+            " kickoff_utc) VALUES (?, 1, 'g-sun-am', 'JAX', 'TEN', ?)",
+            (YEAR, _iso(sat + 14 * HOUR + 30 * 60)),  # Sun 09:30 UTC
+        )
+        lines = tasks.early_game_lines(conn, season, 1, sat, 0.0)
+    assert len(lines) == 1 and lines[0].startswith("TEN @ JAX kicks <t:")
+
+
+# ── the Reckoning posts before it pays (survivor-173, -174) ───────────
+#
+# Marking the week reckoned and paying the weekly prize used to happen in
+# the transaction BEFORE the channel send, so one Forbidden lost the week's
+# post forever — resetting the mark to retry would double-pay. The send
+# now comes first; leavers, prize and mark commit in a second transaction
+# only after Discord accepted the post. Leaver elimination also needs a
+# warm member cache and an API confirmation: a partial cache after a
+# re-IDENTIFY must never bury the roster as source='left'.
+
+
+class _ReckoningChannel(_FakeChannel):
+    def __init__(self, guild, *, fail_sends=0):
+        super().__init__(guild)
+        self.fail_sends = fail_sends
+
+    async def send(self, content=None, **kwargs):
+        if self.fail_sends:
+            import discord as _d
+
+            self.fail_sends -= 1
+            resp = type("R", (), {"status": 403, "reason": "Forbidden"})()
+            raise _d.Forbidden(resp, "no send permission")
+        self.sent.append((content, kwargs))
+
+
+class _ReckoningGuild:
+    def __init__(self, members, *, chunked=True, missing=()):
+        self.id = GID
+        self.members = list(members)
+        self._members = {m.id: m for m in members}
+        self.chunked = chunked
+        self._missing = set(missing)
+        self.channel = _ReckoningChannel(self)
+        self.fetched: list[int] = []
+
+    def get_member(self, uid):
+        return self._members.get(uid)
+
+    def get_role(self, rid):
+        return None
+
+    async def fetch_member(self, uid):
+        import discord as _d
+
+        self.fetched.append(uid)
+        resp = type("R", (), {"status": 404, "reason": "Not Found"})()
+        if uid in self._missing:
+            raise _d.NotFound(resp, "unknown member")
+        return self._members.get(uid) or _FakeMember(uid)
+
+
+class _ReadyBot(_FakeBot):
+    def __init__(self, guild, *, ready=True):
+        super().__init__(guild)
+        self._ready = ready
+
+    def is_ready(self):
+        return self._ready
+
+
+def _quiet_post_side_effects(monkeypatch):
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(tasks, "swap_member_roles", _noop)
+    monkeypatch.setattr(tasks, "send_branded_dm", _noop)
+    monkeypatch.setattr(tasks, "safe_resolve_accent", _noop)
+    import bot_modules.survivor.views as views
+
+    monkeypatch.setattr(views, "refresh_panel", _noop)
+
+
+@pytest.mark.asyncio
+async def test_reckoning_failed_send_pays_and_marks_nothing(db, monkeypatch):
+    from bot_modules.services import economy_service
+
+    with open_db(db) as conn:
+        season = _cfg_season(conn, strikes=0)
+        _settled_week1(conn, season)  # 1 won (prize), 2 lost (dies)
+        season = get_season(conn, season["id"])
+    guild = _ReckoningGuild([_FakeMember(1), _FakeMember(2)])
+    guild.channel.fail_sends = 1
+    bot = _ReadyBot(guild)
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+    _quiet_post_side_effects(monkeypatch)
+
+    ok = await tasks.post_reckoning(bot, db, season, 1, AFTER_W1)
+
+    assert ok is False and guild.channel.sent == []
+    with open_db(db) as conn:
+        season = get_season(conn, season["id"])
+        assert int(season["config"].get("last_reckoned_week") or 0) == 0
+        assert economy_service.get_balance(conn, GID, 1) == 0
+        # Still due — the next pass retries the post.
+        assert next_reckoning_week(conn, season, AFTER_W1) == 1
+
+    # The retry posts, pays once, marks once.
+    ok = await tasks.post_reckoning(bot, db, season, 1, AFTER_W1)
+    assert ok is True and len(guild.channel.sent) == 1
+    with open_db(db) as conn:
+        season = get_season(conn, season["id"])
+        assert int(season["config"]["last_reckoned_week"]) == 1
+        assert economy_service.get_balance(conn, GID, 1) == 25
+        assert next_reckoning_week(conn, season, AFTER_W1) is None
+    # The prize line the post carried matches what was actually paid.
+    (_, kwargs), = guild.channel.sent
+    assert "collect" in kwargs["embed"].description
+
+
+@pytest.mark.parametrize(
+    ("ready", "chunked"),
+    [
+        pytest.param(False, True, id="bot-not-ready"),
+        pytest.param(True, False, id="guild-not-chunked"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_reckoning_partial_cache_eliminates_nobody(
+    db, monkeypatch, ready, chunked
+):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        _settled_week1(conn, season)  # both alive (default strikes)
+        season = get_season(conn, season["id"])
+    # An EMPTY member cache: every player looks gone.
+    guild = _ReckoningGuild([], chunked=chunked)
+    bot = _ReadyBot(guild, ready=ready)
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+    _quiet_post_side_effects(monkeypatch)
+
+    assert await tasks.post_reckoning(bot, db, season, 1, AFTER_W1) is True
+    assert guild.fetched == []
+    with open_db(db) as conn:
+        alive = conn.execute(
+            "SELECT COUNT(*) FROM survivor_players WHERE season_id = ? "
+            "AND status = 'alive'", (season["id"],),
+        ).fetchone()[0]
+        assert alive == 2
+
+
+@pytest.mark.asyncio
+async def test_reckoning_confirms_leavers_with_the_api(db, monkeypatch):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        _settled_week1(conn, season)
+        season = get_season(conn, season["id"])
+    # Neither player is in the cache; only player 2 is really gone.
+    guild = _ReckoningGuild([], chunked=True, missing={2})
+    bot = _ReadyBot(guild)
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+    _quiet_post_side_effects(monkeypatch)
+
+    assert await tasks.post_reckoning(bot, db, season, 1, AFTER_W1) is True
+    assert sorted(guild.fetched) == [1, 2]
+    with open_db(db) as conn:
+        rows = {
+            int(r["user_id"]): (r["status"], r["elimination_source"])
+            for r in conn.execute(
+                "SELECT user_id, status, elimination_source FROM "
+                "survivor_players WHERE season_id = ?", (season["id"],),
+            ).fetchall()
+        }
+    assert rows[1] == ("alive", None)          # cache miss, API says present
+    assert rows[2] == ("ghost", "left")        # API says gone
+
+
+# ── role reconcile runs hourly, and backs off failing members (survivor-185)
+
+
+@pytest.mark.asyncio
+async def test_reconcile_roles_hourly_cadence_and_per_member_backoff(
+    db, monkeypatch
+):
+    with open_db(db) as conn:
+        season = _cfg_season(conn)
+        update_config(conn, season["id"], {
+            "role_survivor_id": 11, "role_ghost_id": 22,
+        })
+        season = get_season(conn, season["id"])
+        join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
+    monkeypatch.setattr(tasks, "_reconciled_at", {})
+    monkeypatch.setattr(tasks, "_role_failures", {})
+    calls: list[int] = []
+
+    async def _swap(bot, guild_id, config, user_id, *, to_ghost):
+        calls.append(user_id)
+        return "role swap failed — check Manage Roles" if user_id == 2 else None
+
+    monkeypatch.setattr(tasks, "swap_member_roles", _swap)
+    bot = _FakeBot(None)
+
+    await tasks.reconcile_roles(bot, db, season, NOW, force=False)
+    assert sorted(calls) == [1, 2]              # first pass runs
+    await tasks.reconcile_roles(bot, db, season, NOW + 60, force=False)
+    assert sorted(calls) == [1, 2]              # a minute later: skipped
+    # A decision fired (force): the pass runs, but the member whose swap
+    # failed a minute ago is left alone until an hour has passed.
+    await tasks.reconcile_roles(bot, db, season, NOW + 120, force=True)
+    assert sorted(calls) == [1, 1, 2]
+    # An hour after the last pass the cadence rolls and the backoff has
+    # expired: both members are tried again.
+    await tasks.reconcile_roles(bot, db, season, NOW + 120 + HOUR, force=False)
+    assert sorted(calls) == [1, 1, 1, 2, 2]
+
+
+@pytest.mark.parametrize(
+    ("kickoff", "offset", "opens"),
+    [
+        # A Wednesday-evening local opener (prod Week 1, 00:20Z Thursday at
+        # UTC-7) belongs to the frame that opened the Tuesday before it.
+        pytest.param(
+            datetime(2026, 9, 10, 0, 20, tzinfo=timezone.utc).timestamp(), -7.0,
+            datetime(2026, 9, 8, 7, 0, tzinfo=timezone.utc).timestamp(),
+            id="wednesday-evening-local",
+        ),
+        # A Tuesday kickoff opens its own frame at that Tuesday's midnight.
+        pytest.param(
+            datetime(2026, 9, 8, 20, 0, tzinfo=timezone.utc).timestamp(), 0.0,
+            datetime(2026, 9, 8, 0, 0, tzinfo=timezone.utc).timestamp(),
+            id="tuesday-kickoff",
+        ),
+        # A Monday-night game is the tail of the frame that opened six days earlier.
+        pytest.param(
+            datetime(2026, 9, 14, 23, 0, tzinfo=timezone.utc).timestamp(), 0.0,
+            datetime(2026, 9, 8, 0, 0, tzinfo=timezone.utc).timestamp(),
+            id="monday-night",
+        ),
+    ],
+)
+def test_week_frame_opens_on_the_tuesday_before_the_kickoff(kickoff, offset, opens):
+    assert tasks.week_frame_opens(kickoff, offset) == opens
+
+
+@pytest.mark.asyncio
+async def test_reckoning_commit_yields_to_a_parallel_pass(db, monkeypatch):
+    """The loop's tick and the dashboard's run-now share no lock, and the
+    send sits between the due-check and the commit. The commit re-reads the
+    mark under the write lock: a week another pass already reckoned is not
+    paid a second time."""
+    from bot_modules.services import economy_service
+
+    with open_db(db) as conn:
+        season = _cfg_season(conn, strikes=0)
+        _settled_week1(conn, season)
+        season = get_season(conn, season["id"])
+    guild = _ReckoningGuild([_FakeMember(1), _FakeMember(2)])
+    bot = _ReadyBot(guild)
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+    _quiet_post_side_effects(monkeypatch)
+
+    real_send = guild.channel.send
+
+    async def _send_while_another_pass_lands(content=None, **kwargs):
+        # The other pass reckons (and pays) the week while this one is
+        # waiting on Discord.
+        with open_db(db) as conn:
+            economy_service.apply_credit(conn, GID, 1, 25, kind="survivor_weekly_win")
+            update_config(conn, season["id"], {"last_reckoned_week": 1})
+        await real_send(content, **kwargs)
+
+    guild.channel.send = _send_while_another_pass_lands
+    assert await tasks.post_reckoning(bot, db, season, 1, AFTER_W1) is True
+    with open_db(db) as conn:
+        # Paid exactly once — by the pass that got there first.
+        assert economy_service.get_balance(conn, GID, 1) == 25
+        assert int(get_season(conn, season["id"])["config"]["last_reckoned_week"]) == 1

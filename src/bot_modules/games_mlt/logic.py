@@ -21,6 +21,8 @@ Five reusable spines are extracted:
 * :func:`apply_vote` — record (or re-target) a single voter's pick,
   reporting whether they switched from a previous target so the cog
   can append ``" (changed)"`` to the ephemeral confirmation.
+  :func:`record_vote` wraps it with the no-contact gate: a blocked pick
+  is dropped while the ack-shaping ``changed`` flag comes back unchanged.
 * :func:`tally_votes` — flatten the ``{voter: target}`` map into a
   ``{target: count}`` tally, ensuring every player is represented
   (including those who received zero votes).
@@ -134,6 +136,36 @@ def apply_vote(
     prev = votes.get(voter_id)
     votes[voter_id] = target_id
     return prev is not None and prev != target_id
+
+
+def record_vote(
+    votes: dict[int, int],
+    voter_id: int,
+    target_id: int,
+    *,
+    blocked: bool,
+) -> tuple[bool, bool]:
+    """Record a pick unless the pair is blocked; return ``(counted, changed)``.
+
+    The no-contact gate for Most Likely To (``docs/no_contact_spec.md``):
+    "most likely to <prompt>" is one member's directed pick of another, so
+    a pair the list keeps apart must not be able to crown each other. The
+    cog resolves ``blocked`` (``is_no_contact_conn`` on voter and target)
+    and this decides what to do with it.
+
+    A blocked pick is simply not stored — the results embed shows counts
+    only, so a dropped vote is invisible — and any earlier vote the voter
+    cast stays as it was. ``changed`` is computed the same way whether or
+    not the vote counted, so the ephemeral "✅ Voted for X (changed)" ack
+    reads identically either way: the blocked party sees exactly what an
+    ordinary voter sees.
+    """
+    prev = votes.get(voter_id)
+    changed = prev is not None and prev != target_id
+    if blocked:
+        return False, changed
+    apply_vote(votes, voter_id, target_id)
+    return True, changed
 
 
 def tally_votes(

@@ -16,6 +16,7 @@ from bot_modules.games_config.embeds import (
 
 from bot_modules.core.utils import has_mod_or_admin_permissions, is_mod_or_admin
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.games.command_groups import games
 from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
@@ -209,7 +210,13 @@ class GamesConfigCog(commands.Cog):
         row = await get_active_game(self.db, interaction.channel_id)
         guild = interaction.guild
         color = await safe_resolve_accent(self.bot, guild, log_label="games config")
-        embed = build_game_status_embed(row, color=color)
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=interaction.guild_id or 0,
+            user_ids=[int(row["host_id"])] if row else [],
+        )
+        embed = build_game_status_embed(row, color=color, name_fn=name_fn)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @game_status.error

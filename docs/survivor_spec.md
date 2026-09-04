@@ -1,6 +1,6 @@
 # Survivor — NFL Pick'em Survival Cog for Dungeon Keeper
 
-**Spec v2.2 (final)** · Target: live before NFL Week 1 (Sept 10, 2026)
+**Spec v2.2 (final)** · Target: live before NFL Week 1 (Wednesday Sept 9, 2026, 5:20pm PT — corrected 2026-09-02 from Sept 10)
 **Research basis:** report #15 in the bank — *NFL Survivor Pool Rulesets & Play Modes (Aug 2026)*
 
 **The game in one breath:** pick one NFL team to win each week, straight up. No team twice. Your team loses, you're out. Last one standing takes the coin pot.
@@ -58,18 +58,18 @@ Season announced → Join (coins) → [Wed slate → pick → sweat → Tue Reck
 ```
 
 ### 2.2 Season announcement
-Pinned embed in #survivor: hero copy (~3 lines), buy-in, live entrant counter, five one-line rules, link to full rules thread, **[🌾 Join the Season]** button → ephemeral confirm (coin balance, debit, one-sentence rules) → role grant. At Week 1 kickoff the button stays live but the copy flips to gauntlet mode: *"the season is underway. the door is open; the road is real. 🌾 N souls walking."* Joins from here run the gauntlet receipt flow (§4.2) before charging the buy-in.
+Embed in #survivor *(not pinned — amended 2026-09-02: the panel is sticky and keeps itself at the channel bottom, and a pin lasted only until the next chat message replaced the pinned copy)*: hero copy (~3 lines), buy-in, live entrant counter, five one-line rules, link to full rules thread, **[🌾 Join the Season]** button → ephemeral confirm (coin balance, debit, one-sentence rules) → role grant. At Week 1 kickoff the button stays live but the copy flips to gauntlet mode: *"the season is underway. the door is open; the road is real. 🌾 N souls walking."* Joins from here run the gauntlet receipt flow (§4.2) before charging the buy-in.
 
 ### 2.3 Weekly cadence
-- **Wed ~9am — Slate post** (`slate_hour`, guild-local; pings `@🏈 Survivor` + `@👻 Ghost`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked. *(Amended 2026-08-18, twice: first the slate absorbed the join door; then Billy collapsed further — **the channel has exactly ONE updating panel**. Season pitch, current week's slate, standings line (alive/eliminated/pots), the rules, the "New Here?" door, and both buttons live in a single pinned message. The bot edits it in place on joins and settles, and **reposts it to the channel bottom every Wednesday with the week-open ping** — that repost IS the slate moment, so the twice-weekly ping budget holds. Entry-closed seasons drop the door. The §2.2 announcement post and this panel are the same message; §2.6's board auto-post is retired — standings live on the panel, and `/survivor board` remains on demand. The Tuesday Reckoning stays a real post: it is the payoff, not furniture.)*
-- **Sat 6pm — Last call:** DM only to the pickless (opt-out honored; fallback channel mention): *"you haven't picked. Make your pick below — or I'll pick for you, and I have terrible taste. 🌙"* **Amended 2026-08-18 (Billy):** the DM — and the closed-DM channel fallback — carries the panel's own persistent 🏈 Make your pick button, so the nudge is the door, not directions to one.
+- **Wed ~9am — Slate post** (`slate_hour`, guild-local; pings `@🏈 Survivor` + `@👻 Ghost`): the week's games with `<t:...:f>` timestamps (local time for free), plus the **[🏈 Make your pick]** button. Footer: picks close at each kickoff · X of N alive have picked. *(Amended 2026-08-18, twice: first the slate absorbed the join door; then Billy collapsed further — **the channel has exactly ONE updating panel**. Season pitch, current week's slate, standings line (alive/eliminated/pots), the rules, the "New Here?" door, and both buttons live in a single message (sticky, never pinned — 2026-09-02). The bot edits it in place on joins and settles, and **reposts it to the channel bottom every Wednesday with the week-open ping** — that repost IS the slate moment, so the twice-weekly ping budget holds. Entry-closed seasons drop the door. The §2.2 announcement post and this panel are the same message; §2.6's board auto-post is retired — standings live on the panel, and `/survivor board` remains on demand. The Tuesday Reckoning stays a real post: it is the payoff, not furniture.)* *(Amended 2026-09-03, games deep review survivor-172/-183: the week-open ping names the first kickoff relatively — "Week 1 is open — first kickoff <t:…:R>. Pick a team to win." — so a short week is obvious, and **the slate and last call only fire once the pick week is imminent**: the guild-local Tue–Mon frame its first non-postponed kickoff falls in has opened (`week_frame_opens`; a day-count window was tried first and posted a week early, because the frame logic treats every day after Wednesday as a missed slate to catch up on — code review 2026-09-04). `pick_week` returns Week 1 from the moment the schedule ingests, so a season created in August used to post Week 1's slate and DM its last call on the first Wednesday and Saturday it saw, weeks before any game, and the once-per-week keys then blocked the real ones. The guard is state, not clock — it holds under the dashboard's forced run too, and `idle_reason` says "Week 1's first kickoff is N days out".)*
+- **Sat 6pm — Last call:** DM only to the pickless (opt-out honored; fallback channel mention): *"you haven't picked. Make your pick below — or I'll pick for you, and I have terrible taste. 🌙"* **Amended 2026-08-18 (Billy):** the DM — and the closed-DM channel fallback — carries the panel's own persistent 🏈 Make your pick button, so the nudge is the door, not directions to one. *(2026-09-03, survivor-180: the early-games line takes the next three games **still to kick** — the future filter runs in SQL before the LIMIT — so a kicked-but-unsettled game can't steal the slot from the Sunday-morning game the line exists to name.)*
 - **Sun–Mon:** the bot posts nothing. The channel does the sweating.
 - **Tue 9am — THE RECKONING** (pings both roles; see 2.5).
 
 The roles get pinged exactly twice a week. Restraint is the brand.
 
 ### 2.4 Pick flow
-- **Primary — `/survivor pick`:** autocomplete filtered to unburned ∩ playing ∩ not-yet-kicked-off, options like `49ers (vs SEA, Sun 1:25)`. Confirmation (ephemeral): team + opponent, lock time `<t:...:R>`, satchel count with wealth signal (`🟢 24 teams left` → `🟡` under 12 — ambient scarcity awareness, never advice), strike status, **[Change pick]** / **[My season]** buttons.
+- **Primary — `/survivor pick`:** autocomplete filtered to unburned ∩ playing ∩ not-yet-kicked-off, options like `SF (vs SEA · Sun 1:25 PM server time)` — the zone is named in every menu label and once in the panel's content, since select labels can't carry Discord timestamps (2026-09-02). Confirmation (ephemeral): team + opponent, lock time `<t:...:R>`, satchel count with wealth signal (`🟢 24 teams left` → `🟡` under 12 — ambient scarcity awareness, never advice), strike status, **[Change pick]** / **[My season]** buttons.
 - **Double-pick weeks:** the same command collects two teams in one flow; the confirmation shows both slots with their independent lock times. Changing one slot never unlocks the other.
 - **Secondary — slate button:** ephemeral **AFC/NFC dual select** (Discord's 25-option cap vs up to 32 legal teams early season). Keeps casuals off slash-command syntax entirely.
 - `/survivor status` (ephemeral): pick state, lock countdown, satchel, strike, ghost stats if dead.
@@ -79,12 +79,14 @@ The roles get pinged exactly twice a week. Restraint is the brand.
    channel panel rides `core.sticky.StickyPanel` — any message beneath it
    (member or bot; the Reckoning is its main burier) reposts it to the
    channel bottom after the house debounce. The Wednesday `repost_panel`
-   stays separate: it carries the week-open ping and the pin, which sticky
-   placements don't; the machinery's at-bottom check keeps the two from
+   stays separate: it carries the week-open ping, which sticky placements
+   don't (the pin it once carried was dropped 2026-09-02, survivor-184 —
+   the sticky replace un-pinned it on the next chat message anyway); the
+   machinery's at-bottom check keeps the two from
    chasing each other. Panel ids live where they always did
    (`announcement_*` in the season config, via
    `survivor_service.panel_ids/set_panel_ids`); no live season → no restick.
-0. **The channel panel roster (added 2026-08-18):** the pinned panel lists who is
+0. **The channel panel roster (added 2026-08-18):** the channel panel lists who is
    alive and who is eliminated **by name**, not just counts — at most
    `ROSTER_DISPLAY_CAP` (30) names per list, dot-separated, with an honest
    "…and N more" tail. Length binds before the count when display names are
@@ -93,6 +95,16 @@ The roles get pinged exactly twice a week. Restraint is the brand.
 1. **The toll** (*amended 2026-08-18: numbers only — the rotating flavor line went with the corpus*)**:** week number, survivors before → after, pot. Plus **the gate**, when anyone joined since last Tuesday: arrivals announced with their gauntlet fate — *"two souls walked the gauntlet this week. one arrived breathing."*
 2. **The ledger:** the only place picks ever appear — every living player → team → `✅ / 💀 / 💛→🖤 / 📎 auto`, deaths sorted first. Ghost Streak standings get a compact strip beneath (current streaks, record holder).
 3. **Eliminations** (*amended 2026-08-18: factual, no corpus*)**:** one line per elimination stating team, result and week. Ghost roles applied on post. Zero deaths: no special line — the toll's unchanged survivor count says it.
+
+**Post first, then commit (2026-09-03, survivor-173).** The Reckoning's
+writes — leaver eliminations (§6.14), the weekly prize, `last_reckoned_week`
+— run once inside a rolled-back transaction to build the post, and again
+for real only after Discord accepted the send. A `Forbidden` or exhausted
+send therefore leaves the week unreckoned and unpaid: `post_reckoning`
+returns False, the run report says *blocked*, and the next pass simply
+retries. Previously the marks and the prize committed before the send, so
+one failed send lost the week's post, condolence DMs and panel refresh
+forever, and resetting the mark to retry would have double-paid.
 
 ~~**Flavor corpus:** DB table (~20 eulogies, ~10 no-death, ~10 toll lines), admin CRUD on the dashboard panel, seasonal drift encouraged.~~ *Removed 2026-08-18 (first-look review) — table dropped in migration 172, CRUD and dashboard card deleted.*
 
@@ -159,6 +171,23 @@ Route id `survivor` (bare feature name, per CLAUDE.md's frozen-id convention).
   buttons. A table beats a command signature you have to remember, and it shows
   you the state you're editing before you edit it.
 - **Role pickers** — Survivor / Ghost / Sole Survivor (see §3.3).
+- **Weekly clock** *(added 2026-09-02)* — read-only rows on the Season card
+  for the slate, the last call and the Reckoning: which week each last fired
+  for, whether it is due on the next tick, and otherwise the next guild-local
+  moment its gate opens (`GET /survivor/clock`; the clock itself —
+  `weekly_clock`, `rearm_weekly_task`, the task→day table — lives in
+  `survivor/tasks.py` beside the due-functions the loop runs, and the route
+  is glue). A slate or last call already fired for the current pick
+  week gets a confirm-gated **Reset this week** (`POST
+  /survivor/tasks/{slate|lastcall}/reset`, audited + mod-log) that re-arms it;
+  the Reckoning is never resettable — it pays weekly-win coins in the
+  transaction that marks the week. The force-run button stays on the
+  Simulator card.
+- **`/games help` pointer** *(added 2026-09-02)* — while a season is live with
+  a wired channel (and, for `late_entry: closed`, before Week 1 kickoff), the
+  games help embed's Other Commands block ends with one line pointing at the
+  Survivor channel. Folded into that block rather than given a field: the
+  registry already sits at Discord's 25-field ceiling.
 
 ### 3.2 Discord — no admin surface at all
 
@@ -282,7 +311,7 @@ CREATE TABLE nfl_games (
 | `late_entry` | `gauntlet` | `gauntlet` \| `closed` \| `ghost_only` |
 | `missed_pick` | `auto_assign` | `auto_assign` \| `eliminate` |
 | `max_auto_assigns` | 3 | Per season; 4th = elimination |
-| `double_pick_start_week` | 14 | 0 = never |
+| `double_pick_start_week` | 14 | 0 = never. **Stored but unread since 2026-09-02** — the gauntlet replay was its only reader and graded late joiners on a rule live members couldn't play; hidden on the panel until stage 6c wires the live flow and the replay together |
 | `double_pick_min_alive` | 5 | Only escalates if ≥ this many alive. **Not a stored setting yet** — see below |
 | `wipeout_annul_through_week` | 13 | After: equal split. **Not a stored setting yet** — see below |
 | `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living. **Not a stored setting yet** — see below |
@@ -342,12 +371,12 @@ raising the float, so a pot that grows past the seed is not extra faucet.
 6. **Timezones:** store UTC, render `<t:...>` everywhere.
 7. **Idempotent settling:** no double eliminations, no duplicate Reckonings.
 8. **Double-pick weeks:** two slots, one fate — either loss burns the strike/kills; both teams burn regardless.
-9. **Gauntlet joins:** replay uses closing favorites only; a week with a voided/postponed chalk game replays as void (survive, team returns). Joins during a double-pick era replay both slots as top-two chalk.
+9. **Gauntlet joins:** replay uses closing favorites only; a week with a voided/postponed chalk game replays as void (survive, team returns). Joins during a double-pick era replay both slots as top-two chalk — *deferred to 6c (2026-09-02): until the live flow has two slots, every elapsed week replays one.*
 10. **Joiner with no legal team in their entry week** (e.g., joins Sunday night and every unplayed team is gauntlet-burned): that week is voided for them — survive, pick next week. Rare, but must not crash or auto-kill.
 11. **Accord discipline:** invocations outside the Tue–Thu window are rejected with the window shown; a player who leaves the server during a vote counts as a decline; accord during a locked pick voids nothing retroactively — the split is computed on invocation-day standings.
 12. **One active season per guild;** archives queryable.
 13. **Auto-assign dead end** *(added 2026-08-17)*: at the final kickoff every legal not-yet-kicked-off team is burned for the player → week voided (survive), no auto-assign charged. Mirrors #10; must not crash or auto-kill.
-14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own fixed line (*"left the server mid-season. Eliminated."*); ghost streak frozen at its best; no further picks accepted. Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
+14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own fixed line (*"left the server mid-season. Eliminated."*); ghost streak frozen at its best; no further picks accepted. *(2026-09-03, survivor-174: absence from the member cache is a **suspicion**, not a verdict — the Reckoning eliminates a leaver only when the bot is ready, the guild is fully chunked, and `guild.fetch_member` answers NotFound; any other answer keeps the player. A partial cache in the seconds after a re-IDENTIFY used to be able to bury the whole roster as `left`, which settle never undoes.)* Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
 
 ---
 
@@ -364,7 +393,7 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    test league — the Gauntlet means a member who shows up in Week 4 still gets a
    live game, so the usual reason to soft-open a pool (miss the start, miss the
    season) doesn't apply here. Enrollment opens as soon as join/pick/slate is
-   testable, ~Sept 3, with real stakes from Sept 10.
+   testable, ~Sept 3, with real stakes from Sept 9.
 9. **Testing rig (added 2026-08-18):** seasons with `season_year >= 2090` are
    **synthetic** — the poller never calls ESPN for them (a nonsense year would
    be served the *current* season and pollute the table), and the dashboard
@@ -386,7 +415,12 @@ raising the float, so a pot that grows past the seed is not extra faucet.
    `swap_member_roles`, which checks the gateway role cache first, so a
    no-drift pass costs zero Discord calls. Exists for drift: a join that
    crashed after charging but before its grant, a hand-removed role, a
-   rejoin. Best-effort per member, never blocks the pass.
+   rejoin. Best-effort per member, never blocks the pass. *(2026-09-03,
+   survivor-185: the pass runs **once an hour per season** — plus whenever
+   a decision fired or an admin forced the run — and a member whose swap
+   failed (a role above the bot, Manage Roles lost) is skipped for an hour
+   and warned about once per hour, instead of a traceback and an API call
+   every 60-second tick. The memory is in-process; a restart retries once.)*
 10. **A forced run reports what it did (added 2026-08-18):** every gate routes
    through the week lookup, so a season whose year has no ingested schedule is
    indistinguishable from a quiet week — all three gates return `None` and the

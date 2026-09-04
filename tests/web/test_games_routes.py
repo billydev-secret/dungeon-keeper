@@ -153,6 +153,22 @@ def test_bank_create_tags_roundtrip(open_client, fake_ctx):
     assert json.loads(row["tags"]) == ["spicy", "nsfw"]  # deduped, order preserved
 
 
+def test_bank_create_tags_are_lowercased(open_client, fake_ctx):
+    """Tags are stored lowercase so a "Nsfw" row can never slip past the
+    bank's NSFW gate (which matches the literal "nsfw")."""
+    resp = open_client.post(
+        f"{BASE}/bank",
+        json={"game_type": "wyr", "tags": ["Nsfw", " Spicy", "NSFW"], "question_text": "Q?"},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert json.loads(row["tags"]) == ["nsfw", "spicy"]  # lowercased, then deduped
+
+
 def test_bank_create_no_tags_defaults_empty(open_client, fake_ctx):
     resp = open_client.post(
         f"{BASE}/bank",
@@ -278,9 +294,30 @@ def test_bank_list_filter_by_tag(open_client, fake_ctx):
     assert data["questions"][0]["question_text"] == "Spicy?"
 
 
+def test_bank_list_tag_filter_and_stats_read_legacy_tags_case_insensitively(open_client, fake_ctx):
+    """A row written before tags were lowercased on save (the 08-28 bulk
+    import stored "Nsfw") must still match the "nsfw" chip the tag list now
+    offers, and count as adult in the stats — the bot side went
+    case-insensitive; the dashboard's read paths have to agree."""
+    _clear_bank(fake_ctx.db_path)
+    _seed_question(fake_ctx.db_path, "wyr", text="Legacy?", tags=["Nsfw"])
+    _seed_question(fake_ctx.db_path, "wyr", text="Safe?", tags=["calm"])
+
+    resp = open_client.get(f"{BASE}/bank?tag=NSFW")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [q["question_text"] for q in data["questions"]] == ["Legacy?"]
+    assert data["questions"][0]["tags"] == ["nsfw"]
+
+    stats = open_client.get(f"{BASE}/stats").json()
+    assert stats["bank_by_type"]["wyr"] == {"sfw": 1, "nsfw": 1}
+
+
 def test_bank_tags_endpoint_returns_distinct_tags(open_client, fake_ctx):
     _seed_question(fake_ctx.db_path, "wyr", text="A?", tags=["a", "b"])
-    _seed_question(fake_ctx.db_path, "wyr", text="B?", tags=["b", "c"])
+    # A legacy row written before tags were lowercased on save: the
+    # suggestion list must offer "b"/"c", never a second "B" spelling.
+    _seed_question(fake_ctx.db_path, "wyr", text="B?", tags=["B", "c"])
     _seed_question(fake_ctx.db_path, "nhie", text="C?", tags=["other"])
 
     resp = open_client.get(f"{BASE}/bank/tags?game_type=wyr")
@@ -321,14 +358,14 @@ def test_bank_update_not_found(open_client):
 
 def test_bank_update_tags(open_client, fake_ctx):
     qid = _seed_question(fake_ctx.db_path, tags=["old"])
-    resp = open_client.put(f"{BASE}/bank/{qid}", json={"tags": ["new", "nsfw"]})
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"tags": ["new", "Nsfw"]})
     assert resp.status_code == 200
 
     with open_db(fake_ctx.db_path) as conn:
         row = conn.execute(
             "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
         ).fetchone()
-    assert json.loads(row["tags"]) == ["new", "nsfw"]
+    assert json.loads(row["tags"]) == ["new", "nsfw"]  # lowercased on save
 
 
 def test_bank_delete_question(open_client, fake_ctx):
@@ -356,7 +393,7 @@ def test_bank_bulk_add_questions(open_client, fake_ctx):
         f"{BASE}/bank/bulk",
         json={
             "game_type": "nhie",
-            "tags": ["batch"],
+            "tags": ["Batch"],
             "lines": ["Q1?", "Q2?", "  Q3?  ", "Q4?"],
         },
     )
@@ -368,7 +405,7 @@ def test_bank_bulk_add_questions(open_client, fake_ctx):
             "SELECT tags FROM games_question_bank WHERE game_type = 'nhie'"
         ).fetchall()
     assert len(rows) == 4
-    assert all(json.loads(r["tags"]) == ["batch"] for r in rows)
+    assert all(json.loads(r["tags"]) == ["batch"] for r in rows)  # lowercased on save
 
 
 def test_bank_bulk_blank_lines_stripped(open_client):
@@ -436,7 +473,8 @@ def test_bank_export_empty_returns_list(open_client, fake_ctx):
 
 def test_bank_import_valid_array(open_client, fake_ctx):
     payload = [
-        {"game_type": "wyr", "tags": ["air"], "question_text": "Fly or swim?"},
+        # The 08-28 import wrote "Nsfw" and the bank gate matched only "nsfw".
+        {"game_type": "wyr", "tags": ["Air", "Nsfw"], "question_text": "Fly or swim?"},
         # No "tags" key → defaults to []. Legacy "category":"nsfw" maps to the nsfw tag.
         {"game_type": "nhie", "category": "nsfw", "question_text": "Never have I?"},
         {"game_type": "wyr", "question_text": "Bare question?"},
@@ -452,7 +490,7 @@ def test_bank_import_valid_array(open_client, fake_ctx):
                 "SELECT question_text, tags FROM games_question_bank"
             ).fetchall()
         }
-    assert rows["Fly or swim?"] == ["air"]
+    assert rows["Fly or swim?"] == ["air", "nsfw"]  # lowercased on import
     assert rows["Never have I?"] == ["nsfw"]  # legacy category backfilled to tag
     assert rows["Bare question?"] == []  # missing tags defaults to empty
 

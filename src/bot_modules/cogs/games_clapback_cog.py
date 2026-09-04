@@ -22,6 +22,7 @@ from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     check_allowed_channel,
     check_game_enabled,
+    relaunch_refusal,
     get_game_options,
     create_game,
     update_game_message,
@@ -35,6 +36,8 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.services.name_resolver import NameFn, build_name_fn
+from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
@@ -51,6 +54,7 @@ from bot_modules.games_clapback.logic import (
     calculate_bye_award,
     drain_pending_players,
     pick_round_bye,
+    playable_players,
     vote_button_label,
     calculate_matchup_score,
     clamp_config_values,
@@ -239,7 +243,12 @@ class ClapbackJoinView(discord.ui.View):
         players = payload.get("players", [])
         min_p = MIN_PLAYERS
 
-        if len(players) < min_p:
+        # A member the no-contact list keeps apart from every other player can
+        # never be seated in a matchup, so they don't count toward the
+        # minimum. The refusal is the ordinary short-lobby line, roster count
+        # and all — nothing about it says which rule it came from.
+        forbidden = await self.cog._forbidden_pairs(interaction.guild, players)
+        if len(playable_players(players, forbidden)) < min_p:
             await interaction.response.send_message(
                 f"Need at least {min_p} players to start Clapback. Currently: {len(players)}.",
                 ephemeral=True,
@@ -526,6 +535,15 @@ class ClapbackRecapView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
+        # Same gate as the slash entry: an admin who unticks the game on the
+        # dashboard mid-evening must not be overridden by the recap card.
+        refusal = await relaunch_refusal(
+            self.cog.db, "clapback", interaction.channel_id,
+            interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
+            return
         self.stop()
         disable_all_items(self)
         await interaction.response.edit_message(view=self)
@@ -551,6 +569,13 @@ class ClapbackRecapView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
+            return
+        refusal = await relaunch_refusal(
+            self.cog.db, "clapback", interaction.channel_id,
+            interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
         channel = interaction.channel
         assert channel is not None and not isinstance(channel, (discord.ForumChannel, discord.CategoryChannel))
@@ -842,8 +867,17 @@ class ClapbackCog(commands.Cog):
                 legacy = payload.get("last_bye")
                 bye_history = [legacy] if legacy is not None else []
             bye_history = [str(b) for b in bye_history]
+            # The no-contact pairs among the people in play, read fresh each
+            # time the bracket needs them (the service keeps no cache on
+            # purpose — a stale read fails toward seating a pair). Here the
+            # roster decides the pre-pick; after the window the submitters
+            # decide the matchups, and anyone who pressed Join now is in
+            # that second read without any bookkeeping.
+            guild = getattr(channel, "guild", None)
+            forbidden = await self._forbidden_pairs(guild, payload["players"])
             round_bye = pick_round_bye(
-                [str(p) for p in payload["players"]], bye_history
+                [str(p) for p in payload["players"]], bye_history,
+                forbidden_pairs=forbidden,
             )
             payload["round_bye"] = round_bye
             await update_game_payload(self.db, game_id, payload)
@@ -862,10 +896,19 @@ class ClapbackCog(commands.Cog):
 
             # The pre-picked bye never submitted, so they are already out of
             # `answers`. A second bye can still fall out here when someone
-            # else misses the window and leaves an odd number of submitters —
-            # both get paid the round average.
-            matchups, late_bye = create_matchups(answers, bye_history)
-            byes = [b for b in (round_bye, late_bye) if b is not None]
+            # else misses the window and leaves an odd number of submitters,
+            # or when the no-contact gate has to bench one of a pair — every
+            # bye gets paid the round average, whatever caused it. A round
+            # the gate leaves with nothing safe to vote on is skipped exactly
+            # like a round short on answers.
+            forbidden = await self._forbidden_pairs(guild, list(answers))
+            matchups, late_byes = create_matchups(
+                answers, bye_history, forbidden_pairs=forbidden,
+            )
+            if not matchups:
+                await channel.send("Not enough answers this round — moving on!")
+                continue
+            byes = [b for b in (round_bye, *late_byes) if b is not None]
             payload = await get_game_payload(self.db, game_id)
             payload["matchups"] = matchups
             payload["phase"] = "voting"
@@ -980,6 +1023,8 @@ class ClapbackCog(commands.Cog):
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
+        guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, [] if bye_player is None else [bye_player])
         embed = build_submit_embed(
             prompt=prompt,
             round_num=round_num,
@@ -989,6 +1034,7 @@ class ClapbackCog(commands.Cog):
             total_players=len(players),
             bye_player=bye_player,
             color=self._accents.get(game_id),
+            name_resolver=name_fn,
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
@@ -996,7 +1042,6 @@ class ClapbackCog(commands.Cog):
 
         # Ping the active players so nobody misses a new round starting. Only
         # user mentions go in the content, so no @everyone/@role pings.
-        guild = getattr(channel, "guild", None)
         content = None
         if guild:
             mentions = " ".join(
@@ -1222,9 +1267,12 @@ class ClapbackCog(commands.Cog):
         self, game_id, channel, payload, round_num, total_rounds, host_id,
         bye_players, bye_award=None,
     ):
+        guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, self._scoreboard_ids(payload, bye_players))
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=False, color=self._accents.get(game_id),
+            name_resolver=name_fn,
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
@@ -1247,13 +1295,54 @@ class ClapbackCog(commands.Cog):
             pass
         return True
 
+    async def _forbidden_pairs(self, guild, user_ids) -> set[tuple[int, int]]:
+        """The no-contact pairs with both members in ``user_ids``.
+
+        Read off the event loop; an empty set outside a guild or for fewer
+        than two ids, so the bracket functions can take it unconditionally.
+        """
+        if guild is None or len(user_ids) < 2:
+            return set()
+        return await asyncio.to_thread(
+            no_contact_pairs_among, self.bot.ctx.db_path, guild.id, user_ids
+        )
+
+    async def _names(self, guild, user_ids) -> NameFn:
+        """The shared resolver (live cache → ``known_users`` → ``<@id>``,
+        markdown-escaped) over one card's players. ``resolve_name`` in this
+        cog is cache-only, so a player who left mid-game rendered as bare
+        digits and a ``*`` in a nickname broke the bold (review 2026-09-04)."""
+        ids: list[int] = []
+        for uid in user_ids:
+            try:
+                ids.append(int(uid))
+            except (TypeError, ValueError):
+                continue
+        return await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=getattr(guild, "id", 0),
+            user_ids=ids,
+        )
+
+    @staticmethod
+    def _scoreboard_ids(payload, bye_players) -> list:
+        byes = (
+            list(bye_players) if isinstance(bye_players, (list, tuple, set))
+            else [bye_players] if bye_players is not None else []
+        )
+        return [*payload.get("scores", {}).keys(), *byes]
+
     async def _post_scoreboard(
         self, game_id, channel, payload, round_num, total_rounds,
         bye_players, bye_award=None, final=False,
     ):
+        guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, self._scoreboard_ids(payload, bye_players))
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=final, color=self._accents.get(game_id),
+            name_resolver=name_fn,
         )
         await channel.send(embed=embed)
 

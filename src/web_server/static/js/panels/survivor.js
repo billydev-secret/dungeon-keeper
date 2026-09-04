@@ -366,19 +366,21 @@ function renderSeasonCard(zone, overview, refresh) {
         <span class="act-spacer"></span>
         <button type="button" class="btn btn-danger" data-end-btn>End Season</button>
       </div>
-      <div class="field-hint">Post Panel pins the channel's one updating
+      <div class="field-hint">Post Panel posts the channel's one updating
         message — slate, standings, join and pick buttons — in the configured
-        Survivor channel; reposting retires the previous copy, and the bot
-        reposts it itself every Wednesday with the week-open ping. Ending
-        archives the season — history stays queryable, and a new season can
-        then be created.</div>
+        Survivor channel, where it keeps itself at the bottom; reposting
+        retires the previous copy, and the bot reposts it itself every
+        Wednesday with the week-open ping. Ending archives the season —
+        history stays queryable, and a new season can then be created.</div>
+      <div data-clock class="mt-8"></div>
     </div>
   `;
   const status = zone.querySelector("[data-status]");
+  renderClock(zone.querySelector("[data-clock]"));
   zone.querySelector("[data-announce-btn]").addEventListener("click", async () => {
     try {
       const res = await apiPost("/api/survivor/announcement", {});
-      showStatus(status, true, res.pinned ? "posted and pinned" : "posted (pin failed — check Manage Messages)");
+      showStatus(status, true, res.retired_previous ? "posted — previous copy retired" : "posted");
       // Posted, but another sticky panel already holds that channel's bottom.
       if (res.warning) toast(res.warning, "info");
     } catch (err) {
@@ -396,6 +398,90 @@ function renderSeasonCard(zone, overview, refresh) {
       showStatus(status, false, err.message);
     }
   });
+}
+
+// ── weekly clock ──────────────────────────────────────────────────────
+// Read-only view of the three clock-gated posts on a real season (the
+// force-run button stays on the Simulator card on purpose): which week each
+// last fired for, and when its gate next opens, in the guild's own hours.
+// "Already fired for this week" is the shape that was invisible before
+// (2026-09-02 review) — the slate and the last call can be re-armed here.
+
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+function hourLabel(hour) {
+  const h12 = ((hour + 11) % 12) + 1;
+  return `${h12}:00 ${hour < 12 ? "AM" : "PM"}`;
+}
+
+// Guild-local rendering: shift by the guild's offset and format as UTC, so
+// an admin three zones away reads the server's clock, not their own.
+function guildLocal(ts, offsetHours) {
+  return new Date((ts + offsetHours * 3600) * 1000).toLocaleString([], {
+    weekday: "short", month: "short", day: "numeric",
+    hour: "numeric", minute: "2-digit", timeZone: "UTC",
+  });
+}
+
+async function renderClock(zone) {
+  let data;
+  try {
+    data = await api("/api/survivor/clock");
+  } catch (err) {
+    zone.innerHTML = `<div class="field-hint">Weekly clock: ${esc(err.message)}</div>`;
+    return;
+  }
+  const rows = (data.tasks || []).map((t) => {
+    let next;
+    if (t.due_week != null) {
+      next = `<strong>due now</strong> — fires for week ${t.due_week} on the next tick`;
+    } else if (t.spent) {
+      next = `already fired for week ${t.fired_week} (this week) · `
+        + `gate reopens ${esc(guildLocal(t.next_ts, data.offset_hours))}`;
+    } else {
+      next = esc(guildLocal(t.next_ts, data.offset_hours));
+    }
+    const reset = t.resettable && t.spent
+      ? `<button type="button" class="btn btn-sm" data-reset="${esc(t.task)}"
+          data-label="${esc(t.label)}">Reset this week</button>`
+      : "";
+    return `
+      <tr>
+        <td>${esc(t.label)}</td>
+        <td>${WEEKDAYS[t.weekday]} ${hourLabel(t.hour)}</td>
+        <td>${t.fired_week ? `week ${t.fired_week}` : "never"}</td>
+        <td>${next}</td>
+        <td style="white-space:nowrap;">${reset}</td>
+      </tr>`;
+  }).join("");
+  zone.innerHTML = `
+    <div class="section-label">Weekly clock</div>
+    <div class="field-hint">Pick week ${data.week ?? "—"} · server-local
+      hours. Each post fires once per week, at or after its hour.</div>
+    <div style="overflow-x:auto;">
+      <table class="table">
+        <thead><tr><th>Post</th><th>Gate</th><th>Last fired</th><th>Next</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <span data-clock-status></span>
+  `;
+  const status = zone.querySelector("[data-clock-status]");
+  zone.onclick = async (e) => {
+    const btn = e.target.closest("[data-reset]");
+    if (!btn) return;
+    if (!await confirmDialog(
+      `Re-arm the ${btn.dataset.label} for week ${data.week}? It posts again `
+      + "at its next gate — or on the next tick if the gate is already open — "
+      + "and pings the roles again.",
+      { danger: true, confirmLabel: "Reset" })) return;
+    try {
+      await apiPost(`/api/survivor/tasks/${btn.dataset.reset}/reset`, {});
+      await renderClock(zone);
+    } catch (err) {
+      showStatus(status, false, err.message);
+    }
+  };
 }
 
 // ── the §5 dials ──────────────────────────────────────────────────────
@@ -457,12 +543,12 @@ const RULES_CARDS = [
       + "is an elimination.", { max: 18 }],
   ]],
   ["Escalation & Endgame", [
-    ["num", "double_pick_start_week", "Double-Pick From Week",
-      "0 = never.", { max: 18 }],
-    // The wipeout-annul, double-pick-minimum and Accord dials are deliberately
-    // absent: nothing enforces those rules yet, so offering them here would
-    // promise a season rule the bot does not play by. They return with the
-    // code that reads them.
+    // The double-pick-start, wipeout-annul, double-pick-minimum and Accord
+    // dials are deliberately absent: nothing enforces those rules yet, so
+    // offering them here would promise a season rule the bot does not play
+    // by. (Double-pick's start week was the last to go, 2026-09-02: only the
+    // gauntlet replay read it, grading late joiners on a rule nobody else
+    // played.) They return with the code that reads them.
     ["check", "ghost_streak", "Ghost Streak side-game",
       "The dead keep picking for a side-pot. Load-bearing for late entry — "
       + "gauntlet joiners who arrive dead land here."],

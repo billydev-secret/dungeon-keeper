@@ -3,7 +3,8 @@
 Stage 5b of docs/plans/survivor.md. The headline is §4.2's determinism:
 two joiners entering at the same moment inherit byte-identical lines, and
 the replay reads only stored favorites and stored winners. §6 edge cases
-in scope: #9 (voided chalk replays as void; double-pick era top-two chalk)
+in scope: #9 (voided chalk replays as void; the double-pick dial is
+ignored until stage 6c ships)
 and #10 (joiner with no legal team must not crash or auto-kill).
 """
 
@@ -146,17 +147,29 @@ def test_no_legal_chalk_is_a_void_week_not_a_crash(db):
         assert not fate.dead
 
 
-def test_double_pick_era_replays_top_two_chalk(db):
-    # Edge #9: weeks >= double_pick_start_week replay two slots.
+@pytest.mark.parametrize("start_week", [2, 14])
+def test_double_pick_dial_is_ignored_until_6c_ships(db, start_week):
+    # Live members can only ever place slot 1 (stage 6c is unbuilt), so the
+    # replay must not grade a late joiner on two chalk picks per week: with
+    # the dial at or below an elapsed week, that week still replays ONE slot
+    # (2026-09-02 review, survivor-179). Week 2 has two candidates (SF .75,
+    # DAL .55) — the top-two era would burn both and double the exposure.
     with open_db(db) as conn:
-        season = _season(conn, double_pick_start_week=3)
+        season = _season(conn, double_pick_start_week=start_week)
         fate = compute_fate(conn, season, NOW)
-        wk3 = [(rw.team, rw.result) for rw in fate.weeks if rw.week == 3]
-        # KC used in wk1 → the top-two remaining chalk of wk3: BUF then… only
-        # two games exist and SEA lost in wk1's other game — g3a's favorite
-        # KC is used, so candidates are BUF only from g3b… plus none other →
-        # a single-candidate double week replays what exists.
-        assert wk3 == [("BUF", "win")]
+        wk2 = [(rw.team, rw.result) for rw in fate.weeks if rw.week == 2]
+        assert wk2 == [("SF", "loss")]
+        assert "DAL" not in fate.burned
+        assert fate == compute_fate(
+            conn, _season_like(season, double_pick_start_week=0), NOW
+        )
+
+
+def _season_like(season: dict | None, **config) -> dict:
+    """A copy of ``season`` with config overrides — the dial-independence
+    check compares fates without a second season row."""
+    assert season is not None
+    return {**season, "config": {**season["config"], **config}}
 
 
 def test_unsettled_chalk_is_skipped_not_inherited(db):

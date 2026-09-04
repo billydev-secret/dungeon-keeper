@@ -49,6 +49,7 @@ SURFACE_AMA = "ama"
 SURFACE_CONFESSION_REPLY = "confession_reply"
 SURFACE_GUESS_SUBMIT = "guess_submit"
 SURFACE_GUESS = "guess"
+SURFACE_DUEL_CHALLENGE = "duel_challenge"
 
 SURFACE_LABELS = {
     SURFACE_WHISPER: "Whisper",
@@ -56,6 +57,7 @@ SURFACE_LABELS = {
     SURFACE_CONFESSION_REPLY: "Confession reply",
     SURFACE_GUESS_SUBMIT: "Guess Who submission",
     SURFACE_GUESS: "Guess Who guess",
+    SURFACE_DUEL_CHALLENGE: "Duel challenge",
 }
 
 # Event kinds recorded in no_contact_events.

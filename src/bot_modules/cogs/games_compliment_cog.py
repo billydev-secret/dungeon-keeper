@@ -30,10 +30,11 @@ from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
 )
+from bot_modules.services.name_resolver import build_name_fn, mention
+from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.games_compliment.embeds import (
     build_lobby_embed,
     build_pairings_embed,
-    format_pairing_line,
 )
 from bot_modules.games_compliment.logic import (
     generate_pairings,
@@ -96,34 +97,46 @@ class ComplimentView(discord.ui.View):
 
         payload = await get_game_payload(self.db, self.game_id)
         participants = payload.get("participants", [])
-        if len(participants) < 2:
+        guild = interaction.guild
+
+        # The no-contact pairs inside the pool are the derangement's forbidden
+        # set: a blocked pair is never giver→receiver in either direction. If
+        # that leaves no valid pairing at all, generate_pairings returns {} —
+        # and that gets the same refusal a one-player pool gets, so the
+        # protected member can't tell which one fired.
+        def _draw() -> dict[int, int]:
+            forbidden: set[tuple[int, int]] = set()
+            if guild is not None and len(participants) >= 2:
+                forbidden = no_contact_pairs_among(
+                    self.bot.ctx.db_path, guild.id, participants
+                )
+            # The constrained derangement is a search, so it stays off the
+            # event loop with the read that feeds it.
+            return generate_pairings(participants, forbidden)
+
+        pairings = await asyncio.to_thread(_draw)
+        if not pairings:
             await interaction.response.send_message("Need at least 2 players in the pool!", ephemeral=True)
             return
 
         await interaction.response.defer()
 
-        # Generate pairings
-        pairings = generate_pairings(participants)
-
-        # Build pairings embed
-        lines: list[str] = []
-        mention_lookup: dict[int, str] = {}
-        for giver_id, receiver_id in pairings.items():
-            giver = interaction.guild.get_member(giver_id) if interaction.guild else None
-            receiver = interaction.guild.get_member(receiver_id) if interaction.guild else None
-            giver_str = giver.mention if giver else str(giver_id)
-            receiver_str = receiver.mention if receiver else str(receiver_id)
-            lines.append(format_pairing_line(giver_str, receiver_str))
-            mention_lookup[giver_id] = giver_str
-            mention_lookup[receiver_id] = receiver_str
-        guild = interaction.guild
+        # The card is the only record of who compliments whom once the ping
+        # below is gone, so it names members (never <@id>, which the reading
+        # client resolves from its own cache). The mentions go in content.
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=guild.id if guild is not None else 0,
+            user_ids=pairing_ids(pairings),
+        )
         color = await safe_resolve_accent(self.bot, guild, log_label="compliment")
-        embed = build_pairings_embed(lines, color=color)
+        embed = build_pairings_embed(pairings, color=color, name_fn=name_fn)
         if guild:
             from bot_modules.economy.game_rewards import append_payout_footer
             await append_payout_footer(self.bot, embed, guild.id, "compliment")
         # Ping all participants (preserve order from pairings dict)
-        unique_mentions = [mention_lookup[uid] for uid in pairing_ids(pairings) if uid in mention_lookup]
+        unique_mentions = [mention(uid) for uid in pairing_ids(pairings)]
 
         self.stop()
         disable_all_items(self)

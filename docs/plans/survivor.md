@@ -26,14 +26,15 @@ after manual settle/eliminate). Remaining: Tier 2
 endgame payouts — Jan; 7 notification toggles — Wk 2) and Tier 3.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
-**Deadline:** NFL Week 1 kickoff — **Thursday Sept 10 2026**, ~24 days out from 08-17.
+**Deadline:** NFL Week 1 kickoff — **Wednesday Sept 9 2026, 5:20pm PT** (corrected
+2026-09-02; earlier drafts said Thursday Sept 10), ~23 days out from 08-17.
 **Branch/worktree:** `survivor-cog`.
 
 ## The one hard constraint
 
 The season opens on a date nobody can move. So the plan is ordered by *what a
 playable Week 1 requires*, not by what's most interesting to build. Everything in
-**Tier 1** must be live by Sept 10. Everything in **Tier 2** has a real in-season
+**Tier 1** must be live by Sept 9. Everything in **Tier 2** has a real in-season
 deadline but that deadline is later than Week 1, and the game runs without it.
 Tier 3 is post-launch.
 
@@ -42,7 +43,7 @@ sequence and pins dates and cut lines to it.
 
 ---
 
-## Tier 1 — required for Week 1 (Sept 10)
+## Tier 1 — required for Week 1 (Sept 9)
 
 A season cannot open without these. Target **all of Tier 1 merged by Sept 3**, a
 week of slack before kickoff, with enrollment opening that day.
@@ -73,7 +74,7 @@ the counter is correct from day one. Payout rides with stage 7.
 | Stage | What | Real deadline | Why it can wait |
 |---|---|---|---|
 | **6b. Wipeout / annul** | Week annulled through Wk 13, equal split Wk 14+ | Wk 2 (first plausible mass death) | Needs to exist before a wipeout *can* happen, which is not Week 1 — but this is the shortest leash in Tier 2, so it lands right after launch. |
-| **6c. Double-pick** | Two slots, independent locks | **Week 14 — Dec 4** | `double_pick_start_week: 14`. Fifteen weeks of runway. The slot column ships in stage 1's schema so no migration is needed later. |
+| **6c. Double-pick** | Two slots, independent locks | **Week 14 — Dec 4** | `double_pick_start_week: 14`. Fifteen weeks of runway. The slot column ships in stage 1's schema so no migration is needed later. *(2026-09-02: the dial still stores but nothing reads it — the gauntlet replay stopped honouring it and the panel hides it, so a late joiner is graded one slot per week like everyone else; 6c wires both back.)* |
 | **6d. The Accord** | Vote flow, unanimity, Tue–Thu window | When ≤6 alive — **Nov at the earliest** | Gated on `accord_max_alive: 6`; with 20–50 entrants and a strike, that's deep in the season. |
 | **6e. Endgame + payouts** | Ceremony, Sole Survivor role, main + ghost pot payouts | **~Jan (Wk 18)** | The single latest-binding piece. Four months of runway. |
 | **7. Notifications panel** | `/survivor notifications` per-category DM toggles | Wk 2 | Last-call DMs default ON and honor opt-out from stage 5; the self-service toggle can follow by a week. |

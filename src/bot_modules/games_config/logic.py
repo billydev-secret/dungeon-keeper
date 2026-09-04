@@ -21,6 +21,8 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
+from bot_modules.services.name_resolver import NameFn, mention
+
 #: Callable signature for ``guild.get_channel``. Returns the channel
 #: object (which only needs a ``.mention`` attribute) or ``None``.
 ChannelResolver = Callable[[int], Any]
@@ -54,12 +56,19 @@ def format_allowed_channels(
     return "\n".join(mentions)
 
 
-def describe_active_game(row: Mapping[str, Any] | None) -> tuple[str, str]:
+def describe_active_game(
+    row: Mapping[str, Any] | None, name_fn: NameFn = mention
+) -> tuple[str, str]:
     """Return ``(title, description)`` for the ``/games game-status`` embed.
 
     The cog hands us the row from ``games_active_games`` (or ``None``
     when no game is running). We build both the title and the body
     text here so the cog's branch is just an embed construction.
+
+    The host is mod-facing, so it renders as ``Name (`id`)``: the name
+    through ``name_fn`` (a ``<@id>`` inside an embed is digits to any
+    client that hasn't cached the member) with the id kept alongside so
+    a moderator retains something copyable.
     """
     if not row:
         return (
@@ -71,7 +80,7 @@ def describe_active_game(row: Mapping[str, Any] | None) -> tuple[str, str]:
         (
             f"**Type:** {row['game_type']}\n"
             f"**State:** {row['state']}\n"
-            f"**Host:** <@{row['host_id']}>\n"
+            f"**Host:** {name_fn(int(row['host_id']))} (`{row['host_id']}`)\n"
             f"**Game ID:** `{row['game_id']}`"
         ),
     )

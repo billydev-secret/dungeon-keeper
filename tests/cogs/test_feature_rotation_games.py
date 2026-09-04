@@ -12,6 +12,7 @@ ordering is the whole reason a recap lands somewhere members can still read it.
 from __future__ import annotations
 
 import discord
+import pytest
 
 from bot_modules.core.db_utils import open_db
 from bot_modules.feature_rotation.logic import GamePlan, Room
@@ -212,6 +213,34 @@ async def test_a_busy_check_refusal_blocks_the_launch(sync_db_path):
     bot.game_busy_checks = {"risky_roll": busy}
 
     assert await svc.start_room_game(bot, bot.guild, OPEN_ROOM, "risky_roll", {}) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("game_key", "dial"),
+    [
+        pytest.param("ama", "ama", id="plain"),
+        # A display variant honours its base game's toggle, as the scheduler does.
+        pytest.param("ffa_banner", "ffa", id="variant-follows-base"),
+    ],
+)
+async def test_a_switched_off_game_is_not_launched(sync_db_path, game_key, dial):
+    """The dashboard's enable dial was read by the slash entry and the
+    scheduler but not by the rotation, so a room whose launch game an admin
+    had unticked still got it every featured morning."""
+    calls = []
+
+    async def launcher(**kwargs):
+        calls.append(kwargs)
+        return "gid-1"
+
+    bot = _Bot(sync_db_path, {OPEN_ROOM: _Chan(OPEN_ROOM)}, {game_key: launcher})
+    await bot.games_db.execute(
+        "INSERT INTO games_game_config (guild_id, game_type, enabled) VALUES (?, ?, 0)",
+        (GUILD, dial),
+    )
+
+    assert await svc.start_room_game(bot, bot.guild, OPEN_ROOM, game_key, {}) is None
     assert calls == []
 
 

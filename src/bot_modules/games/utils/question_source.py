@@ -103,12 +103,37 @@ async def has_clapback_prompts(db) -> bool:
     return row is not None
 
 
+def normalise_tags(raw) -> list[str]:
+    """The one tag-normalisation rule: strip, lowercase, drop empties, dedupe
+    (first-seen order kept). ``None`` is an empty list.
+
+    Every tag reader and writer goes through here — the bank draw
+    (:func:`_parse_tags`), the dashboard's save/read/filter paths and the
+    one-off prod fix script — because the NSFW gate in
+    :func:`_filter_bank_rows` compares against the literal ``"nsfw"``, and a
+    row stored as ``"Nsfw"`` (as one bulk import once wrote it) must still be
+    recognised as adult wherever it is read.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for tag in (raw or []):
+        t = str(tag).strip().lower()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def _parse_tags(tags_json) -> set[str]:
-    """Parse a row's JSON tags column into a set, tolerating bad data."""
+    """Parse a row's JSON tags column into a normalised set, tolerating bad
+    data (see :func:`normalise_tags` for the rule and why)."""
     try:
-        return set(json.loads(tags_json or "[]"))
+        raw = json.loads(tags_json or "[]")
     except (json.JSONDecodeError, TypeError):
         return set()
+    if not isinstance(raw, list):
+        return set()
+    return set(normalise_tags(raw))
 
 
 def _recency_key(last_served_at: str | None) -> tuple[int, str]:
@@ -147,7 +172,7 @@ def _filter_bank_rows(
 ) -> list[tuple[int, str, str | None]]:
     """Apply the shared nsfw/tag rules to raw bank rows.
 
-    Tag rules (in precedence order):
+    Tag rules (in precedence order; all tag comparisons are case-insensitive):
       1. Rows tagged 'nsfw' are excluded unless *allow_nsfw* is True. NSFW is
          gated on the Discord channel's age-restriction flag (see
          :func:`channel_allows_nsfw`); a requested tag cannot re-enable it.
@@ -157,6 +182,7 @@ def _filter_bank_rows(
 
     Returns ``(question_id, question_text, last_served_at)`` triples.
     """
+    requested = set(normalise_tags(requested))
     out: list[tuple[int, str, str | None]] = []
     for qid, text, tags_json, last_served_at in rows:
         row_tags = _parse_tags(tags_json)

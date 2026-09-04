@@ -323,7 +323,7 @@ def test_announcement_warns_beside_a_human_only_panel(
     channel.send.assert_awaited_once()
 
 
-def test_announcement_posts_pins_and_stores_message_id(
+def test_announcement_posts_unpinned_and_stores_message_id(
     authed_client, fake_ctx, monkeypatch
 ):
     # resolve_accent_color reads the bot avatar, which a MagicMock guild
@@ -348,7 +348,11 @@ def test_announcement_posts_pins_and_stores_message_id(
     resp = authed_client.post("/api/survivor/announcement", json={})
     assert resp.status_code == 200
     data = resp.json()
-    assert data["pinned"] is True
+    # Never pinned (2026-09-02): the sticky machinery replaces this exact
+    # message on the next chat line, so a pin only ever lasted until someone
+    # spoke — and left a "pinned a message" notice behind every Wednesday.
+    message.pin.assert_not_awaited()
+    assert "pinned" not in data
     assert data["message_id"] == str(BIG_ID)  # snowflake stays a string
     # Stored in config so the Join flow can refresh the counter.
     over = authed_client.get("/api/survivor/overview").json()
@@ -493,3 +497,71 @@ def test_manual_settle_validation(authed_client, fake_ctx, web_db, body, match):
     resp = authed_client.post("/api/survivor/settle", json=body)
     assert resp.status_code == 422
     assert match in resp.json()["detail"]
+
+
+# ── weekly clock ──────────────────────────────────────────────────────
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def _seed_week1_game(fake_ctx, kickoff: datetime) -> None:
+    """A single week-1 game so pick_week resolves to 1."""
+    with open_db(fake_ctx.db_path) as conn:
+        conn.execute(
+            "INSERT INTO nfl_games (season_year, week, game_id, home, away,"
+            " kickoff_utc, status) VALUES (?, 1, 'w1', 'SEA', 'NE', ?, 'scheduled')",
+            (2026, kickoff.isoformat()),
+        )
+
+
+def test_clock_route_needs_a_season(authed_client):
+    assert authed_client.get("/api/survivor/clock").status_code == 422
+
+
+def test_clock_route_shows_a_spent_week_one(authed_client, fake_ctx):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_slate_week": 1})
+
+    data = authed_client.get("/api/survivor/clock").json()
+    assert data["week"] == 1
+    by = {r["task"]: r for r in data["tasks"]}
+    assert by["slate"]["spent"] is True and by["slate"]["fired_week"] == 1
+    assert by["lastcall"]["spent"] is False
+    assert by["slate"]["next_ts"] > 0
+
+
+def test_reset_rearms_the_slate_and_audits(authed_client, fake_ctx, web_db):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_slate_week": 1})
+
+    resp = authed_client.post("/api/survivor/tasks/slate/reset", json={})
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True, "task": "slate", "week": 1, "fired_week": 0,
+    }
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["last_slate_week"] == 0
+    with open_db(web_db) as conn:
+        row = conn.execute(
+            "SELECT extra FROM audit_log WHERE action = 'survivor_task_reset'"
+        ).fetchone()
+    assert row is not None and '"task": "slate"' in row["extra"]
+    # Nothing left to reset now.
+    again = authed_client.post("/api/survivor/tasks/slate/reset", json={})
+    assert again.status_code == 422
+    assert "nothing to reset" in again.json()["detail"]
+
+
+@pytest.mark.parametrize("task", ["reckoning", "bogus"])
+def test_reset_refuses_the_reckoning_and_unknown_tasks(
+    authed_client, fake_ctx, task
+):
+    _create_season(authed_client)
+    _seed_week1_game(fake_ctx, datetime.now(timezone.utc) + timedelta(days=3))
+    authed_client.put("/api/survivor/config", json={"last_reckoned_week": 1})
+    resp = authed_client.post(f"/api/survivor/tasks/{task}/reset", json={})
+    assert resp.status_code == 422
+    over = authed_client.get("/api/survivor/overview").json()
+    assert over["season"]["config"]["last_reckoned_week"] == 1

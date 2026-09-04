@@ -433,8 +433,10 @@ deliberate ping belongs.
   un-wired caller rendering instead of crashing — which is exactly why the
   wiring needs its own guard: pair the builder table with an **AST test that
   every render site passes a resolver** (`tests/test_casino_embeds.py`,
-  `tests/test_guess_embeds.py` are the two models; a new builder adds a
-  `pytest.param` row, not a new file).
+  `tests/test_guess_embeds.py` are the two models, and
+  `tests/test_embed_name_render_sites.py` is the shared table for games whose
+  guard has no logic file of its own; a new builder adds a `pytest.param`
+  row, not a new file).
 - **Mod-facing embeds keep the id *alongside* the name** — `Name (`id`)` — so a
   moderator retains something copyable. Member-facing cards get the name alone.
 - **The one exception: a no-contact pair.** Where a surface would name two

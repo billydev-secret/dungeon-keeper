@@ -14,6 +14,7 @@ Discord.
 from __future__ import annotations
 
 import random
+from itertools import combinations
 
 import discord
 import pytest
@@ -43,6 +44,7 @@ from bot_modules.games_clapback.logic import (
     find_best_answer_record,
     find_closest_matchup_record,
     pick_round_bye,
+    playable_players,
     shuffled_replay_config,
     sort_scores,
     vote_button_label,
@@ -113,8 +115,8 @@ def test_sort_scores_empty_dict_returns_empty():
 
 def test_create_matchups_three_players_returns_round_robin():
     answers = {"1": "x", "2": "y", "3": "z"}
-    pairs, bye = create_matchups(answers, rng=random.Random(0))
-    assert bye is None
+    pairs, byes = create_matchups(answers, rng=random.Random(0))
+    assert byes == []
     assert len(pairs) == 3
     # Each player appears in exactly 2 of the 3 pairs (round-robin)
     seen: dict[str, int] = {"1": 0, "2": 0, "3": 0}
@@ -133,8 +135,8 @@ def test_create_matchups_three_players_returns_round_robin():
 
 def test_create_matchups_even_count_no_bye():
     answers = {str(i): f"answer{i}" for i in range(1, 5)}  # 4 players
-    pairs, bye = create_matchups(answers, rng=random.Random(0))
-    assert bye is None
+    pairs, byes = create_matchups(answers, rng=random.Random(0))
+    assert byes == []
     assert len(pairs) == 2
     # All four ids are present across the pairs
     flat = [pid for p in pairs for pid in p["pair"]]
@@ -146,7 +148,7 @@ def test_create_matchups_even_count_no_bye():
 
 def test_create_matchups_odd_count_picks_bye():
     answers = {str(i): f"answer{i}" for i in range(1, 6)}  # 5 players
-    pairs, bye = create_matchups(answers, rng=random.Random(0))
+    pairs, (bye,) = create_matchups(answers, rng=random.Random(0))
     assert bye is not None
     assert len(pairs) == 2  # 4 players paired, 1 bye
     flat = [pid for p in pairs for pid in p["pair"]]
@@ -159,7 +161,7 @@ def test_create_matchups_odd_count_skips_players_who_already_had_a_bye():
     cog passes bye ids through as the same str the answer keys use."""
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
     for seed in range(10):
-        _, bye = create_matchups(
+        _, (bye,) = create_matchups(
             answers, bye_history=["3"], rng=random.Random(seed)
         )
         assert bye != "3"
@@ -169,7 +171,7 @@ def test_create_matchups_odd_count_ignores_bye_history_for_absent_players():
     """A bye id that isn't among this round's submitters constrains
     nothing — everyone present is equally overdue."""
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
-    _, bye = create_matchups(answers, bye_history=[999], rng=random.Random(0))
+    _, (bye,) = create_matchups(answers, bye_history=[999], rng=random.Random(0))
     assert bye in ["1", "2", "3", "4", "5"]
 
 
@@ -179,7 +181,7 @@ def test_create_matchups_everyone_byes_once_before_anyone_byes_twice():
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
     history: list[str] = []
     for round_num in range(5):
-        _, bye = create_matchups(
+        _, (bye,) = create_matchups(
             answers, bye_history=history, rng=random.Random(round_num)
         )
         history.append(bye)
@@ -193,7 +195,7 @@ def test_create_matchups_second_lap_reuses_players_with_fewest_byes():
     history = ["1", "2", "3", "4", "5", "1", "2"]
     # 3, 4 and 5 are tied on one bye each; 1 and 2 have two.
     for seed in range(10):
-        _, bye = create_matchups(
+        _, (bye,) = create_matchups(
             answers, bye_history=history, rng=random.Random(seed)
         )
         assert bye in ["3", "4", "5"]
@@ -207,18 +209,18 @@ def test_create_matchups_rotation_survives_a_changing_submitter_set():
     without_two = {k: v for k, v in full.items() if k != "2"}
 
     history: list[str] = []
-    _, bye1 = create_matchups(full, bye_history=history, rng=random.Random(1))
+    _, (bye1,) = create_matchups(full, bye_history=history, rng=random.Random(1))
     history.append(bye1)
     # Round two has an even count without player 2's answer, so no bye.
-    _, bye2 = create_matchups(without_two, bye_history=history, rng=random.Random(2))
-    assert bye2 is None
-    _, bye3 = create_matchups(full, bye_history=history, rng=random.Random(3))
+    _, byes2 = create_matchups(without_two, bye_history=history, rng=random.Random(2))
+    assert byes2 == []
+    _, (bye3,) = create_matchups(full, bye_history=history, rng=random.Random(3))
     assert bye3 != bye1
 
 
 def test_create_matchups_no_bye_history_treats_everyone_equally():
     answers = {str(i): f"answer{i}" for i in range(1, 6)}
-    seen = {create_matchups(answers, rng=random.Random(s))[1] for s in range(25)}
+    seen = {create_matchups(answers, rng=random.Random(s))[1][0] for s in range(25)}
     # With nobody constrained, the bye shouldn't be pinned to one player.
     assert len(seen) > 1
 
@@ -278,8 +280,8 @@ def test_create_matchups_never_drops_a_player_when_dupes_are_unavoidable(seed):
         "1": "same", "2": "same", "3": "same",
         "4": "same", "5": "x", "6": "y",
     }
-    pairs, bye = create_matchups(answers, rng=random.Random(seed))
-    assert bye is None  # even count
+    pairs, byes = create_matchups(answers, rng=random.Random(seed))
+    assert byes == []  # even count
     flat = sorted(str(pid) for p in pairs for pid in p["pair"])
     assert flat == ["1", "2", "3", "4", "5", "6"]
 
@@ -289,7 +291,7 @@ def test_create_matchups_odd_count_pairs_everyone_but_the_bye(seed):
     """Same guarantee with a bye in play: 7 submitters → 3 matchups
     covering the 6 non-bye players, even with unavoidable duplicates."""
     answers = {str(i): "same" for i in range(1, 6)} | {"6": "x", "7": "y"}
-    pairs, bye = create_matchups(answers, rng=random.Random(seed))
+    pairs, (bye,) = create_matchups(answers, rng=random.Random(seed))
     flat = sorted(str(pid) for p in pairs for pid in p["pair"])
     assert len(flat) == 6
     assert str(bye) not in flat
@@ -889,12 +891,17 @@ def test_build_scoreboard_embed_no_bye_omits_bye_field():
 
 def test_build_scoreboard_embed_with_bye_includes_bye_field():
     payload = {"scores": {"1": 100, "2": 50, "3": 0}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3])
+    embed = build_scoreboard_embed(
+        payload, 1, 5, bye_players=[3], name_resolver=_name_resolver
+    )
     field_names = [f.name for f in embed.fields]
     assert "Bye" in field_names
     bye_field = next(f for f in embed.fields if f.name == "Bye")
     assert bye_field.value is not None
-    assert "<@3>" in bye_field.value
+    # A name, never a <@id>: an embed mention renders as digits to anyone whose
+    # client hasn't cached that member.
+    assert "User3" in bye_field.value
+    assert "<@3>" not in bye_field.value
 
 
 def test_build_scoreboard_embed_bye_field_shows_the_actual_award():
@@ -918,14 +925,27 @@ def test_build_scoreboard_embed_bye_award_defaults_to_fifty_for_old_records():
 
 def test_build_scoreboard_embed_sorts_scores_highest_first():
     payload = {"scores": {"1": 30, "2": 100, "3": 50}}
-    embed = build_scoreboard_embed(payload, 2, 5, bye_players=None)
+    embed = build_scoreboard_embed(
+        payload, 2, 5, bye_players=None, name_resolver=_name_resolver
+    )
     sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
     assert sb_field.value is not None
     # Player 2 (100) should appear before player 3 (50) before player 1 (30)
     lines = sb_field.value.splitlines()
-    assert "<@2>" in lines[0]
-    assert "<@3>" in lines[1]
-    assert "<@1>" in lines[2]
+    assert "User2" in lines[0]
+    assert "User3" in lines[1]
+    assert "User1" in lines[2]
+    assert "<@" not in sb_field.value
+
+
+def test_build_scoreboard_embed_default_resolver_keeps_a_mention():
+    """An un-wired caller still renders (as a mention) rather than crashing;
+    the AST test below is what forces the cog to wire a resolver."""
+    embed = build_scoreboard_embed({"scores": {"1": 30}}, 2, 5, bye_players=[2])
+    sb_field = next(f for f in embed.fields if f.name == "📊 Scoreboard")
+    bye_field = next(f for f in embed.fields if f.name == "Bye")
+    assert "<@1>" in (sb_field.value or "")
+    assert "<@2>" in (bye_field.value or "")
 
 
 def test_build_scoreboard_embed_final_round_uses_no_remaining_text():
@@ -1240,8 +1260,8 @@ def test_pick_round_bye_leaves_an_even_field_for_create_matchups():
     players = ["1", "2", "3", "4", "5"]
     bye = pick_round_bye(players, rng=random.Random(1))
     answers = {p: f"answer{p}" for p in players if p != bye}
-    _, late_bye = create_matchups(answers, rng=random.Random(1))
-    assert late_bye is None
+    _, late_byes = create_matchups(answers, rng=random.Random(1))
+    assert late_byes == []
 
 
 def test_pick_round_bye_a_missing_submitter_still_forces_a_late_bye():
@@ -1251,8 +1271,248 @@ def test_pick_round_bye_a_missing_submitter_still_forces_a_late_bye():
     bye = pick_round_bye(players, rng=random.Random(1))
     answers = {p: f"answer{p}" for p in players if p != bye}
     answers.pop(next(iter(answers)))  # someone misses the window → 5 left
-    _, late_bye = create_matchups(answers, rng=random.Random(1))
+    _, (late_bye,) = create_matchups(answers, rng=random.Random(1))
     assert late_bye is not None and late_bye != bye
+
+
+# ── the no-contact gate: a forbidden pair is never a matchup ────────────────
+
+
+def _flat(pairs) -> list[str]:
+    return sorted(str(pid) for p in pairs for pid in p["pair"])
+
+
+def _meets(pairs, a: str, b: str) -> bool:
+    return any({str(p["pair"][0]), str(p["pair"][1])} == {a, b} for p in pairs)
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_create_matchups_three_players_never_seat_the_pair(seed):
+    """Three players would normally round-robin, which *guarantees* the pair
+    meets. With a pair on the list one of the two sits out (paid the bye like
+    any bye) and the other two play one matchup."""
+    answers = {"1": "x", "2": "y", "3": "z"}
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(seed), forbidden_pairs={(1, 2)},
+    )
+    assert not _meets(pairs, "1", "2")
+    assert len(pairs) == 1
+    assert len(byes) == 1 and byes[0] in {"1", "2"}
+    assert sorted(_flat(pairs) + byes) == ["1", "2", "3"]
+
+
+def test_create_matchups_three_players_pair_rotates_the_bye_between_them():
+    """Across a whole game the bye alternates between the two on the list —
+    fewest-byes-first still drives it — and the third player never sits."""
+    answers = {"1": "x", "2": "y", "3": "z"}
+    history: list[str] = []
+    for round_num in range(6):
+        pairs, byes = create_matchups(
+            answers, bye_history=history, rng=random.Random(round_num),
+            forbidden_pairs={(1, 2)},
+        )
+        assert not _meets(pairs, "1", "2")
+        history.extend(byes)
+    assert sorted(history) == ["1", "1", "1", "2", "2", "2"]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_create_matchups_four_players_pair_around_the_forbidden_pair(seed):
+    answers = {str(i): f"answer{i}" for i in range(1, 5)}
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(seed), forbidden_pairs={(1, 2)},
+    )
+    assert byes == []
+    assert len(pairs) == 2
+    assert not _meets(pairs, "1", "2")
+    assert _flat(pairs) == ["1", "2", "3", "4"]
+
+
+@pytest.mark.parametrize(
+    "forbidden",
+    [
+        pytest.param({(2, 1)}, id="ints-reversed"),
+        pytest.param({("1", "2")}, id="strings"),
+        pytest.param([("2", "1")], id="list-of-strings-reversed"),
+    ],
+)
+def test_create_matchups_forbidden_pairs_normalised_either_way_round(forbidden):
+    answers = {str(i): f"answer{i}" for i in range(1, 5)}
+    for seed in range(10):
+        pairs, _ = create_matchups(
+            answers, rng=random.Random(seed), forbidden_pairs=forbidden,
+        )
+        assert not _meets(pairs, "1", "2")
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_create_matchups_a_submitter_blocked_from_everyone_sits_out(seed):
+    """Nobody can be seated opposite them, so they are the bye — and the
+    rest pair cleanly rather than losing a second player to the rotation."""
+    answers = {str(i): f"answer{i}" for i in range(1, 6)}
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(seed),
+        forbidden_pairs={(1, 2), (1, 3), (1, 4), (1, 5)},
+    )
+    assert byes == ["1"]
+    assert _flat(pairs) == ["2", "3", "4", "5"]
+
+
+def test_create_matchups_rotation_bye_never_leaves_a_forbidden_remainder():
+    """Players 4 and 5 are the most overdue for a bye, but benching either
+    leaves 1, 2 and 3 — mutually blocked — needing partners. The bye goes to
+    one of the three instead, and the rest pair safely."""
+    answers = {str(i): f"answer{i}" for i in range(1, 6)}
+    forbidden = {(1, 2), (1, 3), (2, 3)}
+    for seed in range(20):
+        pairs, byes = create_matchups(
+            answers, bye_history=["1", "2", "3"], rng=random.Random(seed),
+            forbidden_pairs=forbidden,
+        )
+        assert len(byes) == 1 and byes[0] in {"1", "2", "3"}
+        assert len(pairs) == 2
+        for a, b in forbidden:
+            assert not _meets(pairs, str(a), str(b))
+        assert sorted(_flat(pairs) + byes) == ["1", "2", "3", "4", "5"]
+
+
+@pytest.mark.parametrize(
+    "answers, forbidden",
+    [
+        pytest.param({"1": "x", "2": "y"}, {(1, 2)}, id="two-who-are-a-pair"),
+        pytest.param(
+            {"1": "x", "2": "y", "3": "z"}, {(1, 2), (1, 3), (2, 3)},
+            id="three-all-blocked",
+        ),
+    ],
+)
+def test_create_matchups_returns_nothing_when_no_matchup_is_safe(answers, forbidden):
+    """No safe matchup at all reads as an empty round — the cog skips it with
+    the ordinary "Not enough answers" line, and nobody is paid a bye for a
+    round that never ran."""
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(0), forbidden_pairs=forbidden,
+    )
+    assert pairs == [] and byes == []
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_create_matchups_falls_back_to_extra_byes_when_no_full_pairing_exists(seed):
+    """Player 1 can face anyone; 2, 3 and 4 can only face player 1. One
+    matchup is all that is safe, so the two left over are byes — never a
+    forbidden matchup, never a dropped player."""
+    answers = {str(i): f"answer{i}" for i in range(1, 5)}
+    forbidden = {(2, 3), (2, 4), (3, 4)}
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(seed), forbidden_pairs=forbidden,
+    )
+    assert len(pairs) == 1 and "1" in _flat(pairs)
+    assert len(byes) == 2
+    assert sorted(_flat(pairs) + byes) == ["1", "2", "3", "4"]
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_create_matchups_gate_holds_alongside_duplicate_avoidance(seed):
+    """Duplicate answers still steer the shuffle, but never into the pair."""
+    answers = {"1": "same", "2": "same", "3": "same", "4": "same", "5": "x", "6": "y"}
+    pairs, byes = create_matchups(
+        answers, rng=random.Random(seed), forbidden_pairs={(1, 5), (2, 6)},
+    )
+    assert byes == []
+    assert _flat(pairs) == ["1", "2", "3", "4", "5", "6"]
+    assert not _meets(pairs, "1", "5") and not _meets(pairs, "2", "6")
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_create_matchups_gate_invariants_under_random_rosters(seed):
+    """Property check: any roster and any forbidden set → no forbidden
+    matchup, and every submitter is seated once or is a bye (the round-robin
+    seats each of three twice)."""
+    rng = random.Random(seed)
+    n = rng.randint(2, 9)
+    ids = [str(i) for i in range(1, n + 1)]
+    answers = {p: rng.choice(["a", "b", "c", f"u{p}"]) for p in ids}
+    forbidden = {
+        (int(a), int(b)) for a, b in combinations(ids, 2) if rng.random() < 0.3
+    }
+    pairs, byes = create_matchups(answers, rng=rng, forbidden_pairs=forbidden)
+    for a, b in forbidden:
+        assert not _meets(pairs, str(a), str(b))
+    seated = _flat(pairs)
+    if pairs == []:
+        assert byes == []
+        return
+    assert len(set(byes)) == len(byes)
+    if len(pairs) == 3 and len(seated) == 6 and len(set(seated)) == 3:
+        # Round-robin: the three seat twice each; anyone the list kept
+        # apart from all of them was benched first and is still a bye.
+        assert sorted(set(seated) | set(byes)) == ids
+        return
+    assert len(set(seated)) == len(seated)
+    assert sorted(seated + byes) == ids
+
+
+def test_create_matchups_without_forbidden_pairs_is_unchanged():
+    """The gate is inert when nothing is forbidden: same shuffle, same bye."""
+    answers = {str(i): f"answer{i}" for i in range(1, 8)}
+    plain = create_matchups(answers, bye_history=["2"], rng=random.Random(4))
+    gated = create_matchups(
+        answers, bye_history=["2"], rng=random.Random(4), forbidden_pairs=set(),
+    )
+    assert plain == gated
+
+
+# ── pick_round_bye honours the same gate ─────────────────────────────────────
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_pick_round_bye_three_players_with_a_pair_benches_one_of_them(seed):
+    bye = pick_round_bye(["1", "2", "3"], rng=random.Random(seed), forbidden_pairs={(1, 2)})
+    assert bye in {"1", "2"}
+
+
+def test_pick_round_bye_three_players_without_a_pair_still_round_robin():
+    assert pick_round_bye(["1", "2", "3"], forbidden_pairs={(4, 5)}) is None
+
+
+def test_pick_round_bye_benches_a_player_blocked_from_everyone():
+    for seed in range(10):
+        bye = pick_round_bye(
+            ["1", "2", "3", "4"], rng=random.Random(seed),
+            forbidden_pairs={(1, 2), (1, 3), (1, 4)},
+        )
+        assert bye == "1"
+
+
+def test_pick_round_bye_even_field_that_pairs_safely_has_no_bye():
+    assert pick_round_bye(["1", "2", "3", "4"], forbidden_pairs={(1, 2)}) is None
+
+
+def test_pick_round_bye_odd_field_leaves_a_safe_remainder():
+    forbidden = {(1, 2), (1, 3), (2, 3)}
+    for seed in range(20):
+        bye = pick_round_bye(
+            ["1", "2", "3", "4", "5"], bye_history=["1", "2", "3"],
+            rng=random.Random(seed), forbidden_pairs=forbidden,
+        )
+        assert bye in {"1", "2", "3"}
+
+
+# ── playable_players: what the Start button counts ───────────────────────────
+
+
+@pytest.mark.parametrize(
+    "players, forbidden, expected",
+    [
+        pytest.param([1, 2, 3], set(), [1, 2, 3], id="nothing-forbidden"),
+        pytest.param([1, 2, 3], {(1, 2)}, [1, 2, 3], id="one-pair-everyone-playable"),
+        pytest.param([1, 2, 3], {(1, 2), (1, 3)}, [2, 3], id="one-blocked-from-both"),
+        pytest.param([1, 2], {(1, 2)}, [], id="two-who-are-a-pair"),
+        pytest.param([1, 2, 3, 4], {(1, 2), (3, 4)}, [1, 2, 3, 4], id="two-pairs"),
+    ],
+)
+def test_playable_players(players, forbidden, expected):
+    assert playable_players(players, forbidden) == expected
 
 
 # ── vote_button_label: the answer goes on the button ─────────────────────────
@@ -1320,9 +1580,13 @@ def test_admit_pending_players_handles_no_queue():
 
 def test_build_scoreboard_embed_renders_multiple_byes():
     payload = {"scores": {"1": 10, "2": 5}}
-    embed = build_scoreboard_embed(payload, 1, 5, bye_players=[3, 4], bye_award=40)
+    embed = build_scoreboard_embed(
+        payload, 1, 5, bye_players=[3, 4], bye_award=40,
+        name_resolver=_name_resolver,
+    )
     field = next(f for f in embed.fields if f.name == "Byes")
-    assert "<@3>" in (field.value or "") and "<@4>" in (field.value or "")
+    assert "User3" in (field.value or "") and "User4" in (field.value or "")
+    assert "<@" not in (field.value or "")
     assert "+40" in (field.value or "") and "each" in (field.value or "")
 
 
@@ -1340,9 +1604,11 @@ def test_build_submit_embed_names_the_benched_player():
     embed = build_submit_embed(
         prompt="p", round_num=1, total_rounds=3, deadline_str="⏰ 60s",
         answers_in=0, total_players=4, bye_player=7,
+        name_resolver=_name_resolver,
     )
     field = next(f for f in embed.fields if "Sitting out" in (f.name or ""))
-    assert "<@7>" in (field.value or "")
+    assert "User7" in (field.value or "")
+    assert "<@7>" not in (field.value or "")
 
 
 def test_build_submit_embed_omits_the_field_with_no_bye():
@@ -1425,3 +1691,40 @@ def test_admit_player_now_recognises_a_second_press_while_queued():
     assert admit_player_now(payload, 3, 10) == "already-queued"
 
     assert payload["pending_players"] == [3]
+
+
+# ── every render site in the cog passes a resolver ───────────────────────────
+
+
+def test_every_clapback_render_site_passes_a_resolver():
+    """``build_submit_embed`` and ``build_scoreboard_embed`` default their
+    resolver to ``mention``, so a render site that forgets to pass one silently
+    reintroduces digits-in-the-scoreboard and no builder test above would
+    notice. This walks the cog and requires every call to a name-taking builder
+    to hand a resolver over."""
+    import ast
+    import inspect
+    import pathlib
+
+    from bot_modules.cogs import games_clapback_cog
+    from bot_modules.games_clapback import embeds as clapback_embeds
+
+    needs = {
+        name
+        for name, fn in inspect.getmembers(clapback_embeds, inspect.isfunction)
+        if "name_resolver" in inspect.signature(fn).parameters
+    }
+    assert {"build_submit_embed", "build_scoreboard_embed"} <= needs
+    # Explicit utf-8: the CI runner is Windows, where the default is cp1252.
+    source = pathlib.Path(inspect.getfile(games_clapback_cog)).read_text(
+        encoding="utf-8"
+    )
+    missed = [
+        f"games_clapback_cog.py:{node.lineno} {node.func.id}()"
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in needs
+        and not any(kw.arg == "name_resolver" for kw in node.keywords)
+    ]
+    assert not missed, "render sites with no name_resolver: " + ", ".join(missed)

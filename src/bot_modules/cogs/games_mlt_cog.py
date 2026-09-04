@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -7,6 +8,8 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.services.name_resolver import NameFn, build_name_fn
+from bot_modules.services.no_contact_service import is_no_contact
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -50,7 +53,6 @@ from bot_modules.games_mlt.logic import (
     MIN_PLAYERS,
     add_player,
     clamp_player_limits,
-    apply_vote,
     bump_crowns,
     can_start,
     encode_round_votes,
@@ -59,6 +61,7 @@ from bot_modules.games_mlt.logic import (
     lobby_is_full,
     pop_next_prompt,
     queue_prompt,
+    record_vote,
     remove_player,
     tally_votes,
 )
@@ -283,15 +286,24 @@ class MLTVoteView(discord.ui.View):
             return
         values = (interaction.data or {}).get("values") or []
         target_id = int(values[0])
-        changed = apply_vote(self.votes, interaction.user.id, target_id)
+        voter_id = interaction.user.id
+        guild_id = interaction.guild_id or 0
 
-        # Persist live votes so a crash mid-round doesn't lose them.
-        def _save(payload):
-            rounds = payload.setdefault("rounds", {})
-            rd = rounds.setdefault(str(self.round_num), {})
-            rd["votes"] = encode_round_votes(self.votes)
+        # The no-contact gate: a blocked pair's pick is dropped, and the ack
+        # below is sent exactly as for a counted vote (docs/no_contact_spec.md).
+        blocked = await asyncio.to_thread(
+            is_no_contact, self.bot.ctx.db_path, guild_id, voter_id, target_id
+        )
+        counted, changed = record_vote(self.votes, voter_id, target_id, blocked=blocked)
 
-        await modify_payload(self.db, self.game_id, _save)
+        if counted:
+            # Persist live votes so a crash mid-round doesn't lose them.
+            def _save(payload):
+                rounds = payload.setdefault("rounds", {})
+                rd = rounds.setdefault(str(self.round_num), {})
+                rd["votes"] = encode_round_votes(self.votes)
+
+            await modify_payload(self.db, self.game_id, _save)
 
         member = self.guild.get_member(target_id) if self.guild else None
         name = member.display_name if member else str(target_id)
@@ -307,13 +319,13 @@ class MLTVoteView(discord.ui.View):
             color=self.accent,
         )
 
-    def _build_results_embed(self, tally: dict) -> discord.Embed:
+    def _build_results_embed(self, tally: dict, name_fn: NameFn) -> discord.Embed:
         return build_results_embed(
             prompt=self.prompt,
             round_num=self.round_num,
             tally=tally,
-            guild=self.guild,
             color=self.accent,
+            name_fn=name_fn,
         )
 
     @discord.ui.button(label="✍️ Pose Prompt", style=discord.ButtonStyle.primary, custom_id="mlt_pose", row=1)
@@ -455,7 +467,13 @@ class MLTCog(commands.Cog):
                 return
             guild = getattr(channel, "guild", None)
             accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
-            embed = build_final_standings_embed(crowns, guild, color=accent)
+            name_fn = await build_name_fn(
+                guild=guild,
+                db_path=self.bot.ctx.db_path,
+                guild_id=getattr(guild, "id", 0),
+                user_ids=[int(uid) for uid in crowns],
+            )
+            embed = build_final_standings_embed(crowns, color=accent, name_fn=name_fn)
             if guild:
                 from bot_modules.economy.game_rewards import append_payout_footer
                 await append_payout_footer(self.bot, embed, guild.id, "mlt")
@@ -590,7 +608,13 @@ class MLTCog(commands.Cog):
 
             tally = tally_votes(view.votes, players)
 
-            results_embed = view._build_results_embed(tally)
+            name_fn = await build_name_fn(
+                guild=guild,
+                db_path=self.bot.ctx.db_path,
+                guild_id=getattr(guild, "id", 0),
+                user_ids=list(tally),
+            )
+            results_embed = view._build_results_embed(tally, name_fn)
             disable_all_items(view)
             try:
                 await message.edit(embed=view._build_embed(closed=True), view=view)

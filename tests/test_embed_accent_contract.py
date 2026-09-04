@@ -29,12 +29,16 @@ from bot_modules.services import economy_bounty_service
 from bot_modules.economy import pin_views as economy_pin_views
 from bot_modules.games import constants as games_constants
 from bot_modules.games_clapback import embeds as clapback_embeds
+from bot_modules.games_compliment import embeds as compliment_embeds
+from bot_modules.games_config import embeds as games_config_embeds
 from bot_modules.games_fantasies import embeds as fantasies_embeds
 from bot_modules.games_hottakes import embeds as hottakes_embeds
+from bot_modules.games_mfk import embeds as mfk_embeds
 from bot_modules.games_mlt import embeds as mlt_embeds
 from bot_modules.games_nhie import embeds as nhie_embeds
 from bot_modules.games_price import embeds as price_embeds
 from bot_modules.games_rushmore import embeds as rushmore_embeds
+from bot_modules.games_session import embeds as session_embeds
 from bot_modules.games_traditional import embeds as traditional_embeds
 from bot_modules.games_ttl import embeds as ttl_embeds
 from bot_modules.games_wyr import embeds as wyr_embeds
@@ -66,6 +70,11 @@ from bot_modules.survivor.logic import OpenGame as _SurvivorGame
 
 # Deliberately no builder defaults to this value.
 ACCENT = discord.Color(0x5A32A8)
+
+
+def _named(uid):
+    """Stand-in ``name_fn`` for builders that name members (never ``<@id>``)."""
+    return f"User{uid}"
 
 
 def case(case_id, build, fallback):
@@ -211,6 +220,14 @@ CASES = [
         None,
     ),
     case(
+        "clapback.submit_bye",
+        lambda **kw: clapback_embeds.build_submit_embed(
+            prompt="p", round_num=1, total_rounds=5, deadline_str="<t:1:R>",
+            answers_in=0, total_players=3, bye_player=7, name_resolver=_named, **kw,
+        ),
+        None,
+    ),
+    case(
         "clapback.vote",
         lambda **kw: clapback_embeds.build_vote_embed(
             answer_a="a", answer_b="b", round_num=1, matchup_index=0,
@@ -222,6 +239,14 @@ CASES = [
         "clapback.scoreboard",
         lambda **kw: clapback_embeds.build_scoreboard_embed(
             {"scores": {"1": 10}}, 1, 5, bye_players=None, **kw
+        ),
+        None,
+    ),
+    case(
+        "clapback.scoreboard_byes",
+        lambda **kw: clapback_embeds.build_scoreboard_embed(
+            {"scores": {"1": 10, "2": 5}}, 1, 5, bye_players=[7], bye_award=40,
+            name_resolver=_named, **kw,
         ),
         None,
     ),
@@ -309,8 +334,22 @@ CASES = [
         discord.Color(games_constants.PHASE_RESULTS),
     ),
     case(
+        "mlt.results_named",
+        lambda **kw: mlt_embeds.build_results_embed(
+            prompt="x", round_num=1, tally={1: 2, 2: 1}, name_fn=_named, **kw
+        ),
+        discord.Color(games_constants.PHASE_RESULTS),
+    ),
+    case(
         "mlt.final_standings",
         lambda **kw: mlt_embeds.build_final_standings_embed({"1": 2}, **kw),
+        discord.Color(games_constants.PHASE_RECAP),
+    ),
+    case(
+        "mlt.final_standings_named",
+        lambda **kw: mlt_embeds.build_final_standings_embed(
+            {"1": 2, "2": 1}, name_fn=_named, **kw
+        ),
         discord.Color(games_constants.PHASE_RECAP),
     ),
     case(
@@ -407,9 +446,60 @@ CASES = [
         None,
     ),
     case(
+        "wyr.round_revealed",
+        lambda **kw: wyr_embeds.build_wyr_embed(
+            "Alice", "fly", "swim", [1], [2], False, 1, revealed=True, name_fn=_named, **kw
+        ),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
+    case(
         "wyr.closed",
         lambda **kw: wyr_embeds.build_closed_embed("Alice", "fly", "swim", [1], [2], True, 1, **kw),
         None,
+    ),
+    case(
+        "wyr.closed_revealed",
+        lambda **kw: wyr_embeds.build_closed_embed(
+            "Alice", "fly", "swim", [1], [2], True, 1, revealed=True, name_fn=_named, **kw
+        ),
+        None,
+    ),
+    # ── spin the compliment / mfk (pairing cards name members via name_fn) ──
+    case(
+        "compliment.pairings",
+        lambda **kw: compliment_embeds.build_pairings_embed(
+            {1: 2, 2: 3, 3: 1}, name_fn=_named, **kw
+        ),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    case(
+        "mfk.assignments",
+        lambda **kw: mfk_embeds.build_assignments_embed(
+            {1: [2, 3, 4], 2: [1, 3, 4]}, name_fn=_named, **kw
+        ),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    # ── session recap + /games game-status (both name members via name_fn) ──
+    case(
+        "session.recap",
+        lambda **kw: session_embeds.build_session_recap_embed(
+            3, [1, 2], "42m", ["🔥 Hottest take: x"], name_fn=_named, **kw
+        ),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    case(
+        "games_config.game_status",
+        lambda **kw: games_config_embeds.build_game_status_embed(
+            {"game_type": "wyr", "state": "playing", "host_id": 1, "game_id": "g1"},
+            name_fn=_named,
+            **kw,
+        ),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    case(
+        "games_config.game_status_idle",
+        lambda **kw: games_config_embeds.build_game_status_embed(None, **kw),
+        discord.Color(games_constants.BRAND_COLOR),
     ),
     # ── two truths and a lie ─────────────────────────────────────────────
     case(
@@ -920,20 +1010,16 @@ KNOWN_UNCOVERED = {
     "bot_modules.games_ama.embeds.build_main_embed",
     "bot_modules.games_ama.embeds.build_panel_embed",
     "bot_modules.games_ama.embeds.build_question_embed",
-    "bot_modules.games_compliment.embeds.build_pairings_embed",
     "bot_modules.games_config.embeds.build_audit_channel_embed",
     "bot_modules.games_config.embeds.build_channel_allowed_embed",
     "bot_modules.games_config.embeds.build_channel_disallowed_embed",
     "bot_modules.games_config.embeds.build_channel_list_embed",
     "bot_modules.games_config.embeds.build_force_end_embed",
-    "bot_modules.games_config.embeds.build_game_status_embed",
     "bot_modules.games_fantasies.embeds.build_round_submit_embed",
     "bot_modules.games_help.embeds.build_help_embed",
     "bot_modules.games_help.embeds.build_support_embed",
-    "bot_modules.games_mfk.embeds.build_assignments_embed",
     "bot_modules.games_rushmore.embeds.build_winner_embed",
     "bot_modules.games_rushmore.embeds.render_draft_board",
-    "bot_modules.games_session.embeds.build_session_recap_embed",
     "bot_modules.games_story.embeds.build_attribution_embed",
     "bot_modules.games_story.embeds.build_complete_story_embed",
     "bot_modules.games_story.embeds.build_turn_embed",
@@ -957,7 +1043,6 @@ KNOWN_UNCOVERED = {
     "bot_modules.services.risky_roll.formatters.build_pending_prompt_content",
     "bot_modules.services.risky_roll.formatters.build_pending_question_summary",
     "bot_modules.services.risky_roll.formatters.build_question_reply_content",
-    "bot_modules.services.risky_roll.formatters.build_rolloff_embed",
     "bot_modules.services.embeds.build_admin_mirror_embed",
     "bot_modules.starboard.embeds.build_starboard_embed",
     "bot_modules.voice_master.embeds.build_claim_done_embed",

@@ -96,6 +96,21 @@ def pick_week(conn: sqlite3.Connection, season_year: int, now: float) -> int | N
     return min(open_weeks) if open_weeks else None
 
 
+def week_first_kickoff(
+    conn: sqlite3.Connection, season_year: int, week: int
+) -> float | None:
+    """Epoch seconds of the week's earliest non-postponed kickoff — the
+    moment the week actually starts, as opposed to the moment ``pick_week``
+    starts returning it (which for Week 1 is the schedule ingest, weeks
+    earlier). None when the week has no games."""
+    row = conn.execute(
+        "SELECT MIN(kickoff_utc) AS k FROM nfl_games "
+        "WHERE season_year = ? AND week = ? AND status != 'postponed'",
+        (season_year, week),
+    ).fetchone()
+    return kickoff_ts(row["k"]) if row and row["k"] else None
+
+
 def elapsed_weeks(conn: sqlite3.Connection, season_year: int, now: float) -> list[int]:
     """Weeks whose every game has kicked off — the gauntlet-replayed ones
     (§1.9). A week with any open game is picked live instead, so it is not
