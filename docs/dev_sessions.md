@@ -227,6 +227,30 @@ very window it runs in; without the delay the ship report dies with the pane. Pa
 Teardown deletes the branch with `git branch -d`, so unmerged work is never silently
 dropped — it says "kept branch — not merged into main" and leaves it.
 
+## Before a restart: `/dk-regress`
+
+`/dk-ship` is per-feature and deliberately fast — a scoped gate, and heavy checks
+left to CI. That means a batch of merged branches has never been checked *together*
+on the tree that is about to run. `/dk-regress` is that check, run on `main` in the
+prod checkout:
+
+1. the full gate with both heavy checks forced back on
+   (`scripts/gate.py --pyright --browser`) — ruff, pyright, the whole suite, and a
+   sweep of every panel at every viewport;
+2. `npx eslint` + `npx stylelint`, the blocking CI lint job, reproduced locally;
+3. the `standards-review` agent over everything since the **deployed** commit;
+4. the migrations that will apply at the next boot, with destructive ones called out.
+
+Step 3 needs to know what is currently running. The restart timestamp gives it:
+
+    T=$(systemctl show dungeon-keeper --property=ActiveEnterTimestamp --value)
+    DEPLOYED=$(git rev-list -1 --before="$T" main)
+
+so the scan reviews exactly the delta a restart would put in front of members,
+rather than a branch or an arbitrary tag.
+
+It reports go/no-go and stops. Restarting is Billy's button, always.
+
 ## Scratch space under /tmp
 
 Each session's agent keeps a scratch directory at /tmp/claude-<uid>/<cwd with

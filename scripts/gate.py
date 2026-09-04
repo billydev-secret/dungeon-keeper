@@ -470,10 +470,17 @@ def _browser_available(py: str) -> bool:
 _BROWSER_TESTS = (TESTS / "web",)
 
 
-def run_mobile(py: str, changed: list[str]) -> None:
-    """Run the scoped browser checks (layout + console) if dashboard assets
-    changed and a browser is available; else print why it skipped (non-fatal)."""
-    should, panels = mobile_scope(changed)
+def run_mobile(py: str, changed: list[str], *, all_panels: bool = False) -> None:
+    """Run the browser checks (layout + console) if a browser is available.
+
+    Scoped to the panels a diff touches by default; ``all_panels`` sweeps
+    everything, which is what a full pre-release run wants — it has no diff to
+    scope to. Non-fatal without a browser, so a plain machine still commits.
+    """
+    if all_panels:
+        should, panels = True, None
+    else:
+        should, panels = mobile_scope(changed)
     if not should:
         return
     label = "all panels" if panels is None else ", ".join(sorted(panels))
@@ -624,6 +631,11 @@ def main() -> None:
         return
 
     run_pytest(py, *pytest_args)
+    # A full run sweeps every panel rather than scoping to a diff: there is no
+    # diff to scope to, and this tier exists to be thorough. Only on request —
+    # the sweep is CI's by default (see wants_heavy).
+    if browser_check:
+        run_mobile(py, changed=[], all_panels=True)
     mark_full_gate()
     print("GATE OK")
 

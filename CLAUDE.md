@@ -135,6 +135,11 @@ SQLite-backed. Tests in `tests/`.
   warning (add `tests/test_<feature>_logic.py`, or `--no-verify` if it's
   genuinely covered by an existing test under another name). `git commit
   --no-verify` bypasses the hook.
+- **`/dk-regress`** — the pre-release check, run on `main` in the prod checkout
+  when a batch of merges is ready to go live: the full gate with pyright and the
+  all-panel browser sweep forced back on, both JS linters, a `standards-review`
+  scan of everything since the running bot's commit, and the list of migrations
+  the restart will apply. It never restarts anything.
 - `python scripts/gate.py` — full pytest (xdist-parallel; `-n 0` to debug a
   single test). **Run it on `main` once a batch of merges is complete** — that
   is where the work branches' deferred full runs are paid, and where a clean

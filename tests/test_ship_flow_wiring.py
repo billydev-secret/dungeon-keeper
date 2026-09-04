@@ -16,6 +16,7 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _SHIP = _ROOT / ".claude" / "commands" / "dk-ship.md"
+_REGRESS = _ROOT / ".claude" / "commands" / "dk-regress.md"
 _AGENT = _ROOT / ".claude" / "agents" / "standards-review.md"
 
 pytestmark = pytest.mark.skipif(
@@ -61,3 +62,26 @@ def test_the_standards_agent_is_read_only():
     )
     for writer in ("Edit", "Write", "NotebookEdit"):
         assert writer not in tools, f"standards-review must not hold {writer}"
+
+
+# ── the pre-release command ───────────────────────────────────────────
+
+
+def test_dk_regress_exists_and_calls_the_standards_agent():
+    assert _REGRESS.exists(), "the pre-release command is gone"
+    s = _REGRESS.read_text(encoding="utf-8")
+    assert "standards-review" in s
+
+
+def test_dk_regress_forces_both_heavy_checks_back_on():
+    """The per-commit tiers dropped pyright and the sweep; this tier is where
+    they are paid before code reaches members, so it must ask for them."""
+    s = _REGRESS.read_text(encoding="utf-8")
+    assert "--pyright" in s and "--browser" in s
+
+
+def test_dk_regress_never_restarts_the_service():
+    """Restarting prod is the user's button, always."""
+    s = _REGRESS.read_text(encoding="utf-8").lower()
+    assert "systemctl restart" not in s
+    assert "never restarts" in s

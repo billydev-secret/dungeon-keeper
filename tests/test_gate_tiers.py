@@ -51,6 +51,20 @@ def test_the_full_local_gate_runs_neither_heavy_check():
     assert gate.wants_heavy(quick=False, forced=False) is False
 
 
+def test_a_forced_full_run_sweeps_every_panel_not_a_diff():
+    """/dk-regress forces the sweep on a tree with no diff to scope to.
+
+    `run_mobile` scopes to changed panels by default, which on a clean main
+    selects nothing — so the pre-release tier must be able to ask for all of
+    them explicitly, or `--browser` is a silent no-op there.
+    """
+    import inspect
+
+    sig = inspect.signature(gate.run_mobile)
+    assert "all_panels" in sig.parameters
+    assert sig.parameters["all_panels"].default is False
+
+
 def _workflow(name: str) -> dict:
     return yaml.safe_load(
         (_WORKFLOWS / name).read_text(encoding="utf-8")  # cp1252 runners exist
