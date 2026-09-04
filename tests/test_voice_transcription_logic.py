@@ -13,13 +13,13 @@ from types import SimpleNamespace
 from bot_modules.core.db_utils import open_db
 from bot_modules.cogs.voice_transcription_cog import (
     _audio_attachment,
-    format_transcript,
     transcript_prefix,
 )
 from bot_modules.services.voice_transcription_service import (
     MAX_TRANSCRIPT_CHARS,
     fit_transcript,
     split_transcript,
+    was_truncated,
     get_config,
     set_config,
 )
@@ -30,26 +30,24 @@ GUILD = 1469491362444480666
 @pytest.mark.parametrize(
     ("speaker", "expected"),
     [
-        pytest.param("Billy", "📝 **Billy:** walk the site", id="plain"),
+        pytest.param("Billy", "📝 **Billy:** ", id="plain"),
         # A display name is member-controlled text landing in a bot message; an
         # unescaped * or _ would reformat the transcript that follows it.
+        pytest.param("*Billy*", "📝 **\\*Billy\\*:** ", id="escapes-markdown"),
         pytest.param(
-            "*Billy*", "📝 **\\*Billy\\*:** walk the site", id="escapes-markdown"
-        ),
-        pytest.param(
-            "under_score", "📝 **under\\_score:** walk the site", id="escapes-underscore"
+            "under_score", "📝 **under\\_score:** ", id="escapes-underscore"
         ),
     ],
 )
 def test_the_transcript_names_the_speaker_and_escapes_the_name(speaker, expected):
-    assert format_transcript(speaker, "walk the site") == expected
+    assert transcript_prefix(speaker) == expected
 
 
 def test_the_transcript_is_not_a_reply_so_it_carries_attribution():
     """Regression guard for why this function exists at all: the transcript used
     to be a reply to the voice message. Deleting the audio leaves a reply
     dangling, so the line has to say whose note it was on its own."""
-    line = format_transcript("Billy", "hello")
+    line = transcript_prefix("Billy") + "hello"
     assert "Billy" in line and line.startswith("📝")
 
 
@@ -285,7 +283,32 @@ def test_the_two_posting_paths_take_the_split_and_the_fit():
 
     listener = inspect.getsource(cog.VoiceTranscriptionCog._on_message)
     assert "fit_transcript(" in listener
-    assert "channel.send(format_transcript" not in listener
+    assert "channel.send(text" not in listener
+
+
+def test_a_truncated_transcript_is_recognisable():
+    """The listener has to tell a whole transcript from a cut one."""
+    prefix = transcript_prefix("Billy")
+    assert not was_truncated(fit_transcript("walk the site", prefix=prefix))
+    assert was_truncated(fit_transcript("word " * 2000, prefix=prefix))
+
+
+def test_a_truncated_transcript_does_not_authorise_deleting_the_audio():
+    """Otherwise the cut tail is destroyed with nothing left to recover it from.
+
+    The clip is the only copy of what did not fit, so delete-after-transcribe
+    has to stand down when the transcript could not carry the whole note.
+    """
+    import inspect
+
+    from bot_modules.cogs import voice_transcription_cog as cog
+
+    listener = inspect.getsource(cog.VoiceTranscriptionCog._on_message)
+    gate = listener.index("delete_after_transcribe")
+    assert "was_truncated(posted)" in listener[gate:]
+    assert listener.index("was_truncated(posted)") < listener.index(
+        "await message.delete()"
+    )
 
 
 def test_the_menu_is_user_installable_and_allowed_in_dms():

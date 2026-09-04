@@ -143,6 +143,16 @@ def fit_transcript(
     return prefix + head + _TRUNCATED_NOTE
 
 
+def was_truncated(message: str) -> bool:
+    """Whether a message built by :func:`fit_transcript` had to be cut.
+
+    The listener asks because the clip is the only copy of what the cut
+    removed: deleting the audio behind a truncated transcript would destroy
+    the tail of what someone said with nothing left to recover it from.
+    """
+    return message.endswith(_TRUNCATED_NOTE)
+
+
 def split_transcript(
     text: str, limit: int = MAX_TRANSCRIPT_CHARS, prefix: str = ""
 ) -> list[str]:

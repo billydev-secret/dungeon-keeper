@@ -24,6 +24,7 @@ from bot_modules.services.voice_transcription_service import (
     is_available,
     split_transcript,
     transcribe_file,
+    was_truncated,
 )
 
 if TYPE_CHECKING:
@@ -99,11 +100,6 @@ def transcript_prefix(speaker: str) -> str:
     ``*`` or ``_`` would otherwise reformat the transcript after it.
     """
     return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** "
-
-
-def format_transcript(speaker: str, text: str) -> str:
-    """One transcript message: the speaker prefix and the text after it."""
-    return transcript_prefix(speaker) + text
 
 
 class VoiceTranscriptionCog(commands.Cog):
@@ -248,26 +244,38 @@ class VoiceTranscriptionCog(commands.Cog):
         # Discord reject any note over the 2000-character cap outright, so a
         # long note auto-transcribed to nothing at all.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        await message.channel.send(
-            fit_transcript(text, prefix=transcript_prefix(speaker))
-        )
+        posted = fit_transcript(text, prefix=transcript_prefix(speaker))
+        await message.channel.send(posted)
 
         # Only after the transcript is safely posted, and only on success: a
         # failed transcribe returns above, so the audio is never destroyed
         # without something to show for it.
-        if cfg.delete_after_transcribe:
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                log.warning(
-                    "Cannot delete voice message in #%s — the bot needs Manage "
-                    "Messages there; transcript posted, audio left in place",
-                    getattr(message.channel, "name", message.channel.id),
-                )
-            except discord.NotFound:
-                pass  # already gone; the transcript still stands
-            except discord.HTTPException:
-                log.warning("Deleting the voice message failed", exc_info=True)
+        if not cfg.delete_after_transcribe:
+            return
+
+        # A truncated transcript is not something to show for all of it. The
+        # clip is the only copy of what the cut removed, so a note too long for
+        # one message keeps its audio rather than losing its tail for good.
+        if was_truncated(posted):
+            log.info(
+                "Voice message in #%s kept: the transcript did not fit one "
+                "message, and the clip is the only copy of the rest",
+                getattr(message.channel, "name", message.channel.id),
+            )
+            return
+
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            log.warning(
+                "Cannot delete voice message in #%s — the bot needs Manage "
+                "Messages there; transcript posted, audio left in place",
+                getattr(message.channel, "name", message.channel.id),
+            )
+        except discord.NotFound:
+            pass  # already gone; the transcript still stands
+        except discord.HTTPException:
+            log.warning("Deleting the voice message failed", exc_info=True)
 
 
 async def setup(bot: Bot) -> None:

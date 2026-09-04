@@ -39,6 +39,8 @@ The two paths then diverge, deliberately:
 - **On demand (context menu)** — `split_transcript` spreads the transcript over as many messages as it takes, with **no cap** on the number of parts. Someone who explicitly pressed the button asked for the whole note. Only the first part carries the speaker prefix and no part is marked as a continuation: repeating `📝 **Name:**` would read as several separate notes rather than one that runs on.
 - **Automatic (listener)** — `fit_transcript` keeps to a single message, appending the truncation note when it trims. An auto-post nobody asked for should not be able to fill a channel, and a transcript that simply stopped mid-sentence would read as a failure, so the cut is announced. The note is paid for out of the budget rather than added on top.
 
+`delete_after_transcribe` stands down whenever the fit truncated (`was_truncated`): the clip is the only copy of the part that did not fit, so an auto-post that could not carry the whole note leaves the audio in place and logs why. A whole transcript still authorises the delete as before.
+
 Until 2026-09-03 the listener posted raw text with no fitter at all: any note over the cap was rejected by Discord with a 400 raised out of the listener, so a long auto-transcribed note produced **nothing** — no transcript, and (because the send raised before it) no `delete_after_transcribe`, which at least left the audio in place.
 
 ### Availability
