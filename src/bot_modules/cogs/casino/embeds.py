@@ -34,7 +34,7 @@ from bot_modules.core.meters import mono
 from bot_modules.economy.leaderboard import bar_fill
 from bot_modules.services import casino_logic as logic
 from bot_modules.services import pools_charts, pools_logic
-from bot_modules.services.casino_service import CasinoSettings, MinesStep
+from bot_modules.services.casino_service import CasinoSettings, MinesStep, comp_on
 from bot_modules.services.economy_service import EconSettings
 from bot_modules.services.branding_service import DEFAULT_CASINO_NAME
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_GREEN, COLOR_RED
@@ -58,7 +58,10 @@ _GAME_LINES = {
     ),
     "slots": "🎰 **Slots** — three spinning reels; pairs pay back, sevens pay big",
     "blackjack": "🃏 **Blackjack** — beat the dealer to 21; naturals pay 3:2",
-    "roulette": "🎡 **Roulette** — one wheel, one window, everyone bets together",
+    "roulette": (
+        "🎡 **Roulette** — red, black, a dozen, or a number; stack your bets, "
+        "then spin"
+    ),
     "derby": "🏇 **Derby** — six critters, one finish line; back your favorite",
     "baccarat": "🎴 **Baccarat** — Player, Banker, or Tie; nearest to nine wins",
     "dice": "🎲 **Dice** — three dice, one roll; call Big, Small, Odd, or Even",
@@ -143,7 +146,14 @@ def _running_note(
     return f"{note} {above}."
 
 
-_TICKER_EMOJI = {"coinflip": "🪙", "slots": "🎰", "blackjack": "🃏", "war": "⚔️"}
+# Each ticker row leads with its table's emoji — the same glyph the Tables
+# list uses, taken from that table rather than kept as a second copy: a
+# hand-maintained map stopped at the original four instant games and left
+# Mines, roulette, derby, baccarat and keno all rendering as the Dice 🎲
+# (casino-140).
+_TICKER_EMOJI = {
+    game: line.split(" ", 1)[0] for game, line in _GAME_LINES.items()
+}
 
 
 def ticker_line(
@@ -210,25 +220,21 @@ def build_hub_embed(
             ) + "\n​",
             inline=False,
         )
-    if standings is not None:
-        earner, loser = standings
-        rows = []
-        if earner is not None:
-            rows.append(
+    # Only the day's biggest winner is crowned. ``standings`` still carries
+    # the biggest loser (daily_standings computes both), but the hub is a
+    # public panel and naming someone at −17,495 there is a pillory, not
+    # the harm-reduction control the plans imagined (casino-137, D6). A
+    # member's own losses are theirs to read on 📊 My Stats.
+    if standings is not None and standings[0] is not None:
+        earner = standings[0]
+        embed.add_field(
+            name="📊 Today at the Tables",
+            value=(
                 f"📈 Up most: {name_fn(earner[0])} · "
-                f"**+{earner[1]:,}** {econ.currency_plural}"
-            )
-        if loser is not None:
-            rows.append(
-                f"📉 Down most: {name_fn(loser[0])} · "
-                f"**−{abs(loser[1]):,}** {econ.currency_plural}"
-            )
-        if rows:
-            embed.add_field(
-                name="📊 Today at the Tables",
-                value="\n".join(rows) + "\n​",
-                inline=False,
-            )
+                f"**+{earner[1]:,}** {econ.currency_plural}\n​"
+            ),
+            inline=False,
+        )
     limits = [f"Bets: **{settings.min_bet:,}**–**{settings.max_bet:,}**"
               if settings.max_bet else f"Bets: **{settings.min_bet:,}**+"]
     if settings.daily_wager_cap:
@@ -236,9 +242,48 @@ def build_hub_embed(
             f"Daily table limit: **{settings.daily_wager_cap:,}** "
             f"{econ.currency_plural} staked per player"
         )
+    if comp_on(settings):
+        limits.append(
+            f"🎁 Daily comp: a free **{settings.daily_comp:,}**-"
+            f"{econ.currency_name} slots spin, once a day"
+        )
     embed.add_field(name="House Rules", value=" · ".join(limits), inline=False)
     apply_section_spacing(embed)
     return embed
+
+
+def build_comp_embed(
+    econ: EconSettings,
+    user_id: int,
+    reels: tuple[str, str, str],
+    amount: int,
+    payout: int,
+    label: str | None,
+    accent: discord.Color | None,
+    *,
+    casino_name: str = DEFAULT_CASINO_NAME,
+    name_fn: NameFn = mention,
+) -> discord.Embed:
+    """The 🎁 Daily Comp result — the member's private card for a spin the
+    house paid for. A win is results-green like any other; a blank spin
+    cost nothing, so it wears the accent rather than the loss red."""
+    reel_line = _reel_row(reels)
+    title = f"🎁 {casino_name} Daily Comp"
+    if payout > 0:
+        desc = (
+            f"{reel_line}\n\n{label} The house spotted {name_fn(user_id)} a "
+            f"free {_coins(econ, amount)} spin and it paid "
+            f"{_coins(econ, payout)}."
+        )
+        color: discord.Color | int = COLOR_GREEN
+    else:
+        desc = (
+            f"{reel_line}\n\nThe house spotted {name_fn(user_id)} a free "
+            f"{_coins(econ, amount)} spin — no luck this time, and it cost "
+            "nothing. There's another tomorrow."
+        )
+        color = _accent(accent)
+    return discord.Embed(title=title, description=desc, color=color)
 
 
 def build_help_embed(
@@ -522,6 +567,7 @@ def build_big_win_broadcast(
     payout: int,
     threshold: int,
     stake: int,
+    min_mult: int,
     game_label: str,
     top_pct_payout: int | None = None,
     ping_enabled: bool = True,
@@ -544,8 +590,8 @@ def build_big_win_broadcast(
     on, so the stake gate is load-bearing for more than the copy.
     """
     tier = logic.big_win_tier(
-        payout, threshold, stake=stake, top_pct_payout=top_pct_payout,
-        ping_enabled=ping_enabled,
+        payout, threshold, stake=stake, min_mult=min_mult,
+        top_pct_payout=top_pct_payout, ping_enabled=ping_enabled,
     )
     if tier is None:
         return None
@@ -732,7 +778,9 @@ def _add_bets_field(
     limit — a long currency name or big stakes must never 400 the repaint
     and silently freeze the board (the result embed's cap_lines rule)."""
     if not bets:
-        embed.add_field(name="Bets", value="*No bets yet — be first.*", inline=False)
+        # A private board has one player, so there is nobody to be first
+        # ahead of (casino-132).
+        embed.add_field(name="Bets", value="*No bets yet.*", inline=False)
         return
     lines = [
         f"{name_fn(uid)} — {desc} · {_coins(econ, amount)}"
@@ -757,15 +805,32 @@ def build_roulette_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
-        title="🎡 Roulette — Bets Open!",
+        title="🎡 Roulette — Your Wheel",
         description=(
-            f"The wheel spins <t:{int(closes_at)}:R>. "
-            "Pick a color, a dozen, or go all-in on a single number.\n​"
+            _solo_board_lead("wheel", "🎡 Spin", "spins itself", closes_at)
+            + " Pick a color, a dozen, or go all-in on a single number.\n​"
         ),
         color=_accent(accent),
     )
     _add_bets_field(embed, econ, bets, name_fn=name_fn)
     return embed
+
+
+def _solo_board_lead(
+    thing: str, button: str, auto: str, closes_at: float
+) -> str:
+    """The opening line every private-round board shares (casino-132).
+
+    A round has belonged to one player since migration 158, but the boards
+    kept the communal-countdown copy ("bets open!", "the wheel spins
+    <t:R>") with no hint that a button resolves it, so a third of prod
+    rounds sat until the abandonment sweep. The line says whose the board
+    is, which button ends it, and that the timestamp is only the fallback.
+    """
+    return (
+        f"Your own {thing}. Stack bets, then press {button}. "
+        f"Left alone it {auto} <t:{int(closes_at)}:R>."
+    )
 
 
 _COLOR_DOTS = {"red": "🔴", "black": "⚫", "green": "🟢"}
@@ -832,10 +897,10 @@ def build_derby_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, runner description, amount), placement order."""
     embed = discord.Embed(
-        title="🏇 Meadow Derby — They're at the Gate!",
+        title="🏇 Meadow Derby — Your Race",
         description=(
-            f"The race starts <t:{int(closes_at)}:R>. "
-            "Back a critter — payouts are total return on your bet.\n​"
+            _solo_board_lead("race", "🏇 Race", "runs itself", closes_at)
+            + " Back a critter — payouts are total return on your bet.\n​"
         ),
         color=_accent(accent),
     )
@@ -927,10 +992,10 @@ def build_baccarat_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, side description, amount), placement order."""
     embed = discord.Embed(
-        title="🎴 Baccarat — Bets Open!",
+        title="🎴 Baccarat — Your Coup",
         description=(
-            f"The cards come down <t:{int(closes_at)}:R>. "
-            "Back the Player, the Banker, or the long-shot Tie — "
+            _solo_board_lead("shoe", "🎴 Deal", "deals itself", closes_at)
+            + " Back the Player, the Banker, or the long-shot Tie — "
             "nearest to nine wins.\n​"
         ),
         color=_accent(accent),
@@ -1033,10 +1098,10 @@ def build_dice_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, bet description, amount), placement order."""
     embed = discord.Embed(
-        title="🎲 Dice — Bets Open!",
+        title="🎲 Dice — Your Roll",
         description=(
-            f"Three dice roll <t:{int(closes_at)}:R>. "
-            "Call Big, Small, Odd, or Even — but any triple sweeps "
+            _solo_board_lead("table", "🎲 Roll", "rolls itself", closes_at)
+            + " Call Big, Small, Odd, or Even — but any triple sweeps "
             "the table.\n​"
         ),
         color=_accent(accent),
@@ -1116,10 +1181,10 @@ def build_keno_round_embed(
 ) -> discord.Embed:
     """``bets`` = (user_id, ticket description, amount), placement order."""
     embed = discord.Embed(
-        title="🔢 Keno — Tickets Open!",
+        title="🔢 Keno — Your Draw",
         description=(
-            f"The draw drops <t:{int(closes_at)}:R>. "
-            "Pick a tier — the house quick-picks your numbers, fate does "
+            _solo_board_lead("draw", "🔢 Draw", "draws itself", closes_at)
+            + " Pick a tier — the house quick-picks your numbers, fate does "
             "the rest.\n​"
         ),
         color=_accent(accent),
@@ -1287,8 +1352,15 @@ def build_my_stats_embed(
     cap: int,
     reset_ts: float,
     accent: discord.Color | None,
+    *,
+    comp_amount: int = 0,
+    comp_claimed: bool = False,
 ) -> discord.Embed:
-    """The hub's 📊 My Stats ephemeral — personal tally + cap headroom."""
+    """The hub's 📊 My Stats ephemeral — personal tally + cap headroom.
+
+    ``comp_amount`` > 0 adds the daily comp's state: the hub panel is one
+    shared message, so this private card is where a member learns whether
+    today's 🎁 is still theirs to take."""
     embed = discord.Embed(title="📊 Your Night at the Tables", color=_accent(accent))
     if stats is not None and int(stats["plays"]) > 0:
         wagered = int(stats["wagered"])
@@ -1318,6 +1390,17 @@ def build_my_stats_embed(
             value=(
                 f"**{used:,}** of **{cap:,}** {econ.currency_plural} wagered "
                 f"· resets <t:{int(reset_ts)}:R>"
+            ),
+            inline=False,
+        )
+    if comp_amount > 0:
+        embed.add_field(
+            name="🎁 Daily Comp",
+            value=(
+                f"Claimed · the next one is yours <t:{int(reset_ts)}:R>"
+                if comp_claimed else
+                f"Waiting for you — a free {_coins(econ, comp_amount)} "
+                "slots spin, on the house. Press 🎁 Daily Comp on the panel."
             ),
             inline=False,
         )
@@ -1359,8 +1442,16 @@ def build_pools_panel_embed(
     *,
     spec,
     closed: bool = False,
+    closing_soon: bool = False,
 ) -> discord.Embed:
     """The standing market panel, repainted as stakes land.
+
+    ``closing_soon`` is the last hour of open betting (``pools_logic.
+    closing_soon``); ``closed`` wins over it. A one-sided pool gets its own
+    warning field naming the empty side and what happens if it stays that
+    way — a quarter of prod markets voided because every bettor backed the
+    same side, and the only place that rule was written was the void card,
+    after the fact (casino-136).
 
     Deliberately states what the number means and where it comes from: this
     is the only game in the casino whose outcome is not something members
@@ -1373,11 +1464,12 @@ def build_pools_panel_embed(
     ``spec.cap_note`` prints next to the buttons, not in the manual.
     """
     prob = pools_logic.implied_probability(split)
-    when = (
-        "Betting is **closed** — settles when the day rolls over."
-        if closed
-        else f"Betting closes <t:{int(closes_at)}:R>."
-    )
+    if closed:
+        when = "Betting is **closed** — settles when the day rolls over."
+    elif closing_soon:
+        when = f"⏰ **Last hour** — betting closes <t:{int(closes_at)}:R>."
+    else:
+        when = f"Betting closes <t:{int(closes_at)}:R>."
     embed = discord.Embed(
         title=f"📈 Pools — today's market · {spec.label}",
         description=(
@@ -1396,13 +1488,26 @@ def build_pools_panel_embed(
     embed.add_field(
         name="Pool", value=_coins(econ, split.total), inline=True
     )
+    empty = pools_logic.unbacked_side(split)
+    if empty is not None and not closed:
+        embed.add_field(
+            name="⚠️ One-Sided So Far",
+            value=(
+                f"Nobody has backed **{pools_logic.describe_side(empty)}** "
+                "yet. If it's still empty when betting closes there's no "
+                "one to play against — the market is called off and every "
+                "stake is refunded.\n​"
+            ),
+            inline=False,
+        )
     embed.add_field(
         name="How It Settles",
         value=(
             "Winners split the whole pool pro-rata — you're betting against "
-            "the other side, not the house. The bot counts it up when the "
-            "day rolls over and compares it to the line; there is nothing "
-            "to dispute."
+            "the other side, not the house. Both sides need a stake: if "
+            "everyone backs the same side, the market is called off and "
+            "refunded in full. The bot counts it up when the day rolls over "
+            "and compares it to the line; there is nothing to dispute."
             + (f"\n{spec.cap_note}" if spec.cap_note else "")
             + "\n​"
         ),

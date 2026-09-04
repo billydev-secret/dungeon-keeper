@@ -23,6 +23,7 @@ two games with a join phase enforce their player limits.
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -349,3 +350,73 @@ def test_game_night_ping_dial_is_the_key_the_sweep_pings() -> None:
     assert "GAME_NIGHT_PING.key" in route
     sweep = (_ROOT / "src" / "bot_modules" / "services" / "game_start_ping_service.py").read_text(encoding="utf-8")
     assert "GAME_NIGHT_PING.key" in sweep and "role_only_mentions" in sweep
+
+
+# ── the casino panel (Economy → Casino) ───────────────────────────────
+#
+# Not an optSchema panel: its dials are numInput/checkbox names PUT to
+# /api/config/casino and read back through ``CasinoSettings``. Same rule
+# though — every name the panel offers must be a field the service loads,
+# and the copy must describe what the broadcast does now.
+
+_CASINO_PANEL = _PANELS / "config-casino.js"
+
+
+def _casino_panel_dials() -> list[str]:
+    src = _CASINO_PANEL.read_text(encoding="utf-8")
+    return re.findall(r'(?:numInput|checkbox)\(\s*"([a-z_]+)"', src)
+
+
+def test_every_casino_panel_dial_is_a_setting_the_service_loads() -> None:
+    from dataclasses import fields
+
+    from bot_modules.services.casino_service import CasinoSettings
+
+    dials = _casino_panel_dials()
+    assert dials, "the casino panel declares no dials — did the regex rot?"
+    known = {f.name for f in fields(CasinoSettings)}
+    unread = [d for d in dials if d not in known]
+    assert not unread, f"config-casino.js offers dials nothing loads: {unread}"
+
+
+def test_the_casino_broadcast_multiple_is_a_panel_dial() -> None:
+    """D6 (2026-09-02): the big-win broadcast needs a real multiple, and the
+    multiple is an admin dial, not a constant."""
+    assert "broadcast_min_mult" in _casino_panel_dials()
+
+
+def test_the_casino_daily_comp_is_a_dial_that_ships_dark_and_is_enforced() -> None:
+    """casino-134 (2026-09-04): the return hook is a panel dial, it defaults
+    to off, and both the hub button and the claim itself read it — an
+    admin who never touches the panel gets no comp, and one who sets it
+    gets exactly one spin per member per day."""
+    from bot_modules.cogs.casino.views import build_hub_view
+    from bot_modules.services.casino_service import (
+        DEFAULT_CASINO_SETTINGS,
+        CasinoSettings,
+        claim_daily_comp,
+        comp_on,
+    )
+
+    assert "daily_comp" in _casino_panel_dials()
+    assert DEFAULT_CASINO_SETTINGS.daily_comp == 0
+    assert not comp_on(DEFAULT_CASINO_SETTINGS) and comp_on(CasinoSettings(daily_comp=5))
+    hub_ids = {
+        getattr(item, "custom_id", "") for item in build_hub_view(DEFAULT_CASINO_SETTINGS).children
+    }
+    assert "casino:comp" not in hub_ids
+    assert "casino:comp" in {
+        getattr(item, "custom_id", "")
+        for item in build_hub_view(CasinoSettings(daily_comp=5)).children
+    }
+    # The claim reads the dial itself, so a stale panel cannot bypass it.
+    src = inspect.getsource(claim_daily_comp)
+    assert "settings.daily_comp" in src and "comp_claimed" in src
+
+
+def test_the_casino_panel_no_longer_promises_a_play_again_button() -> None:
+    """casino-139: the public recap lost its buttons in August; the dial's
+    help text still said the broadcast came "with a Play Again button"."""
+    src = _CASINO_PANEL.read_text(encoding="utf-8")
+    assert "Play Again" not in src
+    assert "carries no buttons" in src

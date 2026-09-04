@@ -589,6 +589,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "min_bet": s.min_bet,
         "max_bet": s.max_bet,
         "daily_wager_cap": s.daily_wager_cap,
+        "daily_comp": s.daily_comp,
         "coinflip_enabled": s.coinflip_enabled,
         "slots_enabled": s.slots_enabled,
         "blackjack_enabled": s.blackjack_enabled,
@@ -617,6 +618,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "jackpot_cut_pct": s.jackpot_cut_pct,
         "jackpot_seed": s.jackpot_seed,
         "broadcast_min_payout": s.broadcast_min_payout,
+        "broadcast_min_mult": s.broadcast_min_mult,
         "broadcast_ping_enabled": s.broadcast_ping_enabled,
     }
 
@@ -4349,6 +4351,9 @@ class CasinoConfigUpdate(BaseModel):
     min_bet: int | None = Field(default=None, ge=1, le=1_000_000)
     max_bet: int | None = Field(default=None, ge=0, le=10_000_000)  # 0 = no max
     daily_wager_cap: int | None = Field(default=None, ge=0, le=10_000_000)
+    # The daily comp: a house-funded slots spin of this many coins, once a
+    # day per member, from the hub. 0 = off, which is how every guild ships.
+    daily_comp: int | None = Field(default=None, ge=0, le=100_000)
     coinflip_enabled: bool | None = None
     slots_enabled: bool | None = None
     blackjack_enabled: bool | None = None
@@ -4387,6 +4392,10 @@ class CasinoConfigUpdate(BaseModel):
     jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)
     jackpot_seed: int | None = Field(default=None, ge=0, le=1_000_000)
     broadcast_min_payout: int | None = Field(default=None, ge=0, le=10_000_000)
+    # The bar's other half: a card also needs payout >= this × stake. 1 is
+    # the floor (amount only) — 0 would read as "off" and there is already
+    # an off switch, the bar itself.
+    broadcast_min_mult: int | None = Field(default=None, ge=1, le=1_000)
     # Mutes the @here on the loudest broadcast tier. Nothing else pings,
     # so this is the whole ping surface.
     broadcast_ping_enabled: bool | None = None

@@ -149,7 +149,53 @@ def test_round_embed_bets_show_newest_first():
     assert value.index("Player2") < value.index("Player1")
 
 
+# ── casino-132: the five private boards read as solo play ──────────────
+#
+# A round has belonged to one player since migration 158, but the boards
+# kept the communal-countdown copy ("bets open!", "the wheel spins <t:R>",
+# "be first") with no hint that a button resolves it — so a third of prod
+# rounds sat until the abandonment sweep. Each board now says whose it is,
+# which button to press, and that the clock is only a fallback.
+
+_ROUND_BOARDS = [
+    pytest.param(casino_embeds.build_roulette_round_embed, "🎡 Spin", id="roulette"),
+    pytest.param(casino_embeds.build_derby_round_embed, "🏇 Race", id="derby"),
+    pytest.param(casino_embeds.build_baccarat_round_embed, "🎴 Deal", id="baccarat"),
+    pytest.param(casino_embeds.build_dice_round_embed, "🎲 Roll", id="dice"),
+    pytest.param(casino_embeds.build_keno_round_embed, "🔢 Draw", id="keno"),
+]
+
+
+@pytest.mark.parametrize(("build", "button"), _ROUND_BOARDS)
+def test_private_round_boards_tell_the_player_to_press_the_button(build, button):
+    embed = build(_ECON, 1_800_000_000.0, [], None, name_fn=_named)
+    body = embed.description or ""
+    title = embed.title or ""
+    assert "Your own" in body
+    assert f"press {button}" in body
+    # The timestamp is the fallback, framed as such — never "bets close".
+    assert "<t:1800000000:R>" in body and "Left alone" in body
+    assert "Open!" not in title and "Gate!" not in title
+    assert "bets open" not in (title + body).lower()
+
+
+@pytest.mark.parametrize(("build", "button"), _ROUND_BOARDS)
+def test_private_round_boards_never_ask_the_player_to_be_first(build, button):
+    value = _bets_value(build(_ECON, 1_800_000_000.0, [], None, name_fn=_named))
+    assert "No bets yet" in value
+    assert "be first" not in value
+
+
 # ── How It Works lists only the open tables ────────────────────────────
+
+
+def test_the_tables_list_no_longer_calls_roulette_communal():
+    """casino-139: roulette went private in August (one board per player,
+    spin when ready), but the hub's How It Works still said "everyone bets
+    together"."""
+    line = casino_embeds._GAME_LINES["roulette"]
+    assert "everyone" not in line and "window" not in line
+    assert "spin" in line
 
 
 def test_help_embed_hides_closed_tables():
@@ -177,6 +223,73 @@ def test_hub_embed_shows_ticker_lines_newest_first():
     assert "the house" in field.value  # the loss names its destination
 
 
+@pytest.mark.parametrize(
+    ("settings", "shown"),
+    [
+        pytest.param(CasinoSettings(channel_id=1), False, id="ships-dark"),
+        pytest.param(CasinoSettings(channel_id=1, daily_comp=5), True, id="on"),
+        pytest.param(
+            CasinoSettings(channel_id=1, daily_comp=5, slots_enabled=False),
+            False, id="slots-closed",
+        ),
+    ],
+)
+def test_hub_embed_house_rules_mention_the_comp_only_while_it_is_on(settings, shown):
+    from bot_modules.cogs.casino.embeds import build_hub_embed
+
+    embed = build_hub_embed(_ECON, settings, None)
+    rules = next(f.value for f in embed.fields if f.name == "House Rules")
+    assert ("Daily comp" in rules) is shown
+    if shown:
+        assert "**5**-gem" in rules and "once a day" in rules
+
+
+def test_comp_card_win_is_green_and_names_the_house_money():
+    win, label = logic.slots_payout(_REELS, 5)
+    embed = casino_embeds.build_comp_embed(
+        _ECON, 7, _REELS, 5, win, label, None, name_fn=_named,
+    )
+    assert embed.color == discord.Color(COLOR_GREEN)
+    assert embed.title == "🎁 Golden Meadow Daily Comp"
+    assert "Player7" in (embed.description or "")
+    assert f"paid 💎 **{win:,}** gems" in (embed.description or "")
+    assert "free 💎 **5** gems spin" in (embed.description or "")
+
+
+def test_comp_card_blank_spin_is_not_a_loss():
+    """Nothing was staked, so a blank comp wears the accent, not the red."""
+    embed = casino_embeds.build_comp_embed(
+        _ECON, 7, ("🌻", "🍀", "🐝"), 5, 0, None, discord.Color(0x123456),
+        name_fn=_named,
+    )
+    assert embed.color == discord.Color(0x123456)
+    assert "cost nothing" in (embed.description or "")
+
+
+@pytest.mark.parametrize(
+    ("comp_amount", "claimed", "expect"),
+    [
+        pytest.param(0, False, None, id="off-says-nothing"),
+        pytest.param(5, False, "Waiting for you", id="available"),
+        pytest.param(5, True, "Claimed", id="claimed"),
+    ],
+)
+def test_my_stats_shows_the_comp_state(comp_amount, claimed, expect):
+    """The hub is one shared panel, so My Stats is where a member learns
+    whether today's 🎁 is still theirs."""
+    embed = casino_embeds.build_my_stats_embed(
+        _ECON, None, 0, 0, 1_800_000_000.0, None,
+        comp_amount=comp_amount, comp_claimed=claimed,
+    )
+    field = next((f for f in embed.fields if f.name == "🎁 Daily Comp"), None)
+    if expect is None:
+        assert field is None
+    else:
+        assert field is not None and expect in (field.value or "")
+        if claimed:
+            assert "<t:1800000000:R>" in (field.value or "")
+
+
 def test_hub_embed_omits_empty_ticker():
     from bot_modules.cogs.casino.embeds import build_hub_embed
 
@@ -189,6 +302,30 @@ def test_ticker_line_marks_push_and_partial_return():
 
     assert "push" in ticker_line(1, "blackjack", 20, 20)
     assert "10 back" in ticker_line(1, "blackjack", 20, 10)
+
+
+@pytest.mark.parametrize(
+    ("game", "emoji"),
+    [
+        pytest.param("roulette", "🎡", id="roulette"),
+        pytest.param("derby", "🏇", id="derby"),
+        pytest.param("baccarat", "🎴", id="baccarat"),
+        pytest.param("dice", "🎲", id="dice"),
+        pytest.param("keno", "🔢", id="keno"),
+        pytest.param("mines", "💣", id="mines"),
+    ],
+)
+def test_ticker_line_wears_the_tables_own_emoji(game, emoji):
+    """casino-140: the emoji map stopped at the original four instant games,
+    so a Mines cash-out and a keno draw both rendered as the Dice 🎲."""
+    assert casino_embeds.ticker_line(1, game, 10, 0).startswith(emoji)
+
+
+def test_every_ticker_game_has_its_own_emoji():
+    from bot_modules.services.casino_service import TICKER_GAMES
+
+    emojis = [casino_embeds._TICKER_EMOJI[g] for g in TICKER_GAMES]
+    assert len(set(emojis)) == len(TICKER_GAMES)
 
 
 # ── baccarat result cards ──────────────────────────────────────────────
@@ -457,7 +594,11 @@ def _standings_field(embed: discord.Embed) -> str | None:
     return field.value if field is not None else None
 
 
-def test_hub_embed_names_the_days_winner_and_loser_with_signed_amounts():
+def test_hub_embed_names_the_days_winner_but_never_the_loser():
+    """casino-137: the hub is public, and naming the day's biggest net loser
+    there (−17,495 in prod once the cap came off) is a pillory, not a
+    harm-reduction control. Only the winner is crowned; a member's own
+    losses stay on their private 📊 My Stats card."""
     from bot_modules.cogs.casino.embeds import build_hub_embed
 
     embed = build_hub_embed(
@@ -467,8 +608,8 @@ def test_hub_embed_names_the_days_winner_and_loser_with_signed_amounts():
     value = _standings_field(embed)
     assert value is not None
     assert "Player7" in value and "**+340**" in value  # winner, signed +
-    assert "Player9" in value and "**−120**" in value  # loser, magnitude with −
-    assert value.index("Player7") < value.index("Player9")  # up-most first
+    assert "Player9" not in value and "120" not in value
+    assert "Down most" not in value
 
 
 def test_hub_embed_shows_only_the_winner_when_nobody_is_down():
@@ -486,7 +627,8 @@ def test_hub_embed_shows_only_the_winner_when_nobody_is_down():
 def test_hub_embed_omits_standings_when_the_board_is_empty():
     from bot_modules.cogs.casino.embeds import build_hub_embed
 
-    for standings in (None, (None, None)):
+    # A loser-only day is an empty board too: there is nobody to crown.
+    for standings in (None, (None, None), (None, (9, -120))):
         embed = build_hub_embed(
             _ECON, CasinoSettings(channel_id=1), None, standings=standings,
         )
@@ -532,6 +674,75 @@ def test_the_currency_placeholder_is_filled_in_not_printed():
     body = _panel("economy_net").description or ""
     assert "gems" in body
     assert "{currency}" not in body
+
+
+# ── casino-136: a one-sided market says so before it voids ─────────────
+#
+# A quarter of prod markets voided because every bettor backed the same
+# side, and the panel never said that an empty side calls the market off —
+# the copy lived on the void card, after the fact.
+
+
+def _panel_with(split: pools_logic.PoolSplit, **kw) -> discord.Embed:
+    return build_pools_panel_embed(
+        _ECON, 1186.5, split, 1_800_000_000.0, "2026-08-03", None,
+        spec=pools_metrics.SPECS["messages"], **kw,
+    )
+
+
+def _one_sided_field(embed: discord.Embed) -> str | None:
+    field = next(
+        (f for f in embed.fields if "One-Sided" in (f.name or "")), None
+    )
+    return field.value if field is not None else None
+
+
+@pytest.mark.parametrize(
+    ("split", "empty"),
+    [
+        pytest.param(pools_logic.PoolSplit(400, 0), "Under", id="under-empty"),
+        pytest.param(pools_logic.PoolSplit(0, 250), "Over", id="over-empty"),
+    ],
+)
+def test_panel_names_the_empty_side_and_what_happens_if_it_stays_empty(
+    split, empty
+):
+    value = _one_sided_field(_panel_with(split))
+    assert value is not None
+    assert f"**{empty}**" in value
+    assert "called off" in value and "refund" in value
+
+
+@pytest.mark.parametrize(
+    "split",
+    [
+        pytest.param(pools_logic.PoolSplit(400, 250), id="both-backed"),
+        pytest.param(pools_logic.PoolSplit(0, 0), id="nobody-yet"),
+    ],
+)
+def test_panel_has_no_one_sided_warning_when_there_is_nothing_to_warn_about(split):
+    assert _one_sided_field(_panel_with(split)) is None
+
+
+def test_panel_always_states_the_both_sides_rule():
+    fields = " ".join(f.value or "" for f in _panel_with(
+        pools_logic.PoolSplit(400, 250)
+    ).fields)
+    assert "same side" in fields and "called off" in fields
+
+
+def test_panel_says_the_last_hour_out_loud():
+    open_body = _panel_with(pools_logic.PoolSplit(400, 0)).description or ""
+    soon_body = _panel_with(
+        pools_logic.PoolSplit(400, 0), closing_soon=True
+    ).description or ""
+    closed_body = _panel_with(
+        pools_logic.PoolSplit(400, 0), closed=True, closing_soon=True
+    ).description or ""
+    assert "Last hour" not in open_body
+    assert "Last hour" in soon_body and "<t:1800000000:R>" in soon_body
+    # Closed wins: there is no last hour once betting has shut.
+    assert "Last hour" not in closed_body and "closed" in closed_body
 
 
 def _result(key: str, value: int) -> discord.Embed:
@@ -610,6 +821,8 @@ _NAME_CASES: list[tuple[str, object]] = [
         _ECON, 7, 10, ("🍯", None, None), None, name_fn=n)),
     ("jackpot", lambda n: casino_embeds.build_jackpot_celebration(
         _ECON, 7, 5000, name_fn=n)),
+    ("comp", lambda n: casino_embeds.build_comp_embed(
+        _ECON, 7, _REELS, 5, 0, None, None, name_fn=n)),
     ("blackjack_reveal", lambda n: casino_embeds.build_blackjack_reveal_embed(
         _ECON, 7, ["9♠", "5♦"], ["K♥"], 10, None, name_fn=n)),
     ("blackjack", lambda n: casino_embeds.build_blackjack_embed(
@@ -735,11 +948,21 @@ def _result_card() -> discord.Embed:
     return embed
 
 
-def _broadcast(payout: int, threshold: int = 500, stake: int = 10, **kw):
+def _broadcast(
+    payout: int, threshold: int = 500, stake: int = 10, min_mult: int = 3, **kw
+):
     return casino_embeds.build_big_win_broadcast(
         _result_card(), payout=payout, threshold=threshold, stake=stake,
-        game_label="Roulette", **kw,
+        min_mult=min_mult, game_label="Roulette", **kw,
     )
+
+
+def test_no_broadcast_is_built_under_the_minimum_multiple():
+    """The builder passes the guild's multiple through to the one gate; a
+    2× win on a 1,000 stake clears a 500 bar on amount and still builds
+    nothing under the default 3×, and builds under a dial of 2."""
+    assert _broadcast(2000, stake=1000) is None
+    assert _broadcast(2000, stake=1000, min_mult=2) is not None
 
 
 @pytest.mark.parametrize(
@@ -790,8 +1013,8 @@ def test_broadcast_never_mutates_the_players_own_card():
     card = _result_card()
     before = (card.title, card.description, len(card.fields), card.color)
     built = casino_embeds.build_big_win_broadcast(
-        card, payout=9_999, threshold=500, stake=10, game_label="Roulette",
-        top_pct_payout=2500,
+        card, payout=9_999, threshold=500, stake=10, min_mult=3,
+        game_label="Roulette", top_pct_payout=2500,
     )
     assert built is not None
     assert built.embed is not card

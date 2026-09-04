@@ -14,8 +14,10 @@ Instant games (coinflip/slots/blackjack) render **ephemerally** — each
 player gets a private machine that edits itself in place, so play never
 scrolls the channel or moves anyone else's buttons. The channel carries
 only the shared surfaces: the hub panel (whose floor ticker shows recent
-action), communal roulette/derby rounds, and broadcast moments (jackpot
-celebrations + wins at or over the configured ``broadcast_min_payout``).
+action) and broadcast moments (jackpot celebrations + wins at or over the
+configured ``broadcast_min_payout`` that are also at least
+``broadcast_min_mult`` × their stake). The private-round family (roulette,
+derby, baccarat, dice, keno) is ephemeral too — one board per player.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from bot_modules.cogs.casino.views import (
     AmountPickerView,
     BaccaratBetButton,
     CoinflipSideView,
+    StepView,
     BaccaratBetModal,
     BaccaratNextView,
     BetModal,
@@ -129,7 +132,8 @@ class _HandOutcome(NamedTuple):
     streak: int = 0
     can_double: bool = True  # clicker can actually afford the second stake
     pot_after: int = 0
-    broadcast_min: int = 0  # the guild's big-win broadcast bar (0 = off)
+    # The guild's dials at settle time — the broadcast bar and multiple.
+    settings: svc.CasinoSettings = svc.DEFAULT_CASINO_SETTINGS
 
 
 class _RoundOpen(NamedTuple):
@@ -1007,13 +1011,18 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         interaction: discord.Interaction,
         *,
         content: str,
-        view: discord.ui.View,
+        view: StepView,
     ) -> None:
         """Render a bet step privately.
 
         A press from inside a private surface (a round's board, the coinflip
         or mines picker) replaces it in place, so a wager never costs the
         player a second message; a press on the public hub opens one.
+
+        Either way the step is bound to this interaction: once its clock
+        runs out, the interaction token is the only handle left on the
+        message, and ``StepView`` uses it to say the step expired rather
+        than leaving buttons that answer "This interaction failed".
         """
         message = interaction.message
         if message is not None and message.flags.ephemeral:
@@ -1025,6 +1034,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 content=content, view=view, ephemeral=True,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
+        view.bind(interaction)
 
     def _window_step_handlers(
         self, guild: discord.Guild, ui: _WindowUI, round_id: int
@@ -1072,9 +1082,12 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         """
 
         async def _cancel(interaction: discord.Interaction) -> None:
+            view = view_factory()
             await interaction.response.edit_message(
-                content=content, embed=None, view=view_factory()
+                content=content, embed=None, view=view
             )
+            if isinstance(view, StepView):
+                view.bind(interaction)  # the re-rendered step expires too
 
         return _cancel
 
@@ -1199,18 +1212,64 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         def _read():
             with self.bot.ctx.open_db() as conn:
                 used, cap, reset_ts = svc.daily_cap_status(conn, guild.id, uid)
+                settings = svc.load_casino_settings(conn, guild.id)
+                comp_amount = settings.daily_comp if svc.comp_on(settings) else 0
                 return (
                     load_econ_settings(conn, guild.id),
                     svc.member_casino_stats(conn, guild.id, uid),
-                    used, cap, reset_ts,
+                    used, cap, reset_ts, comp_amount,
+                    bool(comp_amount) and svc.comp_claimed_today(conn, guild.id, uid),
                 )
 
-        econ, stats, used, cap, reset_ts = await asyncio.to_thread(_read)
+        econ, stats, used, cap, reset_ts, comp_amount, comp_claimed = (
+            await asyncio.to_thread(_read)
+        )
         await interaction.response.send_message(
             embed=casino_embeds.build_my_stats_embed(
-                econ, stats, used, cap, reset_ts, await self._accent(guild)
+                econ, stats, used, cap, reset_ts, await self._accent(guild),
+                comp_amount=comp_amount, comp_claimed=comp_claimed,
             ),
             ephemeral=True,
+        )
+
+    async def claim_daily_comp(self, interaction: discord.Interaction) -> None:
+        """The hub's 🎁 Daily Comp: one house-funded slots spin a day.
+
+        Everything that decides whether the spin happens — the dial, the
+        casino gates, the once-a-day book — is ``svc.claim_daily_comp``;
+        this only renders what came back, privately, with no Play Again
+        (there is nothing to play again for free)."""
+        guild = interaction.guild
+        if guild is None:
+            return
+        uid = interaction.user.id
+
+        def _claim() -> tuple[
+            str | None, svc.CompResult | None, EconSettings | None, str
+        ]:
+            with self.bot.ctx.open_db() as conn:
+                err, result = svc.claim_daily_comp(
+                    conn, guild.id, uid, channel_id=interaction.channel_id
+                )
+                if err is not None or result is None:
+                    return err, None, None, ""
+                return (
+                    None, result, load_econ_settings(conn, guild.id),
+                    resolve_casino_name_conn(conn, guild.id),
+                )
+
+        err, result, econ, casino_name = await asyncio.to_thread(_claim)
+        if err is not None or result is None or econ is None:
+            await safe_ephemeral(interaction, f"❌ {err}")
+            return
+        await self._respond_private(
+            interaction,
+            casino_embeds.build_comp_embed(
+                econ, uid, result.reels, result.amount, result.payout,
+                result.label, await self._accent(guild),
+                casino_name=casino_name,
+                name_fn=await self._names(guild, [uid]),
+            ),
         )
 
     # ── instant games (each player's private, in-place machine) ────────
@@ -1310,12 +1369,18 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         *,
         guild_id: int,
         payout: int,
-        threshold: int,
+        settings: svc.CasinoSettings,
         stake: int,
         game_label: str,
         winner: discord.abc.User | discord.Member | None = None,
     ) -> None:
         """The one place a big win becomes a public message.
+
+        ``settings`` carries both halves of the gate — the bar
+        (``broadcast_min_payout``) and the minimum multiple of the stake
+        (``broadcast_min_mult``). Taking the whole object rather than two
+        ints is what makes forgetting the multiple at a call site
+        impossible; every caller already loaded it for the settle.
 
         No view, deliberately. The broadcast used to carry the player's own
         Play Again / Next Round button as a "me too" invitation for bystanders;
@@ -1324,6 +1389,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         Also the one place the win-history population is written, once per
         card and strictly after the percentile read — see ``record_win``.
         """
+        threshold = settings.broadcast_min_payout
         top_pct = await self._top_pct_payout(guild_id, payout, threshold)
         # The dial only decides anything where a ping is possible at all, and
         # a None percentile can never reach the rung that pings — so the
@@ -1336,6 +1402,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             payout=payout,
             threshold=threshold,
             stake=stake,
+            min_mult=settings.broadcast_min_mult,
             game_label=game_label,
             top_pct_payout=top_pct,
             ping_enabled=ping_enabled,
@@ -1362,7 +1429,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         interaction: discord.Interaction,
         *,
         payout: int,
-        threshold: int,
+        settings: svc.CasinoSettings,
         stake: int,
         embed: discord.Embed,
         game_label: str,
@@ -1370,7 +1437,11 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
     ) -> None:
         """Post-settle chores every instant play shares: the debounced
         floor-ticker repaint, and the public big-win broadcast once the
-        payout clears the configured bar.
+        payout clears the configured bar and multiple.
+
+        ``stake`` is the TOTAL the hand risked — a doubled blackjack hand
+        passes both halves, not the base the Play Again button re-offers —
+        because it is what decides whether the payout was a win at all.
 
         ``embed`` is the player's own result card, read here and never
         mutated — the broadcast is built as a separate embed from it.
@@ -1388,7 +1459,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         # slot is already optional, and the channel knows its own guild.
         await self._send_big_win(
             channel, embed, guild_id=channel.guild.id, payout=payout,
-            threshold=threshold, stake=stake, game_label=game_label,
+            settings=settings, stake=stake, game_label=game_label,
             winner=interaction.user,
         )
 
@@ -1452,9 +1523,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         except discord.HTTPException:
             pass
         await self._after_instant(
-            interaction, payout=result.payout,
-            threshold=settings.broadcast_min_payout, stake=amount,
-            embed=final, game_label="Coinflip",
+            interaction, payout=result.payout, settings=settings,
+            stake=amount, embed=final, game_label="Coinflip",
         )
 
     async def play_slots(
@@ -1552,9 +1622,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                 pass
         # The jackpot celebration above already is the broadcast.
         await self._after_instant(
-            interaction, payout=result.payout,
-            threshold=settings.broadcast_min_payout, stake=amount,
-            embed=final, game_label="Slots",
+            interaction, payout=result.payout, settings=settings,
+            stake=amount, embed=final, game_label="Slots",
             skip_broadcast=bool(result.jackpot_won),
         )
 
@@ -1630,9 +1699,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
                     stake=amount, outcome=outcome, payout=payout, streak=streak,
                     can_double=get_balance(conn, guild.id, uid) >= amount,
                     pot_after=pot_after,
-                    broadcast_min=svc.load_casino_settings(
-                        conn, guild.id
-                    ).broadcast_min_payout,
+                    settings=svc.load_casino_settings(conn, guild.id),
                 )
 
         try:
@@ -1678,9 +1745,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await asyncio.to_thread(_bind)
         else:
             await self._after_instant(
-                interaction, payout=result.payout,
-                threshold=result.broadcast_min, stake=amount,
-                embed=embed, game_label="Blackjack",
+                interaction, payout=result.payout, settings=result.settings,
+                stake=amount, embed=embed, game_label="Blackjack",
             )
 
     async def blackjack_action(
@@ -1733,6 +1799,9 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             doubled=step.doubled, outcome=step.outcome, payout=step.payout,
             streak=step.streak, pot_after=step.pot_after, name_fn=name_fn,
         )
+        # Play Again re-offers the base the player chose; the broadcast below
+        # is judged on step.stake, the TOTAL — a doubled push returns 2× base,
+        # and judged against the base it read as a win that never happened.
         base_stake = step.stake // 2 if step.doubled else step.stake
         view = (
             play_again_view("blackjack", base_stake)
@@ -1763,9 +1832,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         if step.outcome is not None:
             self._bj_followups.pop(hand_id, None)
             await self._after_instant(
-                interaction, payout=step.payout,
-                threshold=settings.broadcast_min_payout, stake=base_stake,
-                embed=embed, game_label="Blackjack",
+                interaction, payout=step.payout, settings=settings,
+                stake=step.stake, embed=embed, game_label="Blackjack",
             )
         return step.outcome is not None
 
@@ -1843,7 +1911,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await self._send_big_win(
                 channel, embed, guild_id=int(row["guild_id"]),
                 payout=int(getattr(step, "payout", 0)),
-                threshold=settings.broadcast_min_payout,
+                settings=settings,
                 # Both hand tables store the TOTAL stake, doubles/wars folded
                 # in — so an auto-stood push or a war retreat reads as the
                 # non-win it is instead of headlining its own stake back.
@@ -1963,9 +2031,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         except discord.HTTPException:
             pass
         await self._after_instant(
-            interaction, payout=step.payout,
-            threshold=settings.broadcast_min_payout, stake=amount,
-            embed=embed, game_label="Casino War",
+            interaction, payout=step.payout, settings=settings,
+            stake=amount, embed=embed, game_label="Casino War",
         )
 
     async def war_action(
@@ -2020,9 +2087,8 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             pass
         self._war_followups.pop(hand_id, None)
         await self._after_instant(
-            interaction, payout=step.payout,
-            threshold=settings.broadcast_min_payout, stake=step.original,
-            embed=embed, game_label="Casino War",
+            interaction, payout=step.payout, settings=settings,
+            stake=step.original, embed=embed, game_label="Casino War",
         )
         return True
 
@@ -2246,18 +2312,19 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         assert guild is not None
         uid = interaction.user.id
 
-        def _act() -> tuple[svc.MinesStep, EconSettings | None, int]:
+        def _act() -> tuple[
+            svc.MinesStep, EconSettings | None, svc.CasinoSettings
+        ]:
             with self.bot.ctx.open_db() as conn:
                 step = act(conn, guild.id, uid)
                 if step.err is not None:
-                    return step, None, 0
-                settings = svc.load_casino_settings(conn, guild.id)
+                    return step, None, svc.DEFAULT_CASINO_SETTINGS
                 return (
                     step, load_econ_settings(conn, guild.id),
-                    settings.broadcast_min_payout,
+                    svc.load_casino_settings(conn, guild.id),
                 )
 
-        step, econ, broadcast_min = await asyncio.to_thread(_act)
+        step, econ, settings = await asyncio.to_thread(_act)
         if step.err is not None or econ is None:
             await safe_ephemeral(interaction, f"❌ {step.err}")
             # "Not your grid" and "already opened that tile" both leave a
@@ -2280,7 +2347,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             return False
         self._mines_followups.pop(hand_id, None)
         await self._after_instant(
-            interaction, payout=step.payout, threshold=broadcast_min,
+            interaction, payout=step.payout, settings=settings,
             stake=step.stake, embed=embed, game_label="Mines",
         )
         return True
@@ -2695,7 +2762,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         guild = self.bot.get_guild(guild_id)
         await self._send_big_win(
             channel, result_embed, guild_id=guild_id, payout=best,
-            threshold=threshold, stake=top_bet[2], game_label=ui.label,
+            settings=settings, stake=top_bet[2], game_label=ui.label,
             winner=guild.get_member(top_bet[0]) if guild else None,
         )
 

@@ -258,6 +258,15 @@ LEGENDARY_LEAD = "**One of the biggest payouts this casino has ever handed over.
 # wins all cluster near its bar would otherwise have a percentile barely over
 # that bar and would ping on every broadcast.
 LEGENDARY_MIN_MULT = BIG_WIN_TIERS[0][0]
+# The bar is an absolute payout, and on its own it stopped meaning "big"
+# once the top players moved to 1,000-coin stakes (2026-09-02: 495 stakes
+# of 1,000 in 30 days). A routine even-money blackjack win — 2,000 — cleared
+# a 500 bar four times over and headlined as 🔥 Huge Win; a Mines cash-out
+# at 1.06× was a 💰 Big Win; ~100 public cards a day. So a card also needs
+# a real MULTIPLE of its stake (decision D6). This is the default for the
+# guild dial ``broadcast_min_mult`` (Economy → Casino); 1 means "amount
+# only", which is what every guild ran before the dial existed.
+BROADCAST_MIN_MULT_DEFAULT = 3
 
 
 class BigWinTier(NamedTuple):
@@ -271,14 +280,25 @@ def big_win_tier(
     threshold: int,
     *,
     stake: int,
+    min_mult: int,
     top_pct_payout: int | None = None,
     ping_enabled: bool = True,
 ) -> BigWinTier | None:
     """The broadcast tier for ``payout``, or None when it stays private.
 
     None means "don't broadcast" — a payout under the bar, a bar of 0 (the
-    guild's off switch), or a payout that isn't a win at all. Callers treat
-    None as the whole decision; there is no second check anywhere.
+    guild's off switch), a payout under ``min_mult`` × the stake, or a
+    payout that isn't a win at all. Callers treat None as the whole
+    decision; there is no second check anywhere.
+
+    ``min_mult`` is the guild's minimum multiple (``broadcast_min_mult``,
+    default ``BROADCAST_MIN_MULT_DEFAULT``): the bar says how many coins
+    count as big, the multiple says how much of a win it has to be. Both
+    must hold — a 1,000-coin even-money win no longer posts against a 500
+    bar, a 1,000 → 3,000 does. It gates the whole card, Legendary included:
+    the percentile decides how loud a qualifying card is, never whether a
+    card qualifies. A multiple of 1 (the dial's floor) is amount-only and
+    leaves the push rule below untouched.
 
     ``stake`` is why this needs more than the payout. A **push returns the
     stake**: blackjack pushes, baccarat Player/Banker bets push on a tie, and
@@ -310,6 +330,8 @@ def big_win_tier(
     being every broadcast.
     """
     if threshold <= 0 or payout < threshold or payout <= stake:
+        return None
+    if payout < stake * max(min_mult, 1):
         return None
     if top_pct_payout is not None and payout >= max(
         top_pct_payout, threshold * LEGENDARY_MIN_MULT

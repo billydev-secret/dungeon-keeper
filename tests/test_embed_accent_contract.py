@@ -611,6 +611,15 @@ CASES = [
     # ── casino (fallback is the house gold; older casino builders are
     # ledger debt below — new ones land here) ────────────────────────────
     case(
+        # The blank comp spin (payout 0) is the accent-colored state; a
+        # paying one is results-green.
+        "casino.comp",
+        lambda **kw: casino_embeds.build_comp_embed(
+            _econ_settings(), 7, ("🌻", "🍀", "🐝"), 5, 0, None, kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
+    case(
         "casino.baccarat_round",
         lambda **kw: casino_embeds.build_baccarat_round_embed(
             _econ_settings(), 0.0, [], kw.get("color")

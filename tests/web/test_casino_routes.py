@@ -219,6 +219,40 @@ def test_update_casino_broadcast_threshold_roundtrip_and_bounds(
     ).status_code == 422
 
 
+def test_update_casino_broadcast_min_mult_roundtrip_and_bounds(
+    authed_client, fake_ctx
+):
+    """The dial's floor is 1 (amount only): 0 would read as a second off
+    switch, and the bar already is one."""
+    assert authed_client.get("/api/config").json()["casino"][
+        "broadcast_min_mult"
+    ] == 3
+    resp = authed_client.put(
+        "/api/config/casino", json={"broadcast_min_mult": 5}
+    )
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(conn, fake_ctx.guild_id).broadcast_min_mult == 5
+    assert authed_client.get("/api/config").json()["casino"]["broadcast_min_mult"] == 5
+    assert authed_client.put(
+        "/api/config/casino", json={"broadcast_min_mult": 0}
+    ).status_code == 422
+
+
+def test_update_casino_daily_comp_roundtrip_and_bounds(authed_client, fake_ctx):
+    """casino-134: the comp dial ships at 0 (off) and a negative amount is
+    refused rather than read as anything."""
+    assert authed_client.get("/api/config").json()["casino"]["daily_comp"] == 0
+    resp = authed_client.put("/api/config/casino", json={"daily_comp": 5})
+    assert resp.status_code == 200
+    with fake_ctx.open_db() as conn:
+        assert load_casino_settings(conn, fake_ctx.guild_id).daily_comp == 5
+    assert authed_client.get("/api/config").json()["casino"]["daily_comp"] == 5
+    assert authed_client.put(
+        "/api/config/casino", json={"daily_comp": -1}
+    ).status_code == 422
+
+
 def test_update_casino_broadcast_ping_roundtrip(authed_client, fake_ctx):
     """The @here dial defaults on, so unchecking it is the only edit that
     changes anything — and it has to survive the round trip to be worth

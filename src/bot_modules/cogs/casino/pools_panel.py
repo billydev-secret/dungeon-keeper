@@ -192,11 +192,14 @@ class PoolsMixin:
             chart_kind=spec.chart_kind,
             value_label=spec.chart_label,
         )
+        now = time.time()
+        closes_at = float(rnd["closes_at"])
         embed = E.build_pools_panel_embed(
-            econ, line, split, float(rnd["closes_at"]), str(rnd["local_day"]),
-            accent, spec=spec, closed=float(rnd["closes_at"]) <= time.time(),
+            econ, line, split, closes_at, str(rnd["local_day"]),
+            accent, spec=spec, closed=closes_at <= now,
+            closing_soon=pools_logic.closing_soon(closes_at, now),
         )
-        self._pools_last_paint[guild.id] = time.time()
+        self._pools_last_paint[guild.id] = now
 
         def chart() -> discord.File:
             # A File's stream is consumed by the send that uses it, so an
@@ -299,10 +302,19 @@ class PoolsMixin:
         # in-progress candle, so an hour with no stakes would otherwise leave
         # members reading a stale picture of the thing they are betting on.
         # The light round read comes first so a guild between rounds does not
-        # pay for the series query every minute.
-        if pools_logic.refresh_due(
-            self._pools_last_paint.get(guild.id, 0.0), time.time()
-        ) and await asyncio.to_thread(self._read_pools_round, guild.id):
+        # pay for the series query every minute. The same read supplies the
+        # close time for the last-hour reminder repaint (casino-136), which
+        # fires once — the first tick inside the window that the hourly
+        # refresh had not already covered.
+        state = await asyncio.to_thread(self._read_pools_round, guild.id)
+        if state is None:
+            return
+        rnd, _ = state
+        last_paint = self._pools_last_paint.get(guild.id, 0.0)
+        now = time.time()
+        if pools_logic.refresh_due(last_paint, now) or pools_logic.reminder_due(
+            last_paint, float(rnd["closes_at"]), now
+        ):
             await self.render_pools_panel(guild)
 
     def _plan_pools(self, guild_id: int):
