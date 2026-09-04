@@ -190,11 +190,22 @@ as "working" is exactly how a stalled worker goes unnoticed.
 3. runs `/code-review high --fix main...HEAD` and commits whatever it fixed as its
    own `Review:` commit (skip with `--no-review`, change the level with
    `--review LEVEL`);
-4. `python scripts/gate.py --scoped` (skip with `--no-test` for docs-only ships);
-5. under `flock .git/dk-ship.lock`, verifies prod is on a clean `main` and
+4. runs the **`standards-review`** agent over the same range — the design and reuse
+   principles no test can express (skip with `--no-standards`);
+5. `python scripts/gate.py --scoped` (skip with `--no-test` for docs-only ships);
+6. under `flock .git/dk-ship.lock`, verifies prod is on a clean `main` and
    `git merge --no-ff` the branch, then pushes (skip with `--no-push`);
-6. tears the session down: removes the worktree, deletes the merged branch, kills the
+7. tears the session down: removes the worktree, deletes the merged branch, kills the
    window.
+
+The standards scan is the judgement half of the house rules. The mechanical half is
+already static sweeps that fail the build (`test_embed_style_contract.py`,
+`test_embed_accent_contract.py`, `test_encoding_portability.py`,
+`test_privacy_register_coverage.py` and the web sweeps), and the agent is told to
+skip those and look at what they cannot see: an admin knob built as a slash command,
+a helper reimplemented beside the shared one, a third toggle where a dial belongs,
+logic living in a cog, a spec left behind by a behaviour change. It **reports and
+asks** rather than editing — a design violation needs a decision, not a patch.
 
 The review is step 3 and not step 4 so its fixes are gated by the run that follows,
 and it targets `main...HEAD` explicitly rather than the working tree, which step 1
