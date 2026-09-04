@@ -37,7 +37,6 @@ from bot_modules.games.constants import (
     PHASE_RECAP,
     PHASE_RESULTS,
 )
-from bot_modules.games.utils.game_manager import resolve_name
 from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.name_resolver import NameFn, mention
 
