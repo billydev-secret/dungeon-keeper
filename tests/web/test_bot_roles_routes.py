@@ -136,6 +136,50 @@ def test_the_state_endpoint_answers_only_the_keys_a_panel_owns(
     assert [r["key"] for r in body["roles"]] == ["welcome_ping_role_id"]
 
 
+def test_a_create_on_offer_dial_is_never_reported_as_turned_off(
+    authed_client, fake_ctx
+):
+    """A stored "0" on `guess_role_id` is a whole-form save, not a decision.
+
+    The Guess Who panel sends `role_id: picker.getValue() || "0"` on EVERY
+    save, so a 0 lands there whenever an unrelated field is changed — which is
+    exactly why Discord Onboarding refuses to read it as a preference and
+    creates the role anyway. This page reading it the other way put
+    '"(none)" — so I won't make one' in the state line directly under the hint
+    telling the admin that offering it in onboarding WILL make it.
+    """
+    _attach(fake_ctx)
+    with open_db(fake_ctx.db_path) as conn:
+        set_config_value(conn, "guess_role_id", "0", fake_ctx.guild_id)
+        set_config_value(
+            conn, "voice_master_spectator_gate_role_id", "0", fake_ctx.guild_id
+        )
+        # An ordinary ping dial's "(none)" is still a decision, and must be.
+        set_config_value(conn, "welcome_ping_role_id", "0", fake_ctx.guild_id)
+        conn.commit()
+
+    cards = _by_key(authed_client.get("/api/bot-roles").json())
+    assert cards["guess_role_id"]["state"] == "offer_first"
+    assert cards["voice_master_spectator_gate_role_id"]["state"] == "offer_first"
+    assert cards["welcome_ping_role_id"]["state"] == "turned_off"
+
+
+def test_the_roster_does_not_promise_to_adopt_a_role_it_could_never_grant(
+    authed_client, fake_ctx
+):
+    """A @Jailed above the bot gets a twin made lower down, not adopted.
+
+    The provisioner (`adoptable_role_ids`) skips it; the page used to say "I'll
+    use that one rather than making a second" about it, and the second one
+    appeared anyway.
+    """
+    _attach(fake_ctx, roles=[_role(700, "Jailed", position=90)], bot_top=10)
+
+    card = _by_key(authed_client.get("/api/bot-roles").json())["jailed_role_id"]
+    assert card["state"] == "not_made"
+    assert any("can't use it" in n for n in card["notes"])
+
+
 # ── create ───────────────────────────────────────────────────────────
 
 

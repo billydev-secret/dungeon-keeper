@@ -1181,8 +1181,11 @@ async def _handle_ballot_vote(
 
     result = await asyncio.to_thread(_cast)
     if result is None:
+        # Covers both a stale button on a long-closed ballot and a press that
+        # raced the deadline sweep. Naming the outcome matters more than the
+        # cause: the member cares that it was not counted.
         await interaction.response.send_message(
-            "❌ This ballot has closed.", ephemeral=True
+            "❌ This ballot has closed — your vote wasn't counted.", ephemeral=True
         )
         return
     fresh, tally = result
@@ -1249,6 +1252,7 @@ async def finalize_ballot(
     closed, tally = result
 
     embed = await _render_ballot_embed(ctx, guild, closed, tally)
+    result_embed = _ballot_result_embed(closed)
     thread = guild.get_channel_or_thread(closed["thread_id"]) if closed["thread_id"] else None
     if isinstance(thread, discord.Thread):
         # message_id 0 means the card never posted (the send failed at open).
@@ -1263,13 +1267,13 @@ async def finalize_ballot(
                 log.info("Ballot %s card could not be edited on close", ballot_id)
         try:
             await thread.send(
-                embed=_ballot_result_embed(closed),
+                embed=result_embed,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
         except discord.HTTPException:
             log.info("Ballot %s result could not be posted to its thread", ballot_id)
 
-    await _post_audit(ctx, guild, _ballot_result_embed(closed))
+    await _post_audit(ctx, guild, result_embed)
     return closed
 
 

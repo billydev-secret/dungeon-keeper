@@ -54,6 +54,8 @@ _REJECTED_COLOR_INT = MOD_JAIL
 # ── Mention helpers ────────────────────────────────────────────────────
 
 
+#: Character budget for one voter-list field. Leaves room under Discord's
+#: 1024-char field ceiling for the "+N more" tail and the separators.
 DEFAULT_BALLOT_NAMES_BUDGET = 900
 
 
@@ -214,8 +216,6 @@ def build_policy_vote_update_embed(
 #    nicknames would silently lose the whole field. The mod vote was converted
 #    to the same character budget on 2026-09-03, and that entry cap is gone.
 
-#: Leaves room under Discord's 1024-char field ceiling for the "+N more" tail
-#: and the separators.
 def build_policy_ballot_embed(
     *,
     question: str,

@@ -114,6 +114,24 @@ class FeatureRole:
     #: The field's own label on that page, for the "Set on X → Y" line.
     dial_label: str = ""
 
+    @property
+    def honours_none(self) -> bool:
+        """Whether a stored ``0`` on this dial is a decision to make no role.
+
+        ``none_means_off`` alone is not the whole answer, and every surface that
+        asks "did the admin switch this off" has to use this instead — the
+        roster page, the per-dial state line and Discord Onboarding all read the
+        same dial and must not disagree about it.
+
+        A ``create_on_offer`` dial is never "off": offering the role in
+        onboarding *is* the decision that makes it exist, and its own panel
+        writes ``"0"`` here on every unrelated whole-form save. Reading that 0
+        as a preference would tell an admin '"(none)" — so I won't make one'
+        directly underneath the hint telling them offering it in onboarding
+        will, and onboarding would then make it anyway.
+        """
+        return self.none_means_off and not self.create_on_offer
+
 
 def _ping(
     key: str,
