@@ -21,6 +21,7 @@ from bot_modules.services.voice_transcription_service import (
     VoiceTranscriptionConfig,
     fit_transcript,
     get_config,
+    MAX_UPLOAD_PARTS,
     is_available,
     split_transcript,
     transcribe_file,
@@ -175,8 +176,18 @@ class VoiceTranscriptionCog(commands.Cog):
         # An explicit press asks for the whole note, so a long one spans as
         # many messages as it takes rather than being cut. Only the first
         # carries the speaker header; the rest read as one continued note.
+        #
+        # A real voice note is uncapped. An *uploaded* audio file is not: the
+        # menu accepts any audio/* attachment on purpose, and an hour-long
+        # podcast would flood the channel and outlive the interaction token, so
+        # it stops at MAX_UPLOAD_PARTS with the truncation note.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        for part in split_transcript(text, prefix=transcript_prefix(speaker)):
+        parts = split_transcript(
+            text,
+            prefix=transcript_prefix(speaker),
+            max_parts=None if _is_voice_message(message) else MAX_UPLOAD_PARTS,
+        )
+        for part in parts:
             await interaction.followup.send(part)
 
     def _menu_model(self, interaction: discord.Interaction) -> str:

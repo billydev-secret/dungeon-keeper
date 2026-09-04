@@ -17,6 +17,7 @@ from bot_modules.cogs.voice_transcription_cog import (
 )
 from bot_modules.services.voice_transcription_service import (
     MAX_TRANSCRIPT_CHARS,
+    MAX_UPLOAD_PARTS,
     fit_transcript,
     split_transcript,
     was_truncated,
@@ -206,6 +207,48 @@ def test_there_is_no_cap_on_the_number_of_parts():
     parts = split_transcript("word " * 20_000)
     assert len(parts) > 10
     assert _rejoin(parts) == ("word " * 20_000).strip()
+
+
+def test_max_parts_bounds_the_flood_and_says_it_cut():
+    """The menu takes any audio upload, so a podcast must not post forever.
+
+    The last allowed part is fitted rather than cut bare, so a capped
+    transcript ends with the same note the listener uses instead of simply
+    stopping mid-sentence.
+    """
+    parts = split_transcript("word " * 20_000, max_parts=MAX_UPLOAD_PARTS)
+    assert len(parts) == MAX_UPLOAD_PARTS
+    assert all(len(p) <= MAX_TRANSCRIPT_CHARS for p in parts)
+    assert was_truncated(parts[-1])
+    assert not any(was_truncated(p) for p in parts[:-1])
+
+
+def test_a_capped_split_that_fits_says_nothing_about_truncation():
+    """The cap only bites when it is actually reached."""
+    parts = split_transcript("word " * 500, max_parts=MAX_UPLOAD_PARTS)
+    assert 1 < len(parts) < MAX_UPLOAD_PARTS
+    assert not any(was_truncated(p) for p in parts)
+    assert _rejoin(parts) == ("word " * 500).strip()
+
+
+def test_a_cap_of_one_part_is_just_the_fit():
+    parts = split_transcript("word " * 2000, max_parts=1)
+    assert parts == [fit_transcript("word " * 2000)]
+
+
+def test_only_an_uploaded_file_is_capped_not_a_real_voice_note():
+    """A voice note someone recorded is uncapped; an mp3 upload is not.
+
+    The context menu accepts any ``audio/*`` attachment on purpose, which is
+    what makes the cap necessary -- and what makes applying it to a genuine
+    voice note wrong.
+    """
+    import inspect
+
+    from bot_modules.cogs import voice_transcription_cog as cog
+
+    menu = inspect.getsource(cog.VoiceTranscriptionCog._transcribe_context_menu)
+    assert "max_parts=None if _is_voice_message(message) else MAX_UPLOAD_PARTS" in menu
 
 
 def test_only_the_first_part_carries_the_speaker_header():

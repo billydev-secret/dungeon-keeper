@@ -153,16 +153,31 @@ def was_truncated(message: str) -> bool:
     return message.endswith(_TRUNCATED_NOTE)
 
 
+#: How many messages an *uploaded* audio file may occupy. A real voice note is
+#: uncapped — someone who pressed the button wants the whole note — but the
+#: context menu also accepts any ``audio/*`` upload, and an hour-long podcast
+#: would otherwise post hundreds of messages into a channel and outlive the
+#: 15-minute interaction token part-way through. Ten parts is around 25 minutes
+#: of speech: past any real voice note, short of a flood.
+MAX_UPLOAD_PARTS = 10
+
+
 def split_transcript(
-    text: str, limit: int = MAX_TRANSCRIPT_CHARS, prefix: str = ""
+    text: str,
+    limit: int = MAX_TRANSCRIPT_CHARS,
+    prefix: str = "",
+    max_parts: int | None = None,
 ) -> list[str]:
     """Spread a transcript over as many messages as it takes, losing nothing.
 
-    There is no cap on the number of parts: someone who explicitly asked for a
-    transcript wants the whole thing, and a cut long note reads like a
-    transcription failure. Only the first part carries *prefix* — repeating
-    ``📝 **Name:**`` on each one would read as several separate notes rather
-    than one continued.
+    By default there is no cap on the number of parts: someone who explicitly
+    asked for a transcript wants the whole thing, and a cut long note reads
+    like a transcription failure. Pass *max_parts* to bound it — the last
+    allowed part is fitted rather than cut bare, so a capped transcript ends
+    with the same truncation note the listener uses and never simply stops.
+
+    Only the first part carries *prefix* — repeating ``📝 **Name:**`` on each
+    one would read as several separate notes rather than one continued.
 
     Empty (or whitespace-only) text yields no messages at all, so a caller
     never posts a bare prefix with nothing after it.
@@ -173,6 +188,9 @@ def split_transcript(
     while rest:
         head, budget = (prefix, limit - len(prefix)) if not parts else ("", limit)
         budget = max(1, budget)
+        if max_parts is not None and len(parts) + 1 >= max_parts:
+            parts.append(head + fit_transcript(rest, budget))
+            break
         if len(rest) <= budget:
             parts.append(head + rest)
             break
