@@ -126,3 +126,13 @@ def test_the_snapshot_does_not_default_to_tmpfs():
     and spray sqlite errors that look like a test failure."""
     assert "tmp" not in str(dryrun.DEFAULT_SNAPSHOT_DIR).split("/")[1:2]
     assert dryrun.DEFAULT_SNAPSHOT_DIR.is_absolute()
+
+
+def test_cleanup_removes_the_wal_sidecars_too(tmp_path):
+    """Migrations run in WAL mode, so a snapshot is three files. Removing only
+    the .db leaked ~50 MB per dry-run into the cache directory."""
+    db = tmp_path / "snap.db"
+    for suffix in ("", "-wal", "-shm"):
+        (tmp_path / f"snap.db{suffix}").write_bytes(b"x")
+    dryrun._remove(db)
+    assert list(tmp_path.iterdir()) == []
