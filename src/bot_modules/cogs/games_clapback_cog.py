@@ -18,6 +18,7 @@ from bot_modules.games.constants import (
     HOW_TO_PLAY,
 )
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
     sign_off_game_chore,
     finish_launch_response,
     get_game_options,
@@ -44,20 +45,27 @@ from bot_modules.games.utils.question_source import (
     channel_allows_nsfw,
 )
 from bot_modules.games.command_groups import play
+from bot_modules.games_clapback import logic as clapback_logic
 from bot_modules.games_clapback.logic import (
     MAX_PLAYERS,
+    MIN_ANSWERS,
     MIN_PLAYERS,
+    THREE_PLAYER_NOTE,
+    accept_answer,
     admit_pending_players,
     admit_player_now,
+    all_eligible_voted,
     calculate_bye_award,
     drain_pending_players,
     pick_round_bye,
     playable_players,
+    submit_window_may_close,
     vote_button_label,
     calculate_matchup_score,
     clamp_config_values,
     create_matchups,
     shuffled_replay_config,
+    withdraw_player,
 )
 from bot_modules.games_clapback.embeds import (
     build_lobby_embed,
@@ -103,6 +111,7 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
         super().__init__()
         self.title = f"Round {round_num} — Your Answer"
         self.game_id = game_id
+        self.round_num = round_num
         self.db = db
         self.cog = cog
 
@@ -120,12 +129,27 @@ class ClapbackAnswerModal(discord.ui.Modal, title="Your Answer"):
             return
 
         uid = interaction.user.id
+        round_num = self.round_num
+        accepted = False
 
+        # Discord keeps a modal open indefinitely: one sent after its window
+        # closed used to be written anyway — lost, or filed under the next
+        # round's prompt (clapback-4). Checked inside the write lock so the
+        # window can't close between the check and the write.
         def _store(payload):
+            nonlocal accepted
+            accepted = accept_answer(payload, round_num)
+            if not accepted:
+                return
             answers = payload.setdefault("answers", {})
             answers[str(uid)] = answer
 
         payload = await modify_payload(self.db, self.game_id, _store)
+        if not accepted:
+            await interaction.response.send_message(
+                f"❌ Answers for round {round_num} are closed.", ephemeral=True,
+            )
+            return
         await interaction.response.send_message(
             "Answer submitted! You can click Submit again to change it before time runs out.",
             ephemeral=True,
@@ -215,8 +239,7 @@ class ClapbackJoinView(discord.ui.View):
 
         if uid == self.host_id:
             await interaction.response.send_message(
-                "You're the host! If you leave, the game will be cancelled. "
-                "Use **Cancel** instead.",
+                "You're the host! Press **Cancel** to close the lobby instead.",
                 ephemeral=True,
             )
             return
@@ -266,35 +289,8 @@ class ClapbackJoinView(discord.ui.View):
         disable_all_items(self)
         await interaction.response.edit_message(view=self)
 
-        # Players are pinged per-round when each round's prompt is posted
-        # (see _submit_phase), so there's no separate start ping here.
-
-        # Initialize scores
-        payload["scores"] = {str(p): 0 for p in players}
-        # Snapshot of scores as of the last fully-completed round. Restored on
-        # crash-resume so a round interrupted mid-scoring can't double-count.
-        payload["scores_checkpoint"] = {str(p): 0 for p in players}
-        payload["clapbacks"] = {str(p): 0 for p in players}
-        payload["current_round"] = 0
-        payload["round_history"] = []
-        payload["used_prompts"] = []
-        payload["phase"] = "playing"
-        payload["last_bye"] = None
-        # Every bye handed out this game, in order. Drives the
-        # fewest-byes-first rotation in create_matchups.
-        payload["bye_history"] = []
-        await update_game_payload(self.db, self.game_id, payload)
-        # The row must stop reading as an open lobby: the start-ping sweep polls
-        # state='joining', and clapback rounds outlive a 10-minute countdown, so
-        # leaving it would nudge "time to start" mid-game.
-        await update_game_state(self.db, self.game_id, "playing")
-
-        try:
-            await self.cog._run_game(self.game_id, channel, payload)
-        except Exception as e:
-            log.error("Clapback game %s crashed: %s", self.game_id, e, exc_info=True)
-            await channel.send("❌ Something went wrong. Game ended.")
-            await self.cog._cancel_game(self.game_id, reason="crash")
+        payload = await self.cog._begin_game(self.game_id, channel, payload)
+        await self.cog._play(self.game_id, channel, payload)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -306,6 +302,43 @@ class ClapbackJoinView(discord.ui.View):
             f"🏆 **{cfg['rounds']}** rounds — highest score wins"
         )
         await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ql_cancel")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Close the lobby before it starts — host or mod, behind the usual
+        confirm popup. The host's Leave reply pointed at a Cancel button that
+        did not exist, leaving `/games end` or the idle sweep as the only
+        ways out (clapback-12)."""
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message(
+                "❌ Only the host or a mod can cancel the lobby.", ephemeral=True,
+            )
+            return
+        anchor = self.message or interaction.message
+
+        async def _confirmed(_confirm: discord.Interaction) -> None:
+            await self._cancel(anchor)
+
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to cancel this lobby?",
+            view=ConfirmCloseView(_confirmed), ephemeral=True,
+        )
+
+    async def _cancel(self, anchor) -> None:
+        """Archive the lobby as cancelled and retire its message, the way
+        ``on_timeout`` does."""
+        self.stop()
+        await self.cog._cancel_game(self.game_id, reason="cancelled")
+        disable_all_items(self)
+        if anchor is not None:
+            try:
+                await anchor.edit(
+                    content="🛑 **Lobby cancelled** by the host. Run `/games play clapback` to open a new one.",
+                    view=self,
+                )
+            except discord.HTTPException:
+                pass
 
     async def _update_embed(self, interaction: discord.Interaction, payload: dict):
         players = payload.get("players", [])
@@ -334,6 +367,8 @@ class ClapbackSubmitView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
+        # Set by Close answers; the submit loop reads it every tick.
+        self.close_requested = False
 
     @discord.ui.button(label="✏️ Submit", style=discord.ButtonStyle.primary, custom_id="ql_submit")
     async def submit(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -380,32 +415,49 @@ class ClapbackSubmitView(discord.ui.View):
         uid = interaction.user.id
         verdict = ""
         round_num = self.round_num
+        bye_before = None
+
+        # The parity rule may un-bench the pre-picked bye, and only if the
+        # no-contact gate would still seat them — so the pairs are read over
+        # the roster-plus-joiner before the write.
+        current = await get_game_payload(self.db, self.game_id)
+        forbidden = await self.cog._forbidden_pairs(
+            interaction.guild, [*current.get("players", []), uid],
+        )
 
         def _join(p):
-            nonlocal verdict, round_num
-            verdict = admit_player_now(p, uid, MAX_PLAYERS)
+            nonlocal verdict, round_num, bye_before
+            bye_before = p.get("round_bye")
+            verdict = admit_player_now(p, uid, MAX_PLAYERS, forbidden_pairs=forbidden)
             round_num = int(p.get("current_round") or self.round_num)
 
         await modify_payload(self.db, self.game_id, _join)
 
-        if verdict == "joined":
+        if verdict in ("joined", "joined-unbenched"):
             log.info(
                 "%s joined game %s mid-round", interaction.user.display_name, self.game_id
             )
             await interaction.response.send_modal(
                 ClapbackAnswerModal(self.game_id, round_num, self.db, self.cog)
             )
+            self.cog._poke_submit(self.game_id)
             # The room sees the answer counter jump; say why. Best-effort — the
             # player is already in and writing, so a failed post is cosmetic.
             channel = interaction.channel
             if channel is not None and not isinstance(
                 channel, (discord.ForumChannel, discord.CategoryChannel)
             ):
-                try:
-                    await channel.send(
-                        f"🙋 {interaction.user.mention} jumped in — they're playing "
-                        f"this round, starting on 0 points."
+                text = (
+                    f"🙋 {interaction.user.mention} jumped in — they're playing "
+                    f"this round, starting on 0 points."
+                )
+                if verdict == "joined-unbenched" and bye_before is not None:
+                    text += (
+                        f"\n🪑 <@{bye_before}> you're back in this round — that "
+                        f"evens the numbers, so hit **Submit**!"
                     )
+                try:
+                    await channel.send(text)
                 except discord.HTTPException:
                     log.debug("clapback: couldn't announce a mid-round join", exc_info=True)
             return
@@ -421,11 +473,48 @@ class ClapbackSubmitView(discord.ui.View):
                 "**next** one — you'll start on 0 points. If this turns out to "
                 "be the last round, you'll be told and can join the next game."
             ),
+            "queued-parity": (
+                "🙋 Jumping in now would leave an odd number of writers and "
+                "bench someone who's already written, so you're in from the "
+                "**next** round — you'll start on 0 points. If this turns out "
+                "to be the last round, you'll be told and can join the next game."
+            ),
             "already-queued": (
                 "You're already queued — you'll be in from the next round."
             ),
         }.get(verdict, "Couldn't add you to this game.")
         await interaction.response.send_message(text, ephemeral=True)
+
+    @discord.ui.button(
+        label="🔒 Close answers", style=discord.ButtonStyle.secondary, custom_id="ql_close_answers",
+    )
+    async def close_answers(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Host or mod ends the write window early (clapback-2): the phase
+        that actually stalls a game had no host control, so every round with
+        one absent writer ran its whole window. Refused below two answers —
+        that would only skip the round."""
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message(
+                "❌ Only the host or a mod can close answers.", ephemeral=True,
+            )
+            return
+        payload = await get_game_payload(self.db, self.game_id)
+        count = len(payload.get("answers") or {})
+        if count < MIN_ANSWERS:
+            await interaction.response.send_message(
+                f"❌ Only {count} answer{'s' if count != 1 else ''} in — at least "
+                f"{MIN_ANSWERS} are needed to run the round.",
+                ephemeral=True,
+            )
+            return
+        self.close_requested = True
+        event = self.cog._submit_events.get(self.game_id)
+        if event is not None:
+            event.set()
+        await interaction.response.send_message(
+            f"🔒 Closing answers with {count} in.", ephemeral=True,
+        )
 
 
 class ClapbackVoteView(discord.ui.View):
@@ -517,14 +606,39 @@ class ClapbackRoundSummaryView(discord.ui.View):
 
 
 class ClapbackRecapView(discord.ui.View):
-    def __init__(self, game_id: str, host_id: int, config: dict, db, bot, cog):
-        super().__init__(timeout=120)
+    # Matches the lobby's inactivity window: a host back from a drink should
+    # still find a live Play Again (clapback-13).
+    RECAP_TIMEOUT = 600
+
+    def __init__(
+        self, game_id: str, host_id: int, config: dict, db, bot, cog,
+        players: list[int] | None = None,
+    ):
+        super().__init__(timeout=float(self.RECAP_TIMEOUT))
         self.game_id = game_id
         self.host_id = host_id
-        self.config = config
+        # The finished game's countdown is spent; carrying it would make the
+        # rematch lobby read as "starting <in the past>" and, with the roster
+        # seeded below, the start-ping sweep would start it on its next tick
+        # (clapback-8) — the host presses Start on a rematch.
+        self.config = {k: v for k, v in config.items() if k != "start_epoch"}
+        # The finished roster (leavers already off it): the rematch lobby
+        # opens with them seated instead of empty (clapback-10).
+        self.players = list(players or [])
         self.db = db
         self.bot = bot
         self.cog = cog
+        self.message: discord.Message | None = None
+
+    async def on_timeout(self):
+        # A live-looking Play Again on a dead view fails with "This interaction
+        # failed" — retire the buttons instead.
+        disable_all_items(self)
+        if self.message is not None:
+            try:
+                await self.message.edit(view=self)
+            except discord.HTTPException:
+                pass
 
     @discord.ui.button(label="🔁 Play Again", style=discord.ButtonStyle.primary, custom_id="ql_replay")
     async def play_again(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -553,6 +667,7 @@ class ClapbackRecapView(discord.ui.View):
             host_name=interaction.user.display_name,
             guild=interaction.guild,
             config=self.config,
+            players=self.players,
         )
         # A rematch started from the recap misses the shared
         # finish_launch_response seam, but a mod pressing it has run a game by
@@ -595,6 +710,7 @@ class ClapbackRecapView(discord.ui.View):
             host_name=interaction.user.display_name,
             guild=interaction.guild,
             config=shuffled,
+            players=self.players,
         )
         # A rematch started from the recap misses the shared
         # finish_launch_response seam, but a mod pressing it has run a game by
@@ -620,6 +736,9 @@ class ClapbackCog(commands.Cog):
         # Guild accent resolved ONCE per game at start (or on recovery) and
         # reused by every phase's embed — never re-resolved per vote / update.
         self._accents: dict[str, "discord.Color | None"] = {}
+        # Games the countdown auto-start spawned; held so the tasks aren't
+        # garbage-collected mid-game.
+        self._auto_tasks: set[asyncio.Task] = set()
 
     @property
     def db(self):
@@ -672,7 +791,7 @@ class ClapbackCog(commands.Cog):
 
     @app_commands.command(name="clapback", description="Start a Clapback game — comedy head-to-head!")
     @app_commands.describe(
-        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
+        start_in="Lobby countdown in minutes — the game starts itself when it runs out (3+ joined)",
     )
     async def clapback(
         self,
@@ -761,14 +880,21 @@ class ClapbackCog(commands.Cog):
         host_name: str,
         guild,
         config: dict,
+        players: list[int] | None = None,
     ) -> str | None:
+        """Open a lobby. ``players`` seeds it (a rematch's finished roster);
+        the host still presses Start. The age-gate is re-read from the channel
+        rather than trusted from a carried config — a rematch after the room's
+        age-restriction changed must draw from the right bank (safety-sweep-10)."""
+        config = {**config, "allow_nsfw": channel_allows_nsfw(channel)}
+        seed = list(dict.fromkeys(int(p) for p in (players or [])))[:MAX_PLAYERS]
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "clapback",
             state="joining",
-            payload={"config": config, "players": [], "host_id": host_id},
+            payload={"config": config, "players": seed, "host_id": host_id},
         )
         log.info("Game %s (clapback) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
@@ -779,7 +905,7 @@ class ClapbackCog(commands.Cog):
         embed = build_lobby_embed(
             host_name=host_name,
             config=config,
-            players=[],
+            players=seed,
             name_resolver=lambda uid: resolve_name(guild, uid),
             start_at=config.get("start_epoch"),
             color=accent,
@@ -798,8 +924,108 @@ class ClapbackCog(commands.Cog):
 
         view.message = msg
         await update_game_message(self.db, game_id, msg.id)
-        await update_session(self.db, channel.id, game_id, [host_id])
+        await update_session(
+            self.db, channel.id, game_id, list(dict.fromkeys([host_id, *seed])),
+        )
         return game_id
+
+    # ── Lobby → play ─────────────────────────────────────────────────────
+
+    async def _begin_game(self, game_id: str, channel, payload: dict) -> dict:
+        """Take a validated lobby into play: seed the scoreboard, retire the
+        ``joining`` state. Shared by the Start button and the countdown
+        auto-start (``auto_start``), so both paths start a game the same way.
+        The caller has already checked the roster against the floor."""
+        players = payload.get("players", [])
+        # Players are pinged per-round when each round's prompt is posted
+        # (see _submit_phase), so there's no separate start ping here. At the
+        # three-player floor, though, say what that means before the first
+        # vote card does (clapback-7).
+        if len(players) == 3:
+            try:
+                await channel.send(THREE_PLAYER_NOTE)
+            except discord.HTTPException:
+                pass
+
+        # Initialize scores
+        payload["scores"] = {str(p): 0 for p in players}
+        # Snapshot of scores (and CLAPBACK tallies) as of the last fully-
+        # completed round. Restored on crash-resume so a round interrupted
+        # mid-scoring can't double-count either (clapback-14).
+        payload["scores_checkpoint"] = {str(p): 0 for p in players}
+        payload["clapbacks"] = {str(p): 0 for p in players}
+        payload["clapbacks_checkpoint"] = {str(p): 0 for p in players}
+        payload["current_round"] = 0
+        payload["round_history"] = []
+        payload["used_prompts"] = []
+        payload["phase"] = "playing"
+        payload["last_bye"] = None
+        # Every bye handed out this game, in order. Drives the
+        # fewest-byes-first rotation in create_matchups.
+        payload["bye_history"] = []
+        await update_game_payload(self.db, game_id, payload)
+        # The row must stop reading as an open lobby: the start-ping sweep polls
+        # state='joining', and clapback rounds outlive a 10-minute countdown, so
+        # leaving it would nudge "time to start" mid-game.
+        await update_game_state(self.db, game_id, "playing")
+        return payload
+
+    async def _play(self, game_id: str, channel, payload: dict) -> None:
+        """Run the game to its end, archiving a crash as one."""
+        try:
+            await self._run_game(game_id, channel, payload)
+        except Exception as e:
+            log.error("Clapback game %s crashed: %s", game_id, e, exc_info=True)
+            await channel.send("❌ Something went wrong. Game ended.")
+            await self._cancel_game(game_id, reason="crash")
+
+    async def auto_start(self, row, payload: dict, channel) -> bool:
+        """Start a countdown lobby without a button press (clapback-8).
+
+        Registered in ``bot.lobby_auto_starters``; the start-ping sweep calls
+        it when ``start_epoch`` arrives with at least ``MIN_PLAYERS`` joined.
+        Applies the Start button's own gates — the no-contact floor
+        (``playable_players``) and the ceiling — and returns False when they
+        refuse, in which case the sweep nudges the host instead and Start
+        gives them the ordinary refusal line. The lobby view is stopped and
+        its buttons retired exactly as a press would, and the game runs as a
+        background task so the sweep is never held for the length of a game.
+        """
+        game_id = row["game_id"]
+        view = self.bot.active_views.get(game_id)
+        if not isinstance(view, ClapbackJoinView):
+            # No live lobby view means no game loop could see itself as
+            # running (``_is_cancelled``); leave it to the host / sweeps.
+            log.debug("auto-start: clapback lobby %s has no live view", game_id)
+            return False
+        # Fresh roster: a join may have landed since the sweep read the row.
+        payload = await get_game_payload(self.db, game_id)
+        players = list(payload.get("players", []))
+        guild = getattr(channel, "guild", None)
+        forbidden = await self._forbidden_pairs(guild, players)
+        if len(playable_players(players, forbidden)) < MIN_PLAYERS or len(players) > MAX_PLAYERS:
+            return False
+
+        view.stop()
+        disable_all_items(view)
+        message = view.message
+        if message is None and row["message_id"]:
+            try:
+                message = await channel.fetch_message(int(row["message_id"]))
+            except Exception:
+                message = None
+        if message is not None:
+            try:
+                await message.edit(view=view)
+            except discord.HTTPException:
+                pass
+
+        payload = await self._begin_game(game_id, channel, payload)
+        task = asyncio.create_task(self._play(game_id, channel, payload))
+        self._auto_tasks.add(task)
+        task.add_done_callback(self._auto_tasks.discard)
+        log.info("Game %s (clapback) auto-started at its countdown with %d players", game_id, len(players))
+        return True
 
     # ── Game loop ────────────────────────────────────────────────────────
 
@@ -817,6 +1043,10 @@ class ClapbackCog(commands.Cog):
         start_round = len(payload.get("round_history", [])) + 1
         if "scores_checkpoint" in payload:
             payload["scores"] = dict(payload["scores_checkpoint"])
+            # The CLAPBACK tally used to survive the rollback, so a resume in
+            # matchup 3 re-counted whoever swept 1–2 (clapback-14).
+            if "clapbacks_checkpoint" in payload:
+                payload["clapbacks"] = dict(payload["clapbacks_checkpoint"])
             await update_game_payload(self.db, game_id, payload)
 
         for round_num in range(start_round, total_rounds + 1):
@@ -842,6 +1072,7 @@ class ClapbackCog(commands.Cog):
                     payload.setdefault("scores", {}).setdefault(str(uid), 0)
                     payload.setdefault("scores_checkpoint", {}).setdefault(str(uid), 0)
                     payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
+                    payload.setdefault("clapbacks_checkpoint", {}).setdefault(str(uid), 0)
             await update_game_payload(self.db, game_id, payload)
             if admitted:
                 joined = ", ".join(f"<@{uid}>" for uid in admitted)
@@ -901,9 +1132,13 @@ class ClapbackCog(commands.Cog):
             if self._is_cancelled(game_id):
                 return
 
-            if len(answers) < 2:
+            if len(answers) < MIN_ANSWERS:
                 await channel.send("Not enough answers this round — moving on!")
                 continue
+
+            # Join now may have un-benched the pre-picked bye to keep the
+            # writer count even (clapback-5); the payload's word is final.
+            round_bye = (await get_game_payload(self.db, game_id)).get("round_bye")
 
             # The pre-picked bye never submitted, so they are already out of
             # `answers`. A second bye can still fall out here when someone
@@ -934,6 +1169,7 @@ class ClapbackCog(commands.Cog):
                 result = await self._vote_matchup(
                     game_id, channel, payload, mi, matchup,
                     answers, config, host_id, round_num, len(matchups), prompt,
+                    byes=byes,
                 )
                 if result is None:
                     return  # game cancelled
@@ -976,6 +1212,7 @@ class ClapbackCog(commands.Cog):
             payload.setdefault("round_history", []).append(round_record)
             # Round fully scored — checkpoint so a later crash resumes from here.
             payload["scores_checkpoint"] = dict(payload.get("scores", {}))
+            payload["clapbacks_checkpoint"] = dict(payload.get("clapbacks", {}))
             payload["phase"] = "revealing"
             await update_game_payload(self.db, game_id, payload)
 
@@ -1023,14 +1260,17 @@ class ClapbackCog(commands.Cog):
         from bot_modules.games.utils.timer import format_deadline, now_plus
         # The benched player is left out of the ping, the answer count and the
         # submit gate: being asked for an answer that will never be shown is
-        # what made sitting out read as a bug rather than a rotation.
-        def _expected(roster) -> list:
+        # what made sitting out read as a bug rather than a rotation. The bye
+        # is read off the payload each time: Join now can un-bench them
+        # mid-window (clapback-5).
+        def _expected(p: dict) -> list:
+            bye = p.get("round_bye")
             return [
-                uid for uid in roster
-                if bye_player is None or str(uid) != str(bye_player)
+                uid for uid in p.get("players", [])
+                if bye is None or str(uid) != str(bye)
             ]
 
-        players = _expected(payload["players"])
+        players = _expected({**payload, "round_bye": bye_player})
         timer_secs = config["timer"]
         deadline = now_plus(timer_secs)
 
@@ -1080,7 +1320,9 @@ class ClapbackCog(commands.Cog):
         elapsed = 0
         last_count = 0
         last_expected = len(players)
+        last_change_at = 0
         last_edit_at = -5  # triggers first timer update at elapsed=1
+        bye_shown = bye_player is not None
         while elapsed < timer_secs:
             if self._is_cancelled(game_id):
                 break
@@ -1097,13 +1339,19 @@ class ClapbackCog(commands.Cog):
             # denominator is not the roster this phase started with. Reading it
             # once is what would make "3/2" show up, and would end the window
             # early the moment the original players were all in.
-            expected = len(_expected(p.get("players", players)))
+            expected = len(_expected(p))
             count_changed = (count, expected) != (last_count, last_expected)
             timer_due = (elapsed - last_edit_at) >= 5
+            if bye_shown and p.get("round_bye") is None:
+                # Un-benched by a Join now: the "Sitting out" field is stale.
+                bye_shown = False
+                embed.remove_field(2)
+                count_changed = True
 
             if count_changed or timer_due:
                 if count_changed:
                     last_count, last_expected = count, expected
+                    last_change_at = elapsed
                 last_edit_at = elapsed
                 remaining = max(0, timer_secs - elapsed)
                 mins, secs = divmod(remaining, 60)
@@ -1115,32 +1363,47 @@ class ClapbackCog(commands.Cog):
                 except discord.HTTPException:
                     pass
 
-            if count >= expected:
+            # Full house, one short and quiet for a while, or the host's
+            # Close answers (clapback-2) — the absent writer is not coming.
+            if view.close_requested or submit_window_may_close(
+                count, expected, elapsed - last_change_at,
+            ):
                 break
 
         self._submit_events.pop(game_id, None)
+
+        # The window is shut before the answers are read, so a modal that
+        # lands from here on is refused rather than bracketed late or filed
+        # under the next round (clapback-4).
+        def _shut(p):
+            p["phase"] = "bracketing"
+
+        payload = await modify_payload(self.db, game_id, _shut)
 
         # Disable submit view
         view.stop()
         disable_all_items(view)
         try:
-            p = await get_game_payload(self.db, game_id)
-            count = len(p.get("answers", {}))
-            expected = len(_expected(p.get("players", players)))
+            count = len(payload.get("answers", {}))
+            expected = len(_expected(payload))
             embed.set_field_at(0, name="Timer", value="⏱️ Closed", inline=True)
             embed.set_field_at(1, name="Answers In", value=f"{count}/{expected}", inline=True)
             await msg.edit(embed=embed, view=view)
         except discord.HTTPException:
             pass
 
-        payload = await get_game_payload(self.db, game_id)
         return payload.get("answers", {})
 
     # ── Vote matchup ─────────────────────────────────────────────────────
 
+    #: Seconds the reveal card sits before the next matchup; a class attribute
+    #: so a test can run a matchup without the wait.
+    REVEAL_SECONDS = 4
+
     async def _vote_matchup(
         self, game_id, channel, payload, matchup_index, matchup,
         answers, config, host_id, round_num, total_matchups, prompt,
+        byes=(),
     ):
         from bot_modules.games.utils.timer import format_deadline, now_plus
         player_a, player_b = int(matchup["pair"][0]), int(matchup["pair"][1])
@@ -1180,6 +1443,12 @@ class ClapbackCog(commands.Cog):
         elapsed = 0
         last_vcount = 0
         last_edit_at = -5  # triggers first timer update at elapsed=1
+        # Decision D1 (2026-09-04): the matchup closes once every eligible
+        # player has voted — the roster minus the contestants minus a silent
+        # bye — after a short grace for a spectator mid-click. A spectator
+        # vote reopens the electorate and the full timer runs, which is the
+        # one case the June decision (ab27201b) was protecting.
+        grace_from: int | None = None
         while elapsed < vote_timer:
             if self._is_cancelled(game_id):
                 return None
@@ -1193,7 +1462,8 @@ class ClapbackCog(commands.Cog):
             p = await get_game_payload(self.db, game_id)
             m = p.get("matchups", [])
             if matchup_index < len(m):
-                vcount = len(m[matchup_index].get("votes", {}))
+                votes = m[matchup_index].get("votes", {})
+                vcount = len(votes)
                 vcount_changed = vcount != last_vcount
                 timer_due = (elapsed - last_edit_at) >= 5
 
@@ -1211,10 +1481,18 @@ class ClapbackCog(commands.Cog):
                     except discord.HTTPException:
                         pass
 
-        # Voting is open to everyone, so "all eligible voters have voted" is
-        # no longer determinable — the matchup always runs the full vote timer
-        # (a host /games end pops the game from active_views, which the next
-        # _is_cancelled check below catches within a second).
+                if all_eligible_voted(
+                    votes, p.get("players", players), (player_a, player_b), byes,
+                ):
+                    if grace_from is None:
+                        grace_from = elapsed
+                    if elapsed - grace_from >= clapback_logic.VOTE_CLOSE_GRACE_SECONDS:
+                        break
+                else:
+                    grace_from = None
+
+        # A host /games end pops the game from active_views, which the next
+        # _is_cancelled check catches within a second.
 
         self._vote_events.pop(game_id, None)
         view._closed = True
@@ -1255,7 +1533,7 @@ class ClapbackCog(commands.Cog):
         except discord.HTTPException:
             pass
 
-        await asyncio.sleep(4)  # Let players read the reveal
+        await asyncio.sleep(self.REVEAL_SECONDS)  # Let players read the reveal
 
         # Build result record for round history
         vc = result["vote_counts"]
@@ -1363,10 +1641,13 @@ class ClapbackCog(commands.Cog):
         players = payload.get("players", [])
         guild = channel.guild if hasattr(channel, "guild") else None
 
+        # A leaver's withdrawn score still names them, and they may be out of
+        # the cache by now — the shared resolver covers that (see _names).
+        name_fn = await self._names(guild, self._scoreboard_ids(payload, None))
         embed = build_recap_embed(
             payload=payload,
             config=config,
-            name_resolver=lambda uid: resolve_name(guild, uid),
+            name_resolver=name_fn,
             color=self._accents.get(game_id),
         )
         if guild:
@@ -1375,8 +1656,10 @@ class ClapbackCog(commands.Cog):
 
         rounds_played = len(payload.get("round_history", []))
         host_id = payload.get("host_id") or (players[0] if players else 0)
-        view = ClapbackRecapView(game_id, host_id, config, self.db, self.bot, self)
-        await channel.send(embed=embed, view=view)
+        view = ClapbackRecapView(
+            game_id, host_id, config, self.db, self.bot, self, players=list(players),
+        )
+        view.message = await channel.send(embed=embed, view=view)
 
         # End game
         log.info("Game %s ended — %d players, %d rounds", game_id, len(players), rounds_played)
@@ -1416,6 +1699,12 @@ class ClapbackCog(commands.Cog):
     def _is_cancelled(self, game_id: str) -> bool:
         return game_id in self._game_cancelled or game_id not in self.bot.active_views
 
+    def _poke_submit(self, game_id: str) -> None:
+        """Wake the submit loop so the panel's count updates at once."""
+        event = self._submit_events.get(game_id)
+        if event is not None:
+            event.set()
+
     def _cleanup(self, game_id: str):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
@@ -1436,19 +1725,32 @@ class ClapbackCog(commands.Cog):
         """
         uid = member.id
         verdict = ""
+        bye_before = None
+        current = await get_game_payload(self.db, game_id)
+        forbidden = await self._forbidden_pairs(
+            getattr(channel, "guild", None), [*current.get("players", []), uid],
+        )
 
         def _add(payload):
-            nonlocal verdict
-            verdict = admit_player_now(payload, uid, MAX_PLAYERS)
+            nonlocal verdict, bye_before
+            bye_before = payload.get("round_bye")
+            verdict = admit_player_now(payload, uid, MAX_PLAYERS, forbidden_pairs=forbidden)
 
         await modify_payload(self.db, game_id, _add)
+        self._poke_submit(game_id)
         name = member.display_name
-        if verdict == "joined":
-            return True, (
+        if verdict in ("joined", "joined-unbenched"):
+            text = (
                 f"{ICON} **{name}** joined Clapback — they're in this round, "
                 f"starting on 0 points!"
             )
-        if verdict == "queued":
+            if verdict == "joined-unbenched" and bye_before is not None:
+                text += (
+                    f"\n🪑 <@{bye_before}> you're back in this round — that "
+                    f"evens the numbers, so hit **Submit**!"
+                )
+            return True, text
+        if verdict in ("queued", "queued-parity"):
             return True, (
                 f"{ICON} **{name}** joined Clapback — they'll play from the "
                 f"next round!"
@@ -1460,21 +1762,23 @@ class ClapbackCog(commands.Cog):
         return False, f"**{name}** is already in this game."
 
     async def mid_game_leave(self, channel, game_id: str, member):
-        """Remove *member* from a running game. Their score stays on the board."""
+        """Remove *member* from a running game. Their score is withdrawn from
+        the board (clapback-17): they are paid nothing either way, and the
+        recap must not crown someone who walked out."""
         uid = member.id
-        state: dict = {}
+        removed = False
 
         def _remove(payload):
-            players = payload.setdefault("players", [])
-            if uid not in players:
-                state["missing"] = True
-                return
-            players.remove(uid)
+            nonlocal removed
+            removed = withdraw_player(payload, uid)
 
         await modify_payload(self.db, game_id, _remove)
-        if state.get("missing"):
+        if not removed:
             return False, f"**{member.display_name}** isn't in this game."
-        return True, f"{ICON} **{member.display_name}** left Clapback — their score stays on the board."
+        return True, (
+            f"{ICON} **{member.display_name}** left Clapback — their score is "
+            f"withdrawn from the board."
+        )
 
 
 async def setup(bot: "Bot"):
@@ -1484,5 +1788,6 @@ async def setup(bot: "Bot"):
     play.add_command(cog.clapback, override=True)
     bot.game_launchers["clapback"] = cog.launch
     bot.game_recoverers["clapback"] = cog.recover_game
+    bot.lobby_auto_starters["clapback"] = cog.auto_start
     bot.game_joiners["clapback"] = cog.mid_game_join
     bot.game_leavers["clapback"] = cog.mid_game_leave

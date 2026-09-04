@@ -21,7 +21,33 @@ built and scored**, which is the part with real rules in it.
 ## 1. Launch and configuration
 
 `/games play clapback [start_in:1-60]` — open to everyone. `start_in` posts a
-lobby countdown; the host still clicks **Start**.
+lobby countdown, and **the game starts itself when it runs out** (clapback-8,
+2026-09-04) provided at least `MIN_PLAYERS` have joined: the start-ping sweep
+(`game_start_ping_service`, polling every 15 s) calls `ClapbackCog.auto_start`
+— registered in `bot.lobby_auto_starters["clapback"]` — which re-reads the
+roster, applies Start's own gates (the no-contact `playable_players` floor and
+`MAX_PLAYERS`), stops the lobby view and greys its buttons as a press would,
+runs the shared `_begin_game` (scoreboard seed, `joining` → `playing`) and
+spawns `_play` (the game loop with its crash archive) as a background task.
+The lobby's **⏰ Starting** field says so (`<t:…:R> — on its own, once 3 have
+joined`). Short of three at the moment, the host is nudged once with what the
+lobby is waiting on, and the game still starts itself the tick a third joins;
+with fewer than three the idle-lobby close applies from the advertised start.
+A refusal from the gates (a no-contact pair leaving fewer than three
+playable) falls back to the old "time to start" nudge and the host's press gets
+the ordinary refusal line. Without `start_in` nothing changes: the host
+presses **Start**. A **scheduled** Clapback is stamped `start_in:10` when its
+schedule names none, so it runs with nobody at the keyboard — before this a
+scheduled Clapback could be started only by the schedule's creator or a mod
+(clapback-8; 3 of 30 rows in 30 days were timed-out lobbies).
+
+**The Game Night ping** (clapback-11 / discovery-2, decision D4). The lobby
+message itself still carries no mention; the platform sweep posts one
+`content=` line mentioning the guild's opt-in **Game Night** role
+(`feature_roles.GAME_NIGHT_PING`, dial on Games Global Config, made on first
+use) with a jump link to the lobby and its start time, the first tick the
+lobby's `message_id` exists. Shared by every lobby game — see
+[games_system_spec.md](games_system_spec.md), *The Game Night ping*.
 
 Clapback is **bank-only**: it never falls back to AI prompt generation, so an
 empty question bank means the run is skipped rather than improvised. Bank
@@ -46,16 +72,82 @@ refuses with the ordinary "Need at least 3 players to start Clapback.
 Currently: *n*." line (roster count) when that leaves fewer than three. See
 §3.4.
 
+**Three is a thin game, and the lobby says so** (clapback-7). With three
+players and no spectators the only eligible voter in every matchup is the
+third player, so each is decided 100/0 on one click and CLAPBACK / Best Single
+Answer are unreachable unless someone watching votes. The lobby embed carries
+`logic.THREE_PLAYER_NOTE` ("⚖️ 3 will play — each matchup is judged by the one
+player not in it …") at exactly three joined, and Start posts the same line to
+the channel when it starts three. No scoring change — the fuller option (a
+3-way ballot per round) is in §6.
+
+### 1.1 The lobby
+
+Join / Leave / Start / ❓ Help / **Cancel**. Cancel is host-or-mod
+(`is_host_or_mod`), behind the shared `ConfirmCloseView` popup like every
+other Close/End path, and runs `_cancel_game(reason="cancelled")` then retires
+the lobby message ("🛑 **Lobby cancelled** by the host …", buttons disabled)
+the way the inactivity timeout does. The host's Leave reply points at it
+("You're the host! Press **Cancel** to close the lobby instead.") — until
+2026-09-04 that reply named a Cancel button that did not exist (clapback-12).
+
+`_start_new_game(…, players=None)` takes an optional roster seed. The recap's
+**🔁 Play Again** / **🔀 Play Again (Shuffled)** pass the finished game's
+roster — leavers are already off it (§2.3) — so the rematch lobby opens with
+everyone seated and the host still presses Start (clapback-10; 8 of 27 real
+games began within three minutes of the previous one). The seed is
+de-duplicated and capped at `MAX_PLAYERS`, and the finished game's
+`start_epoch` is dropped from the carried config — a seeded roster plus a
+spent countdown would otherwise have the sweep auto-start the rematch on its
+next tick. The new lobby's `allow_nsfw` is
+**re-read from the channel** (`channel_allows_nsfw`) rather than carried from
+the finished game's config, so a rematch after the room's age-restriction
+changed draws from the right bank (safety-sweep-10).
+
+The recap view times out after **600 s** (matching the lobby's inactivity
+window) and `on_timeout` disables its buttons and edits the message
+(`view.message` is kept after send), so Play Again never sits looking live
+over a dead view (clapback-13).
+
 ## 2. Round flow
 
 1. Latecomers queued during the previous round are admitted — see §2.2.
 2. The round's bye is picked **before** the prompt goes out — see §2.1.
 3. Prompt is drawn from the bank and posted; players submit via an ephemeral
-   modal (resubmitting before the timer overwrites the previous answer).
+   modal (resubmitting before the timer overwrites the previous answer). The
+   window closes early on `logic.submit_window_may_close`: a full house, or
+   **one answer short with nothing changed for `SUBMIT_IDLE_CLOSE_SECONDS`
+   (20 s)** — every real round that ran its whole window did so because one
+   writer had stepped away, and paid them nothing anyway (clapback-2). Never
+   below `MIN_ANSWERS` (2), which would only skip the round. The panel also
+   carries **🔒 Close answers** for the host or a mod (same gate as Next
+   Round), refused below two answers ("❌ Only *n* answer(s) in — at least 2
+   are needed to run the round.").
+   The phase is set to `bracketing` **before** the answers are read, and the
+   modal's write goes through `logic.accept_answer(payload, round_num)` inside
+   the write lock: an answer is stored only while the phase is `submitting`
+   and `current_round` is the round the modal was opened for; otherwise
+   nothing is written and the reply is "❌ Answers for round *N* are closed."
+   Discord keeps a modal open indefinitely, and until 2026-09-04 a late one
+   was written anyway — lost if the round had bracketed, or filed as the
+   *next* round's entry if that prompt had posted (clapback-4).
 4. Submitted answers are bracketed — see §3.
-5. Each matchup is voted on **sequentially**, `vote_timer` seconds each.
+5. Each matchup is voted on **sequentially**, up to `vote_timer` seconds each.
    Contestants cannot vote on their own matchup. Each vote button carries the
    answer text (`logic.vote_button_label`), not a bare 🅰️/🅱️ emoji.
+   **A matchup closes once every eligible player has voted** —
+   `logic.all_eligible_voted`: the roster minus the two contestants minus a
+   bye who has not voted (a bye may vote and is then counted, but is never
+   waited for) — after a `VOTE_CLOSE_GRACE_SECONDS` (5 s) grace for a
+   spectator mid-click. A vote from **outside the roster** reopens the
+   electorate and the full timer runs.
+   > **Decision D1, 2026-09-04 — reverses ab27201b (June).** When voting was
+   > opened to spectators the loop lost its early exit on purpose, since
+   > "everyone eligible has voted" was no longer knowable. Prod data since:
+   > spectators vote in 2–12% of matchups, and roughly half of a game was
+   > fixed waiting — an all-eligible close would have ended 55–59% of
+   > matchups early at 5–6 players (clapback-1). The June trade-off is now
+   > the exception (a spectator vote keeps the timer) rather than the rule.
 6. Each matchup's reveal shows the split; then the round scoreboard.
 
 A round with fewer than 2 answers is skipped entirely ("Not enough answers this
@@ -103,18 +195,62 @@ of two things happens, from `payload["phase"]`:
 A joiner is covered by the no-contact gate without any extra step: the
 submitters' pairs are read after the window closes (§3.4).
 
-Either way they start on **0 points**, seeded into `scores`, `clapbacks` *and*
-`scores_checkpoint` — the checkpoint is what a crash-resume rolls back to, and
-a joiner missing from it is rolled off the scoreboard. Anyone over
-`MAX_PLAYERS` is turned away out loud rather than silently dropped. Pressing
-Join during the **last** round would otherwise queue someone for a boundary
-that never arrives, so the game end calls `logic.drain_pending_players` and
-tells them the game is over instead of leaving them waiting.
+**Parity** (clapback-5, 2026-09-04). The pre-picked bye (§2.1) exists so
+nobody writes an answer that is never used, and a joiner who turned an even
+writer count odd used to force exactly that on someone at the bracket. So
+`admit_player_now` keeps the writer count even, deciding with
+`pick_round_bye`'s own "needs a bye?" answer over the same `forbidden_pairs`
+the round uses (the cog reads them over roster-plus-joiner before the write):
+
+- seating the joiner leaves a field that needs no bye → `joined`;
+- otherwise, when a bye was pre-picked and the whole roster plus the joiner
+  pairs cleanly, the bye is **un-benched** — `round_bye` cleared so their
+  Submit opens — and the channel post adds "🪑 @bye you're back in this round
+  — that evens the numbers, so hit **Submit**!" (`joined-unbenched`). The
+  submit loop reads `round_bye` off the payload each tick, drops the
+  "Sitting out" field and re-counts; `_run_game` re-reads `round_bye` after
+  the window so an un-benched player is never also paid a bye;
+- otherwise → `queued-parity`, the next-round queue with a reply that says
+  why ("Jumping in now would leave an odd number of writers and bench someone
+  who's already written, so you're in from the **next** round …").
+
+An un-benched bye is always pairable by construction: a player the no-contact
+list keeps apart from everyone stays benched (the gate would only bench them
+again after they wrote), and three players who include a pair are never read
+as a clean round-robin.
+
+Either way they start on **0 points**, seeded into `scores`, `clapbacks`,
+`scores_checkpoint` *and* `clapbacks_checkpoint` — the checkpoints are what a
+crash-resume rolls back to, and a joiner missing from them is rolled off the
+scoreboard. Anyone over `MAX_PLAYERS` is turned away out loud rather than
+silently dropped. Pressing Join during the **last** round would otherwise
+queue someone for a boundary that never arrives, so the game end calls
+`logic.drain_pending_players` and tells them the game is over instead of
+leaving them waiting.
 
 The button queued for the *next* round unconditionally until 2026-08-30. That
 was the safe reading of a harder problem — a live round's matchups must not
 shift — applied to a phase that has no matchups yet, and it made someone
 watching a prompt they had a clapback for sit the round out.
+
+### 2.3 Leaving mid-game
+
+`/games leave` routes to `mid_game_leave`, which runs `logic.withdraw_player`:
+the member comes off `players` and their id is appended to `left`. The score
+is **kept but withdrawn** — `logic.board_scores` splits `scores` into
+`(standing, withdrawn)`, the scoreboard and recap rank only the standing
+players (the recap's `Winner` is the highest of them) and list the withdrawn
+below, struck through, as "left the game" / "left mid-game; score
+withdrawn". The reply says so ("… left Clapback — their score is withdrawn
+from the board."). `end_game` gets the roster as it stands, so a leaver is
+paid nothing, and `game_rewards._winners_clapback` skips withdrawn scores so
+the game-win goes to the same player the recap crowns.
+
+> **Changed 2026-09-04 (clapback-17, option a).** A leaver's score used to
+> stay on the board, so someone who left in round 4 while leading was 🥇 on
+> every later scoreboard and the recap's Winner while nobody was paid the win
+> (the winner id was filtered out of the roster the faucet pays). Withdrawing
+> the score matches the forfeit the payout already applied.
 
 ## 3. Bracketing (`logic.create_matchups`)
 
@@ -260,13 +396,18 @@ record; the embed builder resolves names, keeping the logic layer Discord-free.
 ## 5. Persistence
 
 Game payload keys specific to Clapback: `answers`, `matchups`, `scores`,
-`scores_checkpoint`, `clapbacks`, `round_history`, `used_prompts`,
-`bye_history`, `last_bye` (legacy, still written), `round_bye` (this round's
-pre-picked bye), `pending_players` (queued latecomers), `current_round`,
-`phase`.
+`scores_checkpoint`, `clapbacks`, `clapbacks_checkpoint`, `round_history`,
+`used_prompts`, `bye_history`, `last_bye` (legacy, still written), `round_bye`
+(this round's pre-picked bye; cleared by an un-bench, §2.2), `pending_players`
+(queued latecomers), `left` (ids whose score is withdrawn, §2.3),
+`current_round`, `phase` (`submitting` → `bracketing` → `voting` →
+`revealing`).
 
-`scores_checkpoint` snapshots scores as of the last fully-completed round so a
-crash mid-scoring can't double-count on resume.
+`scores_checkpoint` and `clapbacks_checkpoint` snapshot scores and the
+CLAPBACK tally as of the last fully-completed round; `_run_game` restores both
+on resume so a crash mid-scoring can't double-count either. Until 2026-09-04
+only the scores were checkpointed, so a resume in matchup 3 re-counted the
+CLAPBACKs of whoever swept matchups 1–2 (clapback-14).
 
 ## 6. Not yet built
 
@@ -274,3 +415,7 @@ crash mid-scoring can't double-count on resume.
   the same two players can meet in consecutive rounds. Opponent-repeat memory
   would be the natural next dial if that reads as unfair in play.
 - No per-guild knob for the bye award or the clapback bonus; both are constants.
+- No 3-way ballot for three-player games (each player votes for the better of
+  the other two answers, scored as a share of 2, CLAPBACK reachable at 2–0).
+  The floor is announced instead (§1); the ballot is the fuller fix if
+  three-player games stop being rare (5 of ~45 all-time).

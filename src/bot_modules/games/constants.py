@@ -485,11 +485,16 @@ HOW_TO_PLAY = {
         "🎟️ **Odd number of answers?** One player sits the round out and "
         "scores that round's average — and nobody sits out twice until "
         "everyone has sat out once.\n\n"
+        "⏱️ **Pacing:** a matchup closes as soon as every player who can vote "
+        "has (anyone watching can vote too — that keeps it open for the full "
+        "timer), and the host can **🔒 Close answers** once everyone who's "
+        "writing is in.\n\n"
         "💡 **Tips:**\n"
         "• Funny beats accurate\n"
         "• Short and punchy usually wins\n"
         "• You can resubmit before time runs out\n"
-        "• You can't vote on your own matchup"
+        "• You can't vote on your own matchup\n"
+        "• Leave mid-game and your score comes off the board"
     ),
     'legitlibs': (
         "📝 **LegitLibs — How to Play**\n\n"

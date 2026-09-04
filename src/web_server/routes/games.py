@@ -21,6 +21,7 @@ from bot_modules.services.game_start_ping_service import (
     IDLE_NUDGE_KEY,
     parse_idle_dials,
 )
+from bot_modules.services.feature_roles import GAME_NIGHT_PING
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
@@ -1576,6 +1577,9 @@ async def set_game_config(
 class LobbyDialsBody(BaseModel):
     idle_nudge_minutes: Optional[int] = Field(None, ge=0, le=IDLE_MAX_MINUTES)
     idle_cancel_minutes: Optional[int] = Field(None, ge=0, le=IDLE_MAX_MINUTES)
+    # Snowflake as a string (precision), "0" for "(none)" — which is a
+    # decision, stored, and the sweep stays silent; see feature_roles.
+    game_night_ping_role_id: Optional[str] = Field(None, pattern=r"^\d{1,20}$")
 
 
 def _lobby_dials(conn, guild_id: int) -> dict:
@@ -1583,9 +1587,20 @@ def _lobby_dials(conn, guild_id: int) -> dict:
         get_config_value(conn, IDLE_NUDGE_KEY, str(IDLE_NUDGE_DEFAULT_MINUTES), guild_id),
         get_config_value(conn, IDLE_CANCEL_KEY, str(IDLE_CANCEL_DEFAULT_MINUTES), guild_id),
     )
+    # Read the way the sweep reads it (ensure_config_role → get_config_value
+    # with the registry's own legacy-fallback answer), so the page never
+    # reports a value the bot doesn't see.
+    ping_raw = get_config_value(
+        conn, GAME_NIGHT_PING.key, "", guild_id,
+        allow_legacy_fallback=GAME_NIGHT_PING.legacy_fallback,
+    )
+    ping_role = str(ping_raw).strip() if ping_raw else ""
     return {
         "idle_nudge_minutes": dials.nudge_seconds // 60,
         "idle_cancel_minutes": dials.cancel_seconds // 60,
+        # null = never set (the bot makes @Game Night on the next lobby);
+        # "0" = "(none)" chosen, no ping; otherwise the role id.
+        "game_night_ping_role_id": ping_role or None,
         "defaults": {
             "idle_nudge_minutes": IDLE_NUDGE_DEFAULT_MINUTES,
             "idle_cancel_minutes": IDLE_CANCEL_DEFAULT_MINUTES,
@@ -1626,6 +1641,10 @@ async def set_lobby_dials(
                 set_config_value(conn, IDLE_NUDGE_KEY, str(body.idle_nudge_minutes), guild_id)
             if body.idle_cancel_minutes is not None:
                 set_config_value(conn, IDLE_CANCEL_KEY, str(body.idle_cancel_minutes), guild_id)
+            if body.game_night_ping_role_id is not None:
+                set_config_value(
+                    conn, GAME_NIGHT_PING.key, str(int(body.game_night_ping_role_id)), guild_id,
+                )
             conn.commit()
             return _lobby_dials(conn, guild_id)
 

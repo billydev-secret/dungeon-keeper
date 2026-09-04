@@ -1,6 +1,6 @@
 """Bot-Managed Roles — the roster of every role Dungeon Keeper makes for itself.
 
-The only surface that can show all sixteen together. Nine of them are made by
+The only surface that can show all seventeen together. Nine of them are made by
 features on their own (``ensure_feature_role``) and until round 2 nothing
 listed them at all, so a missing one was invisible until it failed. Read-only
 except for three narrow writes on the ``config``-KV dials — create, adopt,
@@ -95,7 +95,7 @@ def _stored_ids(
 ) -> tuple[dict[str, tuple[int, bool, bool]], dict]:
     """Every dial's stored id, whether it's this guild's own, and opted-out.
 
-    One database pass for all sixteen. Each family is read the way the feature
+    One database pass for all seventeen. Each family is read the way the feature
     that owns it reads it — anything else and the page would report a value no
     feature ever sees.
     """

@@ -1,13 +1,22 @@
-"""Start-countdown nudge for lobby games.
+"""Start-countdown nudge, countdown auto-start and the Game Night ping.
 
 A lobby game opened with ``start_in`` advertises a start time in its lobby
-embed (``<t:epoch:R>``), but the host still presses the button — the countdown
-is advertising, not automation. This module is what taps the host on the
-shoulder when the advertised moment arrives.
+embed (``<t:epoch:R>``). For most lobby games the host still presses the
+button — the countdown is advertising, not automation — and this module is
+what taps the host on the shoulder when the advertised moment arrives. A game
+whose cog registers a **countdown auto-starter** (``bot.lobby_auto_starters``,
+Clapback since 2026-09-04, clapback-8) is started *by this sweep* at the
+advertised moment instead, provided enough players have joined; short of the
+floor the host is nudged once and the idle-lobby close below takes it from
+there — and the game still starts itself the moment the floor is reached
+after that. A scheduled lobby of such a game therefore runs with nobody at the
+keyboard (the scheduler stamps a default countdown when the schedule names
+none).
 
 Two layers live here:
   * Pure predicates + copy — ``extract_start_epoch``, ``start_ping_due``,
-    ``build_start_ping`` (unit-tested, no I/O).
+    ``auto_start_due``, ``build_start_ping``, ``build_game_night_ping``
+    (unit-tested, no I/O).
   * The async polling loop ``game_start_ping_loop`` — registered as a bot
     startup task.
 
@@ -50,6 +59,20 @@ A lobby that *could* start is never closed: that is the host's call, however
 long they sit on it, and the 24-hour sweep stays the safety net for everything
 else (games_system_spec.md, Non-goals — this is a pre-game close of a lobby
 that never filled, not a mid-game inactivity timeout).
+
+**The Game Night ping** (discovery-2 / clapback-11, decision D4). A member
+launch used to post nothing but the board, so a lobby was invisible outside
+its channel. The sweep now posts **one** ping line per lobby the first tick it
+sees the lobby's board (``message_id`` written — every DB-backed launcher does
+that before returning) mentioning the guild's opt-in **Game Night** role
+(``feature_roles.GAME_NIGHT_PING``, config key ``game_night_ping_role_id``,
+provisioned on first use like the other ping roles; a stored "(none)" keeps
+the sweep silent). ``content=`` with ``AllowedMentions(roles=[role])`` and a
+jump link, never inside an embed. Platform-level on purpose: every ``/games
+play`` launch and every scheduled launch gets it without a per-cog edit. A
+schedule that announces itself marks the lobby as pinged before announcing so
+the two never stack; ``game_night_pinged`` in the payload is the once-only
+flag, claimed before the send like ``start_ping_sent``.
 """
 from __future__ import annotations
 
@@ -64,13 +87,17 @@ from typing import Any
 
 import discord
 
-from bot_modules.core.utils import resolve_bot_channel
+from bot_modules.core.db_utils import open_db
+from bot_modules.core.role_provision import ensure_config_role
+from bot_modules.core.utils import jump_url, resolve_bot_channel
 from bot_modules.games.constants import (
     GAME_NAMES,
     LOBBY_GAME_TYPES,
     LOBBY_MIN_PLAYERS,
     LOBBY_START_BUTTON,
 )
+from bot_modules.services import ping_tracker_service
+from bot_modules.services.feature_roles import GAME_NIGHT_PING
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +118,17 @@ IDLE_CANCEL_DEFAULT_MINUTES = 60
 IDLE_MAX_MINUTES = 24 * 60
 
 LOBBY_TIMEOUT_REASON = "lobby_timeout"
+
+# Once-only payload flags the sweep claims before acting (see
+# ``set_payload_flag`` for why a targeted json_set and not a read-modify-write).
+START_PING_SENT_FLAG = "start_ping_sent"
+GAME_NIGHT_PINGED_FLAG = "game_night_pinged"
+AUTO_START_FAILED_FLAG = "auto_start_failed"
+_PAYLOAD_FLAGS = frozenset({START_PING_SENT_FLAG, GAME_NIGHT_PINGED_FLAG, AUTO_START_FAILED_FLAG})
+
+# The countdown a scheduled lobby gets when its game can start itself and the
+# schedule named no start_in — "scheduled" has to mean "runs" (clapback-8).
+SCHEDULED_AUTO_START_MINUTES = 10
 
 
 @dataclass(frozen=True)
@@ -162,6 +200,33 @@ def start_ping_due(payload: dict, now: float) -> bool:
     if epoch is None:
         return False
     return now >= epoch
+
+
+def auto_starter_for(bot, game_type: str):
+    """The cog-registered countdown auto-starter for ``game_type``, or None
+    when the game keeps the press-the-button contract."""
+    starters = getattr(bot, "lobby_auto_starters", None)
+    if not isinstance(starters, dict):
+        return None
+    return starters.get(game_type)
+
+
+def auto_start_due(game_type: str, payload: dict, now: float) -> bool:
+    """True when a countdown lobby should be started by the sweep on this tick.
+
+    Due means: a countdown was advertised, the moment has arrived, the roster
+    is at or above the game's floor, and no earlier attempt blew up. Unlike
+    the nudge this is **not** gated on ``start_ping_sent`` — a lobby that was
+    short at the advertised moment (and got its nudge) still starts itself
+    the tick the floor is reached. The caller checks that the game actually
+    registered an auto-starter; a game that didn't is nudged, never started.
+    """
+    if payload.get(AUTO_START_FAILED_FLAG):
+        return False
+    epoch = extract_start_epoch(payload)
+    if epoch is None or now < epoch:
+        return False
+    return lobby_roster_size(payload) >= lobby_min_players(game_type, payload)
 
 
 def _minutes(raw, default: int) -> int:
@@ -346,6 +411,56 @@ def build_start_ping(game_type: str, host_id: int) -> str:
     )
 
 
+def build_short_roster_nudge(
+    game_type: str, host_id: int, *, joined: int, min_players: int, dials: IdleLobbyDials | None = None
+) -> str:
+    """The countdown-up nudge for a game that starts itself: the roster is
+    short, so say what it is waiting on rather than pointing at a button that
+    would refuse — and, when the close is on, the deadline it is heading for."""
+    game_label = GAME_NAMES.get(game_type, game_type)
+    have = "has" if joined == 1 else "have"
+    text = (
+        f"⏰ <@{host_id}> — **{game_label}**'s countdown is up, but only "
+        f"{joined} of the {min_players} it needs {have} joined. "
+        f"It starts on its own the moment {min_players} are in"
+    )
+    if dials is not None and dials.cancel_seconds > 0:
+        text += f" — with fewer than that it closes after {dials.cancel_seconds // 60} minutes."
+    else:
+        text += "."
+    return text
+
+
+def build_game_night_ping(
+    game_type: str,
+    *,
+    role_id: int,
+    guild_id: int,
+    channel_id: int,
+    message_id: int,
+    start_epoch: int | None = None,
+) -> str:
+    """The one Game Night line: the role, the game, when it starts, a jump
+    link to the board. Content, never an embed — a role mention only
+    notifies from message content."""
+    game_label = GAME_NAMES.get(game_type, game_type)
+    when = f" — it starts <t:{start_epoch}:R>" if start_epoch else ""
+    return (
+        f"<@&{role_id}> 🎮 A **{game_label}** lobby just opened{when}! "
+        f"Jump in: {jump_url(guild_id, channel_id, message_id)}"
+    )
+
+
+def role_only_mentions(role_id: int) -> discord.AllowedMentions:
+    """Allow-list exactly the one role (docs/embed_style_guide.md)."""
+    return discord.AllowedMentions(
+        everyone=False,
+        users=False,
+        roles=[discord.Object(id=role_id)],
+        replied_user=False,
+    )
+
+
 def host_only_mentions(host_id: int) -> discord.AllowedMentions:
     """Allow-list exactly the host, per the embed style guide.
 
@@ -381,26 +496,129 @@ async def send_start_ping(channel, game_type: str, host_id: int) -> bool:
         return False
 
 
-async def mark_start_ping_sent(db, game_id: str) -> None:
-    """Flag the nudge as delivered so the next tick skips this lobby.
+async def set_payload_flag(db, game_id: str, flag: str) -> None:
+    """Set one once-only flag on the game's payload.
 
     A targeted ``json_set``, deliberately **not** a read-modify-write. Several
     lobby writers (mlt join/leave, story, clapback) mutate the payload without
     taking ``payload_lock``, so a read-modify-write here could interleave with a
     join and either lose that join or lose this flag — the latter costing a
     duplicate nudge 15s later. One UPDATE touching one key can't lose either.
+    ``flag`` is one of the module's own constants, never caller text.
     """
+    if flag not in _PAYLOAD_FLAGS:
+        raise ValueError(f"unknown payload flag {flag!r}")
     try:
         await db.execute(
             "UPDATE games_active_games "
-            "SET payload = json_set(payload, '$.start_ping_sent', json('true')) "
+            f"SET payload = json_set(payload, '$.{flag}', json('true')) "
             "WHERE game_id = ?",
             (game_id,),
         )
     except Exception:
         # Malformed payload JSON — json_set refuses it. The nudge is already
         # sent (or unsendable); log rather than let the sweep retry forever.
-        log.warning("start ping: could not flag game %s as nudged", game_id, exc_info=True)
+        log.warning("start ping: could not flag game %s as %s", game_id, flag, exc_info=True)
+
+
+async def mark_start_ping_sent(db, game_id: str) -> None:
+    """Flag the nudge as delivered so the next tick skips this lobby."""
+    await set_payload_flag(db, game_id, START_PING_SENT_FLAG)
+
+
+async def mark_game_night_pinged(db, game_id: str) -> None:
+    """Flag the Game Night ping as done — the scheduler calls this before its
+    own announcement so a schedule that announces never pings twice."""
+    await set_payload_flag(db, game_id, GAME_NIGHT_PINGED_FLAG)
+
+
+async def resolve_game_night_role(bot, guild_id: int) -> tuple[bool, int | None]:
+    """``(resolved, role_id)`` for the guild's Game Night dial.
+
+    Provisions the role on a guild that never set the dial — the same
+    first-use contract as every other ping role (``ensure_config_role``); a
+    stored "(none)" resolves to ``(True, None)`` and the sweep stays silent.
+    ``resolved`` is False when the guild is not reachable from this bot (or
+    provisioning failed), so the caller leaves the lobby unflagged and tries
+    again next tick rather than recording a ping that never went out.
+    """
+    get_guild = getattr(bot, "get_guild", None)
+    ctx = getattr(bot, "ctx", None)
+    guild: Any = get_guild(guild_id) if callable(get_guild) and guild_id else None
+    if guild is None or ctx is None:
+        return False, None
+    try:
+        role = await ensure_config_role(
+            ctx, guild, GAME_NIGHT_PING.key, GAME_NIGHT_PING.spec,
+            feature=GAME_NIGHT_PING.feature,
+            allow_legacy_fallback=GAME_NIGHT_PING.legacy_fallback,
+        )
+    except Exception:
+        log.warning("game night ping: role lookup failed for guild %s", guild_id, exc_info=True)
+        return False, None
+    return True, (int(role.id) if role is not None else None)
+
+
+async def _record_game_night_ping(db, message, *, guild_id: int, channel_id: int, role_id: int, game_id: str) -> None:
+    """Tie the ping to the lobby it advertised, so the Ping Response report
+    can say how many actually joined. Best effort; never fails the sweep."""
+    message_id = getattr(message, "id", None)
+    author = getattr(message, "author", None)
+    created = getattr(message, "created_at", None)
+    if message_id is None or author is None or created is None:
+        return
+
+    def _write() -> None:
+        with open_db(db.db_path) as conn:
+            ping_tracker_service.record_game_start_ping(
+                conn,
+                message_id=int(message_id),
+                guild_id=guild_id,
+                channel_id=channel_id,
+                author_id=int(author.id),
+                role_ids=[role_id],
+                game_id=game_id,
+                ts=created.timestamp(),
+            )
+
+    try:
+        await asyncio.to_thread(_write)
+    except Exception:
+        log.warning("game night ping: tracking failed for %s", game_id, exc_info=True)
+
+
+async def _game_night_ping(bot, db, row, payload: dict, guild_id: int, roles: dict[int, tuple[bool, int | None]]) -> None:
+    """Post the Game Night line for a lobby whose board now exists."""
+    if guild_id not in roles:
+        roles[guild_id] = await resolve_game_night_role(bot, guild_id)
+    resolved, role_id = roles[guild_id]
+    if not resolved:
+        return
+    game_id = row["game_id"]
+    # Claim first: a lost flag write after a successful send is a second ping.
+    await mark_game_night_pinged(db, game_id)
+    if role_id is None:
+        return
+    channel_id = int(row["channel_id"])
+    channel = await resolve_bot_channel(bot, channel_id)
+    if channel is None:
+        return
+    text = build_game_night_ping(
+        str(row["game_type"]),
+        role_id=role_id, guild_id=guild_id, channel_id=channel_id,
+        message_id=int(row["message_id"]),
+        start_epoch=extract_start_epoch(payload),
+    )
+    try:
+        message = await channel.send(
+            text, allowed_mentions=role_only_mentions(role_id), suppress_embeds=True,
+        )
+    except Exception:
+        log.warning("game night ping failed for %s in channel %s", game_id, channel_id, exc_info=True)
+        return
+    await _record_game_night_ping(
+        db, message, guild_id=guild_id, channel_id=channel_id, role_id=role_id, game_id=game_id,
+    )
 
 
 
@@ -449,7 +667,12 @@ async def _cancel_idle_lobby(bot, db, row, channel, dials: IdleLobbyDials, paylo
         )
 
 
-async def _process_lobby(bot, db, row, now: float, *, dials: IdleLobbyDials | None = None) -> None:
+async def _process_lobby(
+    bot, db, row, now: float, *,
+    dials: IdleLobbyDials | None = None,
+    guild_id: int | None = None,
+    roles: dict[int, tuple[bool, int | None]] | None = None,
+) -> None:
     payload = json.loads(row["payload"]) if row["payload"] else {}
     game_id = row["game_id"]
     game_type = str(row["game_type"])
@@ -459,6 +682,31 @@ async def _process_lobby(bot, db, row, now: float, *, dials: IdleLobbyDials | No
         channel = await resolve_bot_channel(bot, int(row["channel_id"]))
         await _cancel_idle_lobby(bot, db, row, channel, dials, payload)
         return
+
+    # The Game Night ping: once, the first tick the board exists. A row whose
+    # launcher hasn't written message_id yet is simply looked at again next
+    # tick — there is nothing to link at until then.
+    if not payload.get(GAME_NIGHT_PINGED_FLAG) and row["message_id"]:
+        if guild_id is None:
+            guild_id = await _guild_id_for(db, row)
+        await _game_night_ping(bot, db, row, payload, guild_id, {} if roles is None else roles)
+
+    # Countdown auto-start (clapback-8): the sweep starts the game itself when
+    # the game can be, and only nudges when it can't.
+    starter = auto_starter_for(bot, game_type)
+    if starter is not None and auto_start_due(game_type, payload, now):
+        channel = await resolve_bot_channel(bot, int(row["channel_id"]))
+        if channel is not None:
+            try:
+                started = bool(await starter(row, payload, channel))
+            except Exception:
+                log.exception("auto-start: %s lobby %s failed to start", game_type, game_id)
+                await set_payload_flag(db, game_id, AUTO_START_FAILED_FLAG)
+                started = False
+            if started:
+                return
+        # Not startable as it stands (or unreachable): the host is told the
+        # ordinary way below, once.
 
     countdown_due = start_ping_due(payload, now)
     idle_due = dials is not None and idle_nudge_due(payload, opened_at, now, dials)
@@ -478,6 +726,20 @@ async def _process_lobby(bot, db, row, now: float, *, dials: IdleLobbyDials | No
     await mark_start_ping_sent(db, game_id)
     host_id = int(row["host_id"])
     if countdown_due:
+        joined = lobby_roster_size(payload)
+        floor = lobby_min_players(game_type, payload)
+        if starter is not None and joined < floor and not payload.get(AUTO_START_FAILED_FLAG):
+            # The game would have started itself; the roster is what's short.
+            try:
+                await channel.send(
+                    build_short_roster_nudge(
+                        game_type, host_id, joined=joined, min_players=floor, dials=dials,
+                    ),
+                    allowed_mentions=host_only_mentions(host_id),
+                )
+            except Exception:
+                log.warning("short-roster nudge failed for %s in channel %s", game_type, row["channel_id"], exc_info=True)
+            return
         await send_start_ping(channel, game_type, host_id)
         return
     assert dials is not None and opened_at is not None
@@ -495,8 +757,9 @@ async def _process_lobby(bot, db, row, now: float, *, dials: IdleLobbyDials | No
         log.warning("idle nudge failed for %s in channel %s", game_type, row["channel_id"], exc_info=True)
 
 
-async def _dials_for(db, row, cache: dict[int, IdleLobbyDials]) -> IdleLobbyDials:
-    """The idle dials for the row's guild, read once per guild per tick."""
+async def _guild_id_for(db, row) -> int:
+    """The row's guild — its own column, or the channel's guild for a row
+    written before the column existed."""
     try:
         guild_id = int(row["guild_id"] or 0)
     except (IndexError, KeyError, TypeError, ValueError):
@@ -505,14 +768,20 @@ async def _dials_for(db, row, cache: dict[int, IdleLobbyDials]) -> IdleLobbyDial
         from bot_modules.games.utils.game_manager import guild_for_channel  # noqa: PLC0415
 
         guild_id = await guild_for_channel(db, int(row["channel_id"]))
+    return guild_id
+
+
+async def _dials_for(db, guild_id: int, cache: dict[int, IdleLobbyDials]) -> IdleLobbyDials:
+    """The idle dials for a guild, read once per guild per tick."""
     if guild_id not in cache:
         cache[guild_id] = await read_idle_dials(db, guild_id)
     return cache[guild_id]
 
 
 async def game_start_ping_loop(bot) -> None:
-    """Poll open lobbies: nudge hosts whose start time has arrived, nudge
-    idle countdown-less lobbies, and close the ones that never filled.
+    """Poll open lobbies: ping the Game Night role for each new board, start
+    the games that start themselves, nudge hosts whose start time has arrived,
+    nudge idle countdown-less lobbies, and close the ones that never filled.
 
     Registered as a bot startup task. Only ``joining`` rows are considered, so
     a game that was started early, cancelled, or timed out drops out of the
@@ -532,10 +801,14 @@ async def game_start_ping_loop(bot) -> None:
                 lobby_types,
             )
             dials_cache: dict[int, IdleLobbyDials] = {}
+            roles_cache: dict[int, tuple[bool, int | None]] = {}
             for row in rows:
                 try:
-                    dials = await _dials_for(db, row, dials_cache)
-                    await _process_lobby(bot, db, row, now, dials=dials)
+                    guild_id = await _guild_id_for(db, row)
+                    dials = await _dials_for(db, guild_id, dials_cache)
+                    await _process_lobby(
+                        bot, db, row, now, dials=dials, guild_id=guild_id, roles=roles_cache,
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception:

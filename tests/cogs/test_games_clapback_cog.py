@@ -8,6 +8,7 @@ config), so the gate has to sit on the button itself.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -64,14 +65,24 @@ async def test_play_again_honours_the_enabled_dial(
         "INSERT INTO games_question_bank (game_type, category, question_text)"
         " VALUES ('clapback', 'sfw', 'p?')",
     )
-    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
-    view = ClapbackRecapView("old-gid", HOST, config, cog.db, bot, cog)
+    config = {
+        "rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False,
+        # The finished game's countdown, long spent.
+        "start_epoch": 1_700_000_000,
+    }
+    view = ClapbackRecapView("old-gid", HOST, config, cog.db, bot, cog, players=[HOST, 2, 3])
     interaction = _interaction()
 
     await getattr(view, button).callback(interaction)  # type: ignore[arg-type]
 
     if enabled:
         start.assert_awaited_once()
+        # The rematch lobby opens with the finished roster seated (clapback-10)
+        # and no countdown: a seeded roster plus a stale start_epoch would have
+        # the sweep start it on its next tick without the host's press.
+        assert start.await_args is not None
+        assert start.await_args.kwargs["players"] == [HOST, 2, 3]
+        assert start.await_args.kwargs["config"].get("start_epoch") is None
         interaction.response.send_message.assert_not_awaited()
     else:
         start.assert_not_awaited()
@@ -214,7 +225,7 @@ async def test_bracket_never_seats_the_pair(sync_db_path, monkeypatch):
 
     seated: list[set[int]] = []
 
-    async def vote_matchup(game_id, channel, payload, mi, matchup, answers, *rest):
+    async def vote_matchup(game_id, channel, payload, mi, matchup, answers, *rest, **kw):
         a, b = int(matchup["pair"][0]), int(matchup["pair"][1])
         seated.append({a, b})
         return {
@@ -301,3 +312,361 @@ async def test_a_crashed_start_archives_its_roster_and_the_reason(sync_db_path, 
     assert payload["players"] == [HOST, 2, 3]
     assert payload["reason"] == "crash"
     assert gid not in bot.active_views
+
+
+# ── P4: pacing, edges and the lobby's dead ends ──────────────────────────────
+
+
+def _msg():
+    return SimpleNamespace(id=5150, edit=AsyncMock())
+
+
+def _channel(guild=None):
+    return SimpleNamespace(
+        id=CHAN, name="games", guild=guild, send=AsyncMock(return_value=_msg()),
+    )
+
+
+async def test_start_new_game_seeds_the_roster_and_rereads_the_age_gate(sync_db_path):
+    """The recap carries the finished game's config, whose allow_nsfw was
+    read when *that* game launched; the new lobby reads the channel again
+    (safety-sweep-10) and seats the seeded roster (clapback-10)."""
+    from bot_modules.games.utils.game_manager import get_game_payload
+
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    channel.is_nsfw = lambda: False
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False, "allow_nsfw": True}
+
+    gid = await cog._start_new_game(
+        channel=channel, host_id=HOST, host_name="Host", guild=None, config=config,
+        players=[2, 3, 3, HOST],
+    )
+
+    assert gid
+    payload = await get_game_payload(cog.db, gid)
+    assert payload["players"] == [2, 3, HOST]
+    assert payload["config"]["allow_nsfw"] is False
+    assert config["allow_nsfw"] is True  # the recap's copy is left alone
+    embed = channel.send.await_args.kwargs["embed"]
+    assert embed.fields[0].name == "Players (3)"
+
+
+async def test_late_answer_modal_is_refused_once_the_window_closes(sync_db_path):
+    """A modal opened in round 1 and sent during the vote (clapback-4)."""
+    from bot_modules.cogs.games_clapback_cog import ClapbackAnswerModal
+    from bot_modules.games.utils.game_manager import get_game_payload
+
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload={"config": {}, "players": [HOST, 2], "phase": "voting",
+                 "current_round": 1, "answers": {"2": "kept"}},
+    )
+    modal = ClapbackAnswerModal(gid, 1, cog.db, cog)
+    modal.answer_input._value = "too late"  # type: ignore[attr-defined]
+    interaction = _interaction()
+
+    await modal.on_submit(interaction)  # type: ignore[arg-type]
+
+    args, kwargs = interaction.response.send_message.await_args
+    assert args[0] == "❌ Answers for round 1 are closed."
+    assert kwargs["ephemeral"] is True
+    assert (await get_game_payload(cog.db, gid))["answers"] == {"2": "kept"}
+
+
+async def test_lobby_cancel_archives_the_lobby_and_retires_the_message(sync_db_path):
+    """Host presses Cancel → confirm → the row is archived as cancelled and
+    the lobby message says so with its buttons off (clapback-12)."""
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2], "host_id": HOST}, guild_id=GUILD,
+    )
+    view = ClapbackJoinView(gid, HOST, cog.db, bot, cog, config)
+    lobby_msg = _msg()
+    view.message = lobby_msg  # type: ignore[assignment]
+    bot.active_views[gid] = view
+    interaction = _start_interaction()
+
+    await view.cancel.callback(interaction)  # type: ignore[arg-type]
+
+    kwargs = interaction.response.send_message.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    confirm = kwargs["view"]
+    await confirm._callback(SimpleNamespace())
+
+    _, player_count, payload = await _history(cog.db, gid)
+    assert player_count == 2 and payload["reason"] == "cancelled"
+    assert gid not in bot.active_views
+    edit = lobby_msg.edit.await_args.kwargs
+    assert "Lobby cancelled" in edit["content"]
+    assert all(getattr(item, "disabled") for item in view.children)
+
+
+async def test_lobby_cancel_is_host_or_mod_only(sync_db_path):
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2], "host_id": HOST},
+    )
+    view = ClapbackJoinView(gid, HOST, cog.db, bot, cog, config)
+    interaction = _start_interaction()
+    interaction.user = SimpleNamespace(id=2, display_name="Two", guild_permissions=None)
+
+    await view.cancel.callback(interaction)  # type: ignore[arg-type]
+
+    args, kwargs = interaction.response.send_message.await_args
+    assert args[0].startswith("❌") and kwargs["ephemeral"] is True
+    assert "view" not in kwargs
+
+
+async def test_recap_view_timeout_retires_its_buttons(sync_db_path):
+    """Play Again looked live two minutes after the recap and failed on the
+    click (clapback-13)."""
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    view = ClapbackRecapView("gid", HOST, {}, cog.db, bot, cog, players=[1])
+    recap_msg = _msg()
+    view.message = recap_msg  # type: ignore[assignment]
+
+    await view.on_timeout()
+
+    assert all(getattr(item, "disabled") for item in view.children)
+    recap_msg.edit.assert_awaited_once()
+    assert view.timeout == 600
+
+
+@pytest.mark.parametrize(
+    "who, answers, closes, reply",
+    [
+        pytest.param(HOST, {"1": "a", "2": "b"}, True, "🔒 Closing answers with 2 in.", id="host"),
+        pytest.param(HOST, {"1": "a"}, False, "❌ Only 1 answer in — at least 2 are needed to run the round.", id="one-answer"),
+        pytest.param(2, {"1": "a", "2": "b"}, False, "❌ Only the host or a mod can close answers.", id="not-host"),
+    ],
+)
+async def test_close_answers_button(sync_db_path, who, answers, closes, reply):
+    from bot_modules.cogs.games_clapback_cog import ClapbackSubmitView
+
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload={"config": {}, "players": [HOST, 2, 3], "phase": "submitting", "answers": answers},
+    )
+    view = ClapbackSubmitView(gid, HOST, 1, cog.db, bot, cog)
+    import asyncio
+    cog._submit_events[gid] = asyncio.Event()
+    interaction = _start_interaction()
+    interaction.user = SimpleNamespace(id=who, display_name="P", guild_permissions=None)
+
+    await view.close_answers.callback(interaction)  # type: ignore[arg-type]
+
+    assert interaction.response.send_message.await_args.args[0] == reply
+    assert view.close_requested is closes
+    assert cog._submit_events[gid].is_set() is closes
+
+
+async def test_submit_window_closes_one_short_once_quiet(sync_db_path, monkeypatch):
+    """Three writers, two answers in, nothing for the idle window: the round
+    closes instead of waiting the whole timer for the absent one (clapback-2),
+    and the phase is shut before the answers are read (clapback-4)."""
+    from bot_modules.games.utils.game_manager import get_game_payload
+    from bot_modules.games_clapback import logic as clapback_logic
+
+    monkeypatch.setattr(clapback_logic, "SUBMIT_IDLE_CLOSE_SECONDS", 1)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    config = {"rounds": 1, "timer": 30, "vote_timer": 30}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload={"config": config, "players": [HOST, 2, 3], "phase": "submitting",
+                 "current_round": 1, "answers": {"1": "a", "2": "b"}},
+    )
+    bot.active_views[gid] = object()
+    channel = _channel()
+
+    import time
+    started = time.monotonic()
+    answers = await cog._submit_phase(
+        gid, channel, await get_game_payload(cog.db, gid), "prompt?", 1, config, HOST,
+    )
+
+    assert answers == {"1": "a", "2": "b"}
+    assert time.monotonic() - started < 10
+    assert (await get_game_payload(cog.db, gid))["phase"] == "bracketing"
+
+
+@pytest.mark.parametrize(
+    "voters, early",
+    [
+        pytest.param(["3", "4"], True, id="eligible-all-voted"),
+        pytest.param(["3", "4", "5"], True, id="bye-voted-too"),
+        pytest.param(["3", "4", "99"], False, id="spectator-keeps-the-timer"),
+    ],
+)
+async def test_vote_matchup_closes_once_every_eligible_player_has_voted(
+    sync_db_path, monkeypatch, voters, early,
+):
+    """Five on the roster, 5 benched: once 3 and 4 have voted the matchup
+    reveals after the grace (decision D1); a spectator's vote keeps the
+    full timer, the case the June decision protected."""
+    from bot_modules.games.utils.game_manager import get_game_payload
+    from bot_modules.games_clapback import logic as clapback_logic
+
+    monkeypatch.setattr(clapback_logic, "VOTE_CLOSE_GRACE_SECONDS", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    cog.REVEAL_SECONDS = 0  # type: ignore[misc]
+    vote_timer = 4
+    config = {"rounds": 1, "timer": 30, "vote_timer": vote_timer, "anonymous": False}
+    matchup = {"pair": ["1", "2"], "votes": {v: "1" for v in voters}, "winner": None}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload={"config": config, "players": [1, 2, 3, 4, 5], "phase": "voting",
+                 "scores": {str(p): 0 for p in range(1, 6)}, "clapbacks": {},
+                 "matchups": [matchup]},
+    )
+    bot.active_views[gid] = object()
+
+    import time
+    started = time.monotonic()
+    result = await cog._vote_matchup(
+        gid, _channel(), await get_game_payload(cog.db, gid), 0, matchup,
+        {"1": "a", "2": "b"}, config, HOST, 1, 1, "prompt?", byes=["5"],
+    )
+    took = time.monotonic() - started
+
+    assert result is not None and result["votes_a"] == len(voters)
+    if early:
+        assert took < vote_timer - 1
+    else:
+        assert took >= vote_timer - 0.5
+
+
+async def test_mid_game_leave_withdraws_the_score(sync_db_path):
+    from bot_modules.games.utils.game_manager import get_game_payload
+
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload={"config": {}, "players": [HOST, 2, 3], "scores": {"1": 5, "2": 90, "3": 1}},
+    )
+
+    ok, text = await cog.mid_game_leave(_channel(), gid, SimpleNamespace(id=2, display_name="Two"))
+
+    assert ok and "withdrawn" in text
+    payload = await get_game_payload(cog.db, gid)
+    assert payload["players"] == [HOST, 3]
+    assert payload["left"] == ["2"]
+    assert payload["scores"]["2"] == 90
+
+
+# ── countdown auto-start (clapback-8) ───────────────────────────────────────
+
+
+async def _lobby_row(db, gid):
+    return await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+
+
+async def test_auto_start_takes_the_lobby_into_play_without_a_press(sync_db_path, monkeypatch):
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_forbidden_pairs", AsyncMock(return_value=set()))
+    ran = asyncio.Event()
+
+    async def _run(game_id, channel, payload):
+        ran.set()
+
+    monkeypatch.setattr(cog, "_run_game", _run)
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False, "start_epoch": 1}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2, 3], "host_id": HOST}, guild_id=GUILD,
+    )
+    view = ClapbackJoinView(gid, HOST, cog.db, bot, cog, config)
+    lobby_msg = _msg()
+    view.message = lobby_msg  # type: ignore[assignment]
+    bot.active_views[gid] = view
+    channel = _channel(guild=SimpleNamespace(id=GUILD))
+
+    started = await cog.auto_start(await _lobby_row(cog.db, gid), {"players": [HOST, 2, 3]}, channel)
+
+    assert started is True
+    await asyncio.wait_for(ran.wait(), 2)
+    row = await _lobby_row(cog.db, gid)
+    assert row["state"] == "playing"
+    assert view.is_finished()
+    lobby_msg.edit.assert_awaited_once()
+    assert all(getattr(item, "disabled", False) for item in view.children)
+    payload = json.loads(row["payload"])
+    assert payload["scores"] == {str(HOST): 0, "2": 0, "3": 0}
+    # Three at the floor: the thin-game note goes out as it does on a press.
+    channel.send.assert_awaited_once_with(cog_module.THREE_PLAYER_NOTE)
+
+
+async def test_auto_start_reads_the_roster_fresh(sync_db_path, monkeypatch):
+    # A join that landed after the sweep read the row is seated.
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_forbidden_pairs", AsyncMock(return_value=set()))
+    monkeypatch.setattr(cog, "_run_game", AsyncMock())
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2, 3, 4], "host_id": HOST}, guild_id=GUILD,
+    )
+    bot.active_views[gid] = ClapbackJoinView(gid, HOST, cog.db, bot, cog, config)
+
+    assert await cog.auto_start(await _lobby_row(cog.db, gid), {"players": [HOST, 2, 3]}, _channel()) is True
+    payload = json.loads((await _lobby_row(cog.db, gid))["payload"])
+    assert set(payload["scores"]) == {str(HOST), "2", "3", "4"}
+
+
+async def test_auto_start_applies_the_no_contact_floor(sync_db_path):
+    # Three joined, one kept apart from both others: Start would refuse, so
+    # the sweep must not start it either — it nudges instead.
+    from bot_modules.services.no_contact_service import add_pair
+
+    add_pair(sync_db_path, GUILD, A, B, created_by=A)
+    add_pair(sync_db_path, GUILD, A, C, created_by=A)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [A, B, C], "host_id": A}, guild_id=GUILD,
+    )
+    view = ClapbackJoinView(gid, A, cog.db, bot, cog, config)
+    bot.active_views[gid] = view
+
+    started = await cog.auto_start(
+        await _lobby_row(cog.db, gid), {"players": [A, B, C]}, _channel(guild=SimpleNamespace(id=GUILD)),
+    )
+
+    assert started is False
+    assert (await _lobby_row(cog.db, gid))["state"] == "joining"
+    assert not view.is_finished()
+
+
+async def test_auto_start_refuses_a_lobby_with_no_live_view(sync_db_path):
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": {}, "players": [HOST, 2, 3], "host_id": HOST}, guild_id=GUILD,
+    )
+    assert await cog.auto_start(await _lobby_row(cog.db, gid), {"players": [HOST, 2, 3]}, _channel()) is False
+    assert (await _lobby_row(cog.db, gid))["state"] == "joining"
+
+
+def test_setup_registers_the_auto_starter():
+    src = open(cog_module.__file__, encoding="utf-8").read()
+    assert 'bot.lobby_auto_starters["clapback"] = cog.auto_start' in src

@@ -15,9 +15,11 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS
 from bot_modules.games_clapback.logic import (
+    MIN_PLAYERS,
+    THREE_PLAYER_NOTE,
+    board_scores,
     find_best_answer_record,
     find_closest_matchup_record,
-    sort_scores,
 )
 from bot_modules.services.embeds import COLOR_BLURPLE, COLOR_GREEN
 from bot_modules.core.branding import apply_section_spacing
@@ -63,9 +65,11 @@ def build_lobby_embed(
     )
 
     if start_at:
+        # The countdown is a promise, not advertising: the start-ping sweep
+        # starts the game itself when it runs out (clapback-8).
         embed.add_field(
             name="⏰ Starting",
-            value=f"<t:{start_at}:R>",
+            value=f"<t:{start_at}:R> — on its own, once {MIN_PLAYERS} have joined",
             inline=True,
         )
 
@@ -83,6 +87,11 @@ def build_lobby_embed(
         value=player_str,
         inline=False,
     )
+    # At the three-player floor every matchup is decided by the one player
+    # not in it (clapback-7). Said here, where a fourth can still be found,
+    # rather than discovered on the first vote card.
+    if len(players) == 3:
+        embed.add_field(name="", value=THREE_PLAYER_NOTE, inline=False)
     embed.set_footer(text=f"{ICON} Clapback")
     apply_section_spacing(embed)
     return embed
@@ -335,14 +344,17 @@ def build_scoreboard_embed(
     """
     if color is None:
         color = FALLBACK_COLOR
-    scores = payload.get("scores", {})
-    sorted_scores = sort_scores(scores)
+    sorted_scores, withdrawn = board_scores(payload)
 
     medals = ["🥇", "🥈", "🥉"]
     lines = []
     for i, (pid, pts) in enumerate(sorted_scores):
         prefix = medals[i] if i < 3 else f"{i + 1}."
         lines.append(f"{prefix} **{name_resolver(int(pid))}** — **{pts}** pts")
+    # A leaver's score is withdrawn from the standings (clapback-17): shown,
+    # unranked, so the board never crowns someone who walked out.
+    for pid, pts in withdrawn:
+        lines.append(f"🚪 ~~{name_resolver(int(pid))}~~ — {pts} pts (left the game)")
 
     remaining = total_rounds - round_num
     title = f"{ICON} Round {round_num} Complete"
@@ -410,13 +422,15 @@ def build_recap_embed(
     The ``anonymous`` config flag swaps the resolved name for ``???``
     on the Best Single Answer field.
     """
-    scores = payload.get("scores", {})
     clapbacks = payload.get("clapbacks", {})
     round_history = payload.get("round_history", [])
     players = payload.get("players", [])
     anonymous = config.get("anonymous", False)
 
-    sorted_scores = sort_scores(scores)
+    # Whoever left mid-game is off the standings (clapback-17): the crown goes
+    # to the highest player still in, and the board says the other score is
+    # withdrawn rather than naming a winner nobody is paid for.
+    sorted_scores, withdrawn = board_scores(payload)
     winner_id = int(sorted_scores[0][0]) if sorted_scores else None
     winner_name = name_resolver(winner_id) if winner_id else "Nobody"
 
@@ -445,6 +459,10 @@ def build_recap_embed(
             else ""
         )
         lines.append(f"{prefix} **{name}** — {pts} pts{ql_str}")
+    for pid, pts in withdrawn:
+        lines.append(
+            f"🚪 ~~{name_resolver(int(pid))}~~ — {pts} pts (left mid-game; score withdrawn)"
+        )
     embed.add_field(
         name="📊 Final Scoreboard",
         value="\n".join(lines) or "—",

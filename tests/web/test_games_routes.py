@@ -205,6 +205,31 @@ def test_lobby_dials_reject_out_of_range(open_client, body):
     assert open_client.put(f"{BASE}/config/lobby", json=body).status_code == 422
 
 
+def test_game_night_ping_role_round_trips(open_client, fake_ctx):
+    # null until touched (the bot makes the role on the next lobby), then the
+    # id, then "0" for a chosen "(none)" — three states, never collapsed.
+    assert open_client.get(f"{BASE}/config/lobby").json()["game_night_ping_role_id"] is None
+
+    big = "123456789012345678901"[:19]  # a real snowflake exceeds 2^53
+    resp = open_client.put(f"{BASE}/config/lobby", json={"game_night_ping_role_id": big})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["game_night_ping_role_id"] == big
+    assert open_client.get(f"{BASE}/config/lobby").json()["idle_nudge_minutes"] == 20
+
+    resp = open_client.put(f"{BASE}/config/lobby", json={"game_night_ping_role_id": "0"})
+    assert resp.json()["game_night_ping_role_id"] == "0"
+
+    from bot_modules.core.role_provision import role_dial_opted_out
+    from bot_modules.services.feature_roles import GAME_NIGHT_PING
+
+    with open_db(fake_ctx.db_path) as conn:
+        assert role_dial_opted_out(conn, GAME_NIGHT_PING.key, fake_ctx.guild_id) is True
+
+
+def test_game_night_ping_role_rejects_junk(open_client):
+    assert open_client.put(f"{BASE}/config/lobby", json={"game_night_ping_role_id": "abc"}).status_code == 422
+
+
 def test_lobby_dials_are_what_the_sweep_reads(open_client, fake_ctx):
     # The dial the page saves is the dial the bot enforces — same key, same
     # parse — or it would be a toggle that isn't enforced.

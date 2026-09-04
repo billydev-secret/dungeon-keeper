@@ -207,24 +207,25 @@ def test_roles_the_bot_hands_out_are_marked():
     assert fr.VOICE_SPECTATE_GATE.assigns is False
 
 
-def test_the_registry_covers_sixteen_roles_across_fourteen_dials():
+def test_the_registry_covers_seventeen_roles_across_fifteen_dials():
     """The corrected figure. "5 of 44" described this file, not the bot.
 
     Fourteen fixed-name roles were reachable before round 2 (5 ping dials +
     jailed + inactive + the DM trio + Survivor's three + Wellness); reopening
-    ``guess_role_id`` and the spectate gate makes it sixteen across fourteen
-    dials, since the DM trio and Survivor's three are three dials each.
+    ``guess_role_id`` and the spectate gate made it sixteen across fourteen
+    dials, since the DM trio and Survivor's three are three dials each, and
+    the Game Night lobby ping (2026-09-04) makes it seventeen across fifteen.
     """
-    assert len(fr.MANAGED_ROLES) == 16
+    assert len(fr.MANAGED_ROLES) == 17
     dials = {
         "config": {e.key for e in fr.MANAGED_ROLES if e.source == fr.SOURCE_CONFIG},
         "dm": {e for e in fr.MANAGED_ROLES if e.source == fr.SOURCE_DM_MODE},
         "survivor": {e for e in fr.MANAGED_ROLES if e.source == fr.SOURCE_SURVIVOR},
         "wellness": {e for e in fr.MANAGED_ROLES if e.source == fr.SOURCE_WELLNESS},
     }
-    # 9 config keys + the dm_mode_roles row + the season config row + the
-    # wellness_config row = 12 stores, 16 roles, 14 dials an admin can point.
-    assert len(dials["config"]) == 9
+    # 10 config keys + the dm_mode_roles row + the season config row + the
+    # wellness_config row = 13 stores, 17 roles, 15 dials an admin can point.
+    assert len(dials["config"]) == 10
     assert len(dials["dm"]) == 3
     assert len(dials["survivor"]) == 3
     assert len(dials["wellness"]) == 1

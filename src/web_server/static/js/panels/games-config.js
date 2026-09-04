@@ -104,6 +104,26 @@ export function mount(container) {
         </section>
 
         <section>
+          <div class="section-label">Game Night Ping</div>
+          <div class="field-hint">Whenever one of those six lobbies opens — started by a member
+            with /games play or by a schedule — the bot posts one line in that channel tagging this
+            role, with a link to the lobby and when it starts. Members pick the role up themselves
+            (offer it on <a href="/#/onboarding">Config &rarr; Discord Onboarding</a>, like
+            the other ping roles). Leave it untouched and the bot creates <strong>@Game Night</strong>
+            the first time a lobby opens; choose "(none)" and no lobby is announced. A schedule that
+            announces itself uses its own ping instead, never both.</div>
+          <div data-region="game-night-current" style="margin-bottom:10px;"><div class="empty">Loading…</div></div>
+          <div class="form" style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end;max-width:none;">
+            <div class="field" style="margin:0;flex:1;min-width:220px;max-width:280px;">
+              <label>Game Night Ping Role</label>
+              <span data-picker="game-night-role"></span>
+            </div>
+            <button class="btn btn-primary" data-action="save-game-night">Save</button>
+            <span data-status="game-night" class="save-status" style="margin-left:4px;"></span>
+          </div>
+        </section>
+
+        <section>
           <div class="section-label">Audit Channel</div>
           <div class="field-hint">Anonymous submissions &mdash; the answers, hot takes,
             compliments, fantasies and AMA questions members send without their name on
@@ -137,6 +157,10 @@ export function mount(container) {
     const auditChannelPicker = mountChannelPicker(
       container.querySelector('[data-picker="audit-channel"]'),
       guildChannels, "0", { label: "Audit Channel" },
+    );
+    const gameNightPicker = mountRolePicker(
+      container.querySelector('[data-picker="game-night-role"]'),
+      roles, "0", { label: "Game Night Ping Role" },
     );
 
     async function loadAllowedChannels() {
@@ -280,12 +304,31 @@ export function mount(container) {
       }
     }
 
+    function renderGameNight(data) {
+      const el = region("game-night-current");
+      // null: never touched, so the bot will make the role itself; "0": an
+      // admin chose "(none)"; otherwise a role id. The three states read
+      // differently on purpose — a blank and a decision are not the same.
+      const rid = data.game_night_ping_role_id;
+      if (rid === null || rid === undefined) {
+        el.innerHTML = `<div class="empty">Not set yet — the bot will create <strong>@Game Night</strong> the next time a lobby opens and tag it from then on.</div>`;
+        gameNightPicker.setValue("0");
+      } else if (String(rid) === "0") {
+        el.innerHTML = `<div class="empty">Off — "(none)" is chosen, so lobbies aren't announced. Pick a role (or use <em>Make it now</em> on Config &rarr; Bot-Managed Roles) to turn it back on.</div>`;
+        gameNightPicker.setValue("0");
+      } else {
+        el.innerHTML = `<div>Currently: ${esc(roleName(roles, rid))}</div>`;
+        gameNightPicker.setValue(String(rid));
+      }
+    }
+
     async function loadLobbyDials() {
       const st = statusEl("lobby");
       try {
         const data = await api("/api/games/config/lobby");
         container.querySelector('[data-ctrl="idle-nudge"]').value = data.idle_nudge_minutes ?? "";
         container.querySelector('[data-ctrl="idle-cancel"]').value = data.idle_cancel_minutes ?? "";
+        renderGameNight(data);
       } catch (err) {
         showStatus(st, false, `The idle-lobby settings failed to load: ${err.message}`);
       }
@@ -351,6 +394,18 @@ export function mount(container) {
           showStatus(st, true);
         }
         loadAudit();
+      } catch (err) { showStatus(st, false, err.message); }
+    });
+
+    container.querySelector('[data-action="save-game-night"]').addEventListener("click", async () => {
+      const st = statusEl("game-night");
+      // Role id stays a string, exactly as the picker holds it — "0" is
+      // "(none)", a stored decision, not a cleared field.
+      const rid = gameNightPicker.getValue() || "0";
+      try {
+        const data = await apiPut("/api/games/config/lobby", { game_night_ping_role_id: rid });
+        showStatus(st, true, rid === "0" ? "Off — lobbies aren't announced" : undefined);
+        renderGameNight(data);
       } catch (err) { showStatus(st, false, err.message); }
     });
 

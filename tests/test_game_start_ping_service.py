@@ -7,7 +7,7 @@ channel-unreachable and send-failure paths, over a real schema + GamesDb.
 
 import asyncio
 import json
-
+from unittest.mock import AsyncMock
 
 import discord
 import pytest
@@ -639,3 +639,294 @@ async def test_loop_reads_each_guilds_dials(sync_db_path, monkeypatch):
 
     assert chan.sends == []
     assert await _live(db, gid) is not None
+
+
+# ── countdown auto-start (clapback-8) ───────────────────────────────────────
+#
+# A game whose cog registers an auto-starter is started by the sweep at its
+# advertised moment when the roster is at the floor; short of it the host is
+# nudged once with what the lobby is waiting on, and the game still starts
+# itself the tick the floor is reached. A game with no auto-starter keeps the
+# nudge contract the tests above pin.
+
+
+@pytest.mark.parametrize(
+    "payload, due",
+    [
+        pytest.param({"players": [1, 2, 3], "start_epoch": NOW - 1}, True, id="due-at-the-floor"),
+        pytest.param({"players": [1, 2, 3], "start_epoch": NOW + 60}, False, id="not-yet"),
+        pytest.param({"players": [1, 2], "start_epoch": NOW - 1}, False, id="short-roster"),
+        pytest.param({"players": [1, 2, 3]}, False, id="no-countdown"),
+        pytest.param({"players": [1, 2, 3], "start_epoch": NOW - 1, "start_ping_sent": True}, True,
+                     id="a-nudged-lobby-still-starts-when-the-floor-arrives"),
+        pytest.param({"players": [1, 2, 3], "start_epoch": NOW - 1, "auto_start_failed": True}, False,
+                     id="never-retried-after-a-crash"),
+    ],
+)
+def test_auto_start_due(payload, due):
+    assert svc.auto_start_due("clapback", payload, NOW) is due
+
+
+def test_build_short_roster_nudge_says_what_it_waits_on():
+    text = svc.build_short_roster_nudge("clapback", HOST, joined=2, min_players=3, dials=DIALS)
+    assert f"<@{HOST}>" in text and "Clapback" in text
+    assert "2 of the 3" in text and "starts on its own" in text
+    assert "60 minutes" in text
+    assert "Hit" not in text  # the button would refuse; don't point at it
+
+
+def test_build_short_roster_nudge_without_the_close():
+    text = svc.build_short_roster_nudge("clapback", HOST, joined=1, min_players=3)
+    assert "closes" not in text and "1 of the 3 it needs has joined" in text
+
+
+class _StarterBot(_Bot):
+    """A bot whose clapback cog registered an auto-starter."""
+
+    def __init__(self, games_db, channels, *, result=True, raise_=False):
+        super().__init__(games_db, channels)
+        self.calls = []
+
+        async def _start(row, payload, channel):
+            self.calls.append((row["game_id"], payload.get("players"), channel))
+            if raise_:
+                raise RuntimeError("bracket exploded")
+            return result
+
+        self.lobby_auto_starters = {"clapback": _start}
+
+
+async def test_sweep_starts_the_game_at_the_countdown_and_does_not_nudge(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _StarterBot(db, {CHAN: chan})
+    gid = await _make_lobby(db, payload={"players": [HOST, 2, 3], "config": {"start_epoch": int(NOW - 5)}})
+
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert [c[0] for c in bot.calls] == [gid]
+    assert bot.calls[0][2] is chan
+    assert chan.sends == []
+    assert "start_ping_sent" not in await get_game_payload(db, gid)
+
+
+async def test_sweep_leaves_a_countdown_alone_until_it_runs_out(sync_db_path):
+    db = GamesDb(sync_db_path)
+    bot = _StarterBot(db, {CHAN: _Chan()})
+    gid = await _make_lobby(db, payload={"players": [HOST, 2, 3], "start_epoch": NOW + 300})
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert bot.calls == []
+
+
+async def test_short_roster_at_the_countdown_is_nudged_once_then_starts_when_full(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _StarterBot(db, {CHAN: chan})
+    gid = await _make_lobby(db, payload={"players": [HOST, 2], "start_epoch": NOW - 5})
+
+    for _ in range(3):
+        row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+        await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert bot.calls == []
+    assert len(chan.sends) == 1
+    assert "2 of the 3" in chan.sends[0] and "starts on its own" in chan.sends[0]
+    assert [u.id for u in chan.mentions[0].users] == [HOST]
+
+    # A third joins two minutes later: no press needed.
+    payload = await get_game_payload(db, gid)
+    payload["players"] = [HOST, 2, 3]
+    await db.execute(
+        "UPDATE games_active_games SET payload = ? WHERE game_id = ?", (json.dumps(payload), gid)
+    )
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW + 120, dials=DIALS)
+    assert [c[0] for c in bot.calls] == [gid]
+    assert len(chan.sends) == 1
+
+
+async def test_a_starter_that_refuses_falls_back_to_the_ordinary_nudge(sync_db_path):
+    # Three joined but the no-contact floor says two: Start would refuse, so
+    # the host gets the plain "time to start" and the refusal line from there.
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _StarterBot(db, {CHAN: chan}, result=False)
+    gid = await _make_lobby(db, payload={"players": [HOST, 2, 3], "start_epoch": NOW - 5})
+
+    for _ in range(2):
+        row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+        await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert len(chan.sends) == 1
+    assert "time to start" in chan.sends[0] and "Start" in chan.sends[0]
+
+
+async def test_a_starter_that_crashes_is_not_retried_every_tick(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _StarterBot(db, {CHAN: chan}, raise_=True)
+    gid = await _make_lobby(db, payload={"players": [HOST, 2, 3], "start_epoch": NOW - 5})
+
+    for _ in range(3):
+        row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+        await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert len(bot.calls) == 1
+    assert (await get_game_payload(db, gid))["auto_start_failed"] is True
+    assert len(chan.sends) == 1 and "time to start" in chan.sends[0]
+
+
+async def test_a_game_without_an_auto_starter_keeps_the_nudge(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _StarterBot(db, {CHAN: chan})
+    gid = await _make_lobby(db, game_type="story", payload={"players": [HOST, 2], "start_epoch": NOW - 5})
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert bot.calls == []
+    assert len(chan.sends) == 1 and "Start Story" in chan.sends[0]
+
+
+def test_set_payload_flag_refuses_caller_text():
+    with pytest.raises(ValueError):
+        asyncio.run(svc.set_payload_flag(None, "g", "players"))
+
+
+# ── the Game Night ping (discovery-2 / clapback-11) ─────────────────────────
+#
+# One line per lobby, the first tick the board exists, mentioning the guild's
+# opt-in Game Night role — content with a role allow-list and a jump link.
+
+ROLE = 777_000
+
+
+def test_build_game_night_ping_mentions_role_game_time_and_board():
+    text = svc.build_game_night_ping(
+        "clapback", role_id=ROLE, guild_id=GUILD, channel_id=CHAN, message_id=555,
+        start_epoch=int(NOW),
+    )
+    assert text.startswith(f"<@&{ROLE}> ")
+    assert "Clapback" in text and f"<t:{int(NOW)}:R>" in text
+    assert f"https://discord.com/channels/{GUILD}/{CHAN}/555" in text
+
+
+def test_build_game_night_ping_without_a_countdown_names_no_time():
+    text = svc.build_game_night_ping("mlt", role_id=ROLE, guild_id=GUILD, channel_id=CHAN, message_id=1)
+    assert "<t:" not in text and "Most Likely To" in text
+
+
+def test_role_only_mentions_allow_lists_exactly_the_role():
+    am = svc.role_only_mentions(ROLE)
+    assert [r.id for r in am.roles] == [ROLE]  # type: ignore[union-attr]
+    assert am.everyone is False and am.users is False
+
+
+async def test_resolve_game_night_role_is_unresolved_without_a_guild(sync_db_path):
+    # The sweep's own bot double has no guild cache: nothing pings, nothing
+    # is flagged, and the lobby is looked at again next tick.
+    assert await svc.resolve_game_night_role(_Bot(GamesDb(sync_db_path), {}), GUILD) == (False, None)
+
+
+async def _board(db, *, payload=None, game_type="clapback"):
+    gid = await _aged_lobby(db, game_type=game_type, payload=payload or {"players": [HOST]}, age_seconds=10)
+    await db.execute("UPDATE games_active_games SET message_id = 555 WHERE game_id = ?", (gid,))
+    return gid
+
+
+async def test_game_night_ping_goes_out_once_per_lobby(sync_db_path, monkeypatch):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    looked_up = []
+
+    async def _role(bot_, guild_id):
+        looked_up.append(guild_id)
+        return True, ROLE
+
+    monkeypatch.setattr(svc, "resolve_game_night_role", _role)
+    gid = await _board(db, payload={"players": [HOST], "start_epoch": NOW + 600})
+
+    for _ in range(3):
+        row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+        await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert len(chan.sends) == 1
+    assert chan.sends[0].startswith(f"<@&{ROLE}> ") and "/555" in chan.sends[0]
+    assert [r.id for r in chan.mentions[0].roles] == [ROLE]
+    assert chan.mentions[0].users is False
+    assert (await get_game_payload(db, gid))["game_night_pinged"] is True
+    assert looked_up == [GUILD]
+
+
+async def test_game_night_ping_waits_for_the_board(sync_db_path, monkeypatch):
+    # No message_id yet: the launcher is still posting. Nothing to link at.
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    monkeypatch.setattr(svc, "resolve_game_night_role", AsyncMock(return_value=(True, ROLE)))
+    gid = await _aged_lobby(db, payload={"players": [HOST]}, age_seconds=10)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert chan.sends == []
+    assert "game_night_pinged" not in await get_game_payload(db, gid)
+
+
+async def test_game_night_ping_honours_none(sync_db_path, monkeypatch):
+    # An admin chose "(none)": flagged so it isn't re-asked, and silent.
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    monkeypatch.setattr(svc, "resolve_game_night_role", AsyncMock(return_value=(True, None)))
+    gid = await _board(db)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert chan.sends == []
+    assert (await get_game_payload(db, gid))["game_night_pinged"] is True
+
+
+async def test_game_night_ping_is_not_flagged_while_the_guild_is_unreachable(sync_db_path, monkeypatch):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    monkeypatch.setattr(svc, "resolve_game_night_role", AsyncMock(return_value=(False, None)))
+    gid = await _board(db)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert chan.sends == []
+    assert "game_night_pinged" not in await get_game_payload(db, gid)
+
+
+async def test_game_night_ping_is_skipped_for_a_lobby_the_scheduler_announced(sync_db_path, monkeypatch):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    monkeypatch.setattr(svc, "resolve_game_night_role", AsyncMock(return_value=(True, ROLE)))
+    gid = await _board(db)
+    await svc.mark_game_night_pinged(db, gid)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert chan.sends == []
+
+
+async def test_loop_resolves_the_role_once_per_guild_per_tick(sync_db_path, monkeypatch):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    calls = []
+
+    async def _role(bot_, guild_id):
+        calls.append(guild_id)
+        return True, ROLE
+
+    monkeypatch.setattr(svc, "resolve_game_night_role", _role)
+    await _board(db)
+    await _board(db, game_type="story")
+
+    monkeypatch.setattr(svc.time, "time", lambda: NOW)
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    await svc.game_start_ping_loop(bot)
+
+    assert len(chan.sends) == 2
+    assert calls == [GUILD]

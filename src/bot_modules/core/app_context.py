@@ -109,6 +109,12 @@ GameRosterHandler: TypeAlias = Callable[
     [Any, str, discord.Member],
     Coroutine[Any, Any, tuple[bool, str]],
 ]
+# Countdown auto-start: (active-game row, payload, channel) -> started. A
+# lobby game that can take itself from lobby to play registers one; the
+# start-ping sweep calls it when the advertised start arrives with enough
+# players joined. Returning False means "not startable as it stands" and the
+# host is nudged the ordinary way instead.
+LobbyAutoStarter: TypeAlias = Callable[[Any, dict, Any], Coroutine[Any, Any, bool]]
 
 
 class Bot(commands.Bot):
@@ -153,6 +159,11 @@ class Bot(commands.Bot):
         # that's already running.
         self.game_joiners: dict[str, GameRosterHandler] = {}
         self.game_leavers: dict[str, GameRosterHandler] = {}
+        # Countdown auto-starters, keyed by game_type. A lobby game whose cog
+        # can start it without a button press registers one in setup(); the
+        # start-ping sweep (game_start_ping_service) calls it at start_epoch.
+        # A type absent here keeps the old contract: the host is nudged.
+        self.lobby_auto_starters: dict[str, LobbyAutoStarter] = {}
 
     async def setup_hook(self) -> None:
         from bot_modules.services.command_sync import sync_if_changed

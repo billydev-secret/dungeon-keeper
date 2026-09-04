@@ -43,7 +43,11 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.services import ping_tracker_service
 from bot_modules.services.game_start_ping_service import (
+    SCHEDULED_AUTO_START_MINUTES,
+    auto_starter_for,
+    mark_game_night_pinged,
     mark_start_ping_sent,
+    resolve_start_epoch,
     send_start_ping,
 )
 
@@ -448,6 +452,13 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     # schedule creator cannot stall the board on round 1 (platform-23).
     options = {**options, "scheduled": True}
 
+    # A lobby game that can start itself (clapback-8) is given a countdown
+    # when the schedule names none, so a scheduled row actually produces a
+    # played game rather than a lobby waiting on a press nobody will make.
+    auto_starts = game_type in LOBBY_GAME_TYPES and auto_starter_for(bot, game_type) is not None
+    if auto_starts and resolve_start_epoch(options) is None:
+        options["start_in"] = SCHEDULED_AUTO_START_MINUTES
+
     try:
         gid = await launcher(
             channel=channel,
@@ -481,6 +492,10 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # nobody would find (todo #97). Every DB-backed launcher writes
         # message_id before returning, so the row is readable by now.
         if row["announce"]:
+            # The schedule's own announcement stands in for the platform's
+            # Game Night ping — flagged before the send so the start-ping
+            # sweep can't slip a second line in between.
+            await mark_game_night_pinged(games_db, gid)
             board = await get_active_game_by_id(games_db, gid)
             message_id = board["message_id"] if board else None
             role_id = row["announce_role_id"]
@@ -534,8 +549,10 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # A lobby game posts its lobby and waits for a human to press start —
         # nobody would otherwise know that's pending. Nudge the person who
         # scheduled it, right after the lobby so the nudge sits next to the
-        # button. Lobby-less games self-run, so they get nothing.
-        if game_type in LOBBY_GAME_TYPES:
+        # button. Lobby-less games self-run, so they get nothing — and so does
+        # a lobby game that starts itself at its countdown: the sweep nudges
+        # only if the roster is short when the moment comes.
+        if game_type in LOBBY_GAME_TYPES and not auto_starts:
             # Record it against the launched game before sending: a schedule
             # whose stored options carry `start_in` also stamps a start_epoch,
             # which the poll loop would otherwise nudge for a second time.

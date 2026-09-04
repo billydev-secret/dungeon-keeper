@@ -74,6 +74,9 @@ CH = 700
         ("clapback", {"scores": {"1": 325, "2": 300, "3": 125}}, [1]),
         ("clapback", {"scores": {"1": 0, "2": 0}}, []),
         ("clapback", {"scores": {"1": 100, "2": 100}}, [1, 2]),  # tie
+        # A leaver's score is withdrawn: the win goes to the highest still in.
+        ("clapback", {"scores": {"1": 325, "2": 300, "3": 125}, "left": ["1"]}, [2]),
+        ("clapback", {"scores": {"1": 325}, "left": ["1"], "players": []}, []),
         # mlt — most round crowns.
         ("mlt", {"crowns": {"5": 2, "6": 1}}, [5]),
         ("mlt", {"crowns": {}}, []),

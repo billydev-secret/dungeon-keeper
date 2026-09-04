@@ -765,8 +765,17 @@ def _winners_rushmore(payload: dict[str, Any]) -> list[int]:
 
 
 def _winners_clapback(payload: dict[str, Any]) -> list[int]:
-    """Highest score after the final round."""
-    return _top_scorers(payload.get("scores") or {})
+    """Highest score after the final round, among players still in.
+
+    A leaver's score is kept on the payload but withdrawn (``left``,
+    ``games_clapback.logic.withdraw_player``): they forfeit, so the win goes
+    to the highest remaining player — the same one the recap crowns. Until
+    2026-09-04 the leaver could still top this table and, being off the
+    roster the faucet pays, nobody received the win (clapback-17).
+    """
+    left = {str(x) for x in (payload.get("left") or [])}
+    scores = payload.get("scores") or {}
+    return _top_scorers({k: v for k, v in scores.items() if str(k) not in left})
 
 
 def _winners_mlt(payload: dict[str, Any]) -> list[int]:

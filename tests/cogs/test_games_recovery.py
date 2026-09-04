@@ -267,6 +267,37 @@ async def test_clapback_recover_respawns_game_loop(sync_db_path):
         _cancel_pending(_baseline)
 
 
+async def test_clapback_resume_rolls_clapbacks_back_with_the_scores(sync_db_path):
+    """A crash in matchup 3 of a round: the score rollback was right, but the
+    CLAPBACK tally survived it and the recap bragged one or two extra
+    (clapback-14). Both come back from their checkpoints."""
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    recap = {}
+
+    async def fake_recap(game_id, channel, payload, config):
+        recap["clapbacks"] = dict(payload["clapbacks"])
+        recap["scores"] = dict(payload["scores"])
+
+    cog._post_recap = fake_recap  # type: ignore[method-assign]
+    channel = _FakeChannel(1150)
+    game_id = await create_game(
+        db, channel.id, 1, "clapback", state="playing",
+        payload={"config": {"rounds": 1, "timer": 30, "vote_timer": 30}, "players": [1, 2],
+                 "host_id": 1,
+                 "scores": {"1": 250, "2": 0}, "scores_checkpoint": {"1": 125, "2": 0},
+                 "clapbacks": {"1": 2, "2": 0}, "clapbacks_checkpoint": {"1": 1, "2": 0},
+                 "round_history": [{"round": 1, "prompt": "p", "matchups": []}]},
+    )
+    bot.active_views[game_id] = object()
+
+    await cog._run_game(game_id, channel, await get_game_payload(db, game_id))
+
+    assert recap["scores"] == {"1": 125, "2": 0}
+    assert recap["clapbacks"] == {"1": 1, "2": 0}
+
+
 async def test_price_recover_resumes_mid_round_without_score_drift(sync_db_path):
     """Round 2 was submitted (so it's in payload["rounds"]) but interrupted
     mid-scoring. Resume must use completed_rounds (1) -> round 2, NOT

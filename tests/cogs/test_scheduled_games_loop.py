@@ -1,5 +1,7 @@
 """Scheduler loop (_process_due) branch behavior, over a real schema + GamesDb."""
 
+from unittest.mock import AsyncMock
+
 from bot_modules.games.utils.game_manager import create_game
 from bot_modules.services.games_db import GamesDb
 from bot_modules.services import scheduled_games_service as svc
@@ -662,3 +664,72 @@ async def test_a_rotation_read_failure_lets_the_game_launch(sync_db_path):
     await svc._process_due(bot, db, row, NOW)
 
     assert len(launched) == 1
+
+
+# ── a scheduled lobby of a game that starts itself (clapback-8) ─────────────
+
+
+async def test_scheduled_auto_start_game_gets_a_countdown_and_no_nudge(sync_db_path):
+    # Nobody is at the keyboard: the countdown is what makes the game run,
+    # and the "hit Start" nudge would be a lie.
+    from bot_modules.games.utils.game_manager import create_game, get_game_payload
+    from bot_modules.services import game_start_ping_service as ping_svc
+
+    db = GamesDb(sync_db_path)
+    launched = []
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        launched.append(options)
+        gid = await create_game(
+            db, CHAN, host_id, "clapback", state="joining",
+            payload={"config": {"start_epoch": ping_svc.resolve_start_epoch(options, now=NOW)}},
+            message_id=555,
+        )
+        return gid
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"clapback": fake_launch})
+    bot.lobby_auto_starters = {"clapback": AsyncMock(return_value=True)}  # type: ignore[attr-defined]
+    row = await _insert(db, game_type="clapback", created_by=2001)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched[0]["start_in"] == ping_svc.SCHEDULED_AUTO_START_MINUTES
+    assert bot._channels[CHAN].sends == []
+    active = await db.fetchone("SELECT game_id FROM games_active_games")
+    assert active is not None
+    gid = active["game_id"]
+    payload = await get_game_payload(db, gid)
+    assert payload["config"]["start_epoch"] == NOW + ping_svc.SCHEDULED_AUTO_START_MINUTES * 60
+    assert "start_ping_sent" not in payload
+
+
+async def test_scheduled_auto_start_game_keeps_its_own_start_in(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        launched.append(options)
+        return "gid"
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"clapback": fake_launch})
+    bot.lobby_auto_starters = {"clapback": AsyncMock(return_value=True)}  # type: ignore[attr-defined]
+    row = await _insert(db, game_type="clapback", options='{"start_in": 25}')
+    await svc._process_due(bot, db, row, NOW)
+    assert launched[0]["start_in"] == 25
+
+
+async def test_an_announcing_schedule_stands_in_for_the_game_night_ping(sync_db_path):
+    from bot_modules.games.utils.game_manager import create_game, get_game_payload
+
+    db = GamesDb(sync_db_path)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        return await create_game(db, CHAN, 2001, "story", state="joining", message_id=555)
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"story": fake_launch})
+    row = await _insert(db, game_type="story", announce=1, announce_role_id=555)
+    await svc._process_due(bot, db, row, NOW)
+
+    active = await db.fetchone("SELECT game_id FROM games_active_games")
+    assert active is not None
+    assert (await get_game_payload(db, active["game_id"]))["game_night_pinged"] is True

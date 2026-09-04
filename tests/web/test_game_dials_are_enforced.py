@@ -331,3 +331,21 @@ def test_the_config_api_knows_every_game_it_can_switch_off() -> None:
         assert base in ALL_GAME_TYPES, (
             f"scheduled launches of {gt} check an enable switch nothing can set"
         )
+
+
+# ── The Game Night ping dial ────────────────────────────────────────────────
+# A role dial on Games Global Config is only honest if the sweep that posts
+# the ping reads the same key, through the same registry entry.
+
+
+def test_game_night_ping_dial_is_the_key_the_sweep_pings() -> None:
+    from bot_modules.services.feature_roles import GAME_NIGHT_PING
+
+    assert GAME_NIGHT_PING.key == "game_night_ping_role_id"
+    assert GAME_NIGHT_PING.panel == "games-config" and GAME_NIGHT_PING.opt_in
+    panel = (_PANELS / "games-config.js").read_text(encoding="utf-8")
+    assert "game_night_ping_role_id" in panel
+    route = (_ROOT / "src" / "web_server" / "routes" / "games.py").read_text(encoding="utf-8")
+    assert "GAME_NIGHT_PING.key" in route
+    sweep = (_ROOT / "src" / "bot_modules" / "services" / "game_start_ping_service.py").read_text(encoding="utf-8")
+    assert "GAME_NIGHT_PING.key" in sweep and "role_only_mentions" in sweep
