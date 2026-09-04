@@ -87,6 +87,15 @@ Two complications, both real:
   `inactive_role_id`. A jail with no role is not a jail. Those carry
   `none_means_off=False` and a stored 0 means "not set up yet". They are also
   the only two, and a test pins the set.
+* **A create-on-offer dial is never "off".** Offering the role in onboarding
+  *is* the decision that makes it, and `guess_role_id` /
+  `voice_master_spectator_gate_role_id` are written a `0` by their own panels
+  on every unrelated save. `FeatureRole.honours_none`
+  (`none_means_off and not create_on_offer`) is the single answer to "did the
+  admin switch this off", and **every** surface asks it that way — the roster
+  page, the per-dial state line and onboarding. Reading it two ways is how the
+  Guess Who panel came to print '"(none)" — so I won't make one' directly under
+  the hint saying that offering it in onboarding will.
 
 `@Economy Notifications` used to be the exception here (`none_means_off=False`,
 2026-08-22) while its panel told admins "(none)" turned notifications off — a
@@ -159,6 +168,15 @@ Nine states, computed pure in `services/role_roster_service.py`:
 `adoptable`, `offer_first` — with *renamed*, *duplicated* and *provenance
 unknown* carried as notes rather than states, since none of them stops anything
 working.
+
+`adoptable` applies the **same two filters as `adoptable_role_ids`** (§2), not
+a bare name match: a same-named role that is integration-managed, or that sits
+at or above the bot's own top role for a role the bot hands out, is not a
+candidate. Promising "I'll use that one rather than making a second" about a
+role the provisioner would skip is how an admin ends up with two `@Jailed`
+roles and no idea why theirs is being ignored — so the card falls back to
+*not made yet* and carries a note saying a same-named role exists that the bot
+can't use.
 
 Three writes, each deliberately narrow:
 

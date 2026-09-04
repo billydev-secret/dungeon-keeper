@@ -109,13 +109,11 @@ def _role_states(ctx, guild: discord.Guild, prompts) -> list[dict]:
             # decision that makes it exist, and its panel writes a "0" on every
             # unrelated save, so reading that 0 as a preference would leave the
             # admin unable to offer a role they are explicitly asking for.
-            opted_out = (
-                entry.none_means_off
-                and not entry.create_on_offer
-                and role_dial_opted_out(
-                    conn, entry.key, guild.id,
-                    allow_legacy_fallback=entry.legacy_fallback,
-                )
+            # `honours_none` carries that rule so the roster page reads the
+            # dial the same way this one does.
+            opted_out = entry.honours_none and role_dial_opted_out(
+                conn, entry.key, guild.id,
+                allow_legacy_fallback=entry.legacy_fallback,
             )
             raw = get_config_value(
                 conn, entry.key, "0", guild.id,
@@ -226,7 +224,7 @@ async def add_roles(
             # This is the create-on-offer action: for the two dials that may
             # only be made while being offered, the admin ticking the box here
             # IS the explicit request, so an old stored "0" does not veto it.
-            respect_opt_out=entry.none_means_off and not entry.create_on_offer,
+            respect_opt_out=entry.honours_none,
             assigns=entry.assigns,
         )
         if role is None:

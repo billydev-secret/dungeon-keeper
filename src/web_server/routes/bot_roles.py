@@ -120,7 +120,13 @@ def _stored_ids(
                 "SELECT 1 FROM config WHERE guild_id = ? AND key = ?",
                 (guild_id, entry.key),
             ).fetchone() is not None
-            opted_out = entry.none_means_off and role_dial_opted_out(
+            # `honours_none`, not `none_means_off`: a create-on-offer dial's
+            # panel writes "0" on every unrelated save, and offering the role
+            # in onboarding is what makes it — so a 0 there is not a decision.
+            # Onboarding reads it the same way; the two must agree or this page
+            # says '"(none)" — I won't make one' about a role the Offer button
+            # on the very next page will happily create.
+            opted_out = entry.honours_none and role_dial_opted_out(
                 conn, entry.key, guild_id,
                 allow_legacy_fallback=entry.legacy_fallback,
             )

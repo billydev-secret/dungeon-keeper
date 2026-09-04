@@ -282,10 +282,27 @@ def cast_ballot_vote(
     """Record (or change) one member's vote. False if the ballot has closed.
 
     Changing a vote is a plain upsert on ``(ballot_id, user_id)``, so pressing
-    a second button replaces the first rather than stacking. The closed check
-    and the write share this connection, so a press that arrives while the
-    sweep is closing the ballot either lands before the freeze or is refused —
-    it cannot slip in after the counts were frozen.
+    a second button replaces the first rather than stacking.
+
+    The closed check is a read, and ``open_db`` runs deferred, so the read
+    happens before any transaction is begun: a press arriving in the instant
+    the sweep is freezing the counts can still be written after the freeze,
+    and is then not counted — a closed ballot's result is the frozen row,
+    never these rows.
+
+    So this re-reads the ballot *after* writing and returns ``False`` if it
+    closed underneath, which is what makes the return value honest: ``True``
+    means counted, not merely stored. The caller shows the member "the ballot
+    closed before your vote landed" instead of "your vote has been recorded",
+    which was the part of this race that actually mattered — a lost vote in a
+    one-round-trip window is tolerable, being told it counted is not.
+
+    The window itself is left open deliberately. Closing it means taking the
+    write lock up front (``open_db_immediate``) at the call site, which
+    serialises every press on every ballot to fix a race that needs a press to
+    land inside the sweep's own transaction. The row left behind is harmless:
+    a closed ballot reads its counts from the frozen row, so an uncounted vote
+    row changes nothing, and it is still purged with the member's data.
     """
     value = normalise_choice(choice)
     ballot = get_ballot(conn, ballot_id)
@@ -301,7 +318,11 @@ def cast_ballot_vote(
         """,
         (ballot_id, guild_id, user_id, value, cast_at),
     )
-    return True
+    # Re-read: the sweep may have frozen the counts between the check above and
+    # this write, in which case the row is stored but will never be counted.
+    # Saying so is the whole point — see the docstring.
+    after = get_ballot(conn, ballot_id)
+    return after is not None and is_open(after)
 
 
 def get_ballot_votes(conn: sqlite3.Connection, ballot_id: int) -> list[BallotVoteRow]:

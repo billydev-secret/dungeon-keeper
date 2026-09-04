@@ -422,3 +422,42 @@ def test_erasure_is_guild_scoped(conn):
 
     assert svc.get_ballot_votes(conn, mine) == []
     assert [v["user_id"] for v in svc.get_ballot_votes(conn, theirs)] == [1]
+
+
+def test_a_vote_that_races_the_close_reports_that_it_did_not_count(conn, monkeypatch):
+    """The return value means COUNTED, not merely STORED.
+
+    ``open_db`` runs deferred, so the closed-check read happens before any
+    transaction begins and a press arriving as the deadline sweep freezes the
+    counts can still be written afterwards. A closed ballot reads its result
+    from the frozen row, so that row is never counted — and telling the member
+    "your vote has been recorded" would be untrue. Re-reading after the write
+    is what keeps the answer honest.
+    """
+    ballot_id = _ballot(conn)
+
+    real_get = svc.get_ballot
+    calls = {"n": 0}
+
+    def _closes_underneath(c, bid):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_get(c, bid)      # the pre-write check sees it open
+        # ...the deadline sweep freezes the counts in between...
+        if calls["n"] == 2:
+            svc.close_ballot(c, bid, closed_by=None, now=2001.0)
+        return real_get(c, bid)          # the post-write re-read sees it closed
+
+    monkeypatch.setattr(svc, "get_ballot", _closes_underneath)
+
+    assert svc.cast_ballot_vote(
+        conn, ballot_id=ballot_id, guild_id=GUILD, user_id=77, choice="yes"
+    ) is False
+
+
+def test_a_vote_on_an_open_ballot_still_reports_success(conn):
+    """The honest-return change must not make ordinary votes look failed."""
+    ballot_id = _ballot(conn)
+    assert svc.cast_ballot_vote(
+        conn, ballot_id=ballot_id, guild_id=GUILD, user_id=77, choice="yes"
+    ) is True

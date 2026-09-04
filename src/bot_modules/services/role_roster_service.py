@@ -116,6 +116,25 @@ def _reach_ok(entry: FeatureRole, role: LiveRole, top: int | None) -> bool:
     return role.position < top
 
 
+def _adoptable(entry: FeatureRole, reading: DialReading) -> tuple[LiveRole, ...]:
+    """The same-named roles the provisioner would actually adopt.
+
+    Must stay in step with :func:`core.role_provision.adoptable_role_ids`,
+    which is what really runs: an integration-managed role can never be granted
+    to anybody, and neither can one at or above the bot's own top role when the
+    bot is the one handing it out. Judging adoptability by name alone made this
+    page promise "I'll use that one rather than making a second" about a role
+    the next provisioning pass would skip — and then quietly make the second.
+
+    ``named_matches`` itself stays unfiltered, because the "there are N roles
+    called @X" note is counting names, not candidates.
+    """
+    return tuple(
+        r for r in reading.named_matches
+        if not r.managed and _reach_ok(entry, r, reading.bot_top_position)
+    )
+
+
 def describe_role(entry: FeatureRole, reading: DialReading) -> RoleCard:
     """:func:`_describe_role`, with the buttons clamped to what is safe.
 
@@ -303,8 +322,9 @@ def _describe_role(entry: FeatureRole, reading: DialReading) -> RoleCard:
             notes=tuple(notes),
         )
 
-    if reading.named_matches:
-        candidate = reading.named_matches[0]
+    adoptable = _adoptable(entry, reading)
+    if adoptable:
+        candidate = adoptable[0]
         return card(
             state=ADOPTABLE,
             current_name=candidate.name,
@@ -319,6 +339,17 @@ def _describe_role(entry: FeatureRole, reading: DialReading) -> RoleCard:
             notes=(where,) if where else (),
         )
 
+    # A same-named role the provisioner would refuse. Saying nothing here is
+    # how an admin ends up with two roles called @Jailed and no idea why the
+    # one they made is being ignored.
+    unusable = (
+        (
+            f"There's already a role called @{entry.spec.name}, but I can't use "
+            "it — it's either managed by an integration or sitting above my own "
+            "role — so I'll make my own instead."
+        ),
+    ) if reading.named_matches else ()
+
     if entry.create_on_offer:
         return card(
             state=OFFER_FIRST,
@@ -330,7 +361,7 @@ def _describe_role(entry: FeatureRole, reading: DialReading) -> RoleCard:
             can_create=False,
             can_adopt=True,
             can_stop=can_stop,
-            notes=(where,) if where else (),
+            notes=((where,) if where else ()) + unusable,
         )
 
     return card(
@@ -343,7 +374,7 @@ def _describe_role(entry: FeatureRole, reading: DialReading) -> RoleCard:
         can_create=True,
         can_adopt=True,
         can_stop=can_stop,
-        notes=(where,) if where else (),
+        notes=((where,) if where else ()) + unusable,
     )
 
 

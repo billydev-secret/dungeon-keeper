@@ -199,6 +199,65 @@ def test_an_ordinary_unset_ping_dial_can_be_made_now():
     assert describe_role(WELCOME, DialReading()).can_create is True
 
 
+# ── adoption candidates the provisioner would actually take ───────────
+#
+# `core.role_provision.adoptable_role_ids` skips an integration-managed role
+# and — for a role the bot hands out — one at or above its own top role, then
+# creates a working twin lower down. A page that judged adoptability by name
+# alone promised "I'll use that one rather than making a second" about exactly
+# those roles, and the second one appeared anyway.
+
+
+def test_a_role_above_the_bot_is_not_an_adoption_candidate():
+    """@Jailed sitting above Dungeon Keeper can never be handed out."""
+    card = describe_role(
+        JAILED,
+        DialReading(
+            named_matches=(_role(9, "Jailed", position=20),),
+            bot_top_position=5,
+        ),
+    )
+    assert card.state == NOT_MADE
+    assert any("can't use it" in n for n in card.notes)
+
+
+def test_an_integration_managed_role_is_not_an_adoption_candidate():
+    card = describe_role(
+        WELCOME,
+        DialReading(named_matches=(_role(9, "Welcome Ping", managed=True),)),
+    )
+    assert card.state == NOT_MADE
+    assert any("can't use it" in n for n in card.notes)
+
+
+def test_a_usable_twin_is_still_adopted_over_an_unusable_one():
+    """Order follows guild.roles (lowest first); the first *usable* one wins."""
+    card = describe_role(
+        JAILED,
+        DialReading(
+            named_matches=(
+                _role(9, "Jailed", position=20),
+                _role(10, "Jailed", position=2, members=4),
+            ),
+            bot_top_position=5,
+        ),
+    )
+    assert card.state == ADOPTABLE
+    assert card.member_count == 4
+
+
+def test_a_mention_only_dial_ignores_hierarchy_when_adopting():
+    """The bot never hands @Welcome Ping out, so position is irrelevant."""
+    card = describe_role(
+        WELCOME,
+        DialReading(
+            named_matches=(_role(9, "Welcome Ping", position=20),),
+            bot_top_position=5,
+        ),
+    )
+    assert card.state == ADOPTABLE
+
+
 # ── the opening sentence ──────────────────────────────────────────────
 
 
