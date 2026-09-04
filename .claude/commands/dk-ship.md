@@ -1,6 +1,6 @@
 ---
 description: Ship the current feature — review, rebase on main, run scoped gate, merge, tear the session down
-argument-hint: [--no-review] [--review LEVEL] [--no-test] [--no-push] [--keep]
+argument-hint: [--no-review] [--review LEVEL] [--no-standards] [--no-test] [--no-push] [--keep]
 allowed-tools: Bash(git:*), Bash(python3:*), Bash(flock:*), Bash(tmux:*), Bash(setsid:*), Skill, Read, Edit, Write, Grep, Glob
 ---
 Ship this feature session into main, then delete the session. If ANY step fails, STOP
@@ -8,7 +8,8 @@ and report — never merge past a failed gate or an unresolved rebase, and never
 down a session whose work did not land.
 
 Args in `$ARGUMENTS`: `--no-review` skips the code review, `--review LEVEL` sets its
-effort level (default `high`), `--no-test` skips the gate (docs-only ships),
+effort level (default `high`), `--no-standards` skips the design/reuse scan,
+`--no-test` skips the gate (docs-only ships),
 `--no-push` skips the final GitHub push, `--keep` leaves the worktree and window alive
 after merging.
 
@@ -40,7 +41,7 @@ Steps:
 
    The explicit `main...HEAD` target matters: step 2 left the tree clean, so "the
    current diff" is empty and a bare review would report a clean branch it never
-   read. The target is the whole feature — every commit the merge in step 6 will
+   read. The target is the whole feature — every commit the merge in step 7 will
    land — reviewed against the main it is about to land on, which is exactly what
    the rebase in step 3 just made current.
 
@@ -66,14 +67,30 @@ Steps:
       the user may well say ship it anyway, but that is their call, not yours.
    d. If nothing was found, say so in one line and move on. A clean review is not
       worth a paragraph.
-5. **Scoped regression** (skip only if `--no-test` was passed):
+5. **Standards scan** (default; skip only if `--no-standards` was passed). Launch the
+   **`standards-review`** agent (Agent tool, `subagent_type: "standards-review"`) on
+   the same `main...HEAD` range, asking it to review the delta against the repo's
+   written design and reuse principles.
+
+   This is the half no test can express. The sweeps already fail the build on the
+   mechanical rules — accent colour, denial wording, encoding, register coverage —
+   so the agent is told to skip those and look instead at the judgement calls:
+   an admin knob built as a slash command instead of a dashboard panel, a helper
+   reimplemented beside the shared one, a third toggle where a dial belongs, real
+   logic living in a cog, a spec or `manual.html` left behind by a behaviour change.
+
+   It **reports, never edits** — a design violation usually needs a decision, not a
+   patch. Relay its findings verbatim and **ask before continuing** if it returns
+   any; the user may well say ship it, but that is their call. If it returns
+   `STANDARDS: clean`, say so in one line and move on.
+6. **Scoped regression** (skip only if `--no-test` was passed):
    `python scripts/gate.py --scoped`. If it fails, STOP — show the failures, do not merge.
    In a session worktree this never fans out to the whole suite: a shared-file edit
    (`core/`, `models/`, an edited migration, deps, `gate.py`) prints the paths whose
    full run was **deferred** instead of running it. That run is paid on main — see
-   step 7 — so a ship is fast and the coverage still happens, once, on the tree that
+   step 8 — so a ship is fast and the coverage still happens, once, on the tree that
    actually matters.
-6. **Integrate** — one ship at a time, since every session merges into the same prod
+7. **Integrate** — one ship at a time, since every session merges into the same prod
    checkout. Take the lock and run these under it:
    `flock "$MAIN/.git/dk-ship.lock" -c '<the commands below>'`
 
@@ -82,18 +99,18 @@ Steps:
       `git -C "$MAIN" status --porcelain -uno` (must be empty). If not, STOP.
    b. `git -C "$MAIN" merge --no-ff "$BRANCH"` — a merge commit. The merge itself
       posts **no** QA card: a branch ships as many times as the work needs, and the
-      feature's single card is written at teardown in step 8 from everything the
+      feature's single card is written at teardown in step 9 from everything the
       branch ever merged.
    c. Unless `--no-push`: `git -C "$MAIN" push`.
 
    If the lock is held, say so — a blocked ship looks identical to a hung one, and
    the user should know another session is mid-merge rather than assume a stall.
-7. Report what merged and whether main was pushed. If step 5 printed **deferred**
+8. Report what merged and whether main was pushed. If step 6 printed **deferred**
    full-run paths, say so and tell the user main needs `python scripts/gate.py`
    (~10 min, from the prod checkout) once their current batch of ships is done —
    one run covers every branch merged since the last one, so don't run it per ship.
    Offer to start it; don't block the teardown on it.
-8. **Tear the session down** (skip if `--keep` was passed, or if this checkout is not
+9. **Tear the session down** (skip if `--keep` was passed, or if this checkout is not
    under `dk-sessions/` — a branch made directly in prod has no session to remove):
 
        cd "$MAIN" && setsid nohup python3 "$MAIN/scripts/dk_session.py" \
@@ -101,7 +118,7 @@ Steps:
 
    Detached and delayed on purpose: teardown removes the worktree, deletes the merged
    branch, and kills **the very window this command is running in**, so it has to
-   outlive the shell that launched it and wait long enough for your report from step 7
+   outlive the shell that launched it and wait long enough for your report from step 8
    to reach the screen. Tell the user the window will close in a few seconds and that
    `--keep` is how to hold it open next time.
 
