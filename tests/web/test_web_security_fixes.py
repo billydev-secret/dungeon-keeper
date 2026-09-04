@@ -28,15 +28,35 @@ _ADMIN_BITS = 0x8
 _MOD_BITS = 0x2000  # MANAGE_MESSAGES — moderator, decidedly not admin
 _OTHER_GUILD = 456
 
+#: The client speaks **https**, and every hand-minted cookie is pinned to this
+#: host. Both matter, and only together: a route that re-signs the session sets
+#: the new cookie ``Secure`` whenever ``DASHBOARD_BASE_URL`` is https (which
+#: production's is), so an http client stores it and never sends it back; and a
+#: domain-less ``cookies.set`` is a *different* jar key from the server's, so
+#: the stale one survives alongside it and wins. Under http with a bare set,
+#: the guild-switch tests below would therefore keep replaying the pre-switch
+#: cookie and read its permissions back as proof of a leak that isn't there.
+_HOST = "testserver"
+_COOKIE_DOMAIN = f"{_HOST}.local"  # http.cookiejar's form for a dotless host
+
 
 # ── Session helpers ──────────────────────────────────────────────────
+
+
+def _client(app) -> TestClient:
+    return TestClient(app, base_url=f"https://{_HOST}")
+
+
+def _set_session(client: TestClient, value: str) -> None:
+    """Install a session cookie the server's own ``Set-Cookie`` will replace."""
+    client.cookies.set(SESSION_COOKIE, value, domain=_COOKIE_DOMAIN, path="/")
 
 
 def _auth_client(fake_ctx, *, bits: int, guild_id: int | None = None, guilds=None):
     """A TestClient whose cookie carries ``bits`` for ``guild_id``."""
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     app = create_app(fake_ctx, auth=auth)
-    client = TestClient(app)
+    client = _client(app)
     active = guild_id or fake_ctx.guild_id
     cookie = auth.create_session_cookie(
         user_id=1,
@@ -50,7 +70,7 @@ def _auth_client(fake_ctx, *, bits: int, guild_id: int | None = None, guilds=Non
             {"id": _OTHER_GUILD, "name": "Other", "icon": None},
         ],
     )
-    client.cookies.set(SESSION_COOKIE, cookie)
+    _set_session(client, cookie)
     return auth, client
 
 
@@ -88,7 +108,7 @@ def test_stale_bits_from_another_guild_grant_nothing(fake_ctx):
             "gen": 0,
         }
     )
-    client.cookies.set(SESSION_COOKIE, stale)
+    _set_session(client, stale)
     assert client.get("/api/system/stats").status_code == 403
 
     me = client.get("/api/me").json()
@@ -112,12 +132,26 @@ def test_legacy_session_without_perms_guild_id_fails_closed(fake_ctx):
             "avatar_url": None,
         }
     )
-    client.cookies.set(SESSION_COOKIE, legacy)
+    _set_session(client, legacy)
     assert client.get("/api/system/stats").status_code == 403
     client.close()
 
 
-def test_select_guild_clears_unresolvable_permissions(fake_ctx):
+@pytest.fixture(params=["http://localhost:8080", "https://dash.example.com"])
+def dashboard_base_url(request, monkeypatch) -> str:
+    """Run a test under both dashboard schemes.
+
+    ``routes/oauth._is_secure()`` reads this URL, and every route that re-signs
+    the session cookie passes the result as the cookie's ``Secure`` flag —
+    so the scheme decides whether a re-signed cookie is even sent back. The
+    https row is the shape production runs in; the http row is a LAN/loopback
+    dashboard. A guild switch has to clear permissions under both.
+    """
+    monkeypatch.setenv("DASHBOARD_BASE_URL", request.param)
+    return request.param
+
+
+def test_select_guild_clears_unresolvable_permissions(fake_ctx, dashboard_base_url):
     """Switching guilds while the bot is offline drops the old guild's bits."""
     _auth, client = _auth_client(fake_ctx, bits=_ADMIN_BITS)
     assert client.get("/api/system/stats").status_code == 200
@@ -126,12 +160,17 @@ def test_select_guild_clears_unresolvable_permissions(fake_ctx):
     assert resp.status_code == 200, resp.text
     assert resp.json()["perms"] == []
 
-    # The re-signed cookie the response set must not carry admin forward.
+    # The re-signed cookie the response set must not carry admin forward —
+    # and the client must actually be sending that cookie rather than a stale
+    # one the server's Set-Cookie failed to displace, or the 403 proves nothing.
+    assert len(list(client.cookies.jar)) == 1
     assert client.get("/api/system/stats").status_code == 403
     client.close()
 
 
-def test_select_guild_recaptures_permissions_for_the_target(fake_ctx):
+def test_select_guild_recaptures_permissions_for_the_target(
+    fake_ctx, dashboard_base_url
+):
     """When the gateway cache has the target guild, bits are re-read there."""
     member = SimpleNamespace(
         guild_permissions=SimpleNamespace(value=_ADMIN_BITS),
@@ -184,7 +223,7 @@ def test_logout_invalidates_a_captured_cookie(fake_ctx):
     assert client.get("/logout", follow_redirects=False).status_code == 302
 
     # The attacker still holds the exact cookie bytes; they must no longer work.
-    client.cookies.set(SESSION_COOKIE, captured)
+    _set_session(client, captured)
     assert client.get("/api/system/stats").status_code == 401
     client.close()
 
@@ -203,7 +242,7 @@ def test_logout_does_not_lock_the_user_out_of_future_logins(fake_ctx):
         guilds=[{"id": fake_ctx.guild_id, "name": "Home", "icon": None}],
         generation=auth.current_generation(fake_ctx, 1),
     )
-    client.cookies.set(SESSION_COOKIE, fresh)
+    _set_session(client, fresh)
     assert client.get("/api/system/stats").status_code == 200
     client.close()
 
@@ -217,8 +256,8 @@ def test_revocation_survives_a_restart(fake_ctx):
 
     # Fresh backend + app == a restarted dashboard: empty in-memory cache.
     restarted = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
-    fresh_client = TestClient(create_app(fake_ctx, auth=restarted))
-    fresh_client.cookies.set(SESSION_COOKIE, captured)
+    fresh_client = _client(create_app(fake_ctx, auth=restarted))
+    _set_session(fresh_client, captured)
     assert fresh_client.get("/api/system/stats").status_code == 401
     fresh_client.close()
 

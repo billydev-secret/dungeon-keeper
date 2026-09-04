@@ -9,6 +9,36 @@ cross-cutting sweeps guard properties that no single route test owns. Two tiers:
   Playwright/Chromium isn't installed. Needs `python -m playwright install
   chromium` on a new machine.
 
+## Environment hermeticity
+
+`bot_modules.core.config` calls `load_dotenv(override=True)` at **module
+scope**, so importing anything under `web_server` pulls the developer's real
+`.env` into `os.environ` — and the production checkout has one. A web test that
+reads a dashboard setting therefore behaved differently on the machine that
+serves the dashboard than on CI or in a worktree.
+
+`tests/web/conftest.py` closes that with an autouse `_hermetic_dashboard_env`
+fixture: it `delenv`s `DASHBOARD_BASE_URL`, `DASHBOARD_RETURN_TO_URLS`,
+`DASHBOARD_OPEN_AUTH`, `SUPPORT_USER_ID`, `DISCORD_CLIENT_ID`,
+`SESSION_SECRET`, `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` for the
+duration of every test under `tests/web/`. Absent, not pinned: that is what CI
+and a fresh clone see, and it makes `_auto_detect_auth` fail closed if a test
+forgets to pass `auth=`. A test that needs a value sets it with
+`monkeypatch.setenv`, which runs after the fixture and still wins.
+
+**Cookie transport.** `DASHBOARD_BASE_URL` is the one that bites hardest.
+`routes/oauth._is_secure()` reads it, and every route that re-signs the session
+cookie (`/api/guilds/{id}/select`, the OAuth callback) passes the result as the
+cookie's `Secure` flag. An https value plus an http-speaking `TestClient` means
+httpx **stores the new cookie and never sends it back** — and a domain-less
+`client.cookies.set(SESSION_COOKIE, …)` is a different jar key from the
+server's, so the stale pre-switch cookie survives beside it and wins. That
+combination made two B-SEC1 tests read a leak that the server never had. Any
+test that asserts on a *re-signed* session must therefore run its client over
+`https://` and pin its hand-minted cookie to the client's host — see `_client`
+/ `_set_session` in `test_web_security_fixes.py`, which also parametrizes the
+two guild-switch tests across both schemes.
+
 ## Default-suite sweeps
 
 ### Authorization — `test_authz_sweep.py`

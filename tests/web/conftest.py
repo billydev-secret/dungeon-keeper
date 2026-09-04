@@ -63,6 +63,44 @@ class FakeCtx:
         return value
 
 
+# ── Environment hermeticity ──────────────────────────────────────────
+
+#: Dashboard settings the web layer reads from the process environment at
+#: request time. ``bot_modules.core.config`` calls ``load_dotenv(override=True)``
+#: at *module scope*, so importing anything under ``web_server`` pulls the
+#: developer's real ``.env`` into ``os.environ`` — and the production checkout
+#: has one. That silently made two B-SEC1 tests fail there and pass everywhere
+#: else (a live ``DASHBOARD_BASE_URL`` of ``https://…`` flips the session
+#: cookie to ``Secure``, which the http-speaking TestClient then refuses to
+#: send back). Scrub them so a web test reads the same environment on every
+#: machine; a test that needs a value sets it with ``monkeypatch.setenv``,
+#: which runs after this and therefore still wins.
+_DASHBOARD_ENV_VARS = (
+    "DASHBOARD_BASE_URL",
+    "DASHBOARD_RETURN_TO_URLS",
+    "DASHBOARD_OPEN_AUTH",
+    "SUPPORT_USER_ID",
+    "DISCORD_CLIENT_ID",
+    "SESSION_SECRET",
+    "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_dashboard_env(monkeypatch):
+    """Unset every dashboard env var a developer's ``.env`` might define.
+
+    Absent rather than pinned to a fixed value on purpose: absent is what CI
+    and a fresh clone see, so it is the configuration the assertions were
+    written against. It also makes ``_auto_detect_auth`` fail closed if a
+    future test forgets to pass ``auth=`` instead of quietly picking up the
+    real Discord client id.
+    """
+    for name in _DASHBOARD_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture
 def web_db(tmp_path) -> Path:
     """A fresh SQLite database with full schema applied."""
