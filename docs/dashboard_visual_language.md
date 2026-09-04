@@ -442,8 +442,10 @@ it carried a 428-line inline `<style>` block that redefined ~45 selectors
 `help-panel.css` already owned, in a light palette of its own built from 31
 hardcoded hexes and a private token set (`--brand`, `--muted`, `--surface`).
 Two renderings, two definitions, and the two had drifted apart at every
-heading level; `.matrix` existed in one and not the other, so the panel
-rendered the permission matrix unstyled.
+heading level. (A `.matrix` rule existed in one copy and not the other; it
+turned out to be dead in both — nothing in `src/` carries the class — and was
+deleted rather than shared, which is the more useful lesson about what a
+duplicated stylesheet hides.)
 
 It drifted **because it was inline**. stylelint globs `static/**/*.css` and
 the token-hygiene and contrast sweeps read `.css` and `.js` — so every guard

@@ -7,7 +7,7 @@
      standalone page        tokens.css + help-panel.css + this file
 
    help-panel.css owns every *content* shape — headings, prose,
-   .cmd-block, .perm-*, .callout-*, tables, lists, .steps, .matrix,
+   .cmd-block, .perm-*, .callout-*, tables, lists, .steps and
    .qr-table. This file owns only what the standalone page has and
    the panel does not: the page frame, the sidebar TOC, the cover,
    the print button, and print styles.

@@ -106,6 +106,25 @@ def test_no_third_party_font_host(name):
         assert host not in text, f"{name} reaches out to {host}"
 
 
+def _page_bundle(name: str) -> str:
+    """A page's CSS as the browser sees it: its own markup plus every local
+    stylesheet it links, concatenated.
+
+    This has to be cross-file now. The faces used to be declared in the same
+    file that used them, so reading one file was enough; they live in
+    tokens.css today and manual.html reaches them through three linked sheets.
+    Reading only the page left the guard below finding no @font-face at all and
+    skipping silently — dormant, on the very file it was written for.
+    """
+    text = (_STATIC / name).read_text(encoding="utf-8")
+    parts = [text]
+    for href in re.findall(r'<link[^>]+href="/static/([^"?]+\.css)', text):
+        sheet = _STATIC / href
+        if sheet.is_file():
+            parts.append(sheet.read_text(encoding="utf-8"))
+    return "\n".join(parts)
+
+
 def test_every_page_declaring_a_face_can_actually_use_it():
     """A page that ships an @font-face but never references the family has paid
     the download cost for nothing — and, worse, looks different from the same
@@ -113,10 +132,13 @@ def test_every_page_declaring_a_face_can_actually_use_it():
     Archivo and then set every heading in the body face, while the Help panel
     rendered the same sections in Archivo."""
     for name in ("login.html", "manual.html"):
-        text = (_STATIC / name).read_text(encoding="utf-8")
+        text = _page_bundle(name)
         families = set(re.findall(r'@font-face\s*\{[^}]*?font-family:\s*"([^"]+)"', text))
-        if not families:
-            continue
+        assert families, (
+            f"{name} loads no @font-face at all — either it lost its link to "
+            f"tokens.css or the faces have gone missing, and this guard would "
+            f"otherwise pass by finding nothing to check"
+        )
         # Strip @font-face blocks AND the :root token declarations. Naming a
         # family in `--display: "Archivo", ...` is not using it; a font-family
         # declaration on a real selector is. (Checking only for the name would
@@ -125,7 +147,7 @@ def test_every_page_declaring_a_face_can_actually_use_it():
         used = re.findall(r"font-family:\s*([^;]+);", body)
         used = [u for u in used if not u.strip().startswith('"')]
         tokens_used = {t for u in used for t in re.findall(r"var\(--([a-z-]+)\)", u)}
-        token_defs = dict(re.findall(r"--([a-z-]+):\s*(\"[^;]+);", text))
+        token_defs = dict(re.findall(r'--([a-z-]+):\s*("[^;]+);', text))
         reachable = {
             fam
             for tok in tokens_used
@@ -133,7 +155,7 @@ def test_every_page_declaring_a_face_can_actually_use_it():
         }
         missing = families - reachable
         assert not missing, (
-            f"{name} declares @font-face for {sorted(missing)} but no rule "
+            f"{name} loads @font-face for {sorted(missing)} but no rule "
             f"reaches it — either use it or drop the download. Naming it in a "
             f":root token does not count."
         )

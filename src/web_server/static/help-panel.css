@@ -258,16 +258,6 @@
   justify-content: center;
 }
 
-/* ── Permission matrix ──────────────────────────────────────── */
-/* A content shape that lived only in manual.html's own \3c style>, so the Help
-   panel rendered it unstyled — the first column is a command name and needs
-   to read as one. Shared now, like every other shape in this file. */
-.dk-help .matrix td:first-child {
-  font-family: var(--mono);
-  font-size: var(--t-2);
-  color: var(--gold-solid);
-}
-
 /* ── Quick-Reference table-section dividers ─────────────────── */
 .dk-help .qr-table .qr-section td {
   background: var(--bg-rail);
