@@ -32,7 +32,9 @@ The menu path is **not** gated on the per-guild config: that dial governs which 
 The interaction is deferred (transcription exceeds Discord's 3s window) and the transcript is posted **publicly**, since the point is to leave the text in the conversation. Every failure mode replies **ephemerally** instead: unavailable, no audio found, transcription failed, or no speech detected. Model choice is the guild's configured model in a guild and `base.en` in a DM.
 
 ### Message length
-Discord caps message content at 2000 characters, and the 1900-char `MAX_TRANSCRIPT_CHARS` budget counts the whole message — `📝 **{speaker}:** ` included — so both fitters take the prefix and subtract it rather than trusting the slack to absorb it. Both cut on a word boundary where one falls in the last fifth of the budget; a single word longer than the budget has no boundary to find and is cut mid-word.
+Both fitters delegate to the shared `core/reports.chunk_text`, which takes the boundary to cut on, a `min_fill` floor, a `prefix` paid for out of the first chunk, and a `max_parts`/`overflow_note` cap. The transcript settings are a space boundary with a 0.8 floor — whisper emits one long paragraph, so a newline cut would find nothing and land mid-word at every join.
+
+Discord caps message content at 2000 characters, and `MAX_TRANSCRIPT_CHARS` (the shared `SAFE_TEXT_CHUNK`, 1900) counts the whole message — `📝 **{speaker}:** ` included — so both fitters take the prefix and subtract it rather than trusting the slack to absorb it. Both cut on a word boundary where one falls in the last fifth of the budget; a single word longer than the budget has no boundary to find and is cut mid-word.
 
 The two paths then diverge, deliberately:
 
