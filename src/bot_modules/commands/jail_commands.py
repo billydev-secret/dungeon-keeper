@@ -910,7 +910,9 @@ async def _handle_policy_vote(
     yes_ids = [uid for uid in voted_ids if vote_map[uid] == "yes"]
     no_ids = [uid for uid in voted_ids if vote_map[uid] == "no"]
     abstain_ids = [uid for uid in voted_ids if vote_map[uid] == "abstain"]
-    awaiting_ids = list(eligible - voted_ids)
+    # Sorted, or the roster reshuffles between refreshes: this is a set
+    # difference, and the removed cap_mentions used to sort on the way past.
+    awaiting_ids = sorted(eligible - voted_ids)
 
     # A 'no' alone does not finalize — we wait until every eligible mod has
     # voted (or the timeout sweeper takes over). This preserves the existing
@@ -927,6 +929,11 @@ async def _handle_policy_vote(
         abstain_ids=abstain_ids,
         awaiting_ids=awaiting_ids,
         outcome=outcome,
+        # Resolved names, never <@id>. Same resolver the ballot card uses; it
+        # also covers a voter who has since left, via known_users.
+        name_fn=await _ballot_name_fn(
+            ctx, guild, [*yes_ids, *no_ids, *abstain_ids, *awaiting_ids]
+        ),
     )
 
     if outcome is not None:

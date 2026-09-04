@@ -13,7 +13,6 @@ from datetime import datetime, timezone
 import pytest
 
 from bot_modules.jail.embeds import (
-    DEFAULT_MAX_ELIGIBLE_MENTIONS,
     DEFAULT_POLICIES_PAGE_SIZE,
     build_adopted_policies_embed,
     build_jail_audit_embed,
@@ -83,33 +82,66 @@ def test_initial_vote_embed_zero_voters():
 
 def test_initial_vote_embed_with_small_eligible_roster():
     embed = build_policy_vote_initial_embed(
-        channel_name="p1", vote_text="text", eligible_ids=[10, 20, 30],
+        channel_name="p1", vote_text="text", eligible_ids=[1, 2, 3], name_fn=_names,
     )
     assert _fv(embed, "Votes Cast") == "0/3"
     awaiting = _fv(embed, "⏳ Awaiting")
-    assert "<@10>" in awaiting and "<@20>" in awaiting and "<@30>" in awaiting
+    assert "Ada" in awaiting and "Grace" in awaiting and "Alan" in awaiting
     assert "more" not in awaiting  # no overflow
 
 
-def test_initial_vote_embed_caps_mentions_with_overflow_note():
-    """When the eligible roster exceeds the default cap, the field gets a
-    ``"+N more"`` suffix and the awaiting list itself is truncated."""
-    eligible = list(range(40))
+def test_initial_vote_embed_truncates_on_characters_not_entries():
+    """The roster is capped by accumulated CHARACTERS, not by a fixed count.
+
+    The old rule showed 25 entries whatever their length, so 25 long display
+    names blew past Discord's 1024-character field ceiling and the whole field
+    was dropped — the failure mode a fixed cap cannot see. Long names must
+    therefore truncate EARLIER than short ones.
+    """
+    long_names = {uid: "N" * 60 for uid in range(100)}
     embed = build_policy_vote_initial_embed(
-        channel_name="p1", vote_text="text", eligible_ids=eligible,
+        channel_name="p1",
+        vote_text="text",
+        eligible_ids=list(range(100)),
+        name_fn=lambda uid: long_names[uid],
     )
     awaiting = _fv(embed, "⏳ Awaiting")
-    assert "<@0>" in awaiting  # first ID shown
-    assert "<@39>" not in awaiting  # 40th ID truncated (over 25-cap)
-    assert f"+{40 - DEFAULT_MAX_ELIGIBLE_MENTIONS} more" in awaiting
+    assert len(awaiting) <= 1024
+    assert "more" in awaiting
 
-
-def test_initial_vote_embed_respects_custom_cap():
-    embed = build_policy_vote_initial_embed(
-        channel_name="p1", vote_text="t", eligible_ids=[1, 2, 3, 4, 5], max_mentions=2,
+    short = build_policy_vote_initial_embed(
+        channel_name="p1",
+        vote_text="text",
+        eligible_ids=list(range(100)),
+        name_fn=lambda uid: "x",
     )
-    awaiting = _fv(embed, "⏳ Awaiting")
-    assert "+3 more" in awaiting
+    # Same roster size, far shorter names: more of them fit.
+    assert _fv(short, "⏳ Awaiting").count(",") > awaiting.count(",")
+
+
+def test_vote_embeds_never_emit_a_raw_mention():
+    """The rule is the rule even in a private mod channel.
+
+    A ``<@id>`` in an embed is resolved by the READING client from its own
+    cache. In the mod channel it mostly resolves, which is why this went
+    unnoticed — but a mod who has never seen a colleague, or a voter who has
+    since left the guild, got a bare number.
+    """
+    initial = build_policy_vote_initial_embed(
+        channel_name="p1", vote_text="text", eligible_ids=[1, 2, 3], name_fn=_names,
+    )
+    update = build_policy_vote_update_embed(
+        policy_title="p1",
+        vote_text="text",
+        yes_ids=[1],
+        no_ids=[2],
+        abstain_ids=[3],
+        awaiting_ids=[],
+        name_fn=_names,
+    )
+    for embed in (initial, update):
+        rendered = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+        assert "<@" not in rendered
 
 
 def test_initial_vote_embed_field_order():
@@ -131,15 +163,32 @@ def test_initial_vote_embed_field_order():
 def test_update_embed_running_tally():
     embed = build_policy_vote_update_embed(
         policy_title="Title", vote_text="Text",
-        yes_ids=[10], no_ids=[], abstain_ids=[20], awaiting_ids=[30, 40],
+        yes_ids=[1], no_ids=[], abstain_ids=[2], awaiting_ids=[3],
+        name_fn=_names,
     )
     assert embed.title == "🗳️ Policy Vote: Title"
     assert embed.color is not None and embed.color.value == MOD_POLICY
     assert _fv(embed, "Status") == "🗳️ Voting"
-    assert _fv(embed, "Votes Cast") == "2/4"  # 1 yes + 1 abstain
-    assert _fv(embed, "✅ Yes") == "<@10>"
+    assert _fv(embed, "Votes Cast") == "2/3"  # 1 yes + 1 abstain
+    # Mod-facing, so the id rides alongside the name and stays copyable —
+    # the ballot card, which members read, deliberately shows the name alone.
+    assert _fv(embed, "✅ Yes") == "Ada (`1`)"
     assert _fv(embed, "❌ No") == "—"
-    assert _fv(embed, "➖ Abstain") == "<@20>"
+    assert _fv(embed, "➖ Abstain") == "Grace (`2`)"
+
+
+def test_a_mod_facing_vote_keeps_the_id_but_a_member_facing_ballot_does_not():
+    """docs/embed_style_guide.md: a moderator keeps something copyable; an id
+    on a card ordinary members read is noise to every one of them."""
+    vote = build_policy_vote_update_embed(
+        policy_title="t", vote_text="t",
+        yes_ids=[1], no_ids=[], abstain_ids=[], awaiting_ids=[],
+        name_fn=_names,
+    )
+    ballot = build_policy_ballot_embed(question="q", yes_ids=[1], name_fn=_names)
+
+    assert "`1`" in _fv(vote, "✅ Yes")
+    assert "`1`" not in "\n".join(f.value or "" for f in ballot.fields)
 
 
 def test_update_embed_adopted():

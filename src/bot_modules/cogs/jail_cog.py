@@ -35,6 +35,7 @@ from bot_modules.jail.embeds import (
     build_warning_threshold_embed,
     warning_threshold_ping,
 )
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.jail.logic import sanitize_channel_name
 
 from bot_modules.commands.jail_commands import (
@@ -365,6 +366,15 @@ class _PolicyVoteModal(discord.ui.Modal, title="Start Policy Vote"):
             channel_name=interaction.channel.name,  # type: ignore[union-attr]
             vote_text=vote_text_val,
             eligible_ids=sorted(eligible),
+            # Resolved names, never <@id>: an embed mention is resolved by the
+            # reading client's own cache, so a mod who has not seen a
+            # colleague sees a bare number.
+            name_fn=await build_name_fn(
+                guild=guild,
+                db_path=ctx.db_path,
+                guild_id=guild.id,
+                user_ids=sorted(eligible),
+            ),
         )
 
         view = discord.ui.View(timeout=None)
