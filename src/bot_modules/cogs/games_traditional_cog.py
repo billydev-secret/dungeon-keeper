@@ -12,8 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.db_utils import open_db
-from bot_modules.services.no_contact_service import no_contact_partners_conn
+from bot_modules.services.no_contact_service import no_contact_partners
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
@@ -213,11 +212,9 @@ class TraditionalHostView(discord.ui.View):
         guild_id = interaction.guild_id or 0
         actor_id = interaction.user.id
 
-        def _partners() -> set[int]:
-            with open_db(self.bot.ctx.db_path) as conn:
-                return no_contact_partners_conn(conn, guild_id, actor_id)
-
-        excluded = await asyncio.to_thread(_partners)
+        excluded = await asyncio.to_thread(
+            no_contact_partners, self.bot.ctx.db_path, guild_id, actor_id
+        )
         choice = select_next_question_target(prefs, asked, excluded=excluded)
         if choice is None:
             await interaction.response.send_message(

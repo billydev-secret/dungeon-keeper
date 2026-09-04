@@ -114,3 +114,20 @@ def test_impossible_constraints_return_empty(pool, forbidden):
 
 def test_empty_forbidden_set_behaves_like_none():
     assert random_derangement([1, 2], set()) == {1: 2, 2: 1}
+
+
+def test_pathological_constraints_stop_at_the_node_budget():
+    """Three givers who can each reach only the same two receivers is
+    infeasible (Hall's condition) yet passes the singleton forward check,
+    so the search would otherwise walk every ordering of the other givers.
+    The budget turns that into the ordinary ``{}`` refusal."""
+    pool = list(range(1, 16))
+    stuck = {13, 14, 15}
+    reachable = {1, 2}
+    forbidden = {
+        (min(a, b), max(a, b))
+        for a in stuck
+        for b in pool
+        if b != a and b not in reachable
+    }
+    assert random_derangement(pool, forbidden, rng=random.Random(1), max_nodes=500) == {}

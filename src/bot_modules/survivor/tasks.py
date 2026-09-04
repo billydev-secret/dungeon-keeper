@@ -24,9 +24,9 @@ from pathlib import Path
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.db_utils import get_tz_offset_hours, open_db
+from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.services.dm_branding import send_branded_dm
-from bot_modules.services.survivor_service import update_config
+from bot_modules.services.survivor_service import get_season, update_config
 from bot_modules.survivor import logic, reckoning
 from bot_modules.survivor.views import SlatePickButton, swap_member_roles
 
@@ -36,10 +36,14 @@ WEDNESDAY, SATURDAY, TUESDAY = 2, 5, 1
 
 # survivor-172: ``pick_week`` returns Week 1 from the moment the schedule
 # ingests, which for a season created in August is weeks before any game.
-# The slate and last call only fire once the week's first kickoff is this
-# close — a state guard like the once-per-week keys, so it holds under
-# ``force`` too (the dashboard button must not recreate the prod defect).
-SLATE_LEAD_DAYS = 7
+# The slate and last call only fire once the week's own Tue–Mon frame has
+# opened (``week_imminent``) — a state guard like the once-per-week keys,
+# so it holds under ``force`` too (the dashboard button must not recreate
+# the prod defect). It is the frame, not a day count, on purpose:
+# ``past_weekly_moment`` treats every day after the target as "missed,
+# catch up now", so a 7-day window that opened on a Thursday posted the
+# slate that Thursday and DM'd the last call the Saturday before the
+# opener, then burned both once-per-week keys (code review, 2026-09-04).
 
 # survivor-185: role reconcile is drift repair, not a 60-second duty. Once
 # an hour per season (plus whenever a decision fired or an admin forced the
@@ -90,13 +94,26 @@ def past_weekly_moment(
     return frame > target or hour >= target_hour
 
 
+def week_frame_opens(first_kickoff: float, offset_hours: float) -> float:
+    """Epoch of the guild-local Tuesday midnight that opens the Tue–Mon
+    frame (see ``past_weekly_moment``) containing ``first_kickoff``."""
+    tz = timezone(timedelta(hours=offset_hours))
+    local = datetime.fromtimestamp(first_kickoff, tz)
+    back = (local.weekday() - TUESDAY) % 7
+    start = (local - timedelta(days=back)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    return start.timestamp()
+
+
 def week_imminent(
-    conn: sqlite3.Connection, season: dict, week: int, now: float
+    conn: sqlite3.Connection, season: dict, week: int, now: float, offset: float
 ) -> bool:
-    """The week's first kickoff is within ``SLATE_LEAD_DAYS`` of ``now`` (or
-    already past — a week in progress is as imminent as it gets)."""
+    """``now`` is inside (or past) the weekly frame the week's first
+    non-postponed kickoff falls in — the Wednesday slate and Saturday last
+    call of *that* frame are the ones meant for it."""
     first = logic.week_first_kickoff(conn, season["season_year"], week)
-    return first is not None and first - now <= SLATE_LEAD_DAYS * 86400.0
+    return first is not None and now >= week_frame_opens(first, offset)
 
 
 def slate_due(
@@ -106,7 +123,7 @@ def slate_due(
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_slate_week") or 0) >= week:
         return None
-    if not week_imminent(conn, season, week, now):
+    if not week_imminent(conn, season, week, now, offset):
         return None
     hour = int(season["config"]["slate_hour"])
     if force:
@@ -121,7 +138,7 @@ def lastcall_due(
     week = logic.pick_week(conn, season["season_year"], now)
     if week is None or int(season["config"].get("last_lastcall_week") or 0) >= week:
         return None
-    if not week_imminent(conn, season, week, now):
+    if not week_imminent(conn, season, week, now, offset):
         return None
     hour = int(season["config"]["lastcall_hour"])
     if force:
@@ -190,12 +207,13 @@ def idle_reason(conn: sqlite3.Connection, season: dict, now: float) -> str:
     week = logic.pick_week(conn, year, now)
     if week is None:
         return f"no open week in {year} right now — the season is between weeks"
-    if not week_imminent(conn, season, week, now):
+    offset = get_tz_offset_hours(conn, season["guild_id"])
+    if not week_imminent(conn, season, week, now, offset):
         first = logic.week_first_kickoff(conn, year, week) or now
         days = int((first - now) // 86400)
         return (
             f"Week {week}'s first kickoff is {days} days out — the slate and "
-            f"last call wait until it is within {SLATE_LEAD_DAYS} days"
+            "last call wait for the Tuesday that opens its week"
         )
     return "already run for this week — the once-per-week state still holds"
 
@@ -426,10 +444,20 @@ async def post_reckoning(
             conn.rollback()
         return data, settings
 
-    def _commit():
-        with open_db(db_path) as conn:
+    def _commit() -> bool:
+        # The write lock first, then the mark re-read under it: the loop's
+        # tick and the dashboard's run-now share no lock, and between
+        # ``reckoning_due`` and here sit an API call per suspect and the
+        # send itself — long enough for a second pass to reach the same
+        # point. Whichever lands second finds the week marked and pays
+        # nothing (code review, 2026-09-04).
+        with open_db_immediate(db_path) as conn:
+            fresh = get_season(conn, season["id"])
+            marked = int((fresh or season)["config"].get("last_reckoned_week") or 0)
+            if marked >= week:
+                return False
             _apply(conn)
-            conn.commit()
+        return True
 
     data, settings = await asyncio.to_thread(_preview)
 
@@ -455,7 +483,12 @@ async def post_reckoning(
         # next pass retries the post — and the run report says why.
         log.warning("survivor: Reckoning post failed for week %s: %s", week, exc)
         return False
-    await asyncio.to_thread(_commit)
+    if not await asyncio.to_thread(_commit):
+        log.warning(
+            "survivor: week %s of season %s was reckoned by a parallel pass "
+            "while this one was posting — the second card is a duplicate",
+            week, season["id"],
+        )
 
     # §2.6 as amended 2026-08-18: standings live on the ONE panel, which
     # gets refreshed here instead of posting a separate board.

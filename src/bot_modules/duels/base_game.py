@@ -26,7 +26,6 @@ import discord
 from discord.ext import commands, tasks
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.db_utils import open_db
 from bot_modules.services import no_contact_service
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.economy.game_rewards import pay_game_rewards
@@ -552,16 +551,11 @@ class BaseGame(commands.Cog):
         ids = {int(u) for u in others} - {int(user_id)}
         if not ids:
             return False
-        db_path = self._no_contact_db_path()
-
-        def _read() -> bool:
-            with open_db(db_path) as conn:
-                partners = no_contact_service.no_contact_partners_conn(
-                    conn, guild_id, user_id
-                )
-            return bool(partners & ids)
-
-        return await asyncio.to_thread(_read)
+        partners = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
+            self._no_contact_db_path(), guild_id, user_id,
+        )
+        return bool(partners & ids)
 
     @staticmethod
     def _sentence_in_progress_copy(loser_name: str) -> str:

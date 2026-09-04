@@ -104,25 +104,29 @@ class MFKView(discord.ui.View):
 
         payload = await get_game_payload(self.db, self.game_id)
         participants = payload.get("participants", [])
-        if len(participants) < 4:
+        guild = interaction.guild
+
+        # Each player gets 3 random names from the pool (not themselves, and
+        # not anyone the no-contact list keeps them apart from — a blocked
+        # pair is dropped from each other's sample in both directions). A
+        # pool that can't give everyone three names after that draws {} and
+        # gets the same refusal a three-player pool gets, so the protected
+        # member can't tell which one fired.
+        assignments: dict[int, list[int]] = {}
+        if len(participants) >= 4:
+            forbidden: set[tuple[int, int]] = set()
+            if guild is not None:
+                forbidden = await asyncio.to_thread(
+                    no_contact_pairs_among, self.bot.ctx.db_path, guild.id, participants
+                )
+            assignments = assign_targets(participants, forbidden_pairs=forbidden)
+        if not assignments:
             await interaction.response.send_message(
                 "Need at least 4 players in the pool!", ephemeral=True
             )
             return
 
         await interaction.response.defer()
-        guild = interaction.guild
-
-        # Each player gets 3 random names from the pool (not themselves, and
-        # not anyone the no-contact list keeps them apart from — a blocked
-        # pair is dropped from each other's sample in both directions, and a
-        # pool too small to fill three names after that simply shows fewer).
-        forbidden: set[tuple[int, int]] = set()
-        if guild is not None:
-            forbidden = await asyncio.to_thread(
-                no_contact_pairs_among, self.bot.ctx.db_path, guild.id, participants
-            )
-        assignments = assign_targets(participants, forbidden_pairs=forbidden)
 
         # The card names members through the resolver — an embed field NAME
         # never resolves a mention, so <@id> there is a literal string to

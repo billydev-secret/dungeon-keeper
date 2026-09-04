@@ -43,7 +43,8 @@ def _seed(db: Path, *, week1_kickoff: float) -> None:
         """
         CREATE TABLE survivor_seasons (id INTEGER PRIMARY KEY, guild_id INTEGER, name TEXT,
             status TEXT, season_year INTEGER, config TEXT);
-        CREATE TABLE nfl_games (season_year INTEGER, week INTEGER, kickoff_utc REAL);
+        CREATE TABLE nfl_games (season_year INTEGER, week INTEGER, kickoff_utc TEXT,
+            status TEXT NOT NULL DEFAULT 'scheduled');
         CREATE TABLE config (guild_id INTEGER NOT NULL DEFAULT 0, key TEXT NOT NULL,
             value TEXT NOT NULL, PRIMARY KEY (guild_id, key));
         CREATE TABLE games_question_bank (question_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -62,7 +63,7 @@ def _seed(db: Path, *, week1_kickoff: float) -> None:
         (json.dumps({"last_slate_week": 4, "last_lastcall_week": 4}),),
     )
     iso = datetime.fromtimestamp(week1_kickoff, tz=timezone.utc).isoformat()
-    conn.execute("INSERT INTO nfl_games VALUES (2026, 1, ?)", (iso,))
+    conn.execute("INSERT INTO nfl_games (season_year, week, kickoff_utc) VALUES (2026, 1, ?)", (iso,))
     conn.executemany(
         "INSERT INTO config VALUES (?, ?, ?)",
         [(1, "mahjong_duel_wall_trim", "60"), (1, "mahjong_fill_bots", "1"),

@@ -36,6 +36,7 @@ from bot_modules.games.utils.game_manager import (
     channel_name,
 )
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.services.name_resolver import NameFn, build_name_fn
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
@@ -998,6 +999,7 @@ class ClapbackCog(commands.Cog):
         deadline = now_plus(timer_secs)
 
         guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, [] if bye_player is None else [bye_player])
         embed = build_submit_embed(
             prompt=prompt,
             round_num=round_num,
@@ -1007,7 +1009,7 @@ class ClapbackCog(commands.Cog):
             total_players=len(players),
             bye_player=bye_player,
             color=self._accents.get(game_id),
-            name_resolver=lambda uid: resolve_name(guild, uid),
+            name_resolver=name_fn,
         )
 
         view = ClapbackSubmitView(game_id, host_id, round_num, self.db, self.bot, self)
@@ -1241,10 +1243,11 @@ class ClapbackCog(commands.Cog):
         bye_players, bye_award=None,
     ):
         guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, self._scoreboard_ids(payload, bye_players))
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=False, color=self._accents.get(game_id),
-            name_resolver=lambda uid: resolve_name(guild, uid),
+            name_resolver=name_fn,
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
@@ -1267,15 +1270,42 @@ class ClapbackCog(commands.Cog):
             pass
         return True
 
+    async def _names(self, guild, user_ids) -> NameFn:
+        """The shared resolver (live cache → ``known_users`` → ``<@id>``,
+        markdown-escaped) over one card's players. ``resolve_name`` in this
+        cog is cache-only, so a player who left mid-game rendered as bare
+        digits and a ``*`` in a nickname broke the bold (review 2026-09-04)."""
+        ids: list[int] = []
+        for uid in user_ids:
+            try:
+                ids.append(int(uid))
+            except (TypeError, ValueError):
+                continue
+        return await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=getattr(guild, "id", 0),
+            user_ids=ids,
+        )
+
+    @staticmethod
+    def _scoreboard_ids(payload, bye_players) -> list:
+        byes = (
+            list(bye_players) if isinstance(bye_players, (list, tuple, set))
+            else [bye_players] if bye_players is not None else []
+        )
+        return [*payload.get("scores", {}).keys(), *byes]
+
     async def _post_scoreboard(
         self, game_id, channel, payload, round_num, total_rounds,
         bye_players, bye_award=None, final=False,
     ):
         guild = getattr(channel, "guild", None)
+        name_fn = await self._names(guild, self._scoreboard_ids(payload, bye_players))
         embed = build_scoreboard_embed(
             payload, round_num, total_rounds, bye_players, bye_award=bye_award,
             final=final, color=self._accents.get(game_id),
-            name_resolver=lambda uid: resolve_name(guild, uid),
+            name_resolver=name_fn,
         )
         await channel.send(embed=embed)
 

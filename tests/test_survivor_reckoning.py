@@ -244,11 +244,17 @@ def _cfg_season(conn, **overrides):
         pytest.param(2, 12, True, id="friday-catchup"),
         # survivor-172: a season created weeks before Week 1 must not post
         # the Week 1 slate on the first Wednesday it sees — pick_week is 1
-        # from the moment the schedule ingests, so the guard is proximity:
-        # the week's first kickoff has to be within SLATE_LEAD_DAYS.
+        # from the moment the schedule ingests, so the guard is the frame:
+        # the Tue–Mon week the first kickoff falls in has to have opened.
         pytest.param(-21, 12, False, id="three-weeks-early-not-imminent"),
         pytest.param(-7, 12, False, id="eight-days-out-not-imminent"),
         pytest.param(-14, 12, False, id="two-weeks-early-not-imminent"),
+        # The week BEFORE the opener: past_weekly_moment reads every day
+        # after Wednesday as "missed, catch up", so a day-count window
+        # opening mid-week posted the slate a week early (review 2026-09-04).
+        pytest.param(-6, 12, False, id="thursday-before-not-imminent"),
+        pytest.param(-3, 12, False, id="sunday-before-not-imminent"),
+        pytest.param(-1, 0, False, id="tuesday-of-the-week-not-yet"),
     ],
 )
 def test_slate_due_frame(db, dow_offset_days, hour, due):
@@ -303,6 +309,8 @@ def test_lastcall_due_saturday(db):
         # survivor-172: the Saturday two weeks before the opener is not a
         # last call — nobody can be late for a week that hasn't opened.
         assert tasks.lastcall_due(conn, season, sat_evening - 14 * DAY, 0.0) is None
+        # The Saturday before the opener's week is not this week's Saturday.
+        assert tasks.lastcall_due(conn, season, sat_evening - 7 * DAY, 0.0) is None
 
 
 # ── the slate as weekly mini-announcement (2026-08-18) ─────────────────
@@ -943,3 +951,66 @@ async def test_reconcile_roles_hourly_cadence_and_per_member_backoff(
     # expired: both members are tried again.
     await tasks.reconcile_roles(bot, db, season, NOW + 120 + HOUR, force=False)
     assert sorted(calls) == [1, 1, 1, 2, 2]
+
+
+@pytest.mark.parametrize(
+    ("kickoff", "offset", "opens"),
+    [
+        # A Wednesday-evening local opener (prod Week 1, 00:20Z Thursday at
+        # UTC-7) belongs to the frame that opened the Tuesday before it.
+        pytest.param(
+            datetime(2026, 9, 10, 0, 20, tzinfo=timezone.utc).timestamp(), -7.0,
+            datetime(2026, 9, 8, 7, 0, tzinfo=timezone.utc).timestamp(),
+            id="wednesday-evening-local",
+        ),
+        # A Tuesday kickoff opens its own frame at that Tuesday's midnight.
+        pytest.param(
+            datetime(2026, 9, 8, 20, 0, tzinfo=timezone.utc).timestamp(), 0.0,
+            datetime(2026, 9, 8, 0, 0, tzinfo=timezone.utc).timestamp(),
+            id="tuesday-kickoff",
+        ),
+        # A Monday-night game is the tail of the frame that opened six days earlier.
+        pytest.param(
+            datetime(2026, 9, 14, 23, 0, tzinfo=timezone.utc).timestamp(), 0.0,
+            datetime(2026, 9, 8, 0, 0, tzinfo=timezone.utc).timestamp(),
+            id="monday-night",
+        ),
+    ],
+)
+def test_week_frame_opens_on_the_tuesday_before_the_kickoff(kickoff, offset, opens):
+    assert tasks.week_frame_opens(kickoff, offset) == opens
+
+
+@pytest.mark.asyncio
+async def test_reckoning_commit_yields_to_a_parallel_pass(db, monkeypatch):
+    """The loop's tick and the dashboard's run-now share no lock, and the
+    send sits between the due-check and the commit. The commit re-reads the
+    mark under the write lock: a week another pass already reckoned is not
+    paid a second time."""
+    from bot_modules.services import economy_service
+
+    with open_db(db) as conn:
+        season = _cfg_season(conn, strikes=0)
+        _settled_week1(conn, season)
+        season = get_season(conn, season["id"])
+    guild = _ReckoningGuild([_FakeMember(1), _FakeMember(2)])
+    bot = _ReadyBot(guild)
+    monkeypatch.setattr(tasks, "_channel", lambda b, se: guild.channel)
+    _quiet_post_side_effects(monkeypatch)
+
+    real_send = guild.channel.send
+
+    async def _send_while_another_pass_lands(content=None, **kwargs):
+        # The other pass reckons (and pays) the week while this one is
+        # waiting on Discord.
+        with open_db(db) as conn:
+            economy_service.apply_credit(conn, GID, 1, 25, kind="survivor_weekly_win")
+            update_config(conn, season["id"], {"last_reckoned_week": 1})
+        await real_send(content, **kwargs)
+
+    guild.channel.send = _send_while_another_pass_lands
+    assert await tasks.post_reckoning(bot, db, season, 1, AFTER_W1) is True
+    with open_db(db) as conn:
+        # Paid exactly once — by the pass that got there first.
+        assert economy_service.get_balance(conn, GID, 1) == 25
+        assert int(get_season(conn, season["id"])["config"]["last_reckoned_week"]) == 1

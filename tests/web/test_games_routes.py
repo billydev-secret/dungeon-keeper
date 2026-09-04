@@ -294,6 +294,25 @@ def test_bank_list_filter_by_tag(open_client, fake_ctx):
     assert data["questions"][0]["question_text"] == "Spicy?"
 
 
+def test_bank_list_tag_filter_and_stats_read_legacy_tags_case_insensitively(open_client, fake_ctx):
+    """A row written before tags were lowercased on save (the 08-28 bulk
+    import stored "Nsfw") must still match the "nsfw" chip the tag list now
+    offers, and count as adult in the stats — the bot side went
+    case-insensitive; the dashboard's read paths have to agree."""
+    _clear_bank(fake_ctx.db_path)
+    _seed_question(fake_ctx.db_path, "wyr", text="Legacy?", tags=["Nsfw"])
+    _seed_question(fake_ctx.db_path, "wyr", text="Safe?", tags=["calm"])
+
+    resp = open_client.get(f"{BASE}/bank?tag=NSFW")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert [q["question_text"] for q in data["questions"]] == ["Legacy?"]
+    assert data["questions"][0]["tags"] == ["nsfw"]
+
+    stats = open_client.get(f"{BASE}/stats").json()
+    assert stats["bank_by_type"]["wyr"] == {"sfw": 1, "nsfw": 1}
+
+
 def test_bank_tags_endpoint_returns_distinct_tags(open_client, fake_ctx):
     _seed_question(fake_ctx.db_path, "wyr", text="A?", tags=["a", "b"])
     # A legacy row written before tags were lowercased on save: the

@@ -243,13 +243,21 @@ def test_assign_targets_never_hands_a_no_contact_pair_to_each_other(forbidden):
             assert len(targets) == TARGETS_PER_PLAYER
 
 
-def test_assign_targets_silently_gives_fewer_names_when_the_pool_is_too_small():
-    """Four players, one blocked pair: the two blocked members can only be
-    shown two names each — no error, no message, just a shorter list."""
-    out = assign_targets([1, 2, 3, 4], rng=random.Random(0), forbidden_pairs={(1, 2)})
-    assert set(out[1]) == {3, 4}
-    assert set(out[2]) == {3, 4}
-    assert len(out[3]) == 3 and len(out[4]) == 3
+@pytest.mark.parametrize(
+    ("pool", "forbidden"),
+    [
+        # Four players, one blocked pair: the two blocked members could only
+        # be shown two names each, which would name the pair on the card.
+        pytest.param([1, 2, 3, 4], {(1, 2)}, id="four-with-one-pair"),
+        # One member blocked from everyone: an empty list would be an empty
+        # embed field, which Discord rejects.
+        pytest.param([1, 2, 3, 4, 5], {(1, 2), (1, 3), (1, 4), (1, 5)}, id="blocked-from-all"),
+    ],
+)
+def test_assign_targets_refuses_when_anyone_cannot_fill_three_names(pool, forbidden):
+    """The draw is all-or-nothing: ``{}`` when the pairs leave any player
+    short, so the cog's ordinary too-few-players refusal covers it."""
+    assert assign_targets(pool, rng=random.Random(0), forbidden_pairs=forbidden) == {}
 
 
 def test_assign_targets_unrelated_players_are_unaffected_by_a_pair():

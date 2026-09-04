@@ -79,7 +79,7 @@ low-frequency, so every check is a direct indexed read.
 | Risky Rolls | The dice: a draw that would seat a pair as asker/answerer is redrawn, and a round that cannot be made safe refuses to close. Plus the 69 room ping | `risky_roll/logic.py`, `risky_roll/views.py` |
 | Economy transfers | `/bank pay`'s public receipt *and* the recipient's notification; `/bank gift`'s notification. The money and the perk still move | `economy/transfers.py`, `economy_cog.finalize_pay` / `finalize_gift` |
 | Spin the Compliment | The pairing: a blocked pair is a forbidden edge of the derangement in both directions. A pool with no valid pairing left is refused with the ordinary "Need at least 2 players in the pool!" | `games_compliment/logic.generate_pairings`, `games/utils/derangement.py`, `games_compliment_cog` |
-| Marry-Fornicate-Kiss | The assignments: blocked members are dropped from each other's three-name sample, so a player silently gets fewer names — the same shape a small pool produces | `games_mfk/logic.assign_targets`, `games_mfk_cog` |
+| Marry-Fornicate-Kiss | The assignments: blocked members are dropped from each other's three-name sample; a pool that then can't give everyone three names draws nothing and gets the ordinary "need at least 4 players" refusal (a shorter list would name the pair — every ordinary pool of four gives everyone three) | `games_mfk/logic.assign_targets`, `games_mfk_cog` |
 | Most Likely To | The vote: a blocked voter→target pick is dropped, not stored. The voter gets the ordinary "✅ Voted for …" ack, the results card shows counts only, and no event row is written | `games_mlt/logic.record_vote`, `games_mlt_cog` |
 | Truth or Dare (traditional) | **Ask Question**: the presser's blocked partners are excluded from the target pool before the least-asked weighting (keyed on the presser, not the host — a mod can ask too). When only they remain, the press gets the ordinary "All player/category combinations have been asked!" | `games_traditional/logic.select_next_question_target`, `games_traditional_cog` |
 | Duel challenge | `/games <duel> challenge @user`: refused with the existing "You two already have a game in progress." line, before the rate limit so it costs no strike. **Records an attempt** (surface `duel_challenge`) | `duels/base_duel.py`, `BaseGame._blocked_pair` |
@@ -151,7 +151,10 @@ anything would have been *publicly visible*:
   and the voter gets the same "✅ Voted" ack as everyone else, and since the
   results card shows counts only there is no hole to notice. MFK is the same
   in the other direction — the blocked member is simply absent from the
-  sample, which a small pool produces anyway.
+  sample, and a pool that can't then give everyone three names is refused
+  with the ordinary too-few-players line rather than shown shorter lists
+  (every ordinary pool of four gives everyone three, so two short rows
+  would name the pair).
 
 Three further leaks are closed away from the send paths:
 

@@ -104,12 +104,17 @@ class ComplimentView(discord.ui.View):
         # that leaves no valid pairing at all, generate_pairings returns {} —
         # and that gets the same refusal a one-player pool gets, so the
         # protected member can't tell which one fired.
-        forbidden: set[tuple[int, int]] = set()
-        if guild is not None and len(participants) >= 2:
-            forbidden = await asyncio.to_thread(
-                no_contact_pairs_among, self.bot.ctx.db_path, guild.id, participants
-            )
-        pairings = generate_pairings(participants, forbidden)
+        def _draw() -> dict[int, int]:
+            forbidden: set[tuple[int, int]] = set()
+            if guild is not None and len(participants) >= 2:
+                forbidden = no_contact_pairs_among(
+                    self.bot.ctx.db_path, guild.id, participants
+                )
+            # The constrained derangement is a search, so it stays off the
+            # event loop with the read that feeds it.
+            return generate_pairings(participants, forbidden)
+
+        pairings = await asyncio.to_thread(_draw)
         if not pairings:
             await interaction.response.send_message("Need at least 2 players in the pool!", ephemeral=True)
             return

@@ -38,12 +38,27 @@ def _sattolo(participants: list[int], chooser: random.Random) -> dict[int, int]:
     return {shuffled[i]: shuffled[perm[i]] for i in range(n)}
 
 
+# The backtracking search's node budget. The forward check only proves each
+# remaining giver has *some* free receiver (not Hall's condition), so a
+# pathological forbidden set — several givers who can only reach the same
+# few receivers — is discovered deep in the tree and would otherwise
+# enumerate the free givers' permutations. Real pools are small and their
+# blocked pairs few; the budget is the guarantee, not the expectation.
+MAX_SEARCH_NODES = 20_000
+
+
 def _constrained(
-    participants: list[int], forbidden: set[Pair], chooser: random.Random
+    participants: list[int],
+    forbidden: set[Pair],
+    chooser: random.Random,
+    *,
+    max_nodes: int = MAX_SEARCH_NODES,
 ) -> dict[int, int]:
-    """Randomised backtracking over receivers; ``{}`` when nothing fits."""
+    """Randomised backtracking over receivers; ``{}`` when nothing fits —
+    or when ``max_nodes`` runs out, which the caller treats the same way."""
     givers = participants[:]
     chooser.shuffle(givers)
+    budget = [max_nodes]
 
     def allowed(giver: int, receiver: int) -> bool:
         if giver == receiver:
@@ -57,6 +72,9 @@ def _constrained(
     def solve(index: int) -> bool:
         if index == len(givers):
             return True
+        budget[0] -= 1
+        if budget[0] < 0:
+            return False
         giver = givers[index]
         # Forward check: every giver still to place must have somewhere to
         # go among the receivers still free, or this branch is already dead.
@@ -85,6 +103,7 @@ def random_derangement(
     forbidden: Iterable[Pair] | None = None,
     *,
     rng: random.Random | None = None,
+    max_nodes: int = MAX_SEARCH_NODES,
 ) -> dict[int, int]:
     """
     Generate a random derangement: each person gives to exactly one other,
@@ -99,6 +118,10 @@ def random_derangement(
     refusal covers both.
 
     ``rng`` is injectable for deterministic tests; defaults to ``random``.
+    ``max_nodes`` bounds the constrained search (see ``MAX_SEARCH_NODES``).
+
+    The constrained path is CPU work: call it from a worker thread
+    (``asyncio.to_thread``) when the caller is on the event loop.
     """
     if len(participants) < 2:
         return {}
@@ -106,4 +129,4 @@ def random_derangement(
     banned = _normalise(forbidden)
     if not banned:
         return _sattolo(participants, chooser)
-    return _constrained(participants, banned, chooser)
+    return _constrained(participants, banned, chooser, max_nodes=max_nodes)

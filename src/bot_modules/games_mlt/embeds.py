@@ -208,7 +208,9 @@ def build_final_standings_embed(
     for rank, (uid, count) in enumerate(items, start=1):
         prefix = "👑 " if count == top else f"{rank}. "
         plural = "crown" if count == 1 else "crowns"
-        lines.append(f"{prefix}**{name_fn(uid)}** — {count} {plural}")
+        # ``crowns`` is payload-shaped (str keys); the resolver's caches are
+        # int-keyed, and a str id falls straight through to ``<@id>``.
+        lines.append(f"{prefix}**{name_fn(int(uid))}** — {count} {plural}")
     embed.description = "\n".join(lines)
     embed.set_footer(text=f"{GAME_ICONS['mlt']} Most Likely To • Final crown tally")
     return embed

@@ -43,7 +43,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from bot_modules.core.db_utils import open_db_immediate  # noqa: E402
-from bot_modules.survivor.logic import kickoff_ts  # noqa: E402
+from bot_modules.survivor.logic import week_first_kickoff  # noqa: E402
 
 DB_PATH = PROJECT_ROOT / "dungeonkeeper.db"
 
@@ -81,14 +81,7 @@ def step_survivor(conn: sqlite3.Connection, apply: bool) -> int:
         marks = {k: int(cfg.get(k) or 0) for k in ("last_slate_week", "last_lastcall_week")}
         if not any(marks.values()):
             continue
-        kicks = [
-            kickoff_ts(k["kickoff_utc"])
-            for k in conn.execute(
-                "SELECT kickoff_utc FROM nfl_games WHERE season_year = ? AND week = 1",
-                (r["season_year"],),
-            ).fetchall()
-        ]
-        first_kick = min(kicks) if kicks else None
+        first_kick = week_first_kickoff(conn, int(r["season_year"]), 1)
         if first_kick is None or first_kick <= now:
             print(f"  survivor: season {r['id']} {r['name']!r} — week 1 already kicked off or "
                   f"not ingested; leaving {marks}")

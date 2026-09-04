@@ -115,9 +115,13 @@ def assign_targets(
     ``forbidden_pairs`` is the pool's no-contact set as
     ``no_contact_pairs_among`` returns it (``(low, high)`` tuples). A
     blocked pair is excluded from each other's sample in both directions.
-    When that leaves a player with fewer than three candidates they simply
-    get fewer names — silently, so the shorter list reads as an ordinary
-    small-pool outcome rather than announcing that a pair exists.
+    When that leaves any player with fewer than three candidates the whole
+    draw returns ``{}`` and the cog refuses with its ordinary "need at least
+    4 players" line — the same shape Compliment uses. A shorter list was
+    tried first and is a tell: every ordinary pool of four gives everyone
+    three names, so the two rows with two names each name the pair, and a
+    player blocked from everyone would get an empty field Discord rejects
+    (code review, 2026-09-04).
 
     Raises ``ValueError`` when fewer than :data:`MIN_PARTICIPANTS` (4)
     participants are supplied — there aren't enough other players to
@@ -141,9 +145,9 @@ def assign_targets(
             if p != player_id
             and ((player_id, p) if player_id < p else (p, player_id)) not in banned
         ]
-        assignments[player_id] = chooser.sample(
-            others, min(TARGETS_PER_PLAYER, len(others))
-        )
+        if len(others) < TARGETS_PER_PLAYER:
+            return {}
+        assignments[player_id] = chooser.sample(others, TARGETS_PER_PLAYER)
     return assignments
 
 

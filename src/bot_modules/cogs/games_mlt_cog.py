@@ -8,9 +8,8 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.db_utils import open_db
 from bot_modules.services.name_resolver import NameFn, build_name_fn
-from bot_modules.services.no_contact_service import is_no_contact_conn
+from bot_modules.services.no_contact_service import is_no_contact
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -292,11 +291,9 @@ class MLTVoteView(discord.ui.View):
 
         # The no-contact gate: a blocked pair's pick is dropped, and the ack
         # below is sent exactly as for a counted vote (docs/no_contact_spec.md).
-        def _blocked() -> bool:
-            with open_db(self.bot.ctx.db_path) as conn:
-                return is_no_contact_conn(conn, guild_id, voter_id, target_id)
-
-        blocked = await asyncio.to_thread(_blocked)
+        blocked = await asyncio.to_thread(
+            is_no_contact, self.bot.ctx.db_path, guild_id, voter_id, target_id
+        )
         counted, changed = record_vote(self.votes, voter_id, target_id, blocked=blocked)
 
         if counted:

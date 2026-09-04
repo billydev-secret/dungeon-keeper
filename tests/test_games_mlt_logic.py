@@ -594,11 +594,20 @@ def test_build_results_embed_names_players_through_name_fn():
 
 
 def test_build_final_standings_embed_names_players_through_name_fn():
-    embed = build_final_standings_embed({"1": 2, "2": 1}, name_fn=_named)
+    seen: list[object] = []
+
+    def _typed(uid):
+        seen.append(uid)
+        return _named(uid)
+
+    embed = build_final_standings_embed({"1": 2, "2": 1}, name_fn=_typed)
     assert embed.description is not None
     assert "Member1" in embed.description
     assert "Member2" in embed.description
     assert "<@" not in embed.description
+    # The crowns map is payload-shaped (str keys) but a real resolver's
+    # caches are int-keyed: a str id would fall through to ``<@id>``.
+    assert seen and all(isinstance(uid, int) for uid in seen)
 
 
 def test_every_mlt_render_site_passes_a_resolver():

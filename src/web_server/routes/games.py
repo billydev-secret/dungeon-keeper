@@ -212,12 +212,19 @@ def _validate_traditional_tags(game_type: str, tags: list[str]) -> None:
 
 
 def _parse_tags_col(raw) -> list[str]:
-    """Parse a stored JSON tags column into a list, tolerating bad data."""
+    """Parse a stored JSON tags column into a lowercased list, tolerating bad data.
+
+    Lowercased on read for the same reason ``question_source._parse_tags``
+    is: a legacy row stored as ``"Nsfw"`` must match the ``"nsfw"`` chip the
+    tag list now offers, and count as adult in the stats.
+    """
     try:
         val = json.loads(raw or "[]")
-        return [str(t) for t in val] if isinstance(val, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+    if not isinstance(val, list):
+        return []
+    return [t for t in (str(x).strip().lower() for x in val) if t]
 
 
 # ── Stats ────────────────────────────────────────────────────────────────────
@@ -346,7 +353,7 @@ async def list_bank(
             # pagination is recomputed from the filtered set. With multiple
             # requested tags, match="all" keeps rows having every tag (AND);
             # match="any" keeps rows sharing at least one tag (OR).
-            requested = {t for t in (tag or []) if t}
+            requested = {t for t in (str(x).strip().lower() for x in (tag or [])) if t}
             any_match = match == "any"
             items = []
             for r in rows:
@@ -719,10 +726,7 @@ async def list_bank_tags(
             # on save doesn't offer a second spelling of the same tag.
             seen: set[str] = set()
             for (raw,) in rows:
-                for t in _parse_tags_col(raw):
-                    t = t.strip().lower()
-                    if t:
-                        seen.add(t)
+                seen.update(_parse_tags_col(raw))
             return {"tags": sorted(seen)}
 
     return await run_query(_q)
