@@ -12,6 +12,7 @@ __pycache__/
 .venv
 /.claude/*
 !/.claude/commands/
+!/.claude/agents/
 backups/
 models/
 
