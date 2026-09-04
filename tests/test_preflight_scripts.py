@@ -118,3 +118,11 @@ def test_the_snapshot_uses_the_backup_api_not_a_copy(tmp_path):
     out = sqlite3.connect(dest)
     assert out.execute("SELECT a FROM t").fetchone()[0] == 7
     out.close()
+
+
+def test_the_snapshot_does_not_default_to_tmpfs():
+    """/tmp here is a 5.8 GiB tmpfs the test suite also uses, and the live
+    database is over a gigabyte: a dry-run beside a full run could exhaust RAM
+    and spray sqlite errors that look like a test failure."""
+    assert "tmp" not in str(dryrun.DEFAULT_SNAPSHOT_DIR).split("/")[1:2]
+    assert dryrun.DEFAULT_SNAPSHOT_DIR.is_absolute()

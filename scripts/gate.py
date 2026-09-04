@@ -470,7 +470,7 @@ def _browser_available(py: str) -> bool:
 _BROWSER_TESTS = (TESTS / "web",)
 
 
-def run_mobile(py: str, changed: list[str], *, all_panels: bool = False) -> None:
+def run_mobile(py: str, changed: list[str], *, all_panels: bool = False) -> bool:
     """Run the browser checks (layout + console) if a browser is available.
 
     Scoped to the panels a diff touches by default; ``all_panels`` sweeps
@@ -482,12 +482,12 @@ def run_mobile(py: str, changed: list[str], *, all_panels: bool = False) -> None
     else:
         should, panels = mobile_scope(changed)
     if not should:
-        return
+        return True
     label = "all panels" if panels is None else ", ".join(sorted(panels))
     if not _browser_available(py):
         print("── browser: Playwright/Chromium not installed → skipping panel checks " + "─" * 3)
         print("   (install: pip install playwright && python -m playwright install chromium)")
-        return
+        return True
     print(f"── browser: panel checks — layout + console ({label}) " + "─" * 6, flush=True)
     env = dict(os.environ)
     if panels is not None:
@@ -506,11 +506,18 @@ def run_mobile(py: str, changed: list[str], *, all_panels: bool = False) -> None
     )
     if result.returncode != 0:
         print("GATE FAILED: browser panel checks", file=sys.stderr)
-        sys.exit(result.returncode)
+        return False
+    return True
 
 
-def run_pytest(py: str, *args: str) -> None:
+def run_pytest(py: str, *args: str) -> bool:
     """Run pytest remotely when configured and reachable, else locally.
+
+    Returns True on success. It reports rather than exiting so a later stage
+    still runs: the browser sweep used to sit after this call and never
+    executed on a red suite, which is exactly when the full picture matters —
+    and in a checkout with a permanently-red test it never executed at all.
+    ``main`` exits non-zero at the end if anything reported failure.
 
     ``remote_test.run`` returns None for every "can't or shouldn't dispatch"
     case, which is exactly the signal to fall through to the local path.
@@ -523,7 +530,7 @@ def run_pytest(py: str, *args: str) -> None:
 
     if code != 0:
         print("GATE FAILED: pytest", file=sys.stderr)
-        sys.exit(code)
+    return code == 0
 
 
 def wants_heavy(*, quick: bool, forced: bool) -> bool:
@@ -561,6 +568,9 @@ def main() -> None:
     ]
 
     py = venv_python()
+    #: Every stage reports into this rather than exiting, so a failing suite
+    #: does not hide the stages after it. Non-zero exit happens at the end.
+    ok = True
     run(py, "ruff", "-m", "ruff", "check", ".")
     if type_check:
         run(py, "pyright", "-m", "pyright")
@@ -571,7 +581,8 @@ def main() -> None:
     if quick:
         # Scoped mobile-layout check for any changed dashboard assets. Non-fatal
         # without a browser, so a plain machine still commits.
-        run_mobile(py, changed_paths())
+        if not run_mobile(py, changed_paths()):
+            sys.exit(1)
         print("GATE OK (quick)")
         return
 
@@ -617,25 +628,30 @@ def main() -> None:
             print(f"── scope: {len(targets)} test file(s) for this diff " + "─" * 10)
             for t in targets:
                 print(f"   • {t}")
-            run_pytest(py, *targets, *pytest_args)
+            ok = run_pytest(py, *targets, *pytest_args) and ok
         else:
             print("── scope: no code/test changes mapped → skipping pytest " + "─" * 6)
         if browser_check:
-            run_mobile(py, changed)
+            ok = run_mobile(py, changed) and ok
         elif mobile_scope(changed)[0]:
             # Say it only when this diff would actually have triggered a sweep,
             # so a commit that touches no dashboard asset stays quiet.
             print("── browser: CI runs the panel checks on every push "
                   "(--browser forces them here) " + "─" * 3)
+        if not ok:
+            sys.exit(1)
         print("GATE OK (scoped)")
         return
 
-    run_pytest(py, *pytest_args)
+    ok = run_pytest(py, *pytest_args)
     # A full run sweeps every panel rather than scoping to a diff: there is no
     # diff to scope to, and this tier exists to be thorough. Only on request —
-    # the sweep is CI's by default (see wants_heavy).
+    # the sweep is CI's by default (see wants_heavy). It runs even when pytest
+    # failed: a pre-release check is worth more complete than early.
     if browser_check:
-        run_mobile(py, changed=[], all_panels=True)
+        ok = run_mobile(py, changed=[], all_panels=True) and ok
+    if not ok:
+        sys.exit(1)
     mark_full_gate()
     print("GATE OK")
 

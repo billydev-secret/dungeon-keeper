@@ -10,6 +10,7 @@ This snapshots the live database, applies whatever has not been applied yet to
 the copy, and reports. The live file is never written to.
 
     python scripts/migration_dryrun.py [--db dungeonkeeper.db] [--keep]
+                                      [--snapshot-dir DIR]
 
 The snapshot uses sqlite3's backup API, never a filesystem copy: the live
 database runs in WAL mode, so a `cp` of it is very often malformed and the
@@ -20,14 +21,20 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sqlite3
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "src" / "migrations"
+
+#: Not /tmp. That is a 5.8 GiB tmpfs — RAM — which the test suite also uses,
+#: and the production database is over a gigabyte. A dry-run running beside a
+#: full pytest run could exhaust it, and the symptom is hundreds of bogus
+#: sqlite errors that look like a test problem and are not. Disk, not memory.
+DEFAULT_SNAPSHOT_DIR = Path.home() / ".cache" / "dk-dryrun"
 
 #: Statements that discard data. Not a reason to stop — several are deliberate
 #: — but a reason to take a backup before the restart rather than after.
@@ -66,6 +73,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--db", default=str(ROOT / "dungeonkeeper.db"))
     ap.add_argument("--keep", action="store_true", help="leave the snapshot on disk")
+    ap.add_argument(
+        "--snapshot-dir", default=str(DEFAULT_SNAPSHOT_DIR),
+        help=f"where to write the working copy (default {DEFAULT_SNAPSHOT_DIR})",
+    )
     args = ap.parse_args()
 
     live = Path(args.db)
@@ -89,8 +100,21 @@ def main() -> int:
             risky.append(p.name)
         print(f"  {p.name}{flag}")
 
-    tmp = Path(tempfile.gettempdir()) / f"dk-dryrun-{int(time.time())}.db"
-    print(f"\nSnapshotting {live} → {tmp}")
+    snap_dir = Path(args.snapshot_dir).expanduser()
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    need = live.stat().st_size
+    free = shutil.disk_usage(snap_dir).free
+    if free < need * 2:
+        print(
+            f"\nNot enough room in {snap_dir}: the database is "
+            f"{need / 2**30:.1f} GiB and only {free / 2**30:.1f} GiB is free. "
+            "Pass --snapshot-dir somewhere with space.",
+            file=sys.stderr,
+        )
+        return 2
+
+    tmp = snap_dir / f"dk-dryrun-{int(time.time())}.db"
+    print(f"\nSnapshotting {live} → {tmp}  ({need / 2**30:.1f} GiB)")
     snapshot(live, tmp)
 
     sys.path.insert(0, str(ROOT / "src"))
