@@ -8,13 +8,15 @@ config), so the gate has to sit on the button itself.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
 import bot_modules.cogs.games_clapback_cog as cog_module
-from bot_modules.cogs.games_clapback_cog import ClapbackCog, ClapbackRecapView
+from bot_modules.cogs.games_clapback_cog import ClapbackCog, ClapbackJoinView, ClapbackRecapView
+from bot_modules.games.utils.game_manager import create_game
 from bot_modules.services.games_db import GamesDb
 
 GUILD = 4242
@@ -57,6 +59,11 @@ async def test_play_again_honours_the_enabled_dial(
         "INSERT INTO games_game_config (guild_id, game_type, enabled) VALUES (?, ?, ?)",
         (GUILD, "clapback", int(enabled)),
     )
+    # The shared guard also refuses an empty bank; this test is about the dial.
+    await cog.db.execute(
+        "INSERT INTO games_question_bank (game_type, category, question_text)"
+        " VALUES ('clapback', 'sfw', 'p?')",
+    )
     config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
     view = ClapbackRecapView("old-gid", HOST, config, cog.db, bot, cog)
     interaction = _interaction()
@@ -73,6 +80,40 @@ async def test_play_again_honours_the_enabled_dial(
         assert "disabled" in interaction.response.send_message.await_args.args[0]
         # The recap card is left alone so the host can retry once it is back on.
         interaction.response.edit_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize("button", ["play_again", "play_again_shuffled"])
+async def test_play_again_bank_check_honours_the_channels_age_gate(
+    sync_db_path, button, monkeypatch
+):
+    """The shared guard's empty-bank check reads the bank through the
+    channel's age-gate, as the slash entry does — an NSFW-only bank must not
+    refuse a rematch in the age-restricted room it was just played in."""
+    monkeypatch.setattr(cog_module, "sign_off_game_chore", AsyncMock())
+    bot = SimpleNamespace(
+        games_db=GamesDb(sync_db_path), active_views={},
+        ctx=SimpleNamespace(db_path=sync_db_path),
+    )
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    start = AsyncMock(return_value="new-gid")
+    cog._start_new_game = start  # type: ignore[method-assign]
+    await cog.db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)",
+        (CHAN, GUILD),
+    )
+    await cog.db.execute(
+        "INSERT INTO games_question_bank (game_type, category, question_text, tags)"
+        " VALUES ('clapback', 'nsfw', 'p?', '[\"nsfw\"]')",
+    )
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
+    view = ClapbackRecapView("old-gid", HOST, config, cog.db, bot, cog)
+    interaction = _interaction()
+    interaction.channel.is_nsfw = lambda: True
+
+    await getattr(view, button).callback(interaction)  # type: ignore[arg-type]
+
+    start.assert_awaited_once()
+    interaction.response.send_message.assert_not_awaited()
 
 
 # ── The no-contact gate is wired through Start and the bracket ───────────────
@@ -198,3 +239,65 @@ async def test_bracket_never_seats_the_pair(sync_db_path, monkeypatch):
     assert record["bye_players"] == [str(bye)]
     # The bye is paid the round's average like any other bye.
     assert payload["scores"][str(bye)] == record["bye_award"] == round((125 + 0) / 2)
+
+
+# ── clapback-9: a lobby that dies says who was in it and why ─────────────────
+#
+# ``end_game``'s own recording (stored payload, derived roster, ``reason``) is
+# pinned in tests/test_game_manager_end_game.py; these prove the two lobby
+# cancel paths hand it the roster and a reason instead of a bare call.
+
+
+async def _history(db, game_id):
+    row = await db.fetchone(
+        "SELECT guild_id, player_count, payload FROM games_game_history WHERE game_id = ?",
+        (game_id,),
+    )
+    assert row is not None
+    return row["guild_id"], row["player_count"], json.loads(row["payload"])
+
+
+async def test_a_timed_out_lobby_archives_its_roster_and_the_reason(sync_db_path):
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2, 3], "host_id": HOST}, guild_id=GUILD,
+    )
+
+    await cog._cancel_game(gid, reason="lobby_timeout")
+
+    guild_id, player_count, payload = await _history(cog.db, gid)
+    assert guild_id == GUILD
+    assert player_count == 3
+    assert payload["players"] == [HOST, 2, 3]
+    assert payload["reason"] == "lobby_timeout"
+    assert gid not in bot.active_views
+
+
+async def test_a_crashed_start_archives_its_roster_and_the_reason(sync_db_path, monkeypatch):
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_forbidden_pairs", AsyncMock(return_value=set()))
+
+    async def boom(game_id, channel, payload):
+        raise RuntimeError("bracket exploded")
+
+    monkeypatch.setattr(cog, "_run_game", boom)
+    config = {"rounds": 3, "timer": 60, "vote_timer": 30, "anonymous": False}
+    gid = await create_game(
+        cog.db, CHAN, HOST, "clapback", state="joining",
+        payload={"config": config, "players": [HOST, 2, 3], "host_id": HOST}, guild_id=GUILD,
+    )
+    view = ClapbackJoinView(gid, HOST, cog.db, bot, cog, config)
+    bot.active_views[gid] = view
+
+    await view.start_game.callback(_start_interaction())  # type: ignore[arg-type]
+
+    guild_id, player_count, payload = await _history(cog.db, gid)
+    assert guild_id == GUILD
+    assert player_count == 3
+    assert payload["players"] == [HOST, 2, 3]
+    assert payload["reason"] == "crash"
+    assert gid not in bot.active_views

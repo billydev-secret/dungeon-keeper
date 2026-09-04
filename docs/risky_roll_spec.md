@@ -49,6 +49,8 @@ Special-roll outcomes:
 
 After resolution, the **Roll / Close** view is disabled and replaced with an **Ask Question** prompt aimed at the eligible questioner(s).
 
+A resolved round — whether closed by the button or by the auto-close timer — is put on the games record before its own rows are deleted: one `games_game_history` row with `game_type = 'risky_roll'`, the opener as `host_id`, `player_count` = the number of rolls, `round_count` 1, the guild id set, and a payload of who rolled what plus the resolved seats (`players`, `rolls`, `highest_user`, `lowest_user`, `second_*`). That is what Play Statistics, `/recap`, the game-night session tracker and the Ping Response game-player join read, and Risky Rolls — the most-played game on the server — was in none of them until 2026-09-04. A round that closes without resolving (fewer than two rolls, or the no-contact refusal that looks the same) writes nothing; recording is best-effort and never holds up the winner's prompt. The write goes through `games.utils.game_history.history_insert`, the same statement the duel and group games use, and is idempotent on `game_id`.
+
 ### Asking and replying
 
 **Ask Question** opens a 300-character modal. On submit, the bot posts the question (in a thread for room/69 questions, in the channel for direct questions) with a **Reply** button. **Reply** opens a 300-character reply modal; the first valid reply edits the original question message in place to embed the reply text, and closes the reply window.
@@ -150,7 +152,7 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 
 ## Non-goals
 
-- **No leaderboards.** Wins / losses aren't aggregated; closed rounds delete their state.
+- **No leaderboards.** Wins / losses aren't aggregated; closed rounds delete their state. The one thing that outlives a round is its `games_game_history` row (see **Closing and resolving**) — a play record for the dashboard, not a scoreboard.
 - **No DM mode.** Server-only.
 - **No multi-channel rounds.** A round lives in one channel; the per-channel game cap (**Configuration**, default 10) applies per channel.
 - **No editing / cancelling an already-asked question.** Once submitted, the question is locked.
@@ -181,7 +183,7 @@ Per-round only (not persisted as config):
 
 Four per-guild tables:
 
-- **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), auto-close settings, special-roll outcomes. Deleted on close.
+- **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), auto-close settings, special-roll outcomes. Deleted on close, after a resolved round's summary has been copied into the shared `games_game_history` table (`docs/data_register.md`, the `games_*` row).
   The table also carries a `reroll_user_ids` column, left over from a player-visible reroll flow that was never wired up; nothing reads or writes it (see **Non-goals**).
 - **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock.
 - **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days.

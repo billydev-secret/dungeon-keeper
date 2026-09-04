@@ -435,6 +435,12 @@ def query_game_player_counts(
     off the live lobby's payload instead. A ping for a game that left no trace
     of either (an in-memory game like risky_roll) is simply absent from the
     result and reports no roster rather than a misleading zero.
+
+    The daily Photo Challenge post is archived the moment it is posted, with
+    no roster — people reply in the channel afterwards — so its history row
+    says 0 while 10–24 members post under it. A photo row at 0 is therefore
+    "unknown", not "nobody", and is left absent so the report renders a blank
+    instead of a failed ping (photo-external-104).
     """
     wanted = [str(r) for r in refs if r]
     if not wanted:
@@ -445,14 +451,16 @@ def query_game_player_counts(
     for start in range(0, len(wanted), 400):
         chunk = wanted[start : start + 400]
         ph = ",".join("?" * len(chunk))
-        for game_id, count in conn.execute(
+        for game_id, count, game_type in conn.execute(
             f"""
-            SELECT game_id, MAX(player_count) FROM games_game_history
+            SELECT game_id, MAX(player_count), MAX(game_type) FROM games_game_history
             WHERE game_id IN ({ph})
             GROUP BY game_id
             """,
             chunk,
         ).fetchall():
+            if game_type == "photo" and not count:
+                continue
             out[str(game_id)] = int(count or 0)
 
         missing = [g for g in chunk if g not in out]

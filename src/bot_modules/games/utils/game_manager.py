@@ -5,13 +5,14 @@ import uuid
 import logging
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import discord
 
 from bot_modules.core.utils import disable_all_items
-from bot_modules.games.constants import GAME_NAMES
+from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_payload
 
 log = logging.getLogger(__name__)
 
@@ -251,12 +252,6 @@ async def check_game_enabled(db, game_type: str, guild_id: int) -> bool:
     return row is None or bool(row[0])
 
 
-CHANNEL_NOT_ALLOWED_MSG = (
-    "This channel isn't set up for games. An admin can enable it from the web dashboard."
-)
-CHANNEL_BUSY_MSG = "There's already a game running in this channel — wait for it to finish."
-
-
 async def relaunch_refusal(
     db, game_type: str, channel_id: int | None, guild_id: int, *,
     label: str | None = None,
@@ -266,21 +261,16 @@ async def relaunch_refusal(
     The relaunch button is a second front door to ``cog.launch``. It used to be
     the only door with no guard on it, so a host could keep a game an admin
     had just switched off on the dashboard alive from the recap card
-    indefinitely. This runs the two checks the slash entry runs — allowed
-    channel and the enabled dial, in that entry's own copy — **plus** a
-    busy check (no game already running in this channel) that the slash
-    entries do not yet have; platform-28 / common-lib A.1 unify the two
-    doors. ``label`` is the game's display name for the disabled line and
-    defaults to ``GAME_NAMES[game_type]``.
+    indefinitely. It is now a thin name for ``launch_guard.launch_refusal`` —
+    the one guard (allowed channel, enabled dial, busy channel with a jump
+    link, empty bank) every door shares and the single owner of the refusal
+    copy. Kept so the three recap cards need no rewiring; new callers import
+    ``launch_guard`` directly. ``label`` overrides the display name.
     """
-    if not await check_allowed_channel(db, channel_id):
-        return CHANNEL_NOT_ALLOWED_MSG
-    if not await check_game_enabled(db, game_type, guild_id):
-        name = label or GAME_NAMES.get(game_type, game_type)
-        return f"{name} is currently disabled on this server."
-    if await get_active_game(db, channel_id) is not None:
-        return CHANNEL_BUSY_MSG
-    return None
+    # Local import: launch_guard imports this module's check helpers.
+    from bot_modules.games.utils.launch_guard import launch_refusal  # noqa: PLC0415
+
+    return await launch_refusal(db, game_type, channel_id, guild_id, label=label)
 
 
 async def get_game_options(db, game_type: str, guild_id: int) -> dict:
@@ -310,6 +300,21 @@ async def get_active_game_by_id(db, game_id: str):
     )
 
 
+async def guild_for_channel(db, channel_id: int | None) -> int:
+    """The guild the games allowlist records for *channel_id*, or 0.
+
+    The allowlist is the one games table keyed by channel that knows its guild
+    (migration 122), so it is the fallback for a launcher that did not pass one.
+    """
+    if channel_id is None:
+        return 0
+    row = await db.fetchone(
+        "SELECT guild_id FROM games_allowed_channels WHERE channel_id = ? AND guild_id != 0",
+        (channel_id,),
+    )
+    return int(row["guild_id"]) if row else 0
+
+
 async def create_game(
     db,
     channel_id: int,
@@ -318,15 +323,25 @@ async def create_game(
     message_id: int | None = None,
     state: str = "open",
     payload: dict | None = None,
+    guild_id: int | None = None,
 ) -> str:
+    """Insert the live-game row. The guild is stamped **here**, at creation,
+    so every end path — including the bare ``end_game`` calls that have no bot
+    to look it up with — archives the right guild instead of 0 (platform-19).
+    Every launcher knows its guild; a caller that omits it falls back to the
+    channel allowlist's record of the channel.
+    """
     game_id = str(uuid.uuid4())
     payload_json = json.dumps(payload or {})
+    if not guild_id:
+        guild_id = await guild_for_channel(db, channel_id)
     await db.execute(
         """
-        INSERT INTO games_active_games (game_id, channel_id, message_id, game_type, host_id, state, payload)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO games_active_games
+            (game_id, channel_id, message_id, game_type, host_id, state, payload, guild_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (game_id, channel_id, message_id, game_type, host_id, state, payload_json),
+        (game_id, channel_id, message_id, game_type, host_id, state, payload_json, int(guild_id)),
     )
     return game_id
 
@@ -367,6 +382,12 @@ async def modify_payload(db, game_id: str, fn):
     *fn* receives the current payload dict and should mutate it in-place
     (or return a new dict).  The lock for *game_id* is held for the
     entire read-modify-write cycle.
+
+    Every vote, pose, join and advance comes through here, so it is also where
+    a live game keeps its game-night session open (``touch_session``): a
+    member typing ``/recap`` forty minutes into an AMA used to be told there
+    was no session, because the 30-minute window only ever moved at start and
+    end (platform-22). The touch is outside the payload lock and never raises.
     """
     async with payload_lock(game_id):
         payload = await get_game_payload(db, game_id)
@@ -374,7 +395,50 @@ async def modify_payload(db, game_id: str, fn):
         if result is not None:
             payload = result
         await update_game_payload(db, game_id, payload)
+    try:
+        await touch_session(db, game_id, payload)
+    except Exception:
+        log.exception("session touch failed for %s", game_id)
     return payload
+
+
+@dataclass(frozen=True)
+class GameEnd:
+    """What ``end_game`` archived and paid — for callers that report on it
+    (the 24h sweep's in-channel line). ``coins_paid`` is 0 whenever the
+    faucet did not fire: no bot, no explicit roster, economy off."""
+
+    game_id: str
+    game_type: str
+    guild_id: int
+    player_count: int
+    round_count: int
+    coins_paid: int = 0
+
+
+async def _resolve_guild_id(db, row, bot) -> int:
+    """The guild a history row belongs to.
+
+    Stamped at creation since migration 204, so normally it is just copied.
+    A row still at 0 (created before the column existed, or by a launcher
+    that could not name its guild) is re-derived: from the bot's channel
+    cache when a bot is at hand, else from the channel allowlist.
+    """
+    try:
+        stored = int(row["guild_id"] or 0)
+    except (IndexError, KeyError, TypeError, ValueError):
+        stored = 0
+    if stored:
+        return stored
+    if bot is not None:
+        try:
+            channel = bot.get_channel(row["channel_id"])
+            guild = getattr(channel, "guild", None)
+            if guild is not None:
+                return int(guild.id)
+        except Exception:
+            pass
+    return await guild_for_channel(db, row["channel_id"])
 
 
 async def end_game(
@@ -386,18 +450,38 @@ async def end_game(
     *,
     bot=None,
     player_ids: Sequence[int | str] | None = None,
-):
+    reason: str | None = None,
+) -> GameEnd | None:
     """Write game to history and remove from games_active_games.
 
     When *bot* and *player_ids* are supplied (only from a game's genuine
     completion site), the economy faucet pays each participant. ``bot=None``
     keeps abort/cleanup call sites payout-free and fully backward-compatible.
+
+    **Recording is not gated on the caller knowing the roster.** A bare call
+    (lobby timeout, empty-bank unwind, crash cleanup) archives the game's
+    *stored* payload when none is passed, and when it names no players and no
+    count, the roster is rebuilt from that payload (``game_roster``) so
+    ``player_count`` / ``round_count`` say what happened instead of 0/0
+    (platform-20). That is recording only — payment still rides on an explicit
+    ``player_ids``, so the anti-farm gate is untouched.
+
+    ``reason`` — ``'lobby_timeout'``, ``'crash'``, ``'expired'`` — lands in the
+    archived payload so the dashboard can tell an abandoned lobby from a game
+    that was played (clapback-9). The caller's dict is never mutated.
+
+    Ending a game also merges its roster into the channel's game-night session
+    (a paying end fires the session_join quest as well), so ``/recap`` sees
+    everyone who played rather than only the host the start-time call knew.
+    Games with no joined roster never open or extend a session.
+
+    Returns what was archived, or None when another call already ended it.
     """
     row = await db.fetchone(
         "SELECT * FROM games_active_games WHERE game_id = ?", (game_id,)
     )
     if not row:
-        return
+        return None
 
     # Claim the game by deleting its active row FIRST — the DELETE is the
     # exactly-once gate. Each GamesDb.execute is its own transaction, so two
@@ -410,21 +494,34 @@ async def end_game(
         "DELETE FROM games_active_games WHERE game_id = ?", (game_id,)
     )
     if (claimed.rowcount or 0) == 0:
-        return  # another call already ended this game
+        return None  # another call already ended this game
 
-    # Resolve the guild so history/stats stay per-guild scoped. games_active_games
-    # carries no guild_id, so we resolve from the bot's channel cache when a bot
-    # is available (genuine completions pass one); abort/cleanup paths fall back
-    # to 0, which the dashboard treats as an unassigned legacy row.
-    guild_id = 0
-    if bot is not None:
+    game_type = row["game_type"]
+    if payload is None:
         try:
-            channel = bot.get_channel(row["channel_id"])
-            if channel is not None and getattr(channel, "guild", None) is not None:
-                guild_id = channel.guild.id
-        except Exception:
-            guild_id = 0
+            payload = json.loads(row["payload"]) if row["payload"] else {}
+        except (TypeError, ValueError):
+            log.warning("Unreadable stored payload on ending game %s", game_id)
+            payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
 
+    # Recording only: a caller that named neither a roster nor a count gets
+    # both read back out of the payload. Payment stays on explicit player_ids.
+    roster: list[int] = [int(p) for p in player_ids] if player_ids else []
+    if player_count == 0 and player_ids is None:
+        roster, derived_rounds = roster_from_payload(game_type, payload)
+        player_count = len(roster)
+        if round_count == 0:
+            round_count = derived_rounds
+    elif player_count == 0 and roster:
+        player_count = len(roster)  # a roster was named; count what was named
+
+    guild_id = await _resolve_guild_id(db, row, bot)
+
+    archived = dict(payload)
+    if reason:
+        archived["reason"] = reason
     try:
         await db.execute(
             """
@@ -434,12 +531,12 @@ async def end_game(
             """,
             (
                 row["game_id"],
-                row["game_type"],
+                game_type,
                 row["channel_id"],
                 row["host_id"],
                 player_count,
                 round_count,
-                json.dumps(payload or {}),
+                json.dumps(archived),
                 row["created_at"],
                 guild_id,
             ),
@@ -447,11 +544,27 @@ async def end_game(
     except Exception as e:
         log.error("Failed to archive game %s to history: %s", game_id, e)
     _payload_locks.pop(game_id, None)
+    _session_touched.pop(game_id, None)
     log.info("Game %s ended and removed.", game_id)
 
+    coins_paid = 0
     if bot is not None and player_ids:
-        await _pay_party_rewards(bot, row, payload, player_ids)
+        coins_paid = await _pay_party_rewards(bot, row, payload, player_ids)
         await _fire_session_join(bot, db, row, player_ids)
+    elif roster and game_type not in NO_ROSTER_TYPES:
+        # Not a paying end, but the room still played: give the recap the
+        # roster and keep the session window open past this game.
+        try:
+            await update_session(
+                db, row["channel_id"], game_id, roster, game_type=game_type,
+            )
+        except Exception:
+            log.exception("session merge failed for %s", game_id)
+
+    return GameEnd(
+        game_id=game_id, game_type=game_type, guild_id=guild_id,
+        player_count=player_count, round_count=round_count, coins_paid=coins_paid,
+    )
 
 
 async def _fire_session_join(bot, db, row, player_ids: Sequence[int | str]) -> None:
@@ -465,7 +578,9 @@ async def _fire_session_join(bot, db, row, player_ids: Sequence[int | str]) -> N
     """
     try:
         ids = [int(p) for p in player_ids]
-        session_id = await update_session(db, row["channel_id"], row["game_id"], ids)
+        session_id = await update_session(
+            db, row["channel_id"], row["game_id"], ids, game_type=row["game_type"],
+        )
         channel = bot.get_channel(row["channel_id"])
         guild = getattr(channel, "guild", None)
         if session_id is None or guild is None:
@@ -480,24 +595,26 @@ async def _fire_session_join(bot, db, row, player_ids: Sequence[int | str]) -> N
         log.exception("session_join trigger failed for %s", row["game_id"])
 
 
-async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequence[int | str]) -> None:
-    """Fire the economy faucet for a completed party game; never raises."""
+async def _pay_party_rewards(bot, row, payload: dict | None, player_ids: Sequence[int | str]) -> int:
+    """Fire the economy faucet for a completed party game; never raises.
+    Returns the coins credited (participation, wins and host bounty)."""
     try:
         from bot_modules.economy.game_rewards import pay_game_rewards, resolve_winners
 
         channel = bot.get_channel(row["channel_id"])
         guild = getattr(channel, "guild", None)
         if guild is None:
-            return
+            return 0
         game_type = row["game_type"]
         winners = resolve_winners(game_type, payload or {})
-        await pay_game_rewards(
+        return await pay_game_rewards(
             bot, guild.id, list(player_ids), winners, game_type,
             occurrence=str(row["game_id"]),
             host_id=int(row["host_id"]) if row["host_id"] else None,
         )
     except Exception:
         log.exception("party game payout failed for %s", row["game_id"])
+        return 0
 
 
 async def force_end_active_game(bot, db, game_id: str) -> None:
@@ -594,14 +711,70 @@ async def is_game_expired(db, game_id: str, max_seconds: int = 86400) -> bool:
 
 # ── Session tracking ──────────────────────────────────────────────────────────
 
+SESSION_WINDOW = timedelta(minutes=30)
+
+# game_id -> monotonic time of its last session touch. modify_payload runs on
+# every vote, so the touch is rate-limited per game rather than written each
+# time; end_game pops the entry.
+_session_touched: dict[str, float] = {}
+SESSION_TOUCH_INTERVAL = 30.0
+
+
+async def touch_session(
+    db, game_id: str, payload: dict | None, *, min_interval: float = SESSION_TOUCH_INTERVAL,
+) -> str | None:
+    """Keep a live game's game-night session open and its roster current.
+
+    Called from ``modify_payload`` on every payload write. Reads the game's
+    channel and type, rebuilds the roster from *payload* (so a joiner is in
+    the recap from the moment they join, not only at the end) and merges it
+    through ``update_session`` — which also moves ``last_game_at`` forward so
+    the 30-minute ``/recap`` window covers a game that is still being played.
+    At most one write per game per *min_interval* seconds. Returns the session
+    id it touched, or None when it skipped (rate-limited, no live row, or a
+    game with no joined roster).
+    """
+    now = time.monotonic()
+    last = _session_touched.get(game_id)
+    if last is not None and now - last < min_interval:
+        return None
+    row = await db.fetchone(
+        "SELECT channel_id, game_type FROM games_active_games WHERE game_id = ?",
+        (game_id,),
+    )
+    if row is None or row["game_type"] in NO_ROSTER_TYPES:
+        return None
+    _session_touched[game_id] = now
+    players, _rounds = roster_from_payload(row["game_type"], payload or {})
+    return await update_session(
+        db, int(row["channel_id"]), game_id, players, game_type=row["game_type"],
+    )
+
+
 async def update_session(
-    db, channel_id: int, game_id: str, player_ids: list[int]
-) -> str:
+    db, channel_id: int, game_id: str, player_ids: list[int], *,
+    game_type: str | None = None,
+) -> str | None:
     """
     Find an active session within 30 minutes in the channel.
     Append game_id and merge player IDs. Create new session if none found.
-    Returns the session_id the game landed in.
+    Returns the session_id the game landed in — or None for a game with no
+    joined roster (``NO_ROSTER_TYPES``: the daily photo post, ffa cards),
+    which must never open a session on its own: a bot post is not a game
+    night. ``game_type`` is looked up from the live row when not given; an
+    already-archived id (end_game merges after its DELETE claim) has no row,
+    so a caller ending a game passes it explicitly.
     """
+    if game_type is None:
+        try:
+            row = await db.fetchone(
+                "SELECT game_type FROM games_active_games WHERE game_id = ?", (game_id,),
+            )
+            game_type = row["game_type"] if row else None
+        except Exception:
+            game_type = None
+    if game_type in NO_ROSTER_TYPES:
+        return None
     # Deliberately naive UTC, both here and for ``now`` below.
     # ``games_session_tracker.last_game_at`` / ``started_at`` are naive ISO
     # strings — SQLite's ``CURRENT_TIMESTAMP`` default writes naive ones, the
@@ -610,7 +783,7 @@ async def update_session(
     # ``last_game_at`` directly. An aware value here would serialise with a
     # "+00:00" suffix, break the string comparison, and make that subtraction
     # raise TypeError against pre-existing naive rows.
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=30)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - SESSION_WINDOW
     row = await db.fetchone(
         """
         SELECT session_id, game_ids, player_ids FROM games_session_tracker

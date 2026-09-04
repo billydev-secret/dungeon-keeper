@@ -838,6 +838,11 @@ async def test_do_close_pays_askers_and_hot_seats(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [5, 7, 9]  # askers {5,7} ∪ hot seats {9,5}
     assert call.kwargs["bot"] is bot
+    # social-prompt-40: the recorded count is the roster the recap path pays,
+    # so it agrees with what the 24h sweep (game_roster._ama) would record —
+    # it used to be the asker count alone (2 here) on this path and 3 on the
+    # sweep's, for the same session.
+    assert call.kwargs["player_count"] == 3
 
 
 # ── normalize_format ─────────────────────────────────────────────────

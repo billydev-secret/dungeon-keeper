@@ -35,6 +35,7 @@ from bot_modules.services.economy_service import (
     get_balance,
     load_econ_settings,
 )
+from bot_modules.games.utils.game_history import history_insert
 from bot_modules.games.utils.game_manager import check_game_enabled, sign_off_game_chore
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
 from bot_modules.core.branding import apply_section_spacing
@@ -145,14 +146,49 @@ class BaseGame(commands.Cog):
                     message_id=game.message_id,
                 )
 
+        pending = await self._reattach_pending_challenges()
+
         self._expire_loop.start()
         log.info(
-            "%s loaded: %d active, %d resolved, %d lobby",
+            "%s loaded: %d active, %d resolved, %d lobby, %d pending",
             self.GAME_DISPLAY_NAME,
             len(active),
             len(resolved),
             len(lobby),
+            pending,
         )
+
+    async def _reattach_pending_challenges(self) -> int:
+        """Give a challenge that was waiting through a restart its buttons back.
+
+        The Accept / Decline view is not persistent — it times out with the
+        challenge — so after a restart a card posted in the minutes before it
+        answered every press with "interaction failed" until the sweep
+        expired it (duels-party-126). Each still-live PENDING row gets a
+        persistent view carrying the same deadline the card counts down to;
+        a press after that deadline is refused with the timed-out copy, the
+        same as a late press on the original. Returns how many were
+        re-attached.
+        """
+        count = 0
+        now = time.time()
+        for game in await self._db_fetch_pending_games():
+            if not game.message_id:
+                continue
+            deadline = float(game.created_at) + duels_db.CHALLENGE_RESPONSE_SECONDS
+            if deadline <= now:
+                continue  # the sweep will flip the card to Expired within a minute
+            view = self._build_challenge_view(game, deadline=deadline)
+            if view is None:
+                continue
+            self.bot.add_view(view, message_id=game.message_id)
+            count += 1
+        return count
+
+    def _build_challenge_view(self, game: Any, *, deadline: float) -> discord.ui.View | None:
+        """The Accept / Decline view for a pending challenge. Duels override;
+        group games have lobbies, not challenges, and return None."""
+        return None
 
     async def cog_unload(self) -> None:
         self._expire_loop.cancel()
@@ -1471,6 +1507,7 @@ class BaseGame(commands.Cog):
                 return
             if game is None:
                 return
+            await self._record_game_history(game_id, game, state)
             await pay_game_rewards(
                 self.bot,
                 game.guild_id,
@@ -1483,6 +1520,44 @@ class BaseGame(commands.Cog):
             log.exception(
                 "%s terminal-state hook failed for game %s (%s)",
                 self.GAME_DISPLAY_NAME, game_id, state,
+            )
+
+    async def _record_game_history(self, game_id: int, game: Any, state: str) -> None:
+        """Put a settled game on the games record (``games_game_history``).
+
+        These games keep their own tables and never had a
+        ``games_active_games`` row for ``end_game`` to archive, so 135 prod
+        games were paid by the economy yet invisible to Play Statistics,
+        ``/recap`` and the game-night session (duels-party-122). Host is the
+        challenger for a duel and the lobby host for a group game;
+        ``player_count`` is everyone who played, eliminated players included.
+        The id is namespaced by game type because six tables share small
+        integer ids. Idempotent — this hook can fire more than once per game.
+        Never raises: the faucet behind it must still pay.
+        """
+        try:
+            participants = self._game_participants(game)
+            host_id = getattr(game, "host_id", None) or getattr(game, "challenger_id", None)
+            sql, params = history_insert(
+                game_id=f"{self.GAME_KEY}:{game_id}",
+                game_type=self.GAME_KEY,
+                channel_id=int(game.channel_id),
+                host_id=int(host_id or 0),
+                player_count=len(participants),
+                round_count=1,
+                payload={
+                    "players": participants,
+                    "winner_id": getattr(game, "winner_id", None),
+                    "loser_id": getattr(game, "loser_id", None),
+                    "state": state,
+                },
+                started_at=float(getattr(game, "created_at", None) or time.time()),
+                guild_id=int(game.guild_id),
+            )
+            await self.db.execute(sql, params)
+        except Exception:
+            log.exception(
+                "%s: failed to record game %s to history", self.GAME_DISPLAY_NAME, game_id
             )
 
     async def _resolve_wagers(
@@ -1689,6 +1764,10 @@ class BaseGame(commands.Cog):
 
     async def _db_fetch_lobby_games(self) -> list:
         """Return open LOBBY games to re-attach views on cog_load. Duels: none."""
+        return []
+
+    async def _db_fetch_pending_games(self) -> list:
+        """Return PENDING challenges to re-attach views on cog_load. Group games: none."""
         return []
 
     async def get_lobby_params(self, guild_id: int) -> tuple[int, int]:

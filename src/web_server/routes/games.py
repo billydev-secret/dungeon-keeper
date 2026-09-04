@@ -9,8 +9,18 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from bot_modules.games.constants import GAME_NAMES
-from bot_modules.games.utils.question_source import normalise_tags
+from bot_modules.core.db_utils import get_config_value, set_config_value
+from bot_modules.games.constants import GAME_ICONS, GAME_NAMES
+from bot_modules.games.utils.game_roster import roster_from_payload
+from bot_modules.games.utils.question_source import normalise_tags, split_wyr_options
+from bot_modules.services.game_start_ping_service import (
+    IDLE_CANCEL_DEFAULT_MINUTES,
+    IDLE_CANCEL_KEY,
+    IDLE_MAX_MINUTES,
+    IDLE_NUDGE_DEFAULT_MINUTES,
+    IDLE_NUDGE_KEY,
+    parse_idle_dials,
+)
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
@@ -192,6 +202,29 @@ def _validate_traditional_tags(game_type: str, tags: list[str]) -> None:
         )
 
 
+WYR_FORMAT_DETAIL = (
+    "Would You Rather questions need two options separated by | — "
+    "e.g. \"fly | be invisible\" (or written as \"…X, or Y?\")."
+)
+
+
+def _normalise_wyr_text(game_type: str, text: str) -> str:
+    """Store a Would You Rather row as ``option A | option B``.
+
+    The bot splits a row on its single ``|``; every prod row had been typed
+    as prose ("Would you rather X, or Y?") and served nothing
+    (vote-games-49). A row that ``split_wyr_options`` can read — one ``|``,
+    or a prose "X, or Y" — is stored in the canonical shape; anything else
+    is refused with the shape spelled out. No-op for any other game type.
+    """
+    if game_type != "wyr":
+        return text
+    parts = split_wyr_options(text)
+    if parts is None:
+        raise HTTPException(status_code=400, detail=f"{WYR_FORMAT_DETAIL} Got: {text.strip()[:120]!r}")
+    return f"{parts[0]} | {parts[1]}"
+
+
 def _parse_tags_col(raw) -> list[str]:
     """Parse a stored JSON tags column into a normalised list, tolerating bad
     data — the same ``normalise_tags`` rule the bank draw reads with, so a
@@ -214,7 +247,20 @@ def _parse_tags_col(raw) -> list[str]:
 async def get_stats(
     request: Request,
     _: AuthenticatedUser = Depends(require_game_host),
+    days: Optional[int] = Query(None, ge=1, le=3650),
 ):
+    """Play Statistics. ``days`` limits the played / rounds / unique-players /
+    by-type numbers to games that ended in the last N days (the bank count is
+    a library size and never windowed); omitted means all time.
+
+    ``games`` is the display name and icon for every type the page might
+    meet — the panel used to carry its own eight-entry copy and so drew Truth
+    or Dare, the second-most-played game, nowhere (platform-26).
+    ``unique_players`` is rebuilt from each archived payload with the same
+    per-game extractors the payout uses, so it counts members who took part
+    (voted, joined, answered) rather than hosts plus whichever payloads happen
+    to carry a ``players`` list.
+    """
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
@@ -226,41 +272,34 @@ async def get_stats(
                 "SELECT COUNT(*) FROM games_question_bank"
             ).fetchone()[0]
 
+            where = "WHERE guild_id = ?"
+            params: list[object] = [guild_id]
+            if days is not None:
+                # ended_at is SQLite's own CURRENT_TIMESTAMP text (UTC), so the
+                # comparison is string-wise against the same format.
+                where += " AND ended_at >= datetime('now', ?)"
+                params.append(f"-{int(days)} days")
+
             games_played = conn.execute(
-                "SELECT COUNT(*) FROM games_game_history WHERE guild_id = ?",
-                (guild_id,),
+                f"SELECT COUNT(*) FROM games_game_history {where}", params,
             ).fetchone()[0]
 
             rounds_played_row = conn.execute(
-                "SELECT COALESCE(SUM(round_count), 0) FROM games_game_history WHERE guild_id = ?",
-                (guild_id,),
+                f"SELECT COALESCE(SUM(round_count), 0) FROM games_game_history {where}", params,
             ).fetchone()
             rounds_played = rounds_played_row[0] if rounds_played_row else 0
 
-            # Unique players: host_ids + player_ids from payload JSON
-            host_rows = conn.execute(
-                "SELECT DISTINCT host_id FROM games_game_history"
-                " WHERE guild_id = ? AND host_id IS NOT NULL",
-                (guild_id,),
-            ).fetchall()
-            player_ids: set[str] = {str(r[0]) for r in host_rows}
-
             payload_rows = conn.execute(
-                "SELECT payload FROM games_game_history"
-                " WHERE guild_id = ? AND payload IS NOT NULL",
-                (guild_id,),
+                f"SELECT game_type, payload FROM games_game_history {where}", params,
             ).fetchall()
-            for row in payload_rows:
+            player_ids: set[int] = set()
+            for gt, raw in payload_rows:
                 try:
-                    data = json.loads(row[0])
-                    if isinstance(data, dict):
-                        pids = data.get("player_ids") or data.get("players") or []
-                        if isinstance(pids, list):
-                            for pid in pids:
-                                player_ids.add(str(pid))
+                    data = json.loads(raw) if raw else {}
                 except (json.JSONDecodeError, TypeError):
-                    pass
-
+                    continue
+                roster, _rounds = roster_from_payload(gt, data if isinstance(data, dict) else {})
+                player_ids.update(roster)
             unique_players = len(player_ids)
 
             # Bank by type: {game_type: {sfw: N, nsfw: N}} — nsfw is now the
@@ -276,11 +315,23 @@ async def get_stats(
 
             # Games by type: {game_type: N}
             hist_rows = conn.execute(
-                "SELECT game_type, COUNT(*) FROM games_game_history"
-                " WHERE guild_id = ? GROUP BY game_type",
-                (guild_id,),
+                f"SELECT game_type, COUNT(*) FROM games_game_history {where} GROUP BY game_type",
+                params,
             ).fetchall()
             games_by_type: dict[str, int] = {gt: cnt for gt, cnt in hist_rows}
+
+            # Every type the history has ever seen, so the filter can offer
+            # a game that played last year even when the 30-day window is on.
+            all_types = [
+                r[0] for r in conn.execute(
+                    "SELECT DISTINCT game_type FROM games_game_history WHERE guild_id = ?",
+                    (guild_id,),
+                ).fetchall()
+            ]
+            games = {
+                gt: {"name": GAME_NAMES.get(gt, gt), "icon": GAME_ICONS.get(gt, "")}
+                for gt in sorted(set(GAME_NAMES) | set(all_types) | set(games_by_type))
+            }
 
             return {
                 "total_questions": total_q,
@@ -289,6 +340,9 @@ async def get_stats(
                 "unique_players": unique_players,
                 "bank_by_type": bank_by_type,
                 "games_by_type": games_by_type,
+                "games": games,
+                "history_types": sorted(all_types),
+                "days": days,
             }
 
     return await run_query(_q)
@@ -382,12 +436,13 @@ async def create_question(
     tags = normalise_tags(body.tags)
     _validate_traditional_tags(body.game_type, tags)
     tags_json = json.dumps(tags)
+    text = _normalise_wyr_text(body.game_type, body.question_text.strip())
 
     def _q():
         with ctx.open_db() as conn:
             cur = conn.execute(
                 "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
-                (body.game_type, tags_json, body.question_text.strip()),
+                (body.game_type, tags_json, text),
             )
             conn.commit()
             return {"question_id": cur.lastrowid}
@@ -417,7 +472,7 @@ async def update_question(
             params: list[object] = []
             if body.question_text is not None:
                 sets.append("question_text = ?")
-                params.append(body.question_text.strip())
+                params.append(_normalise_wyr_text(existing[0], body.question_text.strip()))
             if body.tags is not None:
                 tags = normalise_tags(body.tags)
                 _validate_traditional_tags(existing[0], tags)
@@ -483,6 +538,7 @@ async def bulk_add_questions(
     tags = normalise_tags(body.tags)
     _validate_traditional_tags(body.game_type, tags)
     tags_json = json.dumps(tags)
+    lines = [_normalise_wyr_text(body.game_type, line) for line in lines]
 
     def _q():
         with ctx.open_db() as conn:
@@ -599,7 +655,7 @@ async def import_from_pool(
                     continue
                 existing.add(text)
                 tags = override if override is not None else _parse_tags_col(tags_raw)
-                to_add.append((body.game_type, json.dumps(tags), text))
+                to_add.append((body.game_type, json.dumps(tags), _normalise_wyr_text(body.game_type, text)))
             if to_add:
                 conn.executemany(
                     "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",
@@ -665,7 +721,7 @@ async def import_bank(
         if not tags and entry.get("category") == "nsfw":
             tags = ["nsfw"]
         _validate_traditional_tags(gt, tags)
-        items.append((gt, json.dumps(tags), text))
+        items.append((gt, json.dumps(tags), _normalise_wyr_text(gt, text)))
 
     if not items:
         return {"imported": 0}
@@ -1510,6 +1566,68 @@ async def set_game_config(
                 )
             conn.commit()
             return {}
+
+    return await run_query(_q)
+
+
+# ── Idle lobbies ─────────────────────────────────────────────────────────────
+
+
+class LobbyDialsBody(BaseModel):
+    idle_nudge_minutes: Optional[int] = Field(None, ge=0, le=IDLE_MAX_MINUTES)
+    idle_cancel_minutes: Optional[int] = Field(None, ge=0, le=IDLE_MAX_MINUTES)
+
+
+def _lobby_dials(conn, guild_id: int) -> dict:
+    dials = parse_idle_dials(
+        get_config_value(conn, IDLE_NUDGE_KEY, str(IDLE_NUDGE_DEFAULT_MINUTES), guild_id),
+        get_config_value(conn, IDLE_CANCEL_KEY, str(IDLE_CANCEL_DEFAULT_MINUTES), guild_id),
+    )
+    return {
+        "idle_nudge_minutes": dials.nudge_seconds // 60,
+        "idle_cancel_minutes": dials.cancel_seconds // 60,
+        "defaults": {
+            "idle_nudge_minutes": IDLE_NUDGE_DEFAULT_MINUTES,
+            "idle_cancel_minutes": IDLE_CANCEL_DEFAULT_MINUTES,
+        },
+    }
+
+
+@router.get("/config/lobby")
+async def get_lobby_dials(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """The idle-lobby dials the start-ping sweep enforces (discovery-6):
+    minutes before a countdown-less lobby's host is nudged, and minutes before
+    a lobby still short of its minimum roster is closed. 0 switches a step off."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return _lobby_dials(conn, guild_id)
+
+    return await run_query(_q)
+
+
+@router.put("/config/lobby")
+async def set_lobby_dials(
+    request: Request,
+    body: LobbyDialsBody,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.idle_nudge_minutes is not None:
+                set_config_value(conn, IDLE_NUDGE_KEY, str(body.idle_nudge_minutes), guild_id)
+            if body.idle_cancel_minutes is not None:
+                set_config_value(conn, IDLE_CANCEL_KEY, str(body.idle_cancel_minutes), guild_id)
+            conn.commit()
+            return _lobby_dials(conn, guild_id)
 
     return await run_query(_q)
 

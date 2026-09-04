@@ -63,6 +63,20 @@ async def _blocked_pairs_in(state: RiskyRollState, *extra_user_ids: int) -> set[
     )
 
 
+async def _record_history(state: RiskyRollState) -> None:
+    """Put the resolved round on the games record before its rows go.
+
+    Best-effort: a history failure is logged and never holds up the close —
+    the winner's prompt is what the room is waiting on.
+    """
+    if app_state.store is None:
+        return
+    try:
+        await app_state.store.record_round_history(state)
+    except Exception:
+        log.exception("Risky Rolls: failed to record round %s to history.", state.game_id)
+
+
 async def schedule_auto_close(client: discord.Client, game_id: str, delay: float) -> None:
     if delay > 0:
         await asyncio.sleep(delay)
@@ -119,6 +133,7 @@ async def auto_close_round(client: discord.Client, game_id: str) -> None:
                 log.exception("Auto-close: failed to edit round message in #%s.", getattr(channel, "name", channel_id))
 
         app_state.active_games.pop(game_id, None)
+        await _record_history(state)
         if app_state.store is not None:
             await app_state.store.delete_round(game_id)
 
@@ -453,6 +468,7 @@ class RiskyRollView(BaseRiskyRollView):
                 task.cancel()
 
             app_state.active_games.pop(self.game_id, None)
+            await _record_history(state)
             if app_state.store is not None:
                 await app_state.store.delete_round(self.game_id)
 

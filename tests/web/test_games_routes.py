@@ -40,15 +40,21 @@ def _clear_bank(db_path):
         conn.execute("DELETE FROM games_question_bank")
 
 
-def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5, guild_id=123):
+def _seed_history(db_path, game_type="wyr", player_count=3, round_count=5, guild_id=123,
+                  payload=None, days_ago=0, game_id=None):
     # Default guild_id matches FakeCtx's default (123) so the guild-scoped
     # stats/history routes see these rows under the active guild.
     with open_db(db_path) as conn:
         conn.execute(
             "INSERT INTO games_game_history"
-            " (game_id, game_type, channel_id, host_id, player_count, round_count, started_at, guild_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, datetime('now'), ?)",
-            (f"game-{game_type}-{guild_id}", game_type, 111, 222, player_count, round_count, guild_id),
+            " (game_id, game_type, channel_id, host_id, player_count, round_count, payload,"
+            "  started_at, ended_at, guild_id)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', ?), datetime('now', ?), ?)",
+            (
+                game_id or f"game-{game_type}-{guild_id}", game_type, 111, 222,
+                player_count, round_count, json.dumps(payload or {}),
+                f"-{int(days_ago)} days", f"-{int(days_ago)} days", guild_id,
+            ),
         )
 
 
@@ -125,6 +131,93 @@ def test_stats_counts_questions_and_history(open_client, fake_ctx):
     assert data["games_by_type"] == {"wyr": 1}
 
 
+def test_stats_name_every_type_the_history_holds(open_client, fake_ctx):
+    # platform-26: the panel carried its own eight-entry name table, so a
+    # Truth or Dare row had no label and no bar. Names now ride with the data.
+    _seed_history(fake_ctx.db_path, "traditional")
+    _seed_history(fake_ctx.db_path, "wyr")
+    data = open_client.get(f"{BASE}/stats").json()
+    assert data["games"]["traditional"]["name"] == "Truth or Dare"
+    assert data["games"]["wyr"]["icon"]
+    assert data["history_types"] == ["traditional", "wyr"]
+
+
+def test_stats_unique_players_are_rebuilt_from_the_payload_roster(open_client, fake_ctx):
+    # Unique Players used to be hosts plus whichever payloads carried a
+    # `players` list — a WYR game stores voters per round, so its whole room
+    # was invisible while its host (who may never have voted) counted.
+    _seed_history(
+        fake_ctx.db_path, "wyr",
+        payload={"rounds": {"1": {"a": [11, 12], "b": [13]}, "2": {"a": [11], "b": [14]}}},
+    )
+    _seed_history(fake_ctx.db_path, "clapback", payload={"players": [12, 15]}, game_id="cb-1")
+    data = open_client.get(f"{BASE}/stats").json()
+    assert data["unique_players"] == 5  # 11 12 13 14 15 — host 222 took no part
+
+
+def test_stats_days_window_leaves_out_older_games(open_client, fake_ctx):
+    _seed_history(fake_ctx.db_path, "wyr", round_count=4, payload={"rounds": {"1": {"a": [1], "b": []}}})
+    _seed_history(
+        fake_ctx.db_path, "nhie", round_count=9, days_ago=40, game_id="old",
+        payload={"lives": {"2": 3}},
+    )
+    all_time = open_client.get(f"{BASE}/stats").json()
+    last_30 = open_client.get(f"{BASE}/stats", params={"days": 30}).json()
+    assert all_time["games_played"] == 2 and all_time["unique_players"] == 2
+    assert last_30["games_played"] == 1
+    assert last_30["rounds_played"] == 4
+    assert last_30["unique_players"] == 1
+    assert last_30["games_by_type"] == {"wyr": 1}
+    assert last_30["days"] == 30
+    # The filter list still offers the older game.
+    assert last_30["history_types"] == ["nhie", "wyr"]
+
+
+def test_stats_rejects_a_zero_day_window(open_client):
+    assert open_client.get(f"{BASE}/stats", params={"days": 0}).status_code == 422
+
+
+# ── Idle lobbies (discovery-6) ───────────────────────────────────────────────
+
+
+def test_lobby_dials_default_and_round_trip(open_client):
+    data = open_client.get(f"{BASE}/config/lobby").json()
+    assert data["idle_nudge_minutes"] == 20
+    assert data["idle_cancel_minutes"] == 60
+    assert data["defaults"] == {"idle_nudge_minutes": 20, "idle_cancel_minutes": 60}
+
+    resp = open_client.put(f"{BASE}/config/lobby", json={"idle_nudge_minutes": 5, "idle_cancel_minutes": 0})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["idle_nudge_minutes"] == 5
+    assert resp.json()["idle_cancel_minutes"] == 0
+    again = open_client.get(f"{BASE}/config/lobby").json()
+    assert (again["idle_nudge_minutes"], again["idle_cancel_minutes"]) == (5, 0)
+
+
+def test_lobby_dials_save_one_field_at_a_time(open_client):
+    open_client.put(f"{BASE}/config/lobby", json={"idle_cancel_minutes": 90})
+    data = open_client.get(f"{BASE}/config/lobby").json()
+    assert (data["idle_nudge_minutes"], data["idle_cancel_minutes"]) == (20, 90)
+
+
+@pytest.mark.parametrize("body", [{"idle_nudge_minutes": -1}, {"idle_cancel_minutes": 100000}])
+def test_lobby_dials_reject_out_of_range(open_client, body):
+    assert open_client.put(f"{BASE}/config/lobby", json=body).status_code == 422
+
+
+def test_lobby_dials_are_what_the_sweep_reads(open_client, fake_ctx):
+    # The dial the page saves is the dial the bot enforces — same key, same
+    # parse — or it would be a toggle that isn't enforced.
+    import asyncio
+
+    from bot_modules.services.game_start_ping_service import read_idle_dials
+    from bot_modules.services.games_db import GamesDb
+
+    open_client.put(f"{BASE}/config/lobby", json={"idle_nudge_minutes": 7, "idle_cancel_minutes": 45})
+    dials = asyncio.run(read_idle_dials(GamesDb(fake_ctx.db_path), fake_ctx.guild_id))
+    assert (dials.nudge_seconds, dials.cancel_seconds) == (420, 2700)
+
+
 # ── Bank CRUD ─────────────────────────────────────────────────────────────────
 
 
@@ -142,7 +235,7 @@ def test_bank_create_returns_question_id(open_client):
 def test_bank_create_tags_roundtrip(open_client, fake_ctx):
     resp = open_client.post(
         f"{BASE}/bank",
-        json={"game_type": "wyr", "tags": ["spicy", "nsfw", "spicy"], "question_text": "Q?"},
+        json={"game_type": "nhie", "tags": ["spicy", "nsfw", "spicy"], "question_text": "Q?"},
     )
     assert resp.status_code == 200
     qid = resp.json()["question_id"]
@@ -158,7 +251,7 @@ def test_bank_create_tags_are_lowercased(open_client, fake_ctx):
     bank's NSFW gate (which matches the literal "nsfw")."""
     resp = open_client.post(
         f"{BASE}/bank",
-        json={"game_type": "wyr", "tags": ["Nsfw", " Spicy", "NSFW"], "question_text": "Q?"},
+        json={"game_type": "nhie", "tags": ["Nsfw", " Spicy", "NSFW"], "question_text": "Q?"},
     )
     assert resp.status_code == 200
     qid = resp.json()["question_id"]
@@ -172,7 +265,7 @@ def test_bank_create_tags_are_lowercased(open_client, fake_ctx):
 def test_bank_create_no_tags_defaults_empty(open_client, fake_ctx):
     resp = open_client.post(
         f"{BASE}/bank",
-        json={"game_type": "wyr", "question_text": "Q?"},
+        json={"game_type": "nhie", "question_text": "Q?"},
     )
     assert resp.status_code == 200
     qid = resp.json()["question_id"]
@@ -230,6 +323,69 @@ def test_bank_create_traditional_accepts_single_category(open_client, fake_ctx):
             "SELECT tags FROM games_question_bank WHERE question_id = ?", (qid,)
         ).fetchone()
     assert json.loads(row["tags"]) == ["nsfw_dare"]
+
+
+# vote-games-49: every prod Would You Rather row was dashboard-typed prose
+# with no ``|``, and the bot served none of them. The API now stores what it
+# can split as ``a | b`` and refuses what it cannot.
+@pytest.mark.parametrize(
+    ("text", "stored"),
+    [
+        pytest.param("fly | be invisible", "fly | be invisible", id="canonical"),
+        pytest.param("  fly|be invisible ", "fly | be invisible", id="tight-pipe-normalised"),
+        pytest.param("Would you rather fly, or be invisible?", "fly | be invisible", id="prose-converted"),
+        pytest.param("fight a duck or fight a horse?", "fight a duck | fight a horse", id="bare-or"),
+    ],
+)
+def test_bank_create_wyr_stores_two_options(open_client, fake_ctx, text, stored):
+    resp = open_client.post(
+        f"{BASE}/bank", json={"game_type": "wyr", "question_text": text},
+    )
+    assert resp.status_code == 200
+    qid = resp.json()["question_id"]
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT question_text FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert row["question_text"] == stored
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("just one option", id="no-separator"),
+        pytest.param("a | b | c", id="two-pipes"),
+        pytest.param("Would you rather?", id="prefix-only"),
+    ],
+)
+def test_bank_create_wyr_rejects_a_row_it_cannot_split(open_client, text):
+    resp = open_client.post(
+        f"{BASE}/bank", json={"game_type": "wyr", "question_text": text},
+    )
+    assert resp.status_code == 400
+    assert "two options separated by |" in resp.json()["detail"]
+
+
+def test_bank_update_wyr_text_is_validated_too(open_client, fake_ctx):
+    qid = _seed_question(fake_ctx.db_path, "wyr", "sfw", "fly | swim")
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"question_text": "just fly"})
+    assert resp.status_code == 400
+    resp = open_client.put(f"{BASE}/bank/{qid}", json={"question_text": "Would you rather run or hide?"})
+    assert resp.status_code == 200
+    with open_db(fake_ctx.db_path) as conn:
+        row = conn.execute(
+            "SELECT question_text FROM games_question_bank WHERE question_id = ?", (qid,)
+        ).fetchone()
+    assert row["question_text"] == "run | hide"
+
+
+def test_bank_bulk_wyr_names_the_line_it_refuses(open_client):
+    resp = open_client.post(
+        f"{BASE}/bank/bulk",
+        json={"game_type": "wyr", "tags": [], "lines": ["fly | swim", "no options here"]},
+    )
+    assert resp.status_code == 400
+    assert "no options here" in resp.json()["detail"]
 
 
 def test_bank_bulk_traditional_requires_a_category(open_client):
@@ -337,7 +493,7 @@ def test_bank_list_search(open_client, fake_ctx):
 
 
 def test_bank_update_question_text(open_client, fake_ctx):
-    qid = _seed_question(fake_ctx.db_path, "wyr", "sfw", "Old text?")
+    qid = _seed_question(fake_ctx.db_path, "nhie", "sfw", "Old text?")
     resp = open_client.put(
         f"{BASE}/bank/{qid}",
         json={"question_text": "New text?"},
@@ -412,7 +568,7 @@ def test_bank_bulk_blank_lines_stripped(open_client):
     resp = open_client.post(
         f"{BASE}/bank/bulk",
         json={
-            "game_type": "wyr",
+            "game_type": "nhie",
             "tags": [],
             "lines": ["Real Q?", "   ", ""],
         },
@@ -477,7 +633,7 @@ def test_bank_import_valid_array(open_client, fake_ctx):
         {"game_type": "wyr", "tags": ["Air", "Nsfw"], "question_text": "Fly or swim?"},
         # No "tags" key → defaults to []. Legacy "category":"nsfw" maps to the nsfw tag.
         {"game_type": "nhie", "category": "nsfw", "question_text": "Never have I?"},
-        {"game_type": "wyr", "question_text": "Bare question?"},
+        {"game_type": "nhie", "question_text": "Bare question?"},
     ]
     resp = open_client.post(f"{BASE}/bank/import", json=payload)
     assert resp.status_code == 200
@@ -490,7 +646,8 @@ def test_bank_import_valid_array(open_client, fake_ctx):
                 "SELECT question_text, tags FROM games_question_bank"
             ).fetchall()
         }
-    assert rows["Fly or swim?"] == ["air", "nsfw"]  # lowercased on import
+    # lowercased on import; a wyr row is stored in the a | b shape it is served in
+    assert rows["Fly | swim"] == ["air", "nsfw"]
     assert rows["Never have I?"] == ["nsfw"]  # legacy category backfilled to tag
     assert rows["Bare question?"] == []  # missing tags defaults to empty
 
@@ -580,7 +737,7 @@ def test_pool_import_copies_with_tags_carried_over(open_client, fake_ctx):
     p2 = _seed_question(fake_ctx.db_path, "global", text="Pooled B?", tags=["nsfw"])
     resp = open_client.post(
         f"{BASE}/bank/pool/import",
-        json={"game_type": "wyr", "question_ids": [p1, p2]},
+        json={"game_type": "nhie", "question_ids": [p1, p2]},
     )
     assert resp.status_code == 200
     assert resp.json() == {"imported": 2, "skipped": 0}
@@ -588,7 +745,7 @@ def test_pool_import_copies_with_tags_carried_over(open_client, fake_ctx):
     with open_db(fake_ctx.db_path) as conn:
         rows = conn.execute(
             "SELECT tags, question_text FROM games_question_bank"
-            " WHERE game_type = 'wyr' ORDER BY question_id",
+            " WHERE game_type = 'nhie' ORDER BY question_id",
         ).fetchall()
     got = {r["question_text"]: json.loads(r["tags"]) for r in rows}
     assert got == {"Pooled A?": ["funny"], "Pooled B?": ["nsfw"]}
@@ -597,12 +754,12 @@ def test_pool_import_copies_with_tags_carried_over(open_client, fake_ctx):
 
 
 def test_pool_import_skips_texts_already_in_target(open_client, fake_ctx):
-    _seed_question(fake_ctx.db_path, "wyr", text="Dup?")
+    _seed_question(fake_ctx.db_path, "nhie", text="Dup?")
     p1 = _seed_question(fake_ctx.db_path, "global", text="Dup?")
     p2 = _seed_question(fake_ctx.db_path, "global", text="Fresh?")
     resp = open_client.post(
         f"{BASE}/bank/pool/import",
-        json={"game_type": "wyr", "question_ids": [p1, p2]},
+        json={"game_type": "nhie", "question_ids": [p1, p2]},
     )
     assert resp.status_code == 200
     assert resp.json() == {"imported": 1, "skipped": 1}
@@ -622,12 +779,12 @@ def test_pool_import_tags_override_replaces_pool_tags(open_client, fake_ctx):
     pid = _seed_question(fake_ctx.db_path, "global", text="Override me?", tags=["funny"])
     resp = open_client.post(
         f"{BASE}/bank/pool/import",
-        json={"game_type": "wyr", "question_ids": [pid], "tags": ["deep"]},
+        json={"game_type": "nhie", "question_ids": [pid], "tags": ["deep"]},
     )
     assert resp.status_code == 200
     with open_db(fake_ctx.db_path) as conn:
         row = conn.execute(
-            "SELECT tags FROM games_question_bank WHERE game_type = 'wyr'"
+            "SELECT tags FROM games_question_bank WHERE game_type = 'nhie'"
             " AND question_text = 'Override me?'",
         ).fetchone()
     assert json.loads(row["tags"]) == ["deep"]

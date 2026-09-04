@@ -17,6 +17,8 @@ import asyncio
 import json
 
 from bot_modules.games.utils.question_source import get_photo_prompt
+from bot_modules.games_photo.logic import BACKFILL_WINDOW_SECONDS, backfill_card_counts
+from bot_modules.services.games_db import GamesDb
 
 
 class _FakeDB:
@@ -107,3 +109,119 @@ def test_returns_one_of_several_candidates():
     db = _FakeDB([("photo", [], p) for p in prompts])
     seen = {_run(get_photo_prompt(db)) for _ in range(50)}
     assert seen <= prompts and seen  # every pick is a real candidate
+
+
+# ── Card counts (photo-external-102) ────────────────────────────────────────
+#
+# The daily card archives before anyone replies, so its history row can only
+# be filled in afterwards: player_count = distinct members who posted an image
+# in the 24 h after the card, round_count = images posted. Both come from the
+# messages table's ingest-time media_kind — the same signal the photo_post
+# faucet pays on — and never from message content.
+
+PHOTO_CHAN = 7001
+GUILD = 9001
+BOT_ID = 4444
+CARD_TS = 1_700_000_000  # epoch of the card's started_at
+
+
+def _iso(epoch: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _seed_card(db_path, *, game_id="card-1", started=CARD_TS, guild_id=0,
+               player_count=0, channel_id=PHOTO_CHAN):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_game_history (game_id, game_type, channel_id, host_id,"
+            " player_count, round_count, payload, started_at, ended_at, guild_id)"
+            " VALUES (?, 'photo', ?, 1, ?, 0, '{}', ?, ?, ?)",
+            (game_id, channel_id, player_count, _iso(started), _iso(started), guild_id),
+        )
+
+
+def _seed_image(db_path, *, author_id, ts, channel_id=PHOTO_CHAN, media_kind="media"):
+    from bot_modules.core.db_utils import open_db
+
+    _seed_image.n = getattr(_seed_image, "n", 0) + 1
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO messages (message_id, guild_id, channel_id, author_id, ts, media_kind)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (_seed_image.n, GUILD, channel_id, author_id, ts, media_kind),
+        )
+
+
+def _card_row(db_path, game_id="card-1"):
+    from bot_modules.core.db_utils import open_db
+
+    with open_db(db_path) as conn:
+        return conn.execute(
+            "SELECT player_count, round_count, guild_id FROM games_game_history WHERE game_id = ?",
+            (game_id,),
+        ).fetchone()
+
+
+async def _backfill(db_path, *, now):
+    return await backfill_card_counts(
+        GamesDb(db_path), channel_id=PHOTO_CHAN, guild_id=GUILD,
+        exclude_author_ids=[BOT_ID], now=now,
+    )
+
+
+async def test_backfill_counts_distinct_posters_and_photos_in_the_day_after(sync_db_path):
+    _seed_card(sync_db_path)
+    _seed_image(sync_db_path, author_id=11, ts=CARD_TS + 60)
+    _seed_image(sync_db_path, author_id=11, ts=CARD_TS + 120)   # second photo, same member
+    _seed_image(sync_db_path, author_id=22, ts=CARD_TS + 3600)
+    _seed_image(sync_db_path, author_id=BOT_ID, ts=CARD_TS)      # the card itself
+    _seed_image(sync_db_path, author_id=33, ts=CARD_TS - 10)     # before the card
+    _seed_image(sync_db_path, author_id=44, ts=CARD_TS + BACKFILL_WINDOW_SECONDS)  # too late
+    _seed_image(sync_db_path, author_id=55, ts=CARD_TS + 90, media_kind="gif")     # not a photo
+    _seed_image(sync_db_path, author_id=66, ts=CARD_TS + 90, channel_id=1)         # elsewhere
+
+    updated = await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 5)
+
+    assert updated == 1
+    row = _card_row(sync_db_path)
+    assert (row["player_count"], row["round_count"]) == (2, 3)
+
+
+async def test_backfill_waits_until_the_window_has_closed(sync_db_path):
+    # Filling in at hour 3 would freeze a number that is still climbing.
+    _seed_card(sync_db_path)
+    _seed_image(sync_db_path, author_id=11, ts=CARD_TS + 60)
+
+    assert await _backfill(sync_db_path, now=CARD_TS + 3 * 3600) == 0
+    assert _card_row(sync_db_path)["player_count"] == 0
+
+
+async def test_backfill_repairs_the_legacy_guild_zero(sync_db_path):
+    # Every card before migration 204 archived guild_id = 0 and so was
+    # invisible to the guild-filtered stats page. The channel is the guild's
+    # own photo channel, so the row can say so.
+    _seed_card(sync_db_path, guild_id=0)
+    await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 5)
+    assert _card_row(sync_db_path)["guild_id"] == GUILD
+
+
+async def test_backfill_leaves_a_filled_row_alone(sync_db_path):
+    _seed_card(sync_db_path, player_count=7)
+    _seed_image(sync_db_path, author_id=11, ts=CARD_TS + 60)
+    assert await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 5) == 0
+    assert _card_row(sync_db_path)["player_count"] == 7
+
+
+async def test_backfill_records_a_card_nobody_answered_as_answered(sync_db_path):
+    # A zero must mean "nobody posted", not "not counted yet" — so the row is
+    # marked counted (guild fixed, counts written) even when the count is 0.
+    _seed_card(sync_db_path, guild_id=0)
+    assert await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 5) == 1
+    row = _card_row(sync_db_path)
+    assert (row["player_count"], row["round_count"], row["guild_id"]) == (0, 0, GUILD)
+    # …and it is not re-counted on the next launch.
+    assert await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 99) == 0

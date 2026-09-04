@@ -17,9 +17,8 @@ from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
+    update_game_state,
     update_game_message,
     get_game_payload,
     modify_payload,
@@ -28,6 +27,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games_ttl.embeds import (
@@ -213,6 +213,9 @@ class TTLSubmitView(discord.ui.View):
         self.stop()
         disable_all_items(self)
         await interaction.response.edit_message(view=self)
+        # The row must stop reading as a lobby: boot recovery re-registers the
+        # submit view on a 'joining' row and only re-drives guessing on this.
+        await update_game_state(self.db, self.game_id, "guessing")
 
         # Ping all submitters
         if interaction.guild:
@@ -374,17 +377,13 @@ class TTLCog(commands.Cog):
     @app_commands.describe(prompt="Optional topic prompt for players' statements")
     async def twotruths(self, interaction: discord.Interaction, prompt: str | None = None):
         log.info("%s used /games play twotruths in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "ttl", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Two Truths and a Lie is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "ttl", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -610,17 +609,33 @@ class TTLCog(commands.Cog):
             del self.bot.active_views[game_id]
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-drive the guessing loop after a restart.
+        """Recover after a restart, by phase.
 
-        Completed rounds live in payload["scores"]; the in-progress round can't
-        be reconstructed (its shuffled statements/votes aren't persisted), so we
-        retire the stale round message and restart that subject's round. The
-        re-driven loop reconstructs scores from the payload and continues.
+        A lobby (``state == 'joining'``) gets its submit view re-registered on
+        the lobby message so members keep writing and the host still presses
+        Start Guessing — recovery used to re-drive guessing for any row with a
+        submission, bypassing that button and its 2-submission floor, and left
+        an empty lobby with dead buttons (vote-games-56).
+
+        Once Start Guessing has run (``state == 'guessing'``) the loop is
+        re-driven: completed rounds live in payload["scores"]; the in-progress
+        round can't be reconstructed (its shuffled statements/votes aren't
+        persisted), so we retire the stale round message and restart that
+        subject's round. The re-driven loop reconstructs scores from the
+        payload and continues.
         """
-        if not payload.get("submissions"):
-            return False
         game_id = row["game_id"]
         host_id = int(row["host_id"])
+        if row["state"] == "joining":
+            view = TTLSubmitView(
+                game_id, host_id, self.db, self.bot, self, prompt=payload.get("prompt"),
+            )
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info("Recovered ttl game %s (lobby) in #%s", game_id, getattr(channel, "name", channel.id))
+            return True
+        if not payload.get("submissions"):
+            return False
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
         await start_redrive(

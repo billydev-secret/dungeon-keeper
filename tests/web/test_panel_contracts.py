@@ -331,8 +331,13 @@ def test_a_switch_is_labelled_for_everything_that_reads_it(panel: str):
 
     # Cogs reach their GamesDb differently — most hold `self.db`, Risky Rolls
     # builds one from the app context — so match the call, not the handle.
+    # Since 2026-09-04 the /games play entries gate through the shared
+    # launch_refusal (games/utils/launch_guard.py), which reads the same
+    # enabled dial, so either call shape counts as gating the command.
     gates_its_command = bool(re.search(
-        r'check_game_enabled\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', cog
+        r'(?:check_game_enabled|launch_refusal)\(\s*[^,]+,\s*"'
+        + re.escape(game_type) + '"',
+        cog,
     ))
     if gates_its_command:
         assert "Include in Scheduled Games" not in src, (

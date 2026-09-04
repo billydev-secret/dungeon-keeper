@@ -116,7 +116,11 @@ async def test_photo_still_fires_after_leaving_schedulable(sync_db_path):
     assert after["next_run_at"] > NOW
 
 
-async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
+async def test_recurring_busy_channel_stays_due_and_retries(sync_db_path):
+    # platform-24: a recurring row used to roll to tomorrow the moment its
+    # channel was busy, so a member-opened round overlapping the slot by a
+    # minute cost the whole day. Now it stays due — the 60 s poll is the retry
+    # — until the lateness guard gives up on the slot.
     db = GamesDb(sync_db_path)
     launched = []
     bot = _make_bot(db, launched)
@@ -128,7 +132,96 @@ async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
     assert launched == []  # not launched
     after = await _row(db, row["id"])
     assert after["last_status"] == "skipped_active"
+    assert after["status"] == "active"
+    assert after["next_run_at"] == NOW      # still due, not rolled
+    assert after["last_run_at"] == NOW      # the retry is recorded as a run
+
+
+async def test_recurring_busy_channel_launches_once_it_frees_up(sync_db_path):
+    # The retry is the point: the game the slot was for still happens.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    gid = await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(db, recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+    assert launched == []
+    await db.execute("DELETE FROM games_active_games WHERE game_id = ?", (gid,))
+
+    await svc._process_due(bot, db, await _row(db, row["id"]), NOW + 1200)
+
+    assert len(launched) == 1
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "launched"
+    assert after["next_run_at"] > NOW + 1200
+
+
+async def test_recurring_busy_past_the_grace_rolls_with_skipped_active(sync_db_path):
+    # Still busy when the slot's grace runs out: roll to the next slot and say
+    # *why* — 'skipped_active', not the 'skipped_late' a bot outage would show.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(
+        db, recurrence="daily", last_status="skipped_active",
+        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100,
+        last_run_at=NOW - 60,  # a retry happened inside this slot
+    )
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_active"
     assert after["next_run_at"] > NOW
+
+
+async def test_recurring_stale_slot_after_a_busy_yesterday_is_still_late(sync_db_path):
+    # Yesterday's 'skipped_active' must not relabel an outage: the retry has to
+    # have happened *within* this slot for the roll to blame the busy channel.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(
+        db, recurrence="daily", last_status="skipped_active",
+        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100,
+        last_run_at=NOW - 86400,  # yesterday's retry
+    )
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_late"
+
+
+async def test_a_launch_stamps_last_launched_at(sync_db_path):
+    # last_status alone could never say when a schedule last *actually* ran —
+    # prod's Risky Rolls row read 'skipped_active' for days with no history.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(db, recurrence="daily")
+    assert row["last_launched_at"] is None
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_launched_at"] == NOW
+
+
+async def test_a_busy_retry_leaves_last_launched_at_alone(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(db, recurrence="daily", last_launched_at=NOW - 86400)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_launched_at"] == NOW - 86400
 
 
 async def test_busy_check_skips_without_announcing(sync_db_path):
@@ -151,7 +244,7 @@ async def test_busy_check_skips_without_announcing(sync_db_path):
     assert bot._channels[CHAN].sends == []      # no "starting now!" ping
     after = await _row(db, row["id"])
     assert after["last_status"] == "skipped_active"
-    assert after["next_run_at"] > NOW           # advanced to next slot; round rides
+    assert after["next_run_at"] == NOW          # stays due; the round rides, we retry
 
 
 async def test_once_busy_before_giveup_stays_due(sync_db_path):

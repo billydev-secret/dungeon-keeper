@@ -32,6 +32,11 @@ from bot_modules.games.constants import (
 )
 from bot_modules.games.utils.game_manager import resolve_name
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.games.utils.round_pacing import (
+    TIMER_FIELD_NAME,
+    timer_field_value,
+    waiting_notice,
+)
 from bot_modules.games_nhie.logic import DEFAULT_LIVES
 from bot_modules.core.branding import apply_section_spacing
 
@@ -47,12 +52,17 @@ def build_round_embed(
     guild: Any = None,
     max_lives: int = DEFAULT_LIVES,
     color: discord.Color | None = None,
+    *,
+    waiting: bool = False,
+    advance_at: int | None = None,
 ) -> discord.Embed:
     """Build the main round embed (active OR finished round).
 
     When ``closed=True`` the title gains a "ROUND OVER" suffix. All
     other fields render identically — the cog re-uses this same embed
-    when editing the message after the round resolves.
+    when editing the message after the round resolves. ``waiting`` is the
+    no-statement state (the bank had nothing; a posed statement starts the
+    round) and ``advance_at`` the live countdown of a timed round.
 
     The embed color follows the guild accent (``color``) when supplied;
     absent a guild it falls back to the phase palette (blue while
@@ -74,19 +84,24 @@ def build_round_embed(
         color=color or discord.Color(PHASE_RESULTS if closed else PHASE_PLAYING),
     )
     embed.add_field(name="Round", value=str(round_num), inline=False)
-    embed.add_field(
-        name="Statement",
-        value=discord.utils.escape_markdown(statement),
-        inline=False,
-    )
-    embed.add_field(
-        name="Votes",
-        value=(
-            f"😈 {bar_g} {pct_g} ({len(guilty)})\n"
-            f"😇 {bar_i} {pct_i} ({len(innocent)})"
-        ),
-        inline=False,
-    )
+    if waiting:
+        embed.description = waiting_notice("✍️ Pose Statement", "statement")
+    else:
+        embed.add_field(
+            name="Statement",
+            value=discord.utils.escape_markdown(statement),
+            inline=False,
+        )
+        embed.add_field(
+            name="Votes",
+            value=(
+                f"😈 {bar_g} {pct_g} ({len(guilty)})\n"
+                f"😇 {bar_i} {pct_i} ({len(innocent)})"
+            ),
+            inline=False,
+        )
+        if advance_at and not closed:
+            embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
 
     if lives:
         elim = eliminated or set()
@@ -163,19 +178,31 @@ def build_recap_embed(
     guilt_scores: dict[str, int],
     guild: Any = None,
     color: discord.Color | None = None,
+    *,
+    ended: bool = False,
+    reason: str | None = None,
 ) -> discord.Embed:
     """Build the game-over recap embed.
 
     Shows the winner (or a tombstone for the "everyone eliminated"
     case) and the final per-player guilty vote tally sorted from worst
     to best. ``guilt_scores`` keys are stringified user IDs to match
-    the persisted payload.
+    the persisted payload. ``ended=True`` is the **guilt board** ending —
+    the host's 🏁 End Game, the round cap or ``/games end`` closed the game
+    before elimination decided it (or lives were off), so nobody "won" and
+    the board is the payoff.
     """
     if winner_id is not None:
         winner_name = resolve_name(guild, winner_id) if guild else str(winner_id)
         description = (
             f"🏆 **{discord.utils.escape_markdown(winner_name)}** "
             f"is the last one standing!"
+        )
+    elif ended:
+        description = (
+            "That's the last round — here's the final guilt board."
+            if reason == "round_cap"
+            else "Game over — here's the final guilt board."
         )
     else:
         description = "Everyone's been eliminated! No winner this time."

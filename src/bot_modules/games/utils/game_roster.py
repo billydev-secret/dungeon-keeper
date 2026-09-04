@@ -146,8 +146,10 @@ def _fantasies(p: dict) -> tuple[list[int], int]:
             continue
         if r.get("author") is not None:
             roster.append(r["author"])
-        roster.extend(r.get("same_votes") or [])
-        roster.extend(r.get("nope_votes") or [])
+        # ``voters`` is the one list ``games_fantasies.logic.build_result_entry``
+        # stores (same + nope, already concatenated); the per-side lists never
+        # reach the payload.
+        roster.extend(r.get("voters") or [])
     return _ints(roster), len(results)
 
 
@@ -191,6 +193,14 @@ def _price(p: dict) -> tuple[list[int], int]:
     return _ints(roster), len(rounds)
 
 
+def _recorded_players(p: dict) -> tuple[list[int], int]:
+    """The self-stored games — Risky Rolls and the duel / group family — write
+    their own history row (``game_history.history_insert``) with the full
+    roster under ``players`` and one round; there is no active row to pay
+    from, so this extractor only ever feeds the unique-players count."""
+    return _ints(p.get("players")), 1
+
+
 _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
     "traditional": _traditional,
     "clapback": _clapback,
@@ -207,6 +217,13 @@ _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
     "wyr": _wyr,
     "mlt": _mlt,
     "price": _price,
+    "risky_roll": _recorded_players,
+    "pressure": _recorded_players,
+    "quickdraw": _recorded_players,
+    "hot_potato": _recorded_players,
+    "hot_potato_group": _recorded_players,
+    "chicken": _recorded_players,
+    "musical_chairs": _recorded_players,
 }
 
 # Types with no joined roster, listed so their absence above reads as a decision

@@ -21,8 +21,6 @@ from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     get_game_payload,
@@ -32,6 +30,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games_mfk.embeds import (
     build_assignments_embed,
     build_lobby_embed,
@@ -209,17 +208,13 @@ class MFKCog(commands.Cog):
         start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info("%s used /games play mfk in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "mfk", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Marry, Fornicate, Kiss is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "mfk", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         # Parse custom labels

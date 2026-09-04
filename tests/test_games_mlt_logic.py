@@ -728,7 +728,11 @@ from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
 import bot_modules.cogs.games_mlt_cog as mlt_cog  # noqa: E402
-from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.games.utils.game_manager import (  # noqa: E402
+    create_game,
+    get_active_game_by_id,
+    get_game_payload,
+)
 from bot_modules.services.games_db import GamesDb  # noqa: E402
 
 
@@ -742,36 +746,65 @@ class _SpyBot:
         return None
 
 
-async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
-    """When the prompt bank runs dry, the game ends paying everyone who voted
-    across all completed rounds (not just current survivors)."""
-    spy = AsyncMock()
-    monkeypatch.setattr(mlt_cog, "end_game", spy)
+async def test_run_round_empty_bank_opens_a_waiting_round(monkeypatch, sync_db_path):
+    """platform-27 / vote-games-50: a bare /mlt used to fill a 3+ lobby and
+    die at Start on an empty bank. The slash entry now refuses an empty bank
+    up front, and a round that finds nothing to serve waits for a posed prompt
+    instead of ending the game."""
     monkeypatch.setattr(mlt_cog, "get_mlt_prompt", AsyncMock(return_value=None))
     bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "mlt", payload={"rounds": {}, "players": [1, 2, 3], "crowns": {}})
+    cog = mlt_cog.MLTCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(
+        id=100, name="games", guild=None,
+        send=AsyncMock(return_value=SimpleNamespace(id=555, edit=AsyncMock())),
+    )
+    await cog._run_round(None, gid, 1, "Host", 1, [1, 2, 3], channel)
+
+    view = bot.active_views[gid]
+    assert view.waiting is True
+    assert view.select.disabled and view.next_btn.disabled and not view.end_game_btn.disabled
+    assert await get_active_game_by_id(bot.games_db, gid) is not None
+    await view.begin_round("win a staring contest", SimpleNamespace(id=555, edit=AsyncMock()))
+    assert view.waiting is False and not view.select.disabled
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["prompt"] == "win a staring contest"
+
+
+async def test_end_game_posts_final_standings_and_pays_every_voter(monkeypatch, sync_db_path):
+    """vote-games-52: the host's End Game (and /games end) close through the
+    paying path with the crown standings, tallying the open round first."""
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(mlt_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
     payload = {
-        "rounds": {
-            "1": {"votes": {"1": "2", "2": "1"}, "prompt": "x"},
-            "2": {"votes": {"3": "1"}, "prompt": "y"},
-        },
-        "crowns": {}, "players": [1, 3],  # player 2 left mid-game
+        "rounds": {"1": {"votes": {"1": 2, "2": 2}, "prompt": "p1"}, "2": {"votes": {}, "prompt": "p2"}},
+        "players": [1, 2, 3], "crowns": {"2": 1},
     }
     gid = await create_game(bot.games_db, 100, 1, "mlt", payload=payload)
-    bot.active_views[gid] = object()
     cog = mlt_cog.MLTCog(bot)  # type: ignore[arg-type]
-    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
-    await cog._run_round(None, gid, 1, "Host", 3, [1, 3], channel)
+    channel = SimpleNamespace(id=100, name="games", guild=None, send=AsyncMock())
+    view = cog._build_vote_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=2, players=[1, 2, 3],
+        channel=channel, prompt="p2",
+    )
+    bot.active_views[gid] = view
+    view.votes = {3: 1}
+
+    assert view.finish_callback is not None
+    await view.finish_callback(SimpleNamespace(id=555, edit=AsyncMock()), "ended")
+
+    titles = [c.kwargs["embed"].title for c in channel.send.await_args_list]
+    assert len(titles) == 2  # the open round's results, then the standings
+    assert "Final Standings" in titles[-1]
     call = spy.await_args
     assert call is not None and spy.await_count == 1
-    assert call.kwargs["player_ids"] == [1, 2, 3]  # includes departed voter 2
+    assert call.kwargs["player_ids"] == [1, 2, 3]
     assert call.kwargs["bot"] is bot
+    assert call.kwargs["reason"] == "ended"
+    assert call.kwargs["payload"]["crowns"] == {"2": 1, "1": 1}  # round 2's crown banked
+    assert gid not in bot.active_views
 
-def test_lobby_embed_renders_the_start_countdown():
-    # start_in advertises a start time as a live Discord relative timestamp;
-    # the host still presses the button.
-    embed = build_join_embed("Alice", [], start_at=1_700_000_000)
-    field = next(f for f in embed.fields if f.name == "⏰ Starting")
-    assert field.value == "<t:1700000000:R>"
 
 
 def test_lobby_embed_omits_the_countdown_when_none_was_set():

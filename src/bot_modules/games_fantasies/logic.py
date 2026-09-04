@@ -15,6 +15,8 @@ of free-form text entries, then per-entry binary voting (✅ Same vs
   in the payload. Mirrors the modal's ``_add_entry`` closure.
 * :func:`tally_entry_votes` and :func:`build_result_entry` — collapse
   the two vote lists into the per-entry result dict the recap consumes.
+* :func:`roster_from_results` — the room the host's End Game pays: entry
+  authors plus every voter, the same two fields the 24h sweep reads.
 * :func:`compute_recap_summary` — picks the headline entries (most
   shared, most polarizing, biggest outlier) for the final recap, plus
   the de-duplicated voter set.
@@ -188,3 +190,23 @@ def get_round_entries(
     return (
         payload.get("rounds", {}).get(str(round_num), {}).get("entries", [])
     )
+
+
+def roster_from_results(results: list[dict[str, Any]]) -> list[int]:
+    """Everyone the game pays when the host ends it: entry authors plus
+    everyone who voted either way on an entry, de-duplicated and sorted.
+
+    The author of the most-shared entry may never have voted, so a voters-only
+    roster would drop their participation credit. This is the completion
+    site's roster; ``game_roster._fantasies`` (the sweep's and ``/games end``'s
+    view of the same payload) reads the same two fields, so every end path
+    pays the same room.
+    """
+    roster: set[int] = set()
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        if r.get("author") is not None:
+            roster.add(int(r["author"]))
+        roster.update(int(v) for v in r.get("voters") or [])
+    return sorted(roster)

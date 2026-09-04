@@ -1,3 +1,4 @@
+import inspect
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -29,6 +30,14 @@ log = logging.getLogger(__name__)
 
 
 
+# Games whose cog ends itself with a recap (``end_with_recap``): ``/games end``
+# hands them the close so the room gets the same game-over card and payout the
+# host's own 🏁 End Game posts, instead of the red Force-Closed card
+# (vote-games-52 / discovery-3). Looked up by cog name, the way AMA's cleanup
+# hook is, so a cog mid-reload degrades to the force-close path.
+RECAP_ENDING_COGS = {"wyr": "WYRCog", "nhie": "NHIECog", "mlt": "MLTCog"}
+
+
 class GamesConfigCog(commands.Cog):
     def __init__(self, bot: "Bot"):
         self.bot = bot
@@ -36,6 +45,23 @@ class GamesConfigCog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
+
+    async def _end_with_recap(self, row, channel) -> bool:
+        """Let a game that owns a recap ending close itself; False to fall
+        back to the force-close teardown (unknown type, cog not loaded, or a
+        lobby with nothing to recap)."""
+        cog_name = RECAP_ENDING_COGS.get(row["game_type"])
+        if cog_name is None:
+            return False
+        cog = self.bot.get_cog(cog_name)
+        finisher = getattr(cog, "end_with_recap", None)
+        if finisher is None or not inspect.iscoroutinefunction(finisher):
+            return False
+        try:
+            return bool(await finisher(channel, row["game_id"]))
+        except Exception:
+            log.exception("/games end: recap ending failed for %s", row["game_id"])
+            return False
 
     async def _teardown_active_game(self, row, channel) -> None:
         """Force-close *row*'s game and tidy its message. Shared by /games end
@@ -102,6 +128,8 @@ class GamesConfigCog(commands.Cog):
         assert isinstance(channel, discord.abc.Messageable)
 
         async def _close() -> None:
+            if await self._end_with_recap(row, channel):
+                return
             await self._teardown_active_game(row, channel)
             try:
                 await channel.send(embed=build_force_end_embed(row["game_type"]))

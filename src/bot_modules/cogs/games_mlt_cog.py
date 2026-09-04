@@ -20,10 +20,10 @@ from discord import app_commands
 from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
+    get_active_game_by_id,
     get_game_options,
     update_game_message,
     update_game_payload,
@@ -37,10 +37,25 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.utils.question_source import (
     get_mlt_prompt,
-    has_matching_questions,
     channel_allows_nsfw,
+)
+from bot_modules.games.utils.round_pacing import (
+    END_DENIED,
+    MAX_ROUNDS_CAP,
+    MAX_ROUND_SECONDS,
+    REASON_EXPIRED,
+    REASON_HOST_ENDED,
+    REASON_ROUND_CAP,
+    RoundPacing,
+    advance_check,
+    is_scheduled_launch,
+    may_control,
+    resolve_pacing,
+    round_cap_reached,
+    seconds_left,
 )
 from bot_modules.games_mlt.embeds import (
     build_final_standings_embed,
@@ -70,6 +85,12 @@ log = logging.getLogger(__name__)
 
 # Cap the player-submitted prompt queue to prevent flooding.
 _MAX_QUEUED_PROMPTS = 15
+
+# After a restart, a timed round that already ran out still gets a moment
+# for the room to see the board before it auto-advances.
+_RECOVERY_GRACE_SECONDS = 5.0
+
+REASON_TOO_FEW_PLAYERS = "too_few_players"
 
 
 class MLTJoinView(discord.ui.View):
@@ -212,13 +233,22 @@ class PoseMLTModal(discord.ui.Modal, title="Pose a Prompt"):
         if self._view._closed:
             await interaction.response.send_message("This round already ended.", ephemeral=True)
             return
+        text = self.prompt.value.strip()
+        if not text:
+            await interaction.response.send_message("A prompt is required.", ephemeral=True)
+            return
+        if self._view.waiting:
+            # The bank had nothing to serve, so this prompt *is* the round.
+            await self._view.begin_round(text, self._message)
+            await interaction.response.send_message("✅ Your prompt opened the round!", ephemeral=True)
+            return
         if len(self._view.queued_prompts) >= _MAX_QUEUED_PROMPTS:
             await interaction.response.send_message(
                 f"The prompt queue is full ({_MAX_QUEUED_PROMPTS}). Let some play first!",
                 ephemeral=True,
             )
             return
-        count = queue_prompt(self._view.queued_prompts, self.prompt.value)
+        count = queue_prompt(self._view.queued_prompts, text)
         self._view.next_btn.label = f"⏭️ Next ({count} queued)"
         try:
             await self._message.edit(view=self._view)
@@ -241,6 +271,9 @@ class MLTVoteView(discord.ui.View):
         guild,
         advance_callback,
         accent=None,
+        *,
+        pacing: RoundPacing | None = None,
+        finish_callback=None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -253,12 +286,20 @@ class MLTVoteView(discord.ui.View):
         self.host_name = host_name
         self.guild = guild
         self.advance_callback = advance_callback
+        self.finish_callback = finish_callback
         # Guild accent resolved once at view creation; reused on every
         # vote/edit so we never re-resolve per interaction.
         self.accent = accent
         self.votes: dict[int, int] = {}
         self._closed = False
         self.queued_prompts: list[str] = []
+        self.pacing = pacing or RoundPacing()
+        # force_end_active_game pokes this alias to wake a timed round.
+        self._advanced_event = self.pacing.advanced
+        self.message: discord.Message | None = None
+        # No prompt yet (the bank had nothing to serve): only Pose, End and
+        # Help are live until someone poses one (vote-games-50).
+        self.waiting = not prompt
 
         options = []
         # A Discord Select allows at most 25 options; the lobby is capped
@@ -275,11 +316,37 @@ class MLTVoteView(discord.ui.View):
         )
         self.select.callback = self._vote_select_callback
         self.add_item(self.select)
+        if self.waiting:
+            self._set_round_controls(enabled=False)
+
+    def _set_round_controls(self, *, enabled: bool) -> None:
+        self.select.disabled = not enabled
+        self.next_btn.disabled = not enabled
+
+    async def begin_round(self, prompt: str, message: discord.Message) -> None:
+        """A posed prompt starts a round that was waiting for one."""
+        self.prompt = prompt
+        self.waiting = False
+        self._set_round_controls(enabled=True)
+        opened = self.pacing.open()
+
+        def _save(payload):
+            rd = payload.setdefault("rounds", {}).setdefault(str(self.round_num), {})
+            rd["prompt"] = prompt
+            rd["opened_at"] = opened
+
+        await modify_payload(self.db, self.game_id, _save)
+        self.message = message
+        self.pacing.start_timer(lambda: self.advance_callback(message))
+        try:
+            await message.edit(embed=self._build_embed(), view=self)
+        except discord.HTTPException:
+            pass
 
     async def _vote_select_callback(self, interaction: discord.Interaction):
         log.info("%s voted in game %s in #%s", interaction.user.display_name, self.game_id, channel_name(interaction.channel))
-        if self._closed:
-            await interaction.response.send_message("This round is over.", ephemeral=True)
+        if self._closed or self.waiting:
+            await interaction.response.send_message("This round is over." if self._closed else "No prompt yet — pose one first!", ephemeral=True)
             return
         if not is_eligible_voter(interaction.user.id, self.players):
             await interaction.response.send_message("You're not in the player pool.", ephemeral=True)
@@ -317,6 +384,8 @@ class MLTVoteView(discord.ui.View):
             vote_count=len(self.votes),
             closed=closed,
             color=self.accent,
+            waiting=self.waiting,
+            advance_at=self.pacing.advance_at(),
         )
 
     def _build_results_embed(self, tally: dict, name_fn: NameFn) -> discord.Embed:
@@ -340,14 +409,38 @@ class MLTVoteView(discord.ui.View):
     @discord.ui.button(label="⏭️ Next", style=discord.ButtonStyle.secondary, custom_id="mlt_next", row=1)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
+        refusal = await advance_check(
+            interaction, host_id=self.host_id, db=self.db, pacing=self.pacing,
+            has_voted=interaction.user.id in self.votes,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
         if self._closed:
             await interaction.response.send_message("This round is already over.", ephemeral=True)
             return
         await interaction.response.defer()
         await self.advance_callback(interaction.message)
+
+    @discord.ui.button(label="🏁 End Game", style=discord.ButtonStyle.secondary, custom_id="mlt_end", row=1)
+    async def end_game_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Close the game with its final standings and pay the room (vote-games-52)."""
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not await may_control(interaction, self.host_id, self.db):
+            await interaction.response.send_message(END_DENIED, ephemeral=True)
+            return
+        if self._closed:
+            await interaction.response.send_message("This game already ended.", ephemeral=True)
+            return
+        message = interaction.message
+
+        async def _confirmed(_confirm_interaction: discord.Interaction) -> None:
+            if self.finish_callback is not None:
+                await self.finish_callback(message, REASON_HOST_ENDED)
+
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to end this game?", view=ConfirmCloseView(_confirmed), ephemeral=True,
+        )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="mlt_htp2", row=1)
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -368,6 +461,8 @@ class MLTCog(commands.Cog):
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
         start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
+        round_seconds="Seconds per round before it advances itself (0 = you press Next; default from the dashboard)",
+        rounds="How many rounds before the final standings (0 = until you end it; default from the dashboard)",
     )
     async def mlt(
         self,
@@ -375,26 +470,22 @@ class MLTCog(commands.Cog):
         question: str = "",
         tags: str = "",
         start_in: app_commands.Range[int, 1, 60] | None = None,
+        round_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
+        rounds: app_commands.Range[int, 0, MAX_ROUNDS_CAP] | None = None,
     ):
         log.info("%s used /games play mlt in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "mlt", interaction.guild_id or 0):
-            await interaction.response.send_message("Most Likely To is currently disabled on this server.", ephemeral=True)
-            return
-
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
-        if tag_list and not question.strip() and not await has_matching_questions(
-            self.db, "mlt", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
-        ):
-            await interaction.response.send_message(
-                f"No questions match tags: {', '.join(tag_list)} for this game.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, no game already running here, and a bank with something to
+        # serve unless the host brought their own prompt (platform-27: a bare
+        # /mlt used to fill a lobby and die at Start on an empty bank).
+        refusal = await launch_refusal(
+            self.db, "mlt", interaction.channel_id, interaction.guild_id or 0,
+            tags=tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel),
+            host_supplied=bool(question.strip()),
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -403,7 +494,10 @@ class MLTCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={"question": question, "tags": tag_list, "start_in": start_in},
+            options={
+                "question": question, "tags": tag_list, "start_in": start_in,
+                "round_seconds": round_seconds, "max_rounds": rounds,
+            },
         )
         await finish_launch_response(interaction, game_id)
 
@@ -426,9 +520,15 @@ class MLTCog(commands.Cog):
             options.get("min_players", game_opts.get("min_players", MIN_PLAYERS)),
             options.get("max_players", game_opts.get("max_players", MAX_PLAYERS)),
         )
+        round_seconds, max_rounds = resolve_pacing(options, game_opts)
         start_epoch = resolve_start_epoch(options)
-        payload = {"opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [], "tags": options.get("tags") or [],
-                   "min_players": min_players, "max_players": max_players}
+        payload = {
+            "opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [],
+            "tags": options.get("tags") or [],
+            "min_players": min_players, "max_players": max_players,
+            "round_seconds": round_seconds, "max_rounds": max_rounds,
+            "scheduled": is_scheduled_launch(options, host_id),
+        }
         if start_epoch:
             payload["start_epoch"] = start_epoch
         game_id = await create_game(
@@ -438,6 +538,7 @@ class MLTCog(commands.Cog):
             "mlt",
             state="joining",
             payload=payload,
+            guild_id=guild_id,
         )
 
         log.info("Game %s (mlt) created by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
@@ -457,40 +558,28 @@ class MLTCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
-    async def _emit_final_standings(self, channel, game_id: str) -> None:
-        """Post the cumulative-crown standings when a game ends (skipped if no
-        crowns were ever awarded). Best-effort — never blocks teardown."""
-        try:
-            payload = await get_game_payload(self.db, game_id)
-            crowns = payload.get("crowns") or {}
-            if not any(int(c) > 0 for c in crowns.values()):
-                return
-            guild = getattr(channel, "guild", None)
-            accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
-            name_fn = await build_name_fn(
-                guild=guild,
-                db_path=self.bot.ctx.db_path,
-                guild_id=getattr(guild, "id", 0),
-                user_ids=[int(uid) for uid in crowns],
-            )
-            embed = build_final_standings_embed(crowns, color=accent, name_fn=name_fn)
-            if guild:
-                from bot_modules.economy.game_rewards import append_payout_footer
-                await append_payout_footer(self.bot, embed, guild.id, "mlt")
-            await channel.send(embed=embed)
-        except Exception:
-            log.exception("MLT: failed to emit final standings for %s", game_id)
-
-    async def _voter_roster(self, game_id: str) -> list[int]:
-        """Everyone who cast a vote in any completed round — the real
-        participant set for economy payouts (survivors-only ``players`` would
-        drop members who voted for several rounds then left)."""
-        payload = await get_game_payload(self.db, game_id)
+    @staticmethod
+    def _voter_roster_from(payload: dict) -> list[int]:
+        """Everyone who cast a vote in any round — the real participant set
+        for economy payouts (survivors-only ``players`` would drop members who
+        voted for several rounds then left)."""
         return sorted({
             int(v)
             for rd in payload.get("rounds", {}).values()
             for v in (rd.get("votes") or {})
         })
+
+    async def _voter_roster(self, game_id: str) -> list[int]:
+        return self._voter_roster_from(await get_game_payload(self.db, game_id))
+
+    @staticmethod
+    def _pacing_from_payload(payload: dict, opened_at: float | None) -> RoundPacing:
+        return RoundPacing(
+            round_seconds=payload.get("round_seconds", 0),
+            max_rounds=payload.get("max_rounds"),
+            scheduled=bool(payload.get("scheduled")),
+            opened_at=opened_at,
+        )
 
     async def _run_round(
         self,
@@ -505,26 +594,23 @@ class MLTCog(commands.Cog):
         carry_over_queue: list[str] | None = None,
         accent=None,
     ):
+        payload = await get_game_payload(self.db, game_id)
         if custom_prompt:
             prompt = custom_prompt
         else:
-            tags = (await get_game_payload(self.db, game_id)).get("tags") or None
+            tags = payload.get("tags") or None
             prompt = await get_mlt_prompt(
                 self.db, tags=tags, allow_nsfw=channel_allows_nsfw(channel)
-            )
-        if not prompt:
-            await channel.send(
-                "❌ The prompt bank is empty! Use **✍️ Pose Prompt** to submit your own, "
-                "or ask an admin to add prompts from the Games question bank on the web dashboard."
-            )
-            await self._emit_final_standings(channel, game_id)
-            await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
-            self.bot.active_views.pop(game_id, None)
-            return
+            ) or ""
+        # Nothing to serve: the round opens *waiting* for a posed prompt
+        # rather than ending the game (vote-games-50).
+        waiting = not prompt
 
-        payload = await get_game_payload(self.db, game_id)
+        pacing = self._pacing_from_payload(payload, None)
+        if not waiting:
+            pacing.open()
         rounds_data = payload.setdefault("rounds", {})
-        rounds_data[str(round_num)] = {"votes": {}, "prompt": prompt}
+        rounds_data[str(round_num)] = {"votes": {}, "prompt": prompt, "opened_at": pacing.opened_at}
         await update_game_payload(self.db, game_id, payload)
 
         view = self._build_vote_view(
@@ -537,6 +623,7 @@ class MLTCog(commands.Cog):
             prompt=prompt,
             interaction=interaction,
             accent=accent,
+            pacing=pacing,
         )
         if carry_over_queue:
             view.queued_prompts = carry_over_queue
@@ -551,14 +638,11 @@ class MLTCog(commands.Cog):
             await end_game(self.db, game_id)
             if game_id in self.bot.active_views:
                 del self.bot.active_views[game_id]
-            try:
-                await interaction.followup.send(
-                    "❌ I don't have permission to send messages in that channel. "
-                    "Please grant me **Send Messages** and **Embed Links** permissions.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+            await self._tell_host(
+                interaction,
+                "❌ I don't have permission to send messages in that channel. "
+                "Please grant me **Send Messages** and **Embed Links** permissions.",
+            )
             return
         except Exception:
             # Any other send failure (e.g. a 400 from an oversized select or
@@ -566,19 +650,30 @@ class MLTCog(commands.Cog):
             # row un-ended, so recover_game re-registers the dead lobby every
             # restart. Tear the game down cleanly and tell the host.
             log.exception("mlt: failed to send round message for game %s", game_id)
-            await end_game(self.db, game_id)
+            await end_game(self.db, game_id, reason="crash")
             if game_id in self.bot.active_views:
                 del self.bot.active_views[game_id]
-            try:
-                await interaction.followup.send(
-                    "❌ Something went wrong starting that round, so the game "
-                    "was ended. Please start a new one.",
-                    ephemeral=True,
-                )
-            except discord.HTTPException:
-                pass
+            await self._tell_host(
+                interaction,
+                "❌ Something went wrong starting that round, so the game "
+                "was ended. Please start a new one.",
+            )
             return
+        view.message = msg
         await update_game_message(self.db, game_id, msg.id)
+        if not waiting:
+            view.pacing.start_timer(lambda: view.advance_callback(msg))
+
+    @staticmethod
+    async def _tell_host(interaction, text: str) -> None:
+        """Ephemeral follow-up to whoever pressed Start, when there is one —
+        a timer-driven round has no interaction to answer."""
+        if interaction is None:
+            return
+        try:
+            await interaction.followup.send(text, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     def _build_vote_view(
         self,
@@ -592,8 +687,9 @@ class MLTCog(commands.Cog):
         prompt: str,
         interaction=None,
         accent=None,
+        pacing: RoundPacing | None = None,
     ) -> "MLTVoteView":
-        """Construct a vote-round view with its advance callback wired.
+        """Construct a vote-round view with its advance and finish callbacks wired.
 
         Shared by _run_round (fresh round) and recover_game (post-restart) so
         round-to-round advancement behaves identically after a crash. ``accent``
@@ -601,51 +697,79 @@ class MLTCog(commands.Cog):
         """
         guild = getattr(channel, "guild", None)
 
-        async def advance(message: discord.Message):
-            if view._closed:
-                return
+        async def close_round(message: discord.Message | None) -> dict[int, int]:
+            """Close the board and, when anyone voted, post the round's
+            results and bank its crowns. Returns the tally."""
             view._closed = True
-
+            # Wakes a timed round's wait (and never cancels it — the timer
+            # task may be the caller).
+            view.pacing.advanced.set()
+            disable_all_items(view)
+            if message is not None:
+                try:
+                    await message.edit(embed=view._build_embed(closed=True), view=view)
+                except discord.HTTPException:
+                    pass
+            if view.waiting:
+                return {}
             tally = tally_votes(view.votes, players)
-
             name_fn = await build_name_fn(
                 guild=guild,
                 db_path=self.bot.ctx.db_path,
                 guild_id=getattr(guild, "id", 0),
                 user_ids=list(tally),
             )
-            results_embed = view._build_results_embed(tally, name_fn)
-            disable_all_items(view)
             try:
-                await message.edit(embed=view._build_embed(closed=True), view=view)
+                await channel.send(embed=view._build_results_embed(tally, name_fn))
             except discord.HTTPException:
                 pass
-            await channel.send(embed=results_embed)
+            votes = encode_round_votes(view.votes)
+            winners = find_round_winners(tally)
+
+            def _save(payload):
+                bump_crowns(payload.setdefault("crowns", {}), winners)
+                payload.setdefault("rounds", {}).setdefault(str(round_num), {})["votes"] = votes
+
+            await modify_payload(self.db, game_id, _save)
+            return tally
+
+        async def finish(message: discord.Message | None, reason: str = REASON_HOST_ENDED) -> None:
+            """End with the final standings through the paying path — the
+            host's End Game, the round cap, an expired game at Next, and
+            /games end."""
+            if not view._closed:
+                await close_round(message)
+            await self._finish_game(game_id, channel, reason=reason)
+
+        async def advance(message: discord.Message) -> None:
+            if view._closed:
+                return
+            await close_round(message)
 
             if await is_game_expired(self.db, game_id):
-                await end_game(self.db, game_id)
-                if game_id in self.bot.active_views:
-                    del self.bot.active_views[game_id]
+                # Past the 24h line: end with the standings and pay the room
+                # (vote-games-59 — this used to be a bare, guild-0 end).
+                await self._finish_game(game_id, channel, reason=REASON_EXPIRED)
                 return
 
-            payload = await get_game_payload(self.db, game_id)
-            crowns = payload.setdefault("crowns", {})
-            bump_crowns(crowns, find_round_winners(tally))
-            payload["rounds"][str(round_num)]["votes"] = encode_round_votes(view.votes)
-            await update_game_payload(self.db, game_id, payload)
+            if round_cap_reached(round_num, view.pacing.max_rounds):
+                await self._finish_game(game_id, channel, reason=REASON_ROUND_CAP)
+                return
 
             # Re-read the roster so /games join and /games leave take effect next
             # round. NOTE: keep this round's `players` (used above by tally_votes)
             # untouched — only the next round runs with the updated roster.
+            payload = await get_game_payload(self.db, game_id)
             next_players = [int(p) for p in payload.get("players", players)]
 
             # Mid-game leaves can drop the roster below a playable size — end
             # cleanly rather than trying to build a vote with < 2 candidates.
             if len(next_players) < 2:
-                await channel.send("🎲 Not enough players left — ending the game.")
-                await self._emit_final_standings(channel, game_id)
-                await end_game(self.db, game_id, bot=self.bot, player_ids=await self._voter_roster(game_id))
-                self.bot.active_views.pop(game_id, None)
+                try:
+                    await channel.send("🎲 Not enough players left — ending the game.")
+                except discord.HTTPException:
+                    pass
+                await self._finish_game(game_id, channel, reason=REASON_TOO_FEW_PLAYERS)
                 return
 
             next_custom, remaining = pop_next_prompt(view.queued_prompts)
@@ -664,7 +788,7 @@ class MLTCog(commands.Cog):
                 )
             except Exception:
                 log.exception("Error advancing MLT game %s to round %d", game_id, round_num + 1)
-                await end_game(self.db, game_id)
+                await end_game(self.db, game_id, reason="crash")
                 self.bot.active_views.pop(game_id, None)
                 try:
                     await channel.send("❌ Something went wrong advancing the round. Game ended.")
@@ -681,10 +805,69 @@ class MLTCog(commands.Cog):
             bot=self.bot,
             host_name=host_name,
             guild=guild,
-            advance_callback=advance,
+            # pyright reports a circular inference here (advance captures
+            # `view`, whose initializer takes `advance`); the closure itself
+            # is fully annotated above.
+            advance_callback=advance,  # pyright: ignore[reportGeneralTypeIssues]
             accent=accent,
+            pacing=pacing,
+            finish_callback=finish,
         )
         return view
+
+    async def _finish_game(self, game_id: str, channel, *, reason: str) -> bool:
+        """Post the final crown standings and end through the paying path.
+
+        Returns False when the game had already been ended by another path
+        (``end_game``'s DELETE claim makes the payout exactly-once either way).
+        """
+        row = await get_active_game_by_id(self.db, game_id)
+        if row is None:
+            self.bot.active_views.pop(game_id, None)
+            return False
+        payload = await get_game_payload(self.db, game_id)
+        crowns = payload.get("crowns") or {}
+        roster = self._voter_roster_from(payload)
+        guild = getattr(channel, "guild", None)
+        try:
+            accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
+            name_fn = await build_name_fn(
+                guild=guild,
+                db_path=self.bot.ctx.db_path,
+                guild_id=getattr(guild, "id", 0),
+                user_ids=[int(uid) for uid in crowns],
+            )
+            embed = build_final_standings_embed(crowns, color=accent, name_fn=name_fn)
+            if reason == REASON_ROUND_CAP:
+                embed.description = "That's the last round!\n" + (embed.description or "")
+            if guild:
+                from bot_modules.economy.game_rewards import append_payout_footer
+                await append_payout_footer(self.bot, embed, guild.id, "mlt")
+            await channel.send(embed=embed)
+        except Exception:
+            log.exception("MLT: failed to post final standings for %s", game_id)
+        rounds = payload.get("rounds", {})
+        played = sum(1 for rd in rounds.values() if isinstance(rd, dict) and rd.get("prompt"))
+        ended = await end_game(
+            self.db, game_id,
+            player_count=len(roster), round_count=played, payload=payload,
+            bot=self.bot, player_ids=roster, reason=reason,
+        )
+        self.bot.active_views.pop(game_id, None)
+        return ended is not None
+
+    async def end_with_recap(self, channel, game_id: str) -> bool:
+        """``/games end`` on a started Most Likely To game: the same standings
+        ending as the host's 🏁 End Game, instead of the red Force-Closed card.
+        A lobby that never started has nothing to recap and answers False."""
+        view = self.bot.active_views.get(game_id)
+        if isinstance(view, MLTVoteView) and view.finish_callback is not None:
+            await view.finish_callback(view.message, REASON_HOST_ENDED)
+            return True
+        payload = await get_game_payload(self.db, game_id)
+        if not payload.get("rounds"):
+            return False
+        return await self._finish_game(game_id, channel, reason=REASON_HOST_ENDED)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Rebuild the current phase's view after a restart.
@@ -714,6 +897,7 @@ class MLTCog(commands.Cog):
         host_name = resolve_name(guild, host_id) if guild else "Host"
         accent = await safe_resolve_accent(self.bot, guild, log_label="MLT")
 
+        pacing = self._pacing_from_payload(payload, rd.get("opened_at"))
         view = self._build_vote_view(
             game_id=game_id,
             host_id=host_id,
@@ -724,10 +908,19 @@ class MLTCog(commands.Cog):
             prompt=prompt,
             interaction=None,
             accent=accent,
+            pacing=pacing,
         )
         view.votes = {int(k): int(v) for k, v in (rd.get("votes") or {}).items()}
+        view.message = message
         self.bot.active_views[game_id] = view
         self.bot.add_view(view, message_id=message.id)
+        if not view.waiting:
+            left = seconds_left(pacing.opened_at, pacing.round_seconds)
+            if left is not None:
+                view.pacing.start_timer(
+                    lambda: view.advance_callback(message),
+                    seconds=max(left, _RECOVERY_GRACE_SECONDS),
+                )
         log.info("Recovered mlt game %s (round %s) in #%s", game_id, cur, getattr(channel, "name", channel.id))
         return True
 

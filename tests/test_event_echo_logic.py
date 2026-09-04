@@ -79,6 +79,32 @@ def test_decide_applies_both_cooldowns(last_same_type, last_any, allowed, reason
     assert verdict.reason == reason
 
 
+@pytest.mark.parametrize(
+    "last_same_type, last_any, previous_ended, allowed, reason",
+    [
+        # discovery-10: the second Clapback of an evening, 20 minutes after the
+        # first — which has already ended. "Same type at most hourly" was meant
+        # to stop one open game being announced over and over; a *new* game
+        # once the old one is over is a new invitation.
+        pytest.param(NOW - 1200, NOW - 1200, True, True, "", id="previous-ended-lifts-per-type"),
+        pytest.param(NOW - 1200, NOW - 1200, False, False, "per_type", id="previous-still-open-holds"),
+        # The global floor is the real defence and is never lifted.
+        pytest.param(NOW - 60, NOW - 60, True, False, "global", id="global-floor-still-holds"),
+        # Nothing to lift: a type never echoed passes regardless.
+        pytest.param(None, NOW - GLOBAL_COOLDOWN_SECONDS, True, True, "", id="never-echoed"),
+    ],
+)
+def test_decide_lifts_the_per_type_window_once_the_previous_game_ended(
+    last_same_type, last_any, previous_ended, allowed, reason
+):
+    verdict = decide(
+        now=NOW, last_same_type=last_same_type, last_any=last_any, exempt=False,
+        previous_ended=previous_ended,
+    )
+    assert verdict.allowed is allowed
+    assert verdict.reason == reason
+
+
 
 @pytest.mark.parametrize(
     "opened_at, fresh",

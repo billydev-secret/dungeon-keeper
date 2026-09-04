@@ -31,6 +31,25 @@ Clapback predates this and keeps its epoch under ``config.start_epoch`` (its
 lobby view's timeout and its embed both read it there); ``extract_start_epoch``
 falls back to that rather than duplicating the value into two places that can
 drift apart.
+
+**Idle lobbies** (discovery-6). A lobby opened *without* a countdown used to
+get nothing: no nudge, and — outside Clapback's own 10-minute view timeout —
+no close until the 24-hour sweep, so an abandoned Story Builder sat all day
+holding the channel. The same sweep now applies two per-guild dials from the
+Games Global Config page (``config`` table, 0 switches a step off):
+
+  * after ``IDLE_NUDGE_KEY`` minutes a countdown-less ``joining`` lobby is
+    nudged once, the same way a countdown lobby is at its advertised start;
+  * after ``IDLE_CANCEL_KEY`` minutes a ``joining`` lobby that still holds
+    fewer than its game's minimum roster (``LOBBY_MIN_PLAYERS``, or the floor
+    the payload names) is closed — ``end_game`` with ``reason='lobby_timeout'``
+    and **no payout** — and its lobby message is retired. A countdown lobby's
+    hour starts at its advertised start rather than at open.
+
+A lobby that *could* start is never closed: that is the host's call, however
+long they sit on it, and the 24-hour sweep stays the safety net for everything
+else (games_system_spec.md, Non-goals — this is a pre-game close of a lobby
+that never filled, not a mid-game inactivity timeout).
 """
 from __future__ import annotations
 
@@ -38,11 +57,20 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Iterable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 import discord
 
 from bot_modules.core.utils import resolve_bot_channel
-from bot_modules.games.constants import GAME_NAMES, LOBBY_GAME_TYPES, LOBBY_START_BUTTON
+from bot_modules.games.constants import (
+    GAME_NAMES,
+    LOBBY_GAME_TYPES,
+    LOBBY_MIN_PLAYERS,
+    LOBBY_START_BUTTON,
+)
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +81,24 @@ POLL_SECONDS = 15
 # Bounds on the host-supplied `start_in` (minutes). The slash params declare the
 # same range, but a scheduled row's stored options bypass that validation.
 START_IN_MAX_MINUTES = 60
+
+# Idle-lobby dials: config-table keys (per guild) and the defaults an unset
+# guild runs on. Minutes on the dashboard, seconds in the code.
+IDLE_NUDGE_KEY = "games_lobby_idle_nudge_minutes"
+IDLE_CANCEL_KEY = "games_lobby_idle_cancel_minutes"
+IDLE_NUDGE_DEFAULT_MINUTES = 20
+IDLE_CANCEL_DEFAULT_MINUTES = 60
+IDLE_MAX_MINUTES = 24 * 60
+
+LOBBY_TIMEOUT_REASON = "lobby_timeout"
+
+
+@dataclass(frozen=True)
+class IdleLobbyDials:
+    """The two idle-lobby windows in seconds; 0 means that step is off."""
+
+    nudge_seconds: int
+    cancel_seconds: int
 
 
 # ── Pure predicates + copy ──────────────────────────────────────────────────
@@ -116,6 +162,171 @@ def start_ping_due(payload: dict, now: float) -> bool:
     if epoch is None:
         return False
     return now >= epoch
+
+
+def _minutes(raw, default: int) -> int:
+    """A dial's stored string → whole minutes, clamped; junk reads as the default."""
+    try:
+        value = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(value, IDLE_MAX_MINUTES))
+
+
+def parse_idle_dials(nudge_raw, cancel_raw) -> IdleLobbyDials:
+    """Turn the two stored dial values (or None) into windows in seconds."""
+    return IdleLobbyDials(
+        nudge_seconds=_minutes(nudge_raw, IDLE_NUDGE_DEFAULT_MINUTES) * 60,
+        cancel_seconds=_minutes(cancel_raw, IDLE_CANCEL_DEFAULT_MINUTES) * 60,
+    )
+
+
+async def read_idle_dials(db, guild_id: int) -> IdleLobbyDials:
+    """The guild's idle-lobby dials from the config table, defaults when unset.
+
+    A guild's own row wins; a legacy ``guild_id = 0`` row is the fallback, the
+    way every other config key reads (``db_utils.get_config_value``).
+    """
+
+    async def _read(key: str):
+        row = await db.fetchone(
+            "SELECT value FROM config WHERE guild_id = ? AND key = ?", (int(guild_id), key)
+        )
+        if row is None and guild_id != 0:
+            row = await db.fetchone(
+                "SELECT value FROM config WHERE guild_id = 0 AND key = ?", (key,)
+            )
+        return row[0] if row else None
+
+    return parse_idle_dials(await _read(IDLE_NUDGE_KEY), await _read(IDLE_CANCEL_KEY))
+
+
+def _ints(values: Any) -> list[int]:
+    out: list[int] = []
+    if not isinstance(values, Iterable) or isinstance(values, (str, bytes, dict)):
+        return out
+    for raw in values:
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def lobby_roster_size(payload: dict) -> int:
+    """How many have joined. The six lobby games keep their roster under
+    ``players`` (clapback, mlt, rushmore, story) or ``participants``
+    (compliment, mfk); anything unreadable counts as nobody."""
+    roster = payload.get("players")
+    if roster is None:
+        roster = payload.get("participants")
+    return len(_ints(roster))
+
+
+def lobby_min_players(game_type: str, payload: dict) -> int:
+    """The floor this lobby's start button would hold the roster to.
+
+    mlt (``min_players``) and rushmore (``settings.min_players``) can raise
+    theirs per game and store it in the payload; everything else uses the
+    registry. An unknown type assumes two — a lobby with two people in it is
+    never closed on a guess.
+    """
+    raw = payload.get("min_players")
+    if raw is None:
+        settings = payload.get("settings")
+        if isinstance(settings, dict):
+            raw = settings.get("min_players")
+    if raw is not None:
+        try:
+            floor = int(raw)
+            if floor > 0:
+                return floor
+        except (TypeError, ValueError):
+            pass
+    return LOBBY_MIN_PLAYERS.get(game_type, 2)
+
+
+def opened_epoch(row) -> float | None:
+    """When the lobby opened, from the row's ``created_at`` (SQLite's own
+    ``CURRENT_TIMESTAMP`` text, UTC). None when unreadable — an unknown age
+    is never treated as idle."""
+    raw = row["created_at"]
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def idle_nudge_due(payload: dict, opened_at: float | None, now: float, dials: IdleLobbyDials) -> bool:
+    """A countdown-less lobby, open for the nudge window, not yet nudged.
+
+    Countdown lobbies are left to ``start_ping_due`` — their host chose when
+    to be tapped, and tapping them earlier would contradict the board.
+    """
+    if dials.nudge_seconds <= 0 or opened_at is None:
+        return False
+    if payload.get("start_ping_sent") or extract_start_epoch(payload) is not None:
+        return False
+    return now - opened_at >= dials.nudge_seconds
+
+
+def idle_cancel_due(
+    game_type: str, payload: dict, opened_at: float | None, now: float, dials: IdleLobbyDials
+) -> bool:
+    """Sat for the cancel window with fewer joined than the game can start with.
+
+    The clock starts at open, or at the advertised start for a countdown
+    lobby — people were told to turn up then, so the hour of grace runs from
+    then. Enough players to start means it is the host's lobby to run or
+    abandon; the sweep never closes one that could have begun.
+    """
+    if dials.cancel_seconds <= 0 or opened_at is None:
+        return False
+    if lobby_roster_size(payload) >= lobby_min_players(game_type, payload):
+        return False
+    since = opened_at
+    start_epoch = extract_start_epoch(payload)
+    if start_epoch is not None:
+        since = max(since, float(start_epoch))
+    return now - since >= dials.cancel_seconds
+
+
+def build_idle_nudge(
+    game_type: str, host_id: int, *, idle_minutes: int, dials: IdleLobbyDials, min_players: int
+) -> str:
+    """The idle nudge: how long the lobby has waited, which button, and — when
+    the close is on — the deadline it is heading for."""
+    game_label = GAME_NAMES.get(game_type, game_type)
+    button = LOBBY_START_BUTTON.get(game_type)
+    button_str = f"**{button}**" if button else "the start button"
+    text = (
+        f"⏰ <@{host_id}> — **{game_label}** has been waiting {idle_minutes} minutes. "
+        f"Hit {button_str} when everyone's in"
+    )
+    if dials.cancel_seconds > 0:
+        players = "1 player" if min_players == 1 else f"{min_players} players"
+        text += (
+            f" — with fewer than {players} joined it closes on its own "
+            f"after {dials.cancel_seconds // 60} minutes."
+        )
+    else:
+        text += "."
+    return text
+
+
+def build_idle_cancel_notice(game_type: str, *, dials: IdleLobbyDials, min_players: int) -> str:
+    """What the retired lobby message says, in place of its dead buttons."""
+    game_label = GAME_NAMES.get(game_type, game_type)
+    players = "1 player" if min_players == 1 else f"{min_players} players"
+    return (
+        f"⌛ **Lobby timed out** — {game_label} wasn't started within "
+        f"{dials.cancel_seconds // 60} minutes and fewer than {players} had joined. "
+        f"Run `/games play {game_type}` to open a new one."
+    )
 
 
 def build_start_ping(game_type: str, host_id: int) -> str:
@@ -193,12 +404,67 @@ async def mark_start_ping_sent(db, game_id: str) -> None:
 
 
 
-async def _process_lobby(bot, db, row, now: float) -> None:
-    payload = json.loads(row["payload"]) if row["payload"] else {}
-    if not start_ping_due(payload, now):
+async def _retire_lobby_message(bot, channel, row, text: str) -> None:
+    """Replace the dead lobby's buttons with the timeout notice; best effort."""
+    message_id = row["message_id"]
+    if not message_id:
         return
+    try:
+        message = await channel.fetch_message(int(message_id))
+        await message.edit(content=text, view=None)
+    except Exception:
+        log.info(
+            "idle lobby: could not retire message %s for game %s",
+            message_id, row["game_id"], exc_info=True,
+        )
+
+
+async def _cancel_idle_lobby(bot, db, row, channel, dials: IdleLobbyDials, payload: dict) -> None:
+    """Close a lobby that never filled: archive without pay, stop its view,
+    retire its message. ``end_game``'s DELETE-first claim means a host pressing
+    Start on the same tick wins or loses cleanly, never both."""
+    from bot_modules.games.utils.game_manager import end_game  # noqa: PLC0415
 
     game_id = row["game_id"]
+    game_type = str(row["game_type"])
+    ended = await end_game(db, game_id, reason=LOBBY_TIMEOUT_REASON)
+    if ended is None:
+        return  # someone started or ended it between the read and now
+    views = getattr(bot, "active_views", None)
+    view = views.pop(game_id, None) if isinstance(views, dict) else None
+    stop = getattr(view, "stop", None)
+    if callable(stop):
+        try:
+            stop()
+        except Exception:
+            log.debug("idle lobby: view stop failed for %s", game_id, exc_info=True)
+    log.info("Idle lobby %s (%s) closed after %ss with %d joined",
+             game_id, game_type, dials.cancel_seconds, lobby_roster_size(payload))
+    if channel is not None:
+        await _retire_lobby_message(
+            bot, channel, row,
+            build_idle_cancel_notice(
+                game_type, dials=dials, min_players=lobby_min_players(game_type, payload),
+            ),
+        )
+
+
+async def _process_lobby(bot, db, row, now: float, *, dials: IdleLobbyDials | None = None) -> None:
+    payload = json.loads(row["payload"]) if row["payload"] else {}
+    game_id = row["game_id"]
+    game_type = str(row["game_type"])
+    opened_at = opened_epoch(row)
+
+    if dials is not None and idle_cancel_due(game_type, payload, opened_at, now, dials):
+        channel = await resolve_bot_channel(bot, int(row["channel_id"]))
+        await _cancel_idle_lobby(bot, db, row, channel, dials, payload)
+        return
+
+    countdown_due = start_ping_due(payload, now)
+    idle_due = dials is not None and idle_nudge_due(payload, opened_at, now, dials)
+    if not countdown_due and not idle_due:
+        return
+
     channel = await resolve_bot_channel(bot, int(row["channel_id"]))
     if channel is None:
         # Unreachable channel is terminal for this lobby — mark it sent so we
@@ -210,11 +476,43 @@ async def _process_lobby(bot, db, row, now: float) -> None:
     # Claim before sending: a send that succeeds but whose flag write is lost
     # would double-ping on the next tick, which is the louder failure.
     await mark_start_ping_sent(db, game_id)
-    await send_start_ping(channel, row["game_type"], int(row["host_id"]))
+    host_id = int(row["host_id"])
+    if countdown_due:
+        await send_start_ping(channel, game_type, host_id)
+        return
+    assert dials is not None and opened_at is not None
+    try:
+        await channel.send(
+            build_idle_nudge(
+                game_type, host_id,
+                idle_minutes=int((now - opened_at) // 60),
+                dials=dials,
+                min_players=lobby_min_players(game_type, payload),
+            ),
+            allowed_mentions=host_only_mentions(host_id),
+        )
+    except Exception:
+        log.warning("idle nudge failed for %s in channel %s", game_type, row["channel_id"], exc_info=True)
+
+
+async def _dials_for(db, row, cache: dict[int, IdleLobbyDials]) -> IdleLobbyDials:
+    """The idle dials for the row's guild, read once per guild per tick."""
+    try:
+        guild_id = int(row["guild_id"] or 0)
+    except (IndexError, KeyError, TypeError, ValueError):
+        guild_id = 0
+    if guild_id == 0:
+        from bot_modules.games.utils.game_manager import guild_for_channel  # noqa: PLC0415
+
+        guild_id = await guild_for_channel(db, int(row["channel_id"]))
+    if guild_id not in cache:
+        cache[guild_id] = await read_idle_dials(db, guild_id)
+    return cache[guild_id]
 
 
 async def game_start_ping_loop(bot) -> None:
-    """Poll open lobbies and nudge hosts whose start time has arrived.
+    """Poll open lobbies: nudge hosts whose start time has arrived, nudge
+    idle countdown-less lobbies, and close the ones that never filled.
 
     Registered as a bot startup task. Only ``joining`` rows are considered, so
     a game that was started early, cancelled, or timed out drops out of the
@@ -233,9 +531,11 @@ async def game_start_ping_loop(bot) -> None:
                 f"WHERE state = 'joining' AND game_type IN ({placeholders})",
                 lobby_types,
             )
+            dials_cache: dict[int, IdleLobbyDials] = {}
             for row in rows:
                 try:
-                    await _process_lobby(bot, db, row, now)
+                    dials = await _dials_for(db, row, dials_cache)
+                    await _process_lobby(bot, db, row, now, dials=dials)
                 except asyncio.CancelledError:
                     raise
                 except Exception:

@@ -90,7 +90,11 @@ async def recover_active_games(bot):
 
     Safe to call before any recoverers are registered (unknown types are
     skipped) and resilient to per-game failures (one bad row never aborts the
-    sweep). Expired games are left for the hourly cleanup loop to archive.
+    sweep). Expired games are not recovered — they are archived by one
+    ``sweep_expired_games`` pass at the end, rather than left with dead
+    buttons for up to an hour until the cleanup loop's first tick
+    (platform-30); that same pass also frees their channels for the
+    scheduler's busy check.
     """
     db = bot.games_db
     try:
@@ -139,3 +143,10 @@ async def recover_active_games(bot):
         "%d no-message, %d failed (of %d active)",
         recovered, skipped, expired, no_channel, no_message, failed, len(rows),
     )
+    if expired:
+        from bot_modules.games.utils.expiry_service import sweep_expired_games  # noqa: PLC0415
+
+        try:
+            await sweep_expired_games(bot, db)
+        except Exception:
+            log.exception("games recovery: expiry pass failed")

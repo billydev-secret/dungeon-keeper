@@ -18,6 +18,10 @@ external bank or a FIFO user-submitted queue). What it does have is:
 - :func:`next_button_label` — render the ``"⏭️ Next (N queued)"`` label
   consistently from the queue length. Used in two places in the cog
   (modal submit and round carry-over) so it's worth centralizing.
+- :func:`most_divisive_round` / :func:`count_votes` / :func:`played_rounds`
+  — the numbers the game-over recap shows (vote-games-52: WYR had no
+  in-game ending and no recap at all; the "most divisive" rule mirrors
+  ``games_session.logic.build_game_highlight``).
 """
 
 from __future__ import annotations
@@ -86,3 +90,34 @@ def next_button_label(queued_count: int) -> str:
     over branch both produce identical text.
     """
     return f"⏭️ Next ({queued_count} queued)"
+
+
+def played_rounds(rounds: dict) -> list[dict]:
+    """Rounds that actually had a question, in round order.
+
+    A round left waiting for a prompt (``q == ""``) never happened and is
+    neither counted nor a recap candidate.
+    """
+    out: list[dict] = []
+    for key in sorted(rounds or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
+        rd = rounds[key]
+        if isinstance(rd, dict) and rd.get("q"):
+            out.append(rd)
+    return out
+
+
+def count_votes(rounds: dict) -> int:
+    """Every 🅰️ and 🅱️ vote cast across the game."""
+    return sum(len(rd.get("a") or []) + len(rd.get("b") or []) for rd in played_rounds(rounds))
+
+
+def most_divisive_round(rounds: dict) -> dict | None:
+    """The round with the closest 🅰️/🅱️ split — the game's best moment.
+
+    Only rounds with at least one vote qualify; a 0–0 round is a tie but
+    not a divisive one. Ties on the margin go to the earlier round.
+    """
+    voted = [rd for rd in played_rounds(rounds) if (rd.get("a") or rd.get("b"))]
+    if not voted:
+        return None
+    return min(voted, key=lambda rd: abs(len(rd.get("a") or []) - len(rd.get("b") or [])))

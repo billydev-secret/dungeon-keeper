@@ -65,13 +65,16 @@ async def pay_game_rewards(
     *,
     occurrence: str | None = None,
     host_id: int | None = None,
-) -> None:
+) -> int:
     """Credit participation to every participant and a win bonus to winners.
 
     No-op unless the guild's economy is enabled. Duplicate ids, bots, and
     non-positive/unresolvable ids are dropped; winners also receive
     participation and are restricted to resolved participants. Per-member
-    failures are logged and never propagate.
+    failures are logged and never propagate. Returns the coins credited in
+    total (participation, wins and the host bounty) — 0 on every no-op path —
+    so an end path that reports on the payout (the 24h sweep's in-channel
+    line) can say what it paid.
 
     Also fires the matching quest trigger ("duel" for the PvP cogs,
     "party_game" otherwise) for every participant. ``occurrence`` is the
@@ -86,10 +89,11 @@ async def pay_game_rewards(
     joiners earns nothing and fires nothing — that is the anti-farm gate, so an
     empty game started to game the quest pays out zero.
     """
+    total = 0
     try:
         guild = bot.get_guild(guild_id)
         if guild is None:
-            return
+            return 0
 
         def _coerce(raw: object) -> int | None:
             try:
@@ -106,7 +110,7 @@ async def pay_game_rewards(
         coerced = [c for c in (_coerce(u) for u in participant_ids) if c is not None]
         participants = [uid for uid in dict.fromkeys(coerced) if _valid(uid)]
         if not participants:
-            return
+            return 0
         allowed = set(participants)
         winners = {c for c in (_coerce(u) for u in winner_ids) if c in allowed}
 
@@ -118,21 +122,22 @@ async def pay_game_rewards(
 
         settings = await asyncio.to_thread(_load)
         if not settings.enabled:
-            return
+            return 0
 
         boosters = {uid: member_is_booster(bot, guild_id, uid) for uid in participants}
 
-        def _credit() -> None:
+        def _credit() -> int:
+            paid = 0
             with open_db(db_path) as conn:
                 for uid in participants:
                     booster = boosters[uid]
                     try:
-                        award_game_reward(
+                        paid += award_game_reward(
                             conn, settings, guild_id, uid,
                             kind="game_participation", booster=booster,
                         )
                         if uid in winners:
-                            award_game_reward(
+                            paid += award_game_reward(
                                 conn, settings, guild_id, uid,
                                 kind="game_win", booster=booster,
                             )
@@ -140,10 +145,11 @@ async def pay_game_rewards(
                         log.exception(
                             "game reward failed for user %s (%s)", uid, game_type
                         )
+            return paid
 
-        await asyncio.to_thread(_credit)
+        total += await asyncio.to_thread(_credit)
 
-        await pay_host_bounty(
+        total += await pay_host_bounty(
             bot, guild_id, settings, host_id,
             participants=participants, boosters=boosters,
             game_type=game_type, occurrence=occurrence,
@@ -172,6 +178,7 @@ async def pay_game_rewards(
                 )
     except Exception:
         log.exception("pay_game_rewards failed for guild %s (%s)", guild_id, game_type)
+    return total
 
 
 async def fire_member_trigger(
@@ -555,8 +562,9 @@ async def pay_host_bounty(
     boosters: dict[int, bool],
     game_type: str,
     occurrence: str | None,
-) -> None:
-    """Credit a game's host and fire the ``game_host`` trigger.
+) -> int:
+    """Credit a game's host and fire the ``game_host`` trigger. Returns the
+    bounty credited (0 on every no-op path).
 
     Shared by the flat faucet (``pay_game_rewards``) and the score-proportional
     one (``pay_cah_game_by_score``) so external games pay hosting on exactly the
@@ -569,44 +577,46 @@ async def pay_host_bounty(
     """
     host = int(host_id) if host_id else 0
     if host <= 0:
-        return
+        return 0
     guild = bot.get_guild(guild_id)
     if guild is None:
-        return
+        return 0
     member = guild.get_member(host)
     if member is None or member.bot:
-        return
+        return 0
     joiners = len([uid for uid in participants if uid != host])
     if joiners <= 0:
-        return
+        return 0
 
     host_booster = (
         boosters[host] if host in boosters else member_is_booster(bot, guild_id, host)
     )
     db_path = bot.ctx.db_path
 
-    def _bounty() -> None:
+    def _bounty() -> int:
         with open_db(db_path) as conn:
             # Gate the coin faucet on the game_host income source, the same way
             # photo_post gates its flat award — flipping the source off must
             # stop the payout, not just the quest.
             if not source_enabled(conn, guild_id, "game_host"):
-                return
+                return 0
             try:
-                award_host_bounty(
+                return award_host_bounty(
                     conn, settings, guild_id, host,
                     joiners=joiners, booster=host_booster,
                 )
             except Exception:
                 log.exception("host bounty failed for %s (%s)", host, game_type)
+                return 0
 
-    await asyncio.to_thread(_bounty)
+    bounty = await asyncio.to_thread(_bounty)
     # The game_host trigger drives the personal daily and the guild-wide
     # community counted quest. Keyed to the game id so it fires once.
     await fire_member_trigger(
         bot, guild_id, host, "game_host",
         occurrence=str(occurrence) if occurrence is not None else None,
     )
+    return bounty
 
 
 async def _fire_triggers(

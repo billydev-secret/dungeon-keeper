@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_payload
+from bot_modules.games_fantasies.logic import build_result_entry
 
 
 @pytest.mark.parametrize(
@@ -44,9 +45,14 @@ from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_pay
         # hottakes — voters plus authors; a winning author may never have voted.
         ("hottakes", {"results": [{"voters": [1, 2], "author": 3}]}, ([1, 2, 3], 1)),
         ("hottakes", {"results": [{"voters": [1], "author": None}]}, ([1], 1)),
-        # fantasies — entry authors plus both vote sides.
+        # fantasies — entry authors plus everyone who voted either way. The
+        # row is built by the cog's own builder so the two cannot drift: until
+        # 2026-09-04 the extractor read same_votes/nope_votes keys the builder
+        # never stored, and only authors were ever paid (anon-tail-64).
         ("fantasies", {"results": [
-            {"author": 1, "same_votes": [2], "nope_votes": [3]},
+            build_result_entry(
+                text="x", category="fantasy", author=1, same_votes=[2], nope_votes=[3],
+            ),
         ]}, ([1, 2, 3], 1)),
         # wyr — everyone who voted either option in any round.
         ("wyr", {"rounds": {"1": {"a": [1, 2], "b": [3]}}}, ([1, 2, 3], 1)),
@@ -54,6 +60,10 @@ from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_pay
         ("mlt", {"rounds": {"1": {"votes": {"1": 9, "2": 9}}}, "players": [1]}, ([1, 2], 1)),
         # price — every uid that submitted a price in any round.
         ("price", {"rounds": {"1": {"prices": {"4": 10, "5": 20}}}}, ([4, 5], 1)),
+        # Self-stored games record their roster under `players`, one round.
+        ("risky_roll", {"players": [10, 11], "rolls": {"10": 40, "11": 90}}, ([10, 11], 1)),
+        ("chicken", {"players": [1, 2, 3], "winner_id": 3}, ([1, 2, 3], 1)),
+        ("quickdraw", {"players": ["1", "2"], "winner_id": 2}, ([1, 2], 1)),
         # Prompt-style types have no joined roster and must stay unpaid.
         ("ffa", {"prompt": "x", "seen": ["x"]}, ([], 0)),
         ("photo", {"submissions": {"1": "url"}}, ([], 0)),

@@ -21,6 +21,24 @@ if TYPE_CHECKING:
     from .models import PendingQuestionState, PostedQuestionState, RiskyRollState
 
 
+def build_history_payload(state: RiskyRollState) -> dict:
+    """The ``games_game_history`` payload for a resolved round.
+
+    ``players`` is what ``game_roster`` reads back for the unique-players
+    count; the rest is the roll summary a report can show. Keys are strings
+    because the payload is JSON — ids round-trip as text like every other
+    game's.
+    """
+    return {
+        "players": sorted(state.rolls),
+        "rolls": {str(uid): roll for uid, roll in sorted(state.rolls.items())},
+        "highest_user": state.highest_user,
+        "lowest_user": state.lowest_user,
+        "second_lowest_user": state.second_lowest_user,
+        "second_highest_user": state.second_highest_user,
+    }
+
+
 def serialize_user_ids(user_ids: set[int]) -> str | None:
     """Comma-join sorted user IDs for sqlite TEXT storage.
 

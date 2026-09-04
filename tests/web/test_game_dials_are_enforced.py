@@ -293,8 +293,10 @@ def test_every_toggleable_game_gates_its_own_start(game_type: str) -> None:
     src = (_COGS / STARTABLE[game_type]).read_text(encoding="utf-8")
     # The cogs reach their GamesDb differently — most hold `self.db`, Risky
     # Rolls builds one from the app context — so match the call, not the handle.
+    # ``launch_refusal`` (games/utils/launch_guard.py) is the shared guard
+    # that runs check_game_enabled for the entries wired through it.
     called = re.search(
-        r'check_game_enabled\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', src
+        r'(?:check_game_enabled|launch_refusal)\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', src
     )
     assert called, (
         f"{STARTABLE[game_type]} never checks the per-guild enable switch, so "

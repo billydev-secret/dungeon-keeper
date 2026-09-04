@@ -222,3 +222,47 @@ def test_multi_guild_backfill_leaves_templates_global(sync_db_path):
         assert conn.execute(
             "SELECT guild_id FROM legitlibs_templates WHERE template_id = 1"
         ).fetchone()[0] == 0  # never guessed
+
+
+# ── migration 204: games_active_games carries its guild ───────────────────
+
+def test_games_active_games_has_guild_id_defaulting_to_zero(sync_db_path):
+    """Stamped at create_game; an INSERT that omits it (older callers, dev
+    fills) must still succeed and read as 'unknown' rather than fail."""
+    with open_db(sync_db_path) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(games_active_games)")}
+        assert "guild_id" in cols
+        conn.execute(
+            "INSERT INTO games_active_games (game_id, channel_id, game_type, host_id)"
+            " VALUES ('g', 1, 'wyr', 2)"
+        )
+    with open_db(sync_db_path) as conn:
+        assert conn.execute(
+            "SELECT guild_id FROM games_active_games WHERE game_id = 'g'"
+        ).fetchone()[0] == 0
+
+
+def _run_204_backfill(conn):
+    """The migration's own UPDATE, taken from the file so the test cannot
+    drift from what prod runs."""
+    from pathlib import Path
+
+    sql = Path("src/migrations/204_games_active_games_guild.sql").read_text(encoding="utf-8")
+    code = "\n".join(line for line in sql.splitlines() if not line.lstrip().startswith("--"))
+    statements = [s for s in code.split(";") if "UPDATE games_active_games" in s]
+    assert len(statements) == 1
+    conn.execute(statements[0])
+
+
+def test_204_backfills_live_rows_from_the_channel_allowlist(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        conn.execute("INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (10, 500)")
+        conn.execute("INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (11, 0)")
+        conn.executemany(
+            "INSERT INTO games_active_games (game_id, channel_id, game_type, host_id, guild_id)"
+            " VALUES (?, ?, 'wyr', 2, ?)",
+            [("known", 10, 0), ("legacy", 11, 0), ("unlisted", 12, 0), ("kept", 10, 600)],
+        )
+        _run_204_backfill(conn)
+        got = dict(conn.execute("SELECT game_id, guild_id FROM games_active_games").fetchall())
+    assert got == {"known": 500, "legacy": 0, "unlisted": 0, "kept": 600}

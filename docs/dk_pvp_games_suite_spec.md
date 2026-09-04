@@ -152,13 +152,27 @@ A pending challenge is swept to `EXPIRED_PENDING` after
 feeds all four places that have to agree — the `ChallengeView` timeout, the countdown,
 the late-presser copy, and the `state = 'PENDING'` cutoff in each game's
 `fetch_sweepable_games`. It was 60 seconds hard-coded in each of them until 2026-08-30.
+A challenge still inside that window when the bot restarts keeps its buttons: `cog_load`
+re-attaches a persistent `ChallengeView` carrying the card's original deadline
+(`created_at + CHALLENGE_RESPONSE_SECONDS`), and a press after the deadline gets the same
+timed-out copy (`views.CHALLENGE_TIMED_OUT_TEXT`) a late presser on the original card gets.
+Before 2026-09-04 the view was simply lost, and Accept / Decline answered "interaction
+failed" until the sweep flipped the card to Expired.
 
 **Lobby (group):** `/games <game> start [stakes] [wager]` posts a join lobby with `✋ Join`,
 `🚪 Leave`, `▶️ Start` (host only), `🚫 Cancel` (host only). The host starts once
 `min_players` is met. An idle lobby is swept to `EXPIRED_LOBBY`.
 
 **Resolve:** the game declares its loser (duel) or final loser (group, = last eliminated);
-`BaseGame` posts the result embed.
+`BaseGame` posts the result embed. Reaching `RESOLVED` / `RESOLVED_NO_NICK` also writes the
+game's one `games_game_history` row from `_on_terminal_state` (`game_id` `"<GAME_KEY>:<id>"`,
+`game_type` = `GAME_KEY`, host = the challenger or lobby host, `player_count` = everyone who
+played including the eliminated, `started_at` = `created_at`, guild id set, payload
+`players` / `winner_id` / `loser_id` / `state`). The games keep their own tables and never had
+a `games_active_games` row for `end_game` to archive, so until 2026-09-04 they were paid by
+the economy yet absent from Play Statistics, `/recap` and the game-night session. The write is
+idempotent — the hook can fire more than once per game — and an unsettled end (`ABANDONED`,
+`VOID`, `EXPIRED_*`, `DECLINED`) records nothing, the same rule as the faucet.
 
 **Auto-revert:** in nickname mode, a background sweep restores the original nickname once the
 sentence expires (`sentence_hours`, default 24h). It survives bot restarts (sentences live in
@@ -399,8 +413,10 @@ fully rehydrates after a restart.
   keyed to the game id; cancelled/rescheduled on the relevant interactions.
 - **Restart recovery** — `BaseGame.cog_load` reloads active games (re-attach the game View,
   call `on_game_resume` to re-arm timers), resolved games (re-attach the `📝 Name the loser`
-  View), and open lobbies (re-attach the lobby View). Rows whose message is gone are handled
-  silently.
+  View), open lobbies (re-attach the lobby View), and — duels only — pending challenges still
+  inside their response window (a persistent `ChallengeView` with the card's original
+  deadline; see §3). Rows whose message is gone, and challenges already past their deadline,
+  are left to the sweep.
 
 ---
 

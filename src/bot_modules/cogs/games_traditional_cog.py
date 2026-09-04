@@ -17,8 +17,6 @@ from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     ConfirmCloseView,
     create_game,
     end_game,
@@ -29,6 +27,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games_traditional.embeds import (
     build_lobby_embed,
     build_question_embed,
@@ -384,17 +383,13 @@ class TraditionalCog(commands.Cog):
     )
     async def traditional(self, interaction: discord.Interaction, single_choice: bool = False):
         log.info("%s used /games play traditional in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "traditional", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Traditional Truth or Dare is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "traditional", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()

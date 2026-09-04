@@ -23,6 +23,7 @@ extracted pieces are proven to work without spinning up Discord.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from pathlib import Path
@@ -43,6 +44,7 @@ from bot_modules.services.risky_roll.formatters import (
     seed_display_names_from_db,
 )
 from bot_modules.services.risky_roll.logic import (
+    build_history_payload,
     build_main_prompt_state,
     build_one_rule_prompt_state,
     collect_channel_state_ids,
@@ -1230,3 +1232,59 @@ async def test_store_delete_guild_data_clears_all_tables(store: StateStore):
     # Other guild's data still present
     remaining = await store.load_active_rounds()
     assert {r.guild_id for r in remaining} == {2}
+
+
+# ── round history (rotation-rooms-157 / discovery-5) ──────────────────
+
+
+def _history_rows(db_path: Path) -> list[dict]:
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT game_id, game_type, channel_id, host_id, player_count, round_count, "
+            "payload, started_at, guild_id FROM games_game_history WHERE game_type = 'risky_roll'"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def test_build_history_payload_carries_rolls_and_seats():
+    s = RiskyRollState(channel_id=1, guild_id=2, opener_id=10)
+    s.add_roll(10, 40)
+    s.add_roll(11, 90)
+    s.add_roll(12, 5)
+    s.resolve()
+    payload = build_history_payload(s)
+    assert payload["players"] == [10, 11, 12]
+    assert payload["rolls"] == {"10": 40, "11": 90, "12": 5}
+    assert payload["highest_user"] == 11
+    assert payload["lowest_user"] == 12
+    assert payload["second_lowest_user"] is None
+    assert payload["second_highest_user"] is None
+
+
+async def test_record_round_history_writes_one_row(store, sync_db_path):
+    """A resolved round lands in games_game_history — the table Play
+    Statistics, /recap and the session tracker read — before its own rows
+    are cascade-deleted. Opener is the host, guild_id is set, one round."""
+    s = RiskyRollState(channel_id=555, guild_id=777, opener_id=10, created_at=1_700_000_000.0)
+    s.add_roll(10, 40)
+    s.add_roll(11, 90)
+    s.resolve()
+
+    await store.record_round_history(s)
+
+    rows = _history_rows(sync_db_path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["game_id"] == s.game_id
+    assert row["channel_id"] == 555
+    assert row["host_id"] == 10
+    assert row["player_count"] == 2
+    assert row["round_count"] == 1
+    assert row["guild_id"] == 777
+    assert row["started_at"] == "2023-11-14 22:13:20"
+    assert json.loads(row["payload"])["players"] == [10, 11]
+
+    # Idempotent on game_id: a second call is a no-op, not a duplicate.
+    await store.record_round_history(s)
+    assert len(_history_rows(sync_db_path)) == 1

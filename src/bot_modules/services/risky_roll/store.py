@@ -4,7 +4,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-from .logic import deserialize_user_ids, serialize_user_ids
+from bot_modules.games.utils.game_history import history_insert
+
+from .logic import build_history_payload, deserialize_user_ids, serialize_user_ids
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
 log = logging.getLogger(__name__)
@@ -175,6 +177,31 @@ class StateStore:
     def _delete_round(self, game_id: str) -> None:
         with self._connect() as conn:
             conn.execute("DELETE FROM risky_active_rounds WHERE game_id = ?", (game_id,))
+
+    def _record_round_history(self, state: RiskyRollState) -> None:
+        sql, params = history_insert(
+            game_id=state.game_id,
+            game_type="risky_roll",
+            channel_id=state.channel_id,
+            host_id=state.opener_id,
+            player_count=len(state.rolls),
+            round_count=1,
+            payload=build_history_payload(state),
+            started_at=state.created_at,
+            guild_id=state.guild_id,
+        )
+        with self._connect() as conn:
+            conn.execute(sql, params)
+
+    async def record_round_history(self, state: RiskyRollState) -> None:
+        """Write the round's one ``games_game_history`` row.
+
+        Closed rounds delete their own state (a documented non-goal), which
+        left the server's most-played game out of Play Statistics, ``/recap``
+        and the game-night session. Called on resolve, before the cascade
+        delete; idempotent on ``game_id``.
+        """
+        await asyncio.to_thread(self._record_round_history, state)
 
     async def delete_round(self, game_id: str) -> None:
         await asyncio.to_thread(self._delete_round, game_id)

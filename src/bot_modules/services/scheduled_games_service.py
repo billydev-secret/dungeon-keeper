@@ -49,8 +49,13 @@ from bot_modules.services.game_start_ping_service import (
 
 log = logging.getLogger(__name__)
 
-# How long after a one-time schedule's slot we keep retrying past a busy channel
-# before giving up.
+# How long after a schedule's slot we keep retrying past a busy channel before
+# giving up on that slot. A one-time row is marked missed; a recurring row
+# rolls to its next slot. Before 2026-09-04 only one-time rows retried — a
+# recurring row rolled the moment the channel was busy, so a member-opened
+# round overlapping the slot by a minute cost the whole day (platform-24:
+# prod's daily Risky Rolls was skipped on 09-02 for a round that closed 21
+# minutes later).
 GIVEUP_GRACE_SECONDS = 2 * 3600
 
 VALID_RECURRENCE = ("once", "daily", "weekly")
@@ -351,7 +356,17 @@ async def _process_due(bot, games_db, row, now: float) -> None:
                 (now, sched_id),
             )
         else:
-            await _advance_or_finish(games_db, row, now, "skipped_late", offset, recur_days)
+            # A recurring row that spent this slot retrying past a busy
+            # channel rolls as 'skipped_active', so the panel blames the room
+            # and not an outage. Only a retry recorded *within* this slot
+            # counts — yesterday's status must not relabel today's downtime.
+            retried_this_slot = (
+                row["last_status"] == "skipped_active"
+                and row["last_run_at"] is not None
+                and row["last_run_at"] >= row["next_run_at"]
+            )
+            status = "skipped_active" if retried_this_slot else "skipped_late"
+            await _advance_or_finish(games_db, row, now, status, offset, recur_days)
         return
 
     # 1. Resolve the target channel.
@@ -400,15 +415,15 @@ async def _process_due(bot, games_db, row, now: float) -> None:
             except Exception:
                 log.exception("Scheduled game %s: busy-check for %s raised", sched_id, game_type)
     if busy:
-        if row["recurrence"] == "once":
-            # Stay due — the 60s poll is the retry until giveup_at, at which point
-            # the lateness guard above marks it missed.
-            await games_db.execute(
-                "UPDATE games_scheduled SET last_status='skipped_active' WHERE id=?",
-                (sched_id,),
-            )
-            return
-        await _advance_or_finish(games_db, row, now, "skipped_active", offset, recur_days)
+        # Stay due — the 60s poll is the retry. A one-time row retries until
+        # giveup_at, a recurring one until the slot is GIVEUP_GRACE_SECONDS
+        # old; the lateness guard above is what gives up either way. The
+        # retry is recorded as a run (last_run_at) so that guard can tell a
+        # slot spent waiting on the room from one the bot slept through.
+        await games_db.execute(
+            "UPDATE games_scheduled SET last_status='skipped_active', last_run_at=? WHERE id=?",
+            (now, sched_id),
+        )
         return
 
     launcher = bot.game_launchers.get(game_type) if hasattr(bot, "game_launchers") else None
@@ -428,6 +443,11 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     except Exception:
         options = {}
 
+    # ``scheduled`` tells the launcher nobody is at the keyboard: the round
+    # games unlock Next for any voter after the round timer so an absent
+    # schedule creator cannot stall the board on round 1 (platform-23).
+    options = {**options, "scheduled": True}
+
     try:
         gid = await launcher(
             channel=channel,
@@ -446,8 +466,12 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     # Launchers return None on failure (e.g. missing send perms, caught internally),
     # so a falsy result is a real failure — don't mislabel it as launched.
     if gid:
+        # last_launched_at is the one column that says when this schedule last
+        # produced a game — last_status alone read 'skipped' for days with
+        # nothing to show how long that had been going on (platform-24).
         await games_db.execute(
-            "UPDATE games_scheduled SET last_status='launched' WHERE id=?", (sched_id,)
+            "UPDATE games_scheduled SET last_status='launched', last_launched_at=? WHERE id=?",
+            (now, sched_id),
         )
         log.info("Scheduled game %s launched: %s in channel %s", sched_id, game_type, channel_id)
 

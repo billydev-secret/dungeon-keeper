@@ -124,3 +124,27 @@ async def test_story_start_retires_the_joining_state(sync_db_path):
     await view.start_story.callback(_Interaction())
 
     assert await _state(db, gid) != "joining"
+
+
+async def test_ttl_start_guessing_records_the_guessing_state(sync_db_path):
+    """Two Truths never wrote a phase, so boot recovery could not tell a lobby
+    from a game in progress (vote-games-56); Start Guessing now says so."""
+    import bot_modules.cogs.games_ttl_cog as cog_mod
+
+    db = GamesDb(sync_db_path)
+    subs = {"111": {"statements": ["a", "b", "c"], "lie": 2},
+            "222": {"statements": ["d", "e", "f"], "lie": 0}}
+    gid = await create_game(
+        db, CHAN, HOST, "ttl", state="joining",
+        payload={"submissions": subs, "submission_count": 2, "submitter_names": {},
+                 "scores": {}, "prompt": None},
+    )
+
+    class _Cog:
+        async def _run_guessing(self, **k):
+            return None
+
+    view = cog_mod.TTLSubmitView(gid, HOST, db, None, _Cog())
+    await view.start_guessing.callback(_Interaction())  # type: ignore[arg-type]
+
+    assert await _state(db, gid) == "guessing"

@@ -394,6 +394,7 @@ def test_tally_votes_single_vote_avg_equals_scale_value(idx, expected_avg):
 # ── economy roster enrichment (Stage 2 faucet) ──────────────────────
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
@@ -474,3 +475,110 @@ def test_voting_start_message_carries_no_submitter(takes, count_phrase):
         assert str(take["user_id"]) not in msg
     assert count_phrase in msg
     assert "voting is starting" in msg
+
+
+# ── the lobby survives a restart: phase is recorded, Cancel exists ──
+
+from bot_modules.games.utils.game_manager import (  # noqa: E402
+    ConfirmCloseView,
+    get_active_game,
+)
+from bot_modules.games.utils.launch_guard import busy_message  # noqa: E402
+
+
+def _host_interaction(host_id: int, channel):
+    """A press by the host — is_host_or_mod passes on the id alone."""
+    return SimpleNamespace(
+        user=SimpleNamespace(id=host_id, display_name="Host"),
+        channel=channel,
+        channel_id=getattr(channel, "id", None),
+        guild=None,
+        guild_id=9001,
+        message=SimpleNamespace(id=555, edit=AsyncMock(), embeds=[]),
+        response=SimpleNamespace(
+            send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock(),
+        ),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+
+async def test_start_voting_records_the_playing_phase(monkeypatch, sync_db_path):
+    """The row's state is what recovery branches on: a lobby re-registers its
+    buttons, a game in voting is re-driven. Until 2026-09-04 the cog never
+    wrote the phase, so every restart was decided by the take count alone."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_run_voting", AsyncMock())
+    payload = {"takes": [{"text": "t1", "user_id": 9, "display_order": 0}], "results": []}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", state="joining", payload=payload)
+    view = hottakes_cog.HotTakesSubmitView(gid, 1, bot.games_db, bot, cog)
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+
+    await view.start_voting.callback(_host_interaction(1, channel))  # type: ignore[arg-type]
+
+    row = await get_active_game(bot.games_db, 100)
+    assert row is not None and row["state"] == "playing"
+    assert cog._run_voting.await_count == 1  # type: ignore[attr-defined]
+
+
+async def test_cancel_button_ends_the_lobby_without_paying(sync_db_path):
+    """Host/mod Cancel on the lobby: confirm popup, then the row is archived
+    as 'cancelled' with nobody paid — a lobby that never voted has no roster."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    payload = {"takes": [{"text": "t1", "user_id": 9, "display_order": 0}], "results": []}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", state="joining", payload=payload)
+    view = hottakes_cog.HotTakesSubmitView(gid, 1, bot.games_db, bot, cog)
+    bot.active_views[gid] = view
+    anchor = SimpleNamespace(id=555, edit=AsyncMock(), embeds=[])
+    view._message = anchor  # type: ignore[assignment]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+
+    # A non-host is refused.
+    stranger = _host_interaction(42, channel)
+    await view.cancel_game.callback(stranger)  # type: ignore[arg-type]
+    assert stranger.response.send_message.await_args.args[0].startswith("❌")
+    assert await get_active_game(bot.games_db, 100) is not None
+
+    press = _host_interaction(1, channel)
+    await view.cancel_game.callback(press)  # type: ignore[arg-type]
+    confirm = press.response.send_message.await_args.kwargs["view"]
+    assert isinstance(confirm, ConfirmCloseView)
+    assert press.response.send_message.await_args.kwargs["ephemeral"] is True
+
+    await confirm._callback(_host_interaction(1, channel))
+
+    assert await get_active_game(bot.games_db, 100) is None
+    assert gid not in bot.active_views
+    assert view.is_finished()
+    anchor.edit.assert_awaited()  # the lobby's buttons are disabled
+    archived = await bot.games_db.fetchone(
+        "SELECT player_count, payload FROM games_game_history WHERE game_id = ?", (gid,)
+    )
+    assert archived is not None
+    assert archived["player_count"] == 0
+    assert json.loads(archived["payload"])["reason"] == "cancelled"
+
+
+async def test_slash_entry_refuses_a_channel_with_a_running_game(monkeypatch, sync_db_path):
+    """/games play hottakes goes through the shared launch guard (platform-18):
+    a second host is refused with the running game named, and nothing launches."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    launch = AsyncMock()
+    monkeypatch.setattr(cog, "launch", launch)
+    await bot.games_db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)", (100, 9001),
+    )
+    await create_game(bot.games_db, 100, 7, "wyr", message_id=321, guild_id=9001)
+    interaction = _host_interaction(1, SimpleNamespace(id=100, guild=None, send=AsyncMock()))
+
+    await cog.hottakes.callback(cog, interaction)  # type: ignore[arg-type]
+
+    sent = interaction.response.send_message.await_args
+    assert sent.kwargs["ephemeral"] is True
+    assert sent.args[0] == busy_message(
+        "wyr", link="https://discord.com/channels/9001/100/321",
+    )
+    launch.assert_not_awaited()
+    interaction.response.defer.assert_not_awaited()

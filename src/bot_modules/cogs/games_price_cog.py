@@ -31,9 +31,6 @@ from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     sign_off_game_chore,
     finish_launch_response,
-    relaunch_refusal,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -45,6 +42,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.utils.question_source import get_price_scenario, channel_allows_nsfw
 from bot_modules.games.utils.timer import GameTimer
 from bot_modules.games_price.embeds import (
@@ -450,7 +448,7 @@ class PriceRecapView(discord.ui.View):
             return
         # Same gate as the slash entry: an admin who unticks the game on the
         # dashboard mid-evening must not be overridden by the recap card.
-        refusal = await relaunch_refusal(
+        refusal = await launch_refusal(
             self.cog.db, "price", interaction.channel_id,
             interaction.guild_id or 0,
         )
@@ -608,14 +606,13 @@ class PriceCog(commands.Cog):
             interaction.user.display_name,
             channel_name(interaction.channel),
         )
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "price", interaction.guild_id or 0):
-            await interaction.response.send_message("Name Your Price is currently disabled on this server.", ephemeral=True)
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "price", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()

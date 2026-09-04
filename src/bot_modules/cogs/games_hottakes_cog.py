@@ -18,12 +18,12 @@ from bot_modules.services.anon_audit_service import (
     EVENT_TAKE_SUBMITTED,
 )
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -31,6 +31,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games_hottakes.embeds import (
@@ -139,6 +140,11 @@ class HotTakesSubmitView(discord.ui.View):
 
         payload["takes"] = shuffle_takes(takes)
         await update_game_payload(self.db, self.game_id, payload)
+        # The phase is what a restart branches on: 'joining' re-registers this
+        # lobby's buttons, anything else resumes the vote. Until 2026-09-04
+        # nothing wrote it, so recovery guessed from the take count and
+        # force-started voting on any lobby that held a take (anon-tail-66).
+        await update_game_state(self.db, self.game_id, "playing")
 
         self.stop()
         disable_all_items(self)
@@ -176,6 +182,40 @@ class HotTakesSubmitView(discord.ui.View):
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["hottakes"], ephemeral=True)
+
+    @discord.ui.button(label="Cancel Game", style=discord.ButtonStyle.secondary, custom_id="ht_cancel")
+    async def cancel_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Scrap the lobby before voting starts — host or mod, behind the
+        usual confirm popup. Before this the only ways out of a lobby that
+        never got going were ``/games end`` or the 24h sweep, and a lobby
+        left over a restart sat with dead buttons (anon-tail-66).
+        """
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message("❌ Only the host or a mod can cancel the game.", ephemeral=True)
+            return
+        anchor = self._message or interaction.message
+
+        async def _confirmed(_confirm: discord.Interaction) -> None:
+            await self._cancel(anchor)
+
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to end this game?", view=ConfirmCloseView(_confirmed), ephemeral=True,
+        )
+
+    async def _cancel(self, anchor: discord.Message | None) -> None:
+        """Disable the lobby and archive the row as ``cancelled``. A lobby has
+        no roster yet (nobody has voted), so a bare ``end_game`` pays nobody
+        and records the takes that were collected."""
+        self.stop()
+        disable_all_items(self)
+        if anchor is not None:
+            try:
+                await anchor.edit(content="🛑 Hot Takes was cancelled before voting started.", view=self)
+            except discord.HTTPException:
+                pass
+        await end_game(self.db, self.game_id, reason="cancelled")
+        self.bot.active_views.pop(self.game_id, None)
 
 
 class HotTakeVoteView(discord.ui.View):
@@ -292,17 +332,11 @@ class HotTakesCog(commands.Cog):
     @app_commands.command(name="hottakes", description="Start a Hot Takes / Unpopular Opinions game!")
     async def hottakes(self, interaction: discord.Interaction):
         log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "hottakes", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Hot Takes is currently disabled on this server.",
-                ephemeral=True,
-            )
+        refusal = await launch_refusal(
+            self.db, "hottakes", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -478,18 +512,40 @@ class HotTakesCog(commands.Cog):
             del self.bot.active_views[game_id]
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-drive the voting loop after a restart.
+        """Bring a game back after a restart, by phase.
 
-        Completed takes live in payload["results"]; the take being voted on at
-        crash time can't be reconstructed (live votes aren't persisted), so we
-        retire the stale message and re-vote that take. The re-driven loop seeds
-        results from the payload and continues with the remaining takes.
+        A lobby (row state ``joining``, no results yet) gets its submit view
+        re-registered on the anchor message, the way WYR and Story do — the
+        host still presses Start Voting. Until 2026-09-04 the phase was never
+        recorded and recovery keyed on the take count alone: an empty lobby
+        was skipped (dead buttons until the sweep) and a lobby holding any
+        take was re-driven straight into voting (platform-29, anon-tail-66).
+        A row with results but still marked ``joining`` predates the phase
+        write and is treated as voting underway — results are only written
+        during a vote.
+
+        Voting underway re-drives the loop: completed takes live in
+        payload["results"]; the take being voted on at crash time can't be
+        reconstructed (live votes aren't persisted), so we retire the stale
+        message and re-vote that take. The re-driven loop seeds results from
+        the payload and continues with the remaining takes.
         """
-        takes = payload.get("takes", [])
-        if not takes or len(payload.get("results", [])) >= len(takes):
-            return False  # nothing left to resume; cleanup loop will archive it
         game_id = row["game_id"]
         host_id = int(row["host_id"])
+        takes = payload.get("takes", [])
+        results = payload.get("results", [])
+        if row["state"] == "joining" and not results:
+            view = HotTakesSubmitView(game_id, host_id, self.db, self.bot, self)
+            view._message = message
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info(
+                "Recovered hottakes game %s (lobby, %d takes) in #%s",
+                game_id, len(takes), getattr(channel, "name", channel.id),
+            )
+            return True
+        if not takes or len(results) >= len(takes):
+            return False  # nothing left to resume; cleanup loop will archive it
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
         await start_redrive(

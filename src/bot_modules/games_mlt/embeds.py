@@ -37,6 +37,11 @@ from bot_modules.games.constants import (
     PHASE_RECAP,
     PHASE_RESULTS,
 )
+from bot_modules.games.utils.round_pacing import (
+    TIMER_FIELD_NAME,
+    timer_field_value,
+    waiting_notice,
+)
 from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.name_resolver import NameFn, mention
 
@@ -85,6 +90,9 @@ def build_round_embed(
     vote_count: int,
     closed: bool = False,
     color: discord.Color | None = None,
+    *,
+    waiting: bool = False,
+    advance_at: int | None = None,
 ) -> discord.Embed:
     """Build the active-round (or finished-round) vote embed.
 
@@ -92,22 +100,29 @@ def build_round_embed(
     accent when ``color`` is supplied. When ``color`` is ``None`` it
     falls back to the phase colors (playing blue / results green) so the
     active vs. closed states stay visually distinct with no guild.
+    ``waiting`` is the no-prompt state (the bank had nothing; a posed
+    prompt starts the round); ``advance_at`` the countdown of a timed round.
     """
     title = f"{GAME_ICONS['mlt']} Most Likely To…"
     if closed:
         title += " — Round Over"
     fallback = PHASE_RESULTS if closed else PHASE_PLAYING
     embed = discord.Embed(title=title, color=color or discord.Color(fallback))
-    embed.add_field(
-        name="Prompt",
-        value=discord.utils.escape_markdown(prompt),
-        inline=False,
-    )
+    if waiting:
+        embed.description = waiting_notice("✍️ Pose Prompt", "prompt")
+    else:
+        embed.add_field(
+            name="Prompt",
+            value=discord.utils.escape_markdown(prompt),
+            inline=False,
+        )
     embed.add_field(
         name="Round",
         value=f"{round_num} — {vote_count} votes",
         inline=False,
     )
+    if advance_at and not closed and not waiting:
+        embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
     embed.set_footer(
         text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num}"
     )

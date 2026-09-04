@@ -5,7 +5,8 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, check_game_enabled, get_active_game, finish_launch_response, end_game
+from bot_modules.games.utils.game_manager import channel_name, finish_launch_response, end_game
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.command_groups import play
 from .data import seed_templates_from_file
 from .modes.quiplash import run_quiplash
@@ -56,30 +57,14 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     ):
         log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled on this server.",
-                ephemeral=True,
-            )
-            return
-
-        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled on this server.", ephemeral=True
-            )
-            return
-
-        existing = await get_active_game(self.db, interaction.channel_id)
-        if existing and existing["game_type"] == "legitlibs":
-            await interaction.response.send_message(
-                "A LegitLibs round is already in progress here. Cancel it first.", ephemeral=True
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running here — any game, not only another
+        # LegitLibs round, which is all the private guard this replaced saw.
+        refusal = await launch_refusal(
+            self.db, "legitlibs", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()

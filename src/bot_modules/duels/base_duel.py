@@ -16,11 +16,13 @@ Two stake modes are supported on the duel path:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Awaitable, Callable
 
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.db_utils import sql_identifier
 from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
@@ -37,7 +39,7 @@ from .filters import (
     resolve_stakes_text,
     validate_stakes,
 )
-from .views import ChallengeView, ResultView
+from .views import CHALLENGE_TIMED_OUT_TEXT, ChallengeView, ResultView
 
 
 class BaseDuel(BaseGame):
@@ -46,6 +48,36 @@ class BaseDuel(BaseGame):
     Subclasses must define GAME_KEY / GAME_DISPLAY_NAME and implement the abstract
     hooks declared on BaseGame.
     """
+
+    # ── Restart recovery ──────────────────────────────────────────────────────
+
+    async def _db_fetch_pending_games(self) -> list:
+        """Challenges still inside their response window, for cog_load.
+
+        Every duel keeps its rows in ``<GAME_KEY>_games``; ids are read here
+        and rehydrated through the cog's own ``_db_get_game`` so the row
+        shape stays the game's business.
+        """
+        table = sql_identifier(f"{self.GAME_KEY}_games")
+        rows = await self.db.fetchall(
+            f"SELECT id FROM {table} WHERE state = 'PENDING' AND created_at > ?",
+            (time.time() - CHALLENGE_RESPONSE_SECONDS,),
+        )
+        games = []
+        for row in rows:
+            game = await self._db_get_game(int(row["id"]))
+            if game is not None:
+                games.append(game)
+        return games
+
+    def _build_challenge_view(self, game: Any, *, deadline: float) -> discord.ui.View | None:
+        return ChallengeView(
+            game_id=game.id,
+            target_id=game.target_id,
+            on_accept=self._handle_accept,
+            on_decline=self._handle_decline,
+            deadline=deadline,
+        )
 
     # ── Shared challenge entrypoint ───────────────────────────────────────────
 
@@ -280,11 +312,7 @@ class BaseDuel(BaseGame):
     #: a second too late with no idea whether they'd been beaten to it, blocked,
     #: or hit a bug ("LMAO that did not let me accept" — game night 2026-08-21).
     _STALE_CHALLENGE_REASONS = {
-        "EXPIRED_PENDING": (
-            "⏱️ That challenge timed out before you pressed — challenges expire "
-            f"{CHALLENGE_RESPONSE_SECONDS // 60} minutes after they're posted. "
-            "Ask them to send another one."
-        ),
+        "EXPIRED_PENDING": CHALLENGE_TIMED_OUT_TEXT,
         "DECLINED": "❌ That challenge was already declined.",
         "ACTIVE": "▶️ That challenge has already been accepted — the game is running.",
     }

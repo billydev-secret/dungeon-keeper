@@ -1,10 +1,15 @@
-"""``launch`` must return None when the game didn't actually start.
+"""``launch`` must tell the truth about whether a game is live.
 
 The scheduler reads that return value as "did this work": a truthy id marks the
-row ``launched`` and, since todo #97, fires the announcement. Two games could
+row ``launched`` and, since todo #97, fires the announcement. Two games used to
 return an id for a game that had already ended itself — an empty question bank
-posts a notice, calls ``end_game``, and unwinds normally — which put a
+posted a notice, called ``end_game``, and unwound normally — which put a
 ``🎮 X is starting now!`` ping directly beneath "the bank is empty".
+
+Since 2026-09-04 an empty bank no longer ends the game at all (vote-games-50):
+the round opens *waiting* for a posed prompt, with only Pose, End and Help
+live. That board is a real, live game, so ``launch`` reports its id and the
+row survives; ``None`` is reserved for a launch that posted nothing.
 """
 
 import pytest
@@ -30,7 +35,7 @@ class _FakeChannel:
         self.sends: list = []
 
     async def send(self, *args, **kwargs):
-        self.sends.append(args[0] if args else kwargs.get("content"))
+        self.sends.append(kwargs.get("embed") or (args[0] if args else kwargs.get("content")))
         return _FakeMessage()
 
 
@@ -44,16 +49,16 @@ class _FakeBot:
 
 
 @pytest.mark.parametrize(
-    "cog_cls, game_type, empty_notice",
+    "cog_cls, game_type, pose_label",
     [
-        pytest.param(WYRCog, "wyr", "question bank is empty", id="wyr"),
-        pytest.param(NHIECog, "nhie", "statement bank is empty", id="nhie"),
+        pytest.param(WYRCog, "wyr", "Pose Question", id="wyr"),
+        pytest.param(NHIECog, "nhie", "Pose Statement", id="nhie"),
     ],
 )
-async def test_launch_returns_none_when_the_bank_is_empty(
-    sync_db_path, cog_cls, game_type, empty_notice
+async def test_launch_with_an_empty_bank_opens_a_waiting_round(
+    sync_db_path, cog_cls, game_type, pose_label
 ):
-    """An empty bank is a failed launch, so nothing downstream should announce it."""
+    """The board is live (waiting for a posed prompt), so the launch reports it."""
     db = GamesDb(sync_db_path)
     bot = _FakeBot(db)
     cog = cog_cls(bot)  # type: ignore[arg-type]
@@ -63,10 +68,35 @@ async def test_launch_returns_none_when_the_bank_is_empty(
         channel=channel, host_id=2001, host_name="Tester", guild_id=9001, options={},
     )
 
-    assert any(empty_notice in str(s) for s in channel.sends), "expected the empty-bank notice"
-    assert gid is None, "a game that ended itself must not report as launched"
-    # And it left nothing behind for the scheduler or the echo sweep to find.
+    assert gid is not None, "a waiting board is a live game and must report as launched"
+    embed = channel.sends[0]
+    assert pose_label in (getattr(embed, "description", "") or ""), "expected the waiting notice"
     row = await db.fetchone(
         "SELECT * FROM games_active_games WHERE channel_id = ?", (channel.id,)
     )
-    assert row is None
+    assert row is not None
+    view = bot.active_views[gid]
+    assert view.waiting is True
+    assert view.next_btn.disabled is True
+    assert view.end_game_btn.disabled is False
+
+
+async def test_launch_returns_none_when_the_board_could_not_be_posted(sync_db_path):
+    """The other half of the contract: no board, no id, no row."""
+    from unittest.mock import MagicMock
+
+    import discord
+
+    db = GamesDb(sync_db_path)
+    bot = _FakeBot(db)
+    cog = WYRCog(bot)  # type: ignore[arg-type]
+
+    class _Forbidden(_FakeChannel):
+        async def send(self, *args, **kwargs):
+            raise discord.Forbidden(MagicMock(status=403), "nope")
+
+    gid = await cog.launch(
+        channel=_Forbidden(), host_id=2001, host_name="Tester", guild_id=9001, options={},
+    )
+    assert gid is None
+    assert await db.fetchone("SELECT * FROM games_active_games WHERE channel_id = 4242") is None

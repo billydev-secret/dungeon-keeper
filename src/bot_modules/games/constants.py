@@ -124,6 +124,47 @@ LOBBY_START_BUTTON = {
     'story': 'Start Story',
 }
 
+# The smallest roster each lobby game's start button accepts, mirrored from
+# the cogs (clapback / mlt / rushmore logic ``MIN_PLAYERS``; compliment and
+# story refuse below 2, mfk below 4). The idle-lobby sweep
+# (``game_start_ping_service``) cancels a lobby that has sat this far below
+# its floor for the configured hour — a lobby that *could* start is left to
+# its host. mlt and rushmore may raise their floor per game in the payload;
+# the sweep reads that first. Keys must match LOBBY_GAME_TYPES.
+LOBBY_MIN_PLAYERS = {
+    'clapback': 3,
+    'compliment': 2,
+    'mfk': 4,
+    'mlt': 3,
+    'rushmore': 3,
+    'story': 2,
+}
+
+# ── Hosting registry ────────────────────────────────────────────────────────
+# What the scheduler UI tells an admin about each schedulable game, because
+# "schedule it" reads as "it runs itself" and for most games it doesn't
+# (discovery-4): a scheduled Clapback posts a lobby and waits for a press.
+#
+# SELF_RUNNING: posts and finishes with nobody at the keyboard — a prompt card
+# (ffa / ffa_banner), Risky Rolls' timed round, the daily photo card.
+# TIMER_RUNNING: self-run only when the schedule (or the game's dashboard
+# dial) sets a round timer — a scheduled WYR / NHIE then auto-advances and
+# ends at its round cap, and any voter may press Next; host-paced, it shows
+# one question and waits. Everything else opens a lobby or a host-driven
+# round and needs a human. Disjoint from LOBBY_GAME_TYPES by construction
+# (tested in tests/web/test_scheduled_games_routes.py).
+SELF_RUNNING_GAME_TYPES = frozenset({'ffa', 'ffa_banner', 'risky_roll', 'photo'})
+TIMER_RUNNING_GAME_TYPES = frozenset({'wyr', 'nhie'})
+
+
+def hosting_kind(game_type: str) -> str:
+    """``'self'`` / ``'timer'`` / ``'host'`` — see the registry above."""
+    if game_type in SELF_RUNNING_GAME_TYPES:
+        return 'self'
+    if game_type in TIMER_RUNNING_GAME_TYPES:
+        return 'timer'
+    return 'host'
+
 # Some schedulable types are display variants of a base game — they share the
 # question bank, history rows, and the base game's enable/disable toggle. Map a
 # variant to its base so a single games-config toggle governs both. Used by the
@@ -167,14 +208,26 @@ SCHEDULE_OPTION_SCHEMA = {
     'wyr': [
         {'name': 'question', 'label': "Opening question ('option A | option B', optional)",
          'type': 'str', 'default': ''},
+        {'name': 'round_seconds', 'label': 'Seconds per round (0 = host presses Next)', 'type': 'int',
+         'default': 0, 'min': 0, 'max': 300},
+        {'name': 'max_rounds', 'label': 'Rounds before the recap (0 = until ended)', 'type': 'int',
+         'default': 10, 'min': 0, 'max': 50},
     ],
     'nhie': [
         {'name': 'question', 'label': 'Opening statement (optional)', 'type': 'str', 'default': ''},
         {'name': 'lives', 'label': 'Lives (0 = no elimination)', 'type': 'int',
          'default': 3, 'min': 0, 'max': 10},
+        {'name': 'round_seconds', 'label': 'Seconds per round (0 = host presses Next)', 'type': 'int',
+         'default': 0, 'min': 0, 'max': 300},
+        {'name': 'max_rounds', 'label': 'Rounds before the recap (0 = until ended)', 'type': 'int',
+         'default': 10, 'min': 0, 'max': 50},
     ],
     'mlt': [
         {'name': 'question', 'label': 'Opening prompt (optional)', 'type': 'str', 'default': ''},
+        {'name': 'round_seconds', 'label': 'Seconds per round (0 = host presses Next)', 'type': 'int',
+         'default': 0, 'min': 0, 'max': 300},
+        {'name': 'max_rounds', 'label': 'Rounds before the recap (0 = until ended)', 'type': 'int',
+         'default': 10, 'min': 0, 'max': 50},
     ],
     'ttl': [
         {'name': 'prompt', 'label': 'Theme/prompt (optional)', 'type': 'str', 'default': ''},
@@ -305,19 +358,30 @@ HOW_TO_PLAY = {
         "🤔 **Would You Rather**\n"
         "Two options per round — pick your side.\n\n"
         "1. Vote **🅰️** or **🅱️** — you can switch before the round ends\n"
-        "2. The host clicks **⏭️ Next** to advance to the next round\n"
+        "2. The host clicks **⏭️ Next** to advance — or the round advances itself "
+        "when a round timer is set (the host can still press Next early)\n"
         "3. Use **✍️ Pose Question** to queue your own (format: `option A | option B`)\n"
-        "4. The host can **👀 Reveal Voters** to show who voted for what\n\n"
-        "💡 Questions come from the bank by default — your queued questions get used first."
+        "4. The host can **👀 Reveal Voters** to show who voted for what\n"
+        "5. After the last round (10 by default), or when the host presses **🏁 End Game**, "
+        "the recap shows the most divisive question and pays everyone who voted\n\n"
+        "💡 Questions come from the bank by default — your queued questions get used first. "
+        "If the bank has nothing, the round waits for someone to pose a question. "
+        "On a scheduled game, anyone who voted can press Next once the round has been open a while."
     ),
     'nhie': (
         "⛔ **Never Have I Ever**\n"
         "A statement is read each round — confess or claim innocence.\n\n"
         "1. Vote **😈 Guilty** if you've done it, **😇 Innocent** if you haven't\n"
         "2. Use **✍️ Pose Statement** to queue your own statement\n"
-        "3. The host clicks **⏭️ Next** to advance\n\n"
+        "3. The host clicks **⏭️ Next** to advance — or the round advances itself "
+        "when a round timer is set (the host can still press Next early)\n"
+        "4. After the last round (10 by default), or when the host presses **🏁 End Game**, "
+        "the final guilt board is posted and everyone who played is paid\n\n"
         "❤️ **Lives mode (default 3):** every guilty vote costs you a heart. "
-        "Last one standing wins. Set `lives:0` to disable elimination."
+        "Last one standing wins — once at least two people have played and someone "
+        "has been knocked out. Set `lives:0` to disable elimination.\n"
+        "💡 If the bank has nothing, the round waits for someone to pose a statement. "
+        "On a scheduled game, anyone who voted can press Next once the round has been open a while."
     ),
     'mlt': (
         "👑 **Most Likely To**\n"
@@ -325,8 +389,14 @@ HOW_TO_PLAY = {
         "1. Click **Join** to enter the pool (need 3+ players)\n"
         "2. Each round shows a prompt — vote for the player who fits it best\n"
         "3. The most-voted player gets the crown for that round\n"
-        "4. Use **✍️ Pose Prompt** to queue your own\n\n"
-        "💡 You can vote for anyone in the pool, including yourself."
+        "4. Use **✍️ Pose Prompt** to queue your own\n"
+        "5. The host clicks **⏭️ Next** to advance — or the round advances itself "
+        "when a round timer is set (the host can still press Next early)\n"
+        "6. After the last round (10 by default), or when the host presses **🏁 End Game**, "
+        "the final crown standings are posted and everyone who voted is paid\n\n"
+        "💡 You can vote for anyone in the pool, including yourself. "
+        "If the bank has nothing, the round waits for someone to pose a prompt. "
+        "On a scheduled game, anyone who voted can press Next once the round has been open a while."
     ),
     'ttl': (
         "🤥 **Two Truths and a Lie**\n"
@@ -345,7 +415,8 @@ HOW_TO_PLAY = {
         "3. Each take is shown one at a time in random order\n"
         "4. Vote your temperature: 🧊 Strongly Disagree → 👎 → 😐 → 👍 → 🔥 Strongly Agree\n"
         "5. The average temperature for each take is revealed at the end\n\n"
-        "💡 Submissions stay anonymous through the whole game."
+        "💡 Submissions stay anonymous through the whole game. "
+        "The host can press **Cancel Game** before voting starts to scrap the lobby."
     ),
     'story': (
         "📖 **Story Builder**\n"
@@ -384,7 +455,8 @@ HOW_TO_PLAY = {
         "write your entry\n"
         "3. The host closes submissions when ready\n"
         "4. Each entry is revealed one at a time — vote **Same** or **Not for me**\n"
-        "5. The host can run additional rounds before ending the game\n\n"
+        "5. The host can run more rounds, then presses **End Game** — that posts "
+        "the recap and pays everyone who wrote or voted\n\n"
         "💡 All submissions are anonymous — only the votes are public."
     ),
     'price': (

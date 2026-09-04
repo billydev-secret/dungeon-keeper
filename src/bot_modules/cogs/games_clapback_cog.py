@@ -20,9 +20,6 @@ from bot_modules.games.constants import (
 from bot_modules.games.utils.game_manager import (
     sign_off_game_chore,
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
-    relaunch_refusal,
     get_game_options,
     create_game,
     update_game_message,
@@ -39,6 +36,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.name_resolver import NameFn, build_name_fn
 from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
@@ -183,7 +181,7 @@ class ClapbackJoinView(discord.ui.View):
         self.message: discord.Message | None = None
 
     async def on_timeout(self):
-        await self.cog._cancel_game(self.game_id, reason="Lobby timed out")
+        await self.cog._cancel_game(self.game_id, reason="lobby_timeout")
         # Retire the lobby message — a live-looking Join/Start row on a dead
         # view swallows clicks as "This interaction failed".
         if self.message is not None:
@@ -296,8 +294,7 @@ class ClapbackJoinView(discord.ui.View):
         except Exception as e:
             log.error("Clapback game %s crashed: %s", self.game_id, e, exc_info=True)
             await channel.send("❌ Something went wrong. Game ended.")
-            await end_game(self.db, self.game_id)
-            self.bot.active_views.pop(self.game_id, None)
+            await self.cog._cancel_game(self.game_id, reason="crash")
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ql_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -536,10 +533,13 @@ class ClapbackRecapView(discord.ui.View):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
         # Same gate as the slash entry: an admin who unticks the game on the
-        # dashboard mid-evening must not be overridden by the recap card.
-        refusal = await relaunch_refusal(
+        # dashboard mid-evening must not be overridden by the recap card. The
+        # bank check honours the channel's age-gate the way the slash entry
+        # does, or an NSFW-only bank would refuse a rematch in its own room.
+        refusal = await launch_refusal(
             self.cog.db, "clapback", interaction.channel_id,
             interaction.guild_id or 0,
+            allow_nsfw=channel_allows_nsfw(interaction.channel),
         )
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
@@ -570,9 +570,10 @@ class ClapbackRecapView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
-        refusal = await relaunch_refusal(
+        refusal = await launch_refusal(
             self.cog.db, "clapback", interaction.channel_id,
             interaction.guild_id or 0,
+            allow_nsfw=channel_allows_nsfw(interaction.channel),
         )
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
@@ -625,21 +626,40 @@ class ClapbackCog(commands.Cog):
         return self.bot.games_db
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-drive the game from the next un-played round after a restart.
+        """Recover after a restart, by phase.
 
-        Completed rounds live in payload["round_history"]; _run_game resumes at
+        A lobby (``state == 'joining'``) gets its Join/Leave/Start row rebuilt
+        on the lobby message, as Rushmore does — re-driving the loop from a
+        lobby played five no-op rounds on an empty roster and crashed on the
+        missing scores key with a joined one (clapback-3). discord.py only
+        re-binds a persistent view, so the recovered lobby has no inactivity
+        timeout; the start-ping sweep and the 24h sweep still cover it.
+
+        A game in play is re-driven from the next un-played round: completed
+        rounds live in payload["round_history"]; _run_game resumes at
         len(round_history)+1, re-running the interrupted round after rolling
         scores back to the last-completed-round checkpoint so its partial
         mid-scoring mutations can't double-count. The stale phase message is
         retired and the game loop is re-spawned in the background.
         """
-        if not payload.get("config"):
+        config = payload.get("config")
+        if not config:
             return False
         game_id = row["game_id"]
         self._game_cancelled.discard(game_id)
         # Accent cache is lost across a restart — re-resolve it once here so the
         # resumed phases stay on-theme without re-resolving per update.
-        self._accents[game_id] = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="clapback")
+        accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="clapback")
+        self._accents[game_id] = accent
+        if row["state"] == "joining":
+            host_id = int(payload.get("host_id") or row["host_id"])
+            view = ClapbackJoinView(game_id, host_id, self.db, self.bot, self, config, accent=accent)
+            view.timeout = None
+            view.message = message
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info("Recovered clapback game %s (lobby) in #%s", game_id, getattr(channel, "name", channel.id))
+            return True
         resume_round = len(payload.get("round_history", [])) + 1
         await start_redrive(
             self.bot, game_id, message,
@@ -665,24 +685,15 @@ class ClapbackCog(commands.Cog):
             channel_name(interaction.channel),
         )
 
-        # Pre-flight checks
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "clapback", interaction.guild_id or 0):
-            await interaction.response.send_message("Clapback is currently disabled on this server.", ephemeral=True)
-            return
-
-        # Clapback is bank-only, so an empty bank means there's nothing to play.
-        if not await has_clapback_prompts(self.db):
-            await interaction.response.send_message(
-                "No prompts in the bank for Clapback. "
-                "Add some from the Games question bank on the web dashboard.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, no game already running here, and — Clapback is bank-only —
+        # a bank with a prompt this channel's age-gate lets it serve.
+        refusal = await launch_refusal(
+            self.db, "clapback", interaction.channel_id, interaction.guild_id or 0,
+            allow_nsfw=channel_allows_nsfw(interaction.channel),
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -1381,11 +1392,24 @@ class ClapbackCog(commands.Cog):
 
     # ── Helpers ──────────────────────────────────────────────────────────
 
-    async def _cancel_game(self, game_id: str, reason: str = ""):
-        """Silently cancel a game (e.g. lobby timeout)."""
+    async def _cancel_game(self, game_id: str, reason: str = "cancelled"):
+        """Silently cancel a game (lobby timeout, crash) and archive it as one.
+
+        The archive carries the roster as it stood and *reason*
+        (``lobby_timeout`` / ``crash``), so a lobby nobody started is telling
+        about how many had joined when it died instead of a bare row
+        (clapback-9). Recording only — nothing here pays.
+        """
         self._game_cancelled.add(game_id)
         log.info("Game %s cancelled: %s", game_id, reason)
-        await end_game(self.db, game_id)
+        payload = await get_game_payload(self.db, game_id)
+        await end_game(
+            self.db, game_id,
+            player_count=len(payload.get("players", [])),
+            round_count=len(payload.get("round_history", [])),
+            payload=payload or None,
+            reason=reason,
+        )
         self.bot.active_views.pop(game_id, None)
         self._cleanup(game_id)
 

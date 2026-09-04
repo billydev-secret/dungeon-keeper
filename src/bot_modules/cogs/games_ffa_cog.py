@@ -16,8 +16,6 @@ from bot_modules.services.anon_audit_service import (
 )
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     get_active_game_by_id,
     get_game_payload,
@@ -27,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal, no_tag_match_message
 from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.prompts import label_for_kind
 from bot_modules.games.utils.question_source import (
@@ -489,27 +488,23 @@ class FFACog(commands.Cog):
     ):
         cmd = "ffa_banner" if banner else "ffa"
         log.info("%s used /games play %s in #%s", interaction.user.display_name, cmd, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "ffa", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Free-for-All is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "ffa", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
+        # ffa is not bank-only (a host prompt or an untagged draw always
+        # works), so the guard skips its bank; a tag filter with no match is
+        # still refused here, with the guard's copy.
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         if tag_list and not (prompt or "").strip() and not await has_matching_questions(
             self.db, "ffa", tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel)
         ):
-            await interaction.response.send_message(
-                f"No prompts match tags: {', '.join(tag_list)} for this game.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(no_tag_match_message(tag_list), ephemeral=True)
             return
 
         await interaction.response.defer()

@@ -12,9 +12,11 @@ import json
 import discord
 import pytest
 
+from bot_modules.core.db_utils import open_db, set_config_value
 from bot_modules.games.constants import (
     GAME_NAMES,
     LOBBY_GAME_TYPES,
+    LOBBY_MIN_PLAYERS,
     LOBBY_START_BUTTON,
 )
 from bot_modules.games.utils.game_manager import create_game, get_game_payload
@@ -371,3 +373,269 @@ async def test_mark_start_ping_sent_survives_a_corrupt_payload(sync_db_path):
         ("{not json", gid),
     )
     await svc.mark_start_ping_sent(db, gid)  # must not raise
+
+
+# ── idle lobbies (discovery-6) ──────────────────────────────────────────────
+#
+# A lobby opened without start_in was never nudged and sat until the 24 h
+# sweep. Now a joining lobby is nudged once after the configured idle time and
+# closed — no payout — once it has sat for the configured hour with fewer
+# than the game's minimum roster. Both dials live on Games Global Config; 0
+# switches a step off.
+
+GUILD = 9001
+DIALS = svc.IdleLobbyDials(nudge_seconds=20 * 60, cancel_seconds=60 * 60)
+
+
+def test_lobby_min_players_covers_every_lobby_game():
+    assert set(LOBBY_MIN_PLAYERS) == set(LOBBY_GAME_TYPES)
+
+
+def test_lobby_min_players_matches_the_cogs_own_floors():
+    # The sweep must not close a lobby its start button would have accepted.
+    from bot_modules.games_clapback.logic import MIN_PLAYERS as clapback_min
+    from bot_modules.games_mlt.logic import MIN_PLAYERS as mlt_min
+    from bot_modules.games_rushmore.logic import MIN_PLAYERS as rushmore_min
+
+    assert LOBBY_MIN_PLAYERS["clapback"] == clapback_min
+    assert LOBBY_MIN_PLAYERS["mlt"] == mlt_min
+    assert LOBBY_MIN_PLAYERS["rushmore"] == rushmore_min
+
+
+@pytest.mark.parametrize(
+    "game_type, payload, expected",
+    [
+        pytest.param("clapback", {}, 3, id="registry-default"),
+        pytest.param("mlt", {"min_players": 5}, 5, id="mlt-payload-floor"),
+        pytest.param("rushmore", {"settings": {"min_players": 4}}, 4, id="rushmore-settings-floor"),
+        pytest.param("mlt", {"min_players": "junk"}, 3, id="unreadable-falls-back"),
+        pytest.param("not_a_game", {}, 2, id="unknown-type-assumes-two"),
+    ],
+)
+def test_lobby_min_players_reads_the_games_own_floor(game_type, payload, expected):
+    assert svc.lobby_min_players(game_type, payload) == expected
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        pytest.param({"players": [1, 2, "3"]}, 3, id="players"),
+        pytest.param({"participants": [7, 7, 8]}, 2, id="participants-deduped"),
+        pytest.param({}, 0, id="empty"),
+        pytest.param({"players": "nope"}, 0, id="malformed"),
+    ],
+)
+def test_lobby_roster_size(payload, expected):
+    assert svc.lobby_roster_size(payload) == expected
+
+
+@pytest.mark.parametrize(
+    "nudge_raw, cancel_raw, nudge, cancel",
+    [
+        pytest.param(None, None, 20 * 60, 60 * 60, id="defaults"),
+        pytest.param("5", "30", 5 * 60, 30 * 60, id="stored"),
+        pytest.param("0", "0", 0, 0, id="both-off"),
+        pytest.param("junk", "-4", 20 * 60, 0, id="junk-defaults-negative-off"),
+    ],
+)
+def test_parse_idle_dials(nudge_raw, cancel_raw, nudge, cancel):
+    dials = svc.parse_idle_dials(nudge_raw, cancel_raw)
+    assert (dials.nudge_seconds, dials.cancel_seconds) == (nudge, cancel)
+
+
+@pytest.mark.parametrize(
+    "payload, idle, due",
+    [
+        pytest.param({}, 20 * 60, True, id="idle-long-enough"),
+        pytest.param({}, 19 * 60, False, id="not-yet"),
+        pytest.param({"start_epoch": NOW + 600}, 40 * 60, False, id="countdown-lobbies-use-their-own-nudge"),
+        pytest.param({"start_ping_sent": True}, 40 * 60, False, id="already-nudged"),
+    ],
+)
+def test_idle_nudge_due(payload, idle, due):
+    assert svc.idle_nudge_due(payload, NOW - idle, NOW, DIALS) is due
+
+
+def test_idle_nudge_off_when_dial_is_zero():
+    off = svc.IdleLobbyDials(nudge_seconds=0, cancel_seconds=3600)
+    assert svc.idle_nudge_due({}, NOW - 9999, NOW, off) is False
+
+
+@pytest.mark.parametrize(
+    "payload, idle, due",
+    [
+        pytest.param({"players": [1, 2]}, 60 * 60, True, id="under-the-floor-for-an-hour"),
+        pytest.param({"players": [1, 2, 3]}, 60 * 60, False, id="enough-to-start-is-the-hosts-call"),
+        pytest.param({"players": [1, 2]}, 59 * 60, False, id="not-yet"),
+        # A countdown lobby's hour starts at its advertised start, not at open.
+        pytest.param({"players": [1], "start_epoch": NOW - 1800}, 3 * 3600, False, id="countdown-clock-starts-at-start"),
+        pytest.param({"players": [1], "start_epoch": NOW - 3600}, 3 * 3600, True, id="countdown-then-an-idle-hour"),
+    ],
+)
+def test_idle_cancel_due(payload, idle, due):
+    assert svc.idle_cancel_due("clapback", payload, NOW - idle, NOW, DIALS) is due
+
+
+def test_idle_cancel_off_when_dial_is_zero():
+    off = svc.IdleLobbyDials(nudge_seconds=1200, cancel_seconds=0)
+    assert svc.idle_cancel_due("clapback", {}, NOW - 99999, NOW, off) is False
+
+
+def test_build_idle_nudge_names_button_floor_and_deadline():
+    text = svc.build_idle_nudge("rushmore", HOST, idle_minutes=20, dials=DIALS, min_players=3)
+    assert f"<@{HOST}>" in text
+    assert "Start Draft" in text
+    assert "20 minutes" in text
+    assert "3 players" in text and "60 minutes" in text
+
+
+def test_build_idle_nudge_omits_the_deadline_when_cancel_is_off():
+    dials = svc.IdleLobbyDials(nudge_seconds=1200, cancel_seconds=0)
+    text = svc.build_idle_nudge("story", HOST, idle_minutes=20, dials=dials, min_players=2)
+    assert "closes" not in text
+
+
+async def _aged_lobby(db, *, game_type="clapback", payload=None, age_seconds=0, state="joining"):
+    gid = await _make_lobby(db, game_type=game_type, payload=payload, state=state)
+    await db.execute(
+        "UPDATE games_active_games SET created_at = datetime(?, 'unixepoch'), guild_id = ?"
+        " WHERE game_id = ?",
+        (int(NOW - age_seconds), GUILD, gid),
+    )
+    return gid
+
+
+async def _live(db, gid):
+    return await db.fetchone("SELECT 1 FROM games_active_games WHERE game_id = ?", (gid,))
+
+
+async def test_read_idle_dials_falls_back_to_defaults(sync_db_path):
+    dials = await svc.read_idle_dials(GamesDb(sync_db_path), GUILD)
+    assert dials == svc.IdleLobbyDials(
+        nudge_seconds=svc.IDLE_NUDGE_DEFAULT_MINUTES * 60,
+        cancel_seconds=svc.IDLE_CANCEL_DEFAULT_MINUTES * 60,
+    )
+
+
+async def test_read_idle_dials_reads_the_guilds_config(sync_db_path):
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, svc.IDLE_NUDGE_KEY, "7", GUILD)
+        set_config_value(conn, svc.IDLE_CANCEL_KEY, "0", GUILD)
+    dials = await svc.read_idle_dials(GamesDb(sync_db_path), GUILD)
+    assert (dials.nudge_seconds, dials.cancel_seconds) == (420, 0)
+
+
+async def test_idle_lobby_is_nudged_once(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    gid = await _aged_lobby(db, payload={"players": [HOST]}, age_seconds=25 * 60)
+
+    for _ in range(3):
+        row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+        await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert len(chan.sends) == 1
+    assert "Clapback" in chan.sends[0] and f"<@{HOST}>" in chan.sends[0]
+    assert [u.id for u in chan.mentions[0].users] == [HOST]
+    assert (await get_game_payload(db, gid))["start_ping_sent"] is True
+    assert await _live(db, gid) is not None  # nudged, not closed
+
+
+async def test_fresh_lobby_is_left_alone(sync_db_path):
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    gid = await _aged_lobby(db, payload={"players": [HOST]}, age_seconds=5 * 60)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert chan.sends == []
+
+
+class _LobbyMsg:
+    def __init__(self):
+        self.edits = []
+
+    async def edit(self, **kwargs):
+        self.edits.append(kwargs)
+
+
+class _ChanWithMessage(_Chan):
+    def __init__(self):
+        super().__init__()
+        self.message = _LobbyMsg()
+
+    async def fetch_message(self, mid):
+        return self.message
+
+
+class _View:
+    def __init__(self):
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+async def test_under_populated_lobby_is_closed_after_the_hour_without_pay(sync_db_path, monkeypatch):
+    db = GamesDb(sync_db_path)
+    chan = _ChanWithMessage()
+    bot = _Bot(db, {CHAN: chan})
+    view = _View()
+    bot.active_views = {}
+    gid = await _aged_lobby(db, payload={"players": [HOST, 2]}, age_seconds=61 * 60)
+    bot.active_views[gid] = view
+    await db.execute("UPDATE games_active_games SET message_id = 555 WHERE game_id = ?", (gid,))
+
+    paid = []
+    from bot_modules.games.utils import game_manager as gm
+
+    async def _no_pay(*a, **k):
+        paid.append(1)
+        return 0
+
+    monkeypatch.setattr(gm, "_pay_party_rewards", _no_pay)
+
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert await _live(db, gid) is None
+    hist = await db.fetchone(
+        "SELECT player_count, payload FROM games_game_history WHERE game_id = ?", (gid,)
+    )
+    assert json.loads(hist["payload"])["reason"] == "lobby_timeout"
+    assert hist["player_count"] == 2          # recorded, not paid
+    assert paid == []
+    assert view.stopped and gid not in bot.active_views
+    assert chan.message.edits and "timed out" in chan.message.edits[0]["content"]
+    assert chan.message.edits[0]["view"] is None
+
+
+async def test_a_lobby_that_could_start_is_never_closed(sync_db_path):
+    # Three joined Clapback: the host's call, however long they sit on it.
+    db = GamesDb(sync_db_path)
+    chan = _ChanWithMessage()
+    bot = _Bot(db, {CHAN: chan})
+    gid = await _aged_lobby(db, payload={"players": [HOST, 2, 3]}, age_seconds=5 * 3600)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+    assert await _live(db, gid) is not None
+    assert chan.message.edits == []
+
+
+async def test_loop_reads_each_guilds_dials(sync_db_path, monkeypatch):
+    # Dial set to 0 for this guild: the lobby is neither nudged nor closed.
+    db = GamesDb(sync_db_path)
+    chan = _ChanWithMessage()
+    bot = _Bot(db, {CHAN: chan})
+    with open_db(sync_db_path) as conn:
+        set_config_value(conn, svc.IDLE_NUDGE_KEY, "0", GUILD)
+        set_config_value(conn, svc.IDLE_CANCEL_KEY, "0", GUILD)
+    gid = await _aged_lobby(db, payload={"players": [HOST]}, age_seconds=5 * 3600)
+
+    monkeypatch.setattr(svc.time, "time", lambda: NOW)
+    monkeypatch.setattr(asyncio, "sleep", _noop_sleep)
+    await svc.game_start_ping_loop(bot)
+
+    assert chan.sends == []
+    assert await _live(db, gid) is not None

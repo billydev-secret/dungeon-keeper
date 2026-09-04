@@ -16,8 +16,6 @@ from bot_modules.games.constants import HOW_TO_PLAY
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -27,6 +25,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import launch_refusal
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
@@ -1029,7 +1028,6 @@ class AMAView(discord.ui.View):
         payload = await get_game_payload(self.db, self.game_id)
         stats = compute_recap_stats(payload)
         total_q = stats["total_q"]
-        unique_askers = stats["unique_askers"]
 
         color = await safe_resolve_accent(self.bot, channel.guild, log_label="ama")
         embed = build_recap_embed(self.mode, stats, color=color)
@@ -1056,7 +1054,10 @@ class AMAView(discord.ui.View):
             {q["asker_id"] for q in _qs if q.get("asker_id", 0) > 0}
             | {q["hot_seat_id"] for q in _qs if q.get("hot_seat_id", 0) > 0}
         )
-        await end_game(self.db, self.game_id, player_count=unique_askers, round_count=total_q, payload=payload,
+        # player_count is the roster paid here, so it matches what the 24h
+        # sweep records for the same session (game_roster._ama); it used to be
+        # the asker count alone on this path (social-prompt-40).
+        await end_game(self.db, self.game_id, player_count=len(participants), round_count=total_q, payload=payload,
                        bot=self.bot, player_ids=participants)
         if self.game_id in self.bot.active_views:
             del self.bot.active_views[self.game_id]
@@ -1544,14 +1545,13 @@ class AMACog(commands.Cog):
     )
     async def ama(self, interaction: discord.Interaction, mode: str = "unfiltered", format: str = AMA_FORMAT_HOT_SEAT):
         log.info("%s used /games play ama in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "ama", interaction.guild_id or 0):
-            await interaction.response.send_message("Anonymous AMA is currently disabled on this server.", ephemeral=True)
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await launch_refusal(
+            self.db, "ama", interaction.channel_id, interaction.guild_id or 0,
+        )
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()

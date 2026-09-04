@@ -140,10 +140,19 @@ def _bal(db_path, uid: int) -> int:
 async def test_pay_splits_participation_and_win(db_path):
     _enable(db_path)
     bot: Any = _Bot(db_path, [_member(1), _member(2), _member(3)])
-    await pay_game_rewards(bot, GUILD, [1, 2, 3], [1], "chicken")
+    paid = await pay_game_rewards(bot, GUILD, [1, 2, 3], [1], "chicken")
     assert _bal(db_path, 1) == 25  # 5 participation + 20 win
     assert _bal(db_path, 2) == 5
     assert _bal(db_path, 3) == 5
+    assert paid == 35  # the total, for an end path that reports on it
+
+
+async def test_pay_reports_zero_on_every_noop_path(db_path):
+    bot: Any = _Bot(db_path, [_member(1), _member(2)])
+    assert await pay_game_rewards(bot, GUILD, [1, 2], [], "chicken") == 0  # economy off
+    _enable(db_path)
+    assert await pay_game_rewards(bot, GUILD, [], [], "chicken") == 0
+    assert await pay_game_rewards(bot, 9999, [1, 2], [], "chicken") == 0
 
 
 def _add_active_quest(db_path, *, trigger_kind: str, reward: int) -> None:

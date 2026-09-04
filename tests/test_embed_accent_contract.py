@@ -307,6 +307,37 @@ CASES = [
         lambda **kw: nhie_embeds.build_recap_embed(winner_id=42, guilt_scores={"42": 1}, **kw),
         discord.Color(games_constants.PHASE_RECAP),
     ),
+    case(
+        "nhie.recap_ended",
+        lambda **kw: nhie_embeds.build_recap_embed(
+            winner_id=None, guilt_scores={"42": 1}, ended=True, **kw
+        ),
+        discord.Color(games_constants.PHASE_RECAP),
+    ),
+    case(
+        "nhie.round_waiting",
+        lambda **kw: nhie_embeds.build_round_embed(
+            statement="", guilty=[], innocent=[], round_num=1, waiting=True, **kw
+        ),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
+    case(
+        "wyr.recap",
+        lambda **kw: wyr_embeds.build_wyr_recap_embed(
+            {"1": {"a": [1], "b": [2], "q": "x OR y"}}, **kw
+        ),
+        discord.Color(games_constants.PHASE_RECAP),
+    ),
+    case(
+        "wyr.round_waiting",
+        lambda **kw: wyr_embeds.build_wyr_embed("Alice", "", "", [], [], True, 1, waiting=True, **kw),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
+    case(
+        "mlt.round_waiting",
+        lambda **kw: mlt_embeds.build_round_embed("", round_num=1, vote_count=0, waiting=True, **kw),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
     # ── most likely to ───────────────────────────────────────────────────
     case(
         "mlt.join",
