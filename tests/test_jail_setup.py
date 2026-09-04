@@ -14,7 +14,6 @@ from __future__ import annotations
 
 
 from bot_modules.jail.logic import (
-    cap_mentions,
     sanitize_channel_name,
 )
 
@@ -63,44 +62,3 @@ def test_sanitize_unicode_falls_back_or_strips():
     replaced. The cog uses this on Discord usernames which may contain them."""
     assert sanitize_channel_name("café") == "caf"
     assert sanitize_channel_name("中文") == "user"
-
-
-# ── cap_mentions ───────────────────────────────────────────────────────
-
-
-def test_cap_under_limit_returns_all_sorted():
-    shown, overflow = cap_mentions([3, 1, 2], max_count=10)
-    assert shown == [1, 2, 3]
-    assert overflow == 0
-
-
-def test_cap_at_limit_returns_all():
-    shown, overflow = cap_mentions([1, 2, 3], max_count=3)
-    assert shown == [1, 2, 3]
-    assert overflow == 0
-
-
-def test_cap_over_limit_truncates_and_reports_overflow():
-    shown, overflow = cap_mentions([5, 4, 3, 2, 1], max_count=2)
-    assert shown == [1, 2]
-    assert overflow == 3
-
-
-def test_cap_accepts_a_set():
-    """The cog's ``eligible`` is a set; the helper has to handle that."""
-    shown, overflow = cap_mentions({30, 10, 20}, max_count=10)
-    assert shown == [10, 20, 30]
-    assert overflow == 0
-
-
-def test_cap_default_is_25():
-    big = list(range(40))
-    shown, overflow = cap_mentions(big)
-    assert len(shown) == 25
-    assert overflow == 15
-
-
-def test_cap_empty_input():
-    shown, overflow = cap_mentions([])
-    assert shown == []
-    assert overflow == 0

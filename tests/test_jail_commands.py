@@ -399,10 +399,20 @@ def _vote_interaction(ctx, *, guild_id: int, policy_channel_id: int, press_chann
     voter.bot = False
     voter.roles = []
     voter.guild_permissions = MagicMock(manage_guild=True, administrator=True)
+    # Real strings: the tally embed resolves ids to names and escapes markdown,
+    # and re.sub cannot take a MagicMock. Nothing here asserts on the name — it
+    # just has to be a name.
+    voter.display_name = "Voter"
+    voter.name = "voter"
 
     guild = MagicMock(spec=discord.Guild)
     guild.id = guild_id
     guild.members = [voter]
+    # A bare MagicMock answers get_member() for EVERY id, so the tally embed's
+    # name resolver would "find" a mock member for every voter and then try to
+    # markdown-escape a MagicMock. Behave like a real cache: the voter is
+    # present, nobody else is.
+    guild.get_member.side_effect = lambda uid: voter if uid == voter.id else None
     voter.guild = guild
 
     policy_channel = MagicMock(spec=discord.TextChannel)

@@ -36,30 +36,6 @@ def sanitize_channel_name(part: str, *, fallback: str = "user") -> str:
     return cleaned or fallback
 
 
-# ── Mention-list capping ──────────────────────────────────────────────
-
-
-def cap_mentions(
-    ids: list[int] | set[int],
-    *,
-    max_count: int = 25,
-) -> tuple[list[int], int]:
-    """Cap an ID list to ``max_count``, returning ``(shown, overflow_count)``.
-
-    Discord embed fields max out at 1024 characters. A field full of
-    ``<@123456789012345678>`` mentions hits that ceiling around 25 entries,
-    so the policy-vote embed has to truncate when the eligible roster grows
-    past that cap. The caller then renders ``"+N more"`` for the overflow.
-
-    Sorted so the output is deterministic regardless of input ordering — the
-    same set always produces the same shown roster across embed refreshes.
-    """
-    sorted_ids = sorted(ids)
-    if len(sorted_ids) <= max_count:
-        return sorted_ids, 0
-    return sorted_ids[:max_count], len(sorted_ids) - max_count
-
-
 # ── Role snapshot / restore ───────────────────────────────────────────
 
 

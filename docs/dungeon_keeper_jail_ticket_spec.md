@@ -138,6 +138,12 @@ Generated when a jail channel is closed via unjail or when a ticket is **deleted
 
 Transcripts are delivered as Markdown (`.md`) files. They're readable in any text editor without rendering, copy-paste cleanly, and survive archival in plain-text tools without losing structure.
 
+**Naming voters (both cards, 2026-09-03).** Neither the mod vote nor the ballot renders `<@id>` any more. An embed mention is resolved by the *reading* client from its own cache, so it degrades to a bare number for anyone who has not seen that member — including a voter who has since left the guild. Both cards route every id through `build_name_fn`.
+
+The two differ in one way, per `docs/embed_style_guide.md`: the **mod vote is mod-facing**, so it renders ``Name (`id`)`` and a moderator keeps something copyable; the **ballot is member-facing**, so it shows the name alone, because an id there is noise to every reader. A test pins the distinction.
+
+Both truncate their voter lists on accumulated **characters**, not on a fixed entry count. The mod vote used to cap at 25 mentions, which worked only because `<@id>` has a predictable width — with real display names, 25 long nicknames blow past Discord's 1024-character field ceiling and the whole field is dropped. That entry cap (`cap_mentions`) is gone, and the awaiting roster is sorted at the call site, since it comes off a set difference and the cap used to sort on the way past.
+
 ### Community ballots
 
 `/policy ballot` (admin) is the members' counterpart to the mod team's policy vote. It opens a **thread in the channel it was run in** and posts one card with Yes / No / Abstain buttons plus a moderator-only **Close Ballot**. A modal takes the question, and that question is the only string the ballot carries — no proposal description, no transcript, nothing from a private policy channel, which is what stops "widen the vote" from also meaning "widen the deliberation". The private mod channel is not involved in a community ballot at all.

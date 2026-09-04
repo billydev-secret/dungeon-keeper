@@ -25,7 +25,6 @@ from typing import Any
 
 import discord
 
-from bot_modules.jail.logic import cap_mentions
 from bot_modules.services.name_resolver import NameFn, mention
 from bot_modules.services.embeds import (
     MOD_INFO,
@@ -43,7 +42,6 @@ from bot_modules.core.branding import apply_section_spacing
 # Defaults that mirror the cog's existing knobs. Kept here so tests can
 # assert behavior changes when (e.g.) the page size moves without finding
 # the constant baked into the cog.
-DEFAULT_MAX_ELIGIBLE_MENTIONS = 25
 DEFAULT_POLICIES_PAGE_SIZE = 25
 DEFAULT_POLICY_DESC_PREVIEW = 100
 
@@ -56,22 +54,40 @@ _REJECTED_COLOR_INT = MOD_JAIL
 # ── Mention helpers ────────────────────────────────────────────────────
 
 
-def _format_mentions(ids: Sequence[int]) -> str:
-    """Render an ID list as a comma-separated mention list, or ``"—"``."""
-    return ", ".join(f"<@{uid}>" for uid in ids) or "—"
+DEFAULT_BALLOT_NAMES_BUDGET = 900
 
 
-def _format_capped_mentions(
+def _format_names(
     ids: Sequence[int],
+    name_fn: "NameFn | None" = None,
     *,
-    max_count: int = DEFAULT_MAX_ELIGIBLE_MENTIONS,
+    budget: int = DEFAULT_BALLOT_NAMES_BUDGET,
+    with_ids: bool = False,
 ) -> str:
-    """Render mentions with an ``"+N more"`` suffix when the cap is exceeded."""
-    shown, overflow = cap_mentions(list(ids), max_count=max_count)
-    base = _format_mentions(shown)
-    if overflow:
-        return f"{base} *+{overflow} more*"
-    return base
+    """Render ids as a comma-separated list of resolved names, or ``"—"``.
+
+    Truncates on accumulated *characters* and appends ``"+N more"``, so the
+    field fits whatever mix of short and long display names turns up.
+
+    ``with_ids`` renders ``Name (`id`)``, which is the house rule for a
+    **mod-facing** embed: a moderator keeps something copyable to paste into
+    another command. Member-facing cards — the community ballot — get the name
+    alone, because an id there is noise to everyone who reads it. See
+    docs/embed_style_guide.md, "Naming members in embeds".
+    """
+    resolve = name_fn or mention
+    shown: list[str] = []
+    used = 0
+    for index, uid in enumerate(ids):
+        name = resolve(uid)
+        if with_ids:
+            name = f"{name} (`{uid}`)"
+        cost = len(name) + (2 if shown else 0)
+        if used + cost > budget:
+            return f"{', '.join(shown) or '—'} *+{len(ids) - index} more*"
+        shown.append(name)
+        used += cost
+    return ", ".join(shown) or "—"
 
 
 # ── Policy vote ────────────────────────────────────────────────────────
@@ -82,13 +98,20 @@ def build_policy_vote_initial_embed(
     channel_name: str,
     vote_text: str,
     eligible_ids: Sequence[int],
-    max_mentions: int = DEFAULT_MAX_ELIGIBLE_MENTIONS,
+    name_fn: "NameFn | None" = None,
 ) -> discord.Embed:
     """Build the very first embed posted when a policy vote opens.
 
     All counts are zero / "—"; only the eligible-voter "awaiting" list is
-    populated. Renders the ``"+N more"`` overflow when the roster is wider
-    than ``max_mentions`` so the field stays under Discord's 1024-char cap.
+    populated, truncated with a ``"+N more"`` tail so the field stays under
+    Discord's 1024-character ceiling.
+
+    Names, not mentions. This card lives in a private mod channel, so a
+    ``<@id>`` mostly resolved and the violation was invisible — but it was
+    still a violation, and "mostly" is doing real work in that sentence: a
+    mod who has never seen a colleague, or a voter who has since left the
+    guild, rendered as a bare number. Every id goes through ``name_fn``
+    (``services/name_resolver.build_name_fn``), which also escapes markdown.
     """
     embed = discord.Embed(title=f"🗳️ Policy Vote: {channel_name}", color=MOD_POLICY)
     embed.add_field(name="📜 Policy Text", value=vote_text, inline=False)
@@ -101,7 +124,7 @@ def build_policy_vote_initial_embed(
     embed.add_field(name="➖ Abstain", value="—", inline=False)
     embed.add_field(
         name="⏳ Awaiting",
-        value=_format_capped_mentions(eligible_ids, max_count=max_mentions),
+        value=_format_names(eligible_ids, name_fn, with_ids=True),
         inline=False,
     )
     apply_section_spacing(embed)
@@ -117,6 +140,7 @@ def build_policy_vote_update_embed(
     abstain_ids: Sequence[int],
     awaiting_ids: Sequence[int],
     outcome: str | None = None,
+    name_fn: "NameFn | None" = None,
 ) -> discord.Embed:
     """Build the running-tally embed shown after each vote is cast.
 
@@ -150,10 +174,26 @@ def build_policy_vote_update_embed(
         name="Votes Cast", value=f"{voted_count}/{eligible_count}", inline=True
     )
     embed.add_field(name="Status", value=status, inline=True)
-    embed.add_field(name="✅ Yes", value=_format_mentions(yes_ids), inline=False)
-    embed.add_field(name="❌ No", value=_format_mentions(no_ids), inline=False)
-    embed.add_field(name="➖ Abstain", value=_format_mentions(abstain_ids), inline=False)
-    embed.add_field(name="⏳ Awaiting", value=_format_mentions(awaiting_ids), inline=False)
+    embed.add_field(
+        name="✅ Yes",
+        value=_format_names(yes_ids, name_fn, with_ids=True),
+        inline=False,
+    )
+    embed.add_field(
+        name="❌ No",
+        value=_format_names(no_ids, name_fn, with_ids=True),
+        inline=False,
+    )
+    embed.add_field(
+        name="➖ Abstain",
+        value=_format_names(abstain_ids, name_fn, with_ids=True),
+        inline=False,
+    )
+    embed.add_field(
+        name="⏳ Awaiting",
+        value=_format_names(awaiting_ids, name_fn, with_ids=True),
+        inline=False,
+    )
     apply_section_spacing(embed)
     return embed
 
@@ -170,38 +210,12 @@ def build_policy_vote_update_embed(
 #    (``services/name_resolver.build_name_fn``), which also escapes markdown.
 #  * **The voter lists are capped by characters, not entries.** Embed fields
 #    stop at 1024 characters and display names vary wildly in length, so the
-#    25-mention rule the mod vote uses (``cap_mentions``) does not transfer: a
-#    ballot with 25 long nicknames would silently lose its whole field.
+#    fixed 25-entry rule the mod vote used to use does not transfer: 25 long
+#    nicknames would silently lose the whole field. The mod vote was converted
+#    to the same character budget on 2026-09-03, and that entry cap is gone.
 
 #: Leaves room under Discord's 1024-char field ceiling for the "+N more" tail
 #: and the separators.
-DEFAULT_BALLOT_NAMES_BUDGET = 900
-
-
-def _format_names(
-    ids: Sequence[int],
-    name_fn: "NameFn | None" = None,
-    *,
-    budget: int = DEFAULT_BALLOT_NAMES_BUDGET,
-) -> str:
-    """Render ids as a comma-separated list of resolved names, or ``"—"``.
-
-    Truncates on accumulated *characters* and appends ``"+N more"``, so the
-    field fits whatever mix of short and long display names turns up.
-    """
-    resolve = name_fn or mention
-    shown: list[str] = []
-    used = 0
-    for index, uid in enumerate(ids):
-        name = resolve(uid)
-        cost = len(name) + (2 if shown else 0)
-        if used + cost > budget:
-            return f"{', '.join(shown) or '—'} *+{len(ids) - index} more*"
-        shown.append(name)
-        used += cost
-    return ", ".join(shown) or "—"
-
-
 def build_policy_ballot_embed(
     *,
     question: str,
