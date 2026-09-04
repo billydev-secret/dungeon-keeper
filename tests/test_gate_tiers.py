@@ -87,3 +87,31 @@ def test_push_ci_still_type_checks_and_runs_the_browser_sweep():
     # By marker, never by filename — naming files once left five of the seven
     # browser test files running in no tier at all.
     assert "-m browser" in browser_steps
+
+
+# ── a red suite must not hide the stages after it ─────────────────────
+
+
+def test_the_stage_runners_report_rather_than_exit():
+    """`run_pytest` used to sys.exit on failure, which skipped the browser
+    sweep that follows it — so in a checkout with a permanently-red test the
+    sweep never ran at all, silently, in the one tier that exists to be
+    thorough."""
+    import inspect
+
+    for fn in (gate.run_pytest, gate.run_mobile):
+        src = inspect.getsource(fn)
+        assert "sys.exit" not in src, (
+            f"{fn.__name__} exits instead of reporting; a later stage will be skipped"
+        )
+        assert inspect.signature(fn).return_annotation == "bool"
+
+
+def test_main_still_exits_non_zero_when_a_stage_fails():
+    """Reporting instead of exiting is only safe if main() honours the report —
+    otherwise the pre-commit hook would pass on a red suite."""
+    import inspect
+
+    src = inspect.getsource(gate.main)
+    assert src.count("if not ok:") >= 2, "a tier stopped honouring the failure flag"
+    assert "ok = run_pytest" in src
