@@ -57,11 +57,17 @@ from bot_modules.games.mahjong.tiles import (
     MIN_RANK,
     STANDARD_JOKERS,
     Tile,
+    deck_size,
     in_play,
 )
 
 DEALER_TILES = 14
 SEAT_TILES = 13
+#: The fewest live tiles a wall may be dealt with (mahjong-142). A Duel trim
+#: is applied on top of whatever deck the table plays, and prod's stale
+#: trim of 60 on a 104-tile quick deck dealt a 17-tile wall — a hand that
+#: could only ever end as a wall game. ``clamp_wall_trim`` is the guard.
+MIN_LIVE_WALL = 60
 CHARLESTON_TILES = 3
 MAX_COURTESY = 3
 STRIKES_TO_FALLOW = 3
@@ -493,6 +499,24 @@ def close_table(state: GameState, reason: str) -> tuple[GameState, list[Event]]:
 
 
 # ── Deal ─────────────────────────────────────────────────────────────────────
+
+
+def clamp_wall_trim(
+    trim: int, seat_count: int, max_rank: int = FULL_RANK,
+    *, jokers: int = STANDARD_JOKERS,
+) -> int:
+    """The trim a table may actually be built with (mahjong-142).
+
+    A short deck is already the length lever, so it takes no trim at all;
+    on the full deck the trim is capped so the wall keeps at least
+    ``MIN_LIVE_WALL`` tiles after the deal. The dial's own bounds can't do
+    this — they know nothing about the deck the table will play.
+    """
+    if trim <= 0 or max_rank < FULL_RANK:
+        return 0
+    dealt = DEALER_TILES + SEAT_TILES * (seat_count - 1)
+    room = deck_size(max_rank, jokers=jokers) - dealt - MIN_LIVE_WALL
+    return max(0, min(trim, room))
 
 
 def deal(state: GameState, wall: list[Tile]) -> tuple[GameState, list[Event]]:

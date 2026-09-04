@@ -176,6 +176,38 @@ def test_report_shape_and_snowflake_strings(fake_ctx, authed_client):
     assert data["tables"][0]["host_id"] == str(big)
     assert data["results"][0]["winner_id"] == str(big)
     assert data["aggregates"][0]["user_id"] == str(big)
+    # a hand from before migration 181 has no timing — unknown, never zero
+    assert data["results"][0]["duration"] is None
+    assert data["results"][0]["discards"] is None
+    assert data["results"][0]["practice"] is False
+    assert data["pace"] == {"hands": 0, "seconds_per_discard": None, "avg_minutes": None}
+
+
+def test_report_carries_hand_timing_and_a_real_hands_only_pace(fake_ctx, authed_client):
+    # mahjong-152: started_at/discards were written since migration 181 and
+    # read by nothing; practice hands now record too, flagged, and stay out
+    # of the pace figure (a bot's reaction delay is configured)
+    upload_and_activate(authed_client)
+    with open_db(fake_ctx.db_path) as conn:
+        for started, ended, discards, practice, winner in (
+            (1000.0, 1000.0 + 40 * 45, 40, 0, 5),        # 45 s/discard
+            (2000.0, 2000.0 + 60 * 15, 60, 0, None),     # 15 s/discard
+            (3000.0, 3000.0 + 10 * 2, 10, 1, -111),      # practice: excluded
+        ):
+            conn.execute(
+                "INSERT INTO mahjong_results (guild_id, table_id, hand_no, mode, "
+                "stake, card_id, kind, winner_id, line_id, line_name, base_value, "
+                "won_by, jokerless, created_at, started_at, discards, practice) "
+                "VALUES (?, 1, 1, 2, 1, 'c', 'mahjong', ?, 'gh-1', 'Golden Hour', "
+                "25, 'discard', 0, ?, ?, ?, ?)",
+                (fake_ctx.guild_id, winner, ended, started, discards, practice),
+            )
+    data = authed_client.get("/api/mahjong/report").json()
+    by_start = {r["discards"]: r for r in data["results"]}
+    assert by_start[40]["duration"] == 1800.0 and by_start[40]["practice"] is False
+    assert by_start[10]["practice"] is True and by_start[10]["winner_id"] == "-111"
+    # (40×45 + 60×15) / 100 discards = 27 s; (1800 + 900) / 2 hands = 22.5 min
+    assert data["pace"] == {"hands": 2, "seconds_per_discard": 27.0, "avg_minutes": 22.5}
 
 
 def test_every_assist_mode_saves(authed_client):

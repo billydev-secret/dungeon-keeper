@@ -424,3 +424,76 @@ def test_claim_advice_is_never_trimmed_by_the_1024_fit_loop(monkeypatch):
     block = _rack_field(embed, "Closest Hands")
     assert block is not None and len(block) <= 1024
     assert block.splitlines()[0].startswith("✋")   # the decision survives
+
+
+# ── Claim window ticks (mahjong-145) ─────────────────────────────────────────
+
+
+def _claim_field(state) -> str:
+    embed = mj_embeds.build_table_panel(state, NAMES, 1, 450, ACCENT, None)
+    return next(f.value or "" for f in embed.fields if f.name == "Claim Window")
+
+
+@pytest.mark.parametrize("claims, tick", [
+    pytest.param({}, "…", id="undecided"),
+    pytest.param({1: (G.AUTO_PASS, [])}, "…", id="auto_pass"),
+    pytest.param({1: ("pass", [])}, "✅", id="chose_pass"),
+    pytest.param({1: ("call", [Tile("1c")])}, "✅", id="chose_call"),
+])
+def test_claim_window_ticks_only_what_a_seat_chose(claims, tick):
+    # An auto-passed seat is one with no legal route to the tile; ticking it
+    # the instant a discard lands told the whole table who could (or could
+    # not) call or Mahjong it. Only a seat's own tap earns a tick.
+    import copy
+
+    state = copy.deepcopy(STATES["claim_window"])
+    state.claims = claims
+    assert f"Responses: {tick}" in _claim_field(state)
+
+
+def test_auto_passed_seat_renders_exactly_like_an_undecided_one():
+    import copy
+
+    undecided = copy.deepcopy(STATES["claim_window"])
+    undecided.claims = {}
+    auto = copy.deepcopy(STATES["claim_window"])
+    auto.claims = {1: (G.AUTO_PASS, [])}
+    assert _claim_field(undecided) == _claim_field(auto)
+
+
+# ── Turn nudges (mahjong-144) ────────────────────────────────────────────────
+
+
+def test_nudge_lines_ping_the_human_on_draw_and_at_the_second_strike():
+    from bot_modules.games.mahjong.bot_logic import bot_member_id
+    from tests.test_mahjong_game_logic import play_state
+
+    state = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=1)
+    events = [("strike", {"seat": 0, "strikes": 2}),
+              ("tile_drawn", {"seat": 1, "wall_left": 3})]
+    lines = mj_embeds.nudge_lines(state, events, turn_changed=True)
+    assert [(m, "your draw" in t) for m, t, _ in lines] == [(100, False), (101, True)]
+    assert all(t.startswith(f"<@{m}>") for m, t, _ in lines)
+    assert "one more" in lines[0].content and "folds" in lines[0].content
+    assert [n.warning for n in lines] == [True, False]
+    # the warning stands while the seat is one miss from folding, and no longer
+    state.seats[0].strikes = 2
+    assert mj_embeds.warning_live(state, 100) is True
+    state.seats[0].strikes = 0
+    assert mj_embeds.warning_live(state, 100) is False
+    state.seats[0].strikes = 2
+    state.seats[0].fallow = True
+    assert mj_embeds.warning_live(state, 100) is False
+    assert mj_embeds.warning_live(state, 999) is False
+    state.seats[0].fallow = False
+    # same turn, nothing new (a joker redeem, say) → no re-ping
+    assert mj_embeds.nudge_lines(state, [], turn_changed=False) == []
+    # a first strike is not a warning
+    assert mj_embeds.nudge_lines(
+        state, [("strike", {"seat": 0, "strikes": 1})], turn_changed=False) == []
+    # a bot seat is never pinged, and no draw line outside a turn
+    state.seats[1].member_id = bot_member_id(7, 1)
+    assert mj_embeds.nudge_lines(state, events, turn_changed=True) == [
+        lines[0]]
+    state.phase = Phase.CLAIM_WINDOW
+    assert mj_embeds.nudge_lines(state, [], turn_changed=True) == []

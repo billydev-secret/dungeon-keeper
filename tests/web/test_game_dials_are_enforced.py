@@ -415,6 +415,12 @@ def test_game_night_ping_dial_is_the_key_the_sweep_pings() -> None:
     assert "GAME_NIGHT_PING.key" in route
     sweep = (_ROOT / "src" / "bot_modules" / "services" / "game_start_ping_service.py").read_text(encoding="utf-8")
     assert "GAME_NIGHT_PING.key" in sweep and "role_only_mentions" in sweep
+    # Meadow Mahjong is off the games platform, so its table-open line goes
+    # through the sweep's own reader rather than a second copy of the dial
+    # (mahjong-149)
+    mahjong = (_ROOT / "src" / "bot_modules" / "cogs" / "mahjong_cog.py").read_text(encoding="utf-8")
+    assert "resolve_game_night_role(" in mahjong and "role_only_mentions(" in mahjong
+    assert '"game_night_ping_role_id"' not in mahjong  # no private copy of the key
 
 
 # ── the casino panel (Economy → Casino) ───────────────────────────────

@@ -7,6 +7,7 @@ from bot_modules.games.command_groups import games
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.games_help.embeds import build_help_embed
+from bot_modules.games.mahjong.mahjong_service import mahjong_help_line
 from bot_modules.games_help.logic import survivor_help_line
 from bot_modules.games.utils.game_manager import channel_name
 
@@ -23,13 +24,16 @@ async def help_command(interaction: discord.Interaction):
         db_path = interaction.client.ctx.db_path  # type: ignore[attr-defined]
         now = discord.utils.utcnow().timestamp()
 
-        def _survivor():
+        def _extra() -> list[str]:
             with open_db(db_path) as conn:
-                return survivor_help_line(conn, guild.id, now)
+                return [
+                    line for line in (
+                        survivor_help_line(conn, guild.id, now),
+                        mahjong_help_line(conn, guild.id),
+                    ) if line
+                ]
 
-        line = await asyncio.to_thread(_survivor)
-        if line:
-            extra_lines.append(line)
+        extra_lines.extend(await asyncio.to_thread(_extra))
     embed = build_help_embed(color=color, extra_lines=extra_lines)
     await interaction.response.send_message(embed=embed, ephemeral=True)
 

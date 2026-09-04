@@ -61,6 +61,86 @@ body below. 1–2 predate any code (2026-08-21); 3 records the assist addon.
    80% / 85, 20 at 92% / 70. Wall *trim* is the wrong lever for this — it
    shortens by guaranteeing wall games (97% at trim 60).
 
+6. **Turn signals, claim-window privacy, settle window (added 2026-09-04
+   from the games deep review, findings mahjong-144/145/146/148/154).**
+   - *Turn ping.* Every human turn start posts a plain message —
+     `<@id> — your draw.` in message **content** (never an embed), with
+     `allowed_mentions` restricted to that one member — and the second
+     strike posts `<@id> — one more missed turn and your seat folds.` The
+     previous turn's draw line is deleted when the next turn begins, so a
+     channel never carries more than one turn's worth; a transition inside
+     the same turn (a joker redeem) never re-pings. The strike warning is
+     the exception: it stays up across turns — the member it names is the
+     one not looking — and is deleted once the seat is no longer one miss
+     from folding (a timely act reset the strikes, the seat folded, or the
+     table closed; `warning_live`). Bot seats are never pinged.
+   - *Claim-window ticks.* The per-seat response ticks on the table card show
+     ✅ only for a response the seat **chose**; a seat the engine auto-passed
+     (no legal route to the tile) renders exactly like an undecided one (…).
+     The old instant ✅ told the whole table which seats could call or
+     Mahjong the discard, every discard, for free.
+   - *Rack panel Now line* for an auto-passed seat reads "Nothing to claim
+     here — the window moves on without you." — it is not "You passed",
+     because the seat never decided anything.
+   - *Settle window.* SETTLE has its own ten-minute window
+     (`SETTLE_LIFETIME`), not `phase_timer`: a unanimous Rematch no longer
+     has to land inside 60 s or the whole table closes. No new dial. This
+     supersedes the "phase timer" wording of plan decision D11; the
+     unanimity half of D11 stands (non-voting seats are not dropped).
+   - *Sticky hold.* The table card's chat-driven restick is **held** while
+     the table is in CLAIM_WINDOW (StickyPanel `hold`, polled every 2 s) so
+     the only Mahjong/Call/Pass buttons never move mid-window; the resolving
+     transition's own refresh re-sticks the card afterwards.
+
+7. **Floors, lobby, records (added 2026-09-04 from the games deep review,
+   findings mahjong-142/143/147/149/150/151/152/153).**
+   - *Fill floor.* A house bot may be seated only once **two members** are
+     already sitting (`FILL_MIN_HUMANS`; `fill_bot_allowed`) — never in a
+     Duel, at most two bots on a full table. The Add Bot button is hidden
+     and the service refuses on the same predicate. This enforces the bots
+     plan's own definition of a fill table (2+ humans + bots); the fill dial
+     alone let a lone host stake against the house with coach assist on.
+   - *Wall-trim clamp.* `clamp_wall_trim` (engine) is applied at table
+     creation: a short deck takes **no** trim, and on the full deck the trim
+     is capped so at least `MIN_LIVE_WALL` (60) tiles remain after the deal.
+     Prod's stale trim of 60 on a 104-tile quick deck had dealt a 17-tile
+     wall. The engine's own `deal` keeps its cap-not-crash behaviour.
+   - *Quick practice.* With the short-deck dial set, the create flow offers
+     **Quick Practice Duel / Quick Practice Table** ahead of the full-deck
+     practice buttons (their own button row); `create_table(practice=True,
+     max_rank=…)` passes the same house gate as a staked quick table.
+   - *Lobby lifetime* is **20 minutes** (`LOBBY_LIFETIME`); the settle
+     window stays ten (`SETTLE_LIFETIME`). §6.2 amended.
+   - *Table-open ping.* Opening a **real** table posts one plain-content
+     line mentioning the guild's Game Night role (the `game_night_ping_role_id`
+     dial, read through `game_start_ping_service.resolve_game_night_role` —
+     the same reader as the lobby-games sweep, provisioning on first use,
+     silent on "(none)"), with a jump link to the card; `allowed_mentions`
+     is the one role. Practice tables are born full and never ping.
+     `/games help` lists `/mahjong` in its extra-lines block while the
+     game's enable dial is on (`mahjong_help_line`).
+   - *Escrow on the panel.* `/mahjong` shows the hold per table size at the
+     lowest allowed stake before any click (the cap itself is unchanged).
+   - *Closed card.* A closed table's final card is rendered from the CLOSED
+     state with its `closed_reason` ("Table closed — the lobby never filled /
+     nobody rematched in time / a seat couldn't cover the next hand's
+     escrow / cancelled before the deal / …"), buttons gone. `rematch_unfunded`
+     still closes the whole table: keeping the funded seats at the settle
+     screen would mean dropping a seat, which D11 (unanimity) forbids.
+   - *Practice results.* A practice hand writes its `mahjong_results` row
+     with `practice = 1` (migration 209) — kind, line, `started_at`,
+     `discards` — and **no** seat rows, stats, coins or games record; bots
+     plan B5 is about money, not telemetry. The dashboard's Recent Hands
+     shows length and discards per hand, marks practice rows, renders
+     negative winner ids as "🌱 house bot", and carries a pace line
+     (seconds per discard, minutes per hand) over timed **real** hands only.
+   - *Games record.* Every settled real hand writes one `games_game_history`
+     row (`game_id = "mahjong:<table·100000+hand>"`, host = table host,
+     `player_count` = member seats, `round_count` = discards, payload with
+     the result summary and `players`), through
+     `games/utils/game_history.history_insert`. No XP, no quest (decision D5
+     not taken).
+
 ---
 
 **Handoff target:** Claude Code, working in the Dungeon Keeper repo.
@@ -250,12 +330,12 @@ src/bot_modules/games/mahjong/
 5. **Charleston picker** [5] — ephemeral 3-tile multi-select (jokers excluded), `Blind Pass…` on final passes; table message ticks ✅ per seat.
 6. **Second-Charleston vote** [6] — public buttons on the table message; early-resolve on any ❌.
 7. **Courtesy** [7] — ephemeral 0–3 proposal buttons → public resolution embed → ephemeral give-picker for the minimum count.
-8. **Turn panel** [8] — ephemeral on your turn: rack with drawn tile highlighted, discard select, `Redeem Joker` (enabled only when legal); public table message shows discard pit (latest highlighted), wall count, turn arrow, ⏱ countdown in the footer.
-9. **Claim window** [9] — buttons `🀄 Mahjong · ✋ Call · Pass` on the table message; per-seat response ticks; resolution announced in the table render.
+8. **Turn panel** [8] — ephemeral on your turn: rack with drawn tile highlighted, discard select, `Redeem Joker` (enabled only when legal); public table message shows discard pit (latest highlighted), wall count, turn arrow, ⏱ countdown in the footer. A plain `<@id> — your draw.` content ping lands under the card at each human turn start and is deleted at the next (amendment 6).
+9. **Claim window** [9] — buttons `🀄 Mahjong · ✋ Call · Pass` on the table message; per-seat response ticks for **chosen** responses only (an auto-passed seat shows … like an undecided one — amendment 6); resolution announced in the table render. The sticky restick is held for the window's duration.
 10. **Exposure render** [10] — exposures live inline on the owner's seat row of the table message, jokers visibly marked.
 11. **Joker redemption** [11] — public "Joker Redeemed" embed (exposure now natural), then the redeemer's refreshed ephemeral panel (joker in rack, discard prompt).
 12. **Mahjong** [12] — silent validation; on success a green reveal embed: line name, groups, how won; on failure a private ❌ and the window continues.
-13. **Settlement** [13] — green results embed with a monospace payout table, multiplier notes, `Rematch · Close Table`.
+13. **Settlement** [13] — green results embed with a monospace payout table, multiplier notes, `Rematch · Close Table`. The settle screen waits ten minutes for a unanimous Rematch, not the phase timer (amendment 6). When the table closes, the card is re-rendered as a closed card stating why (amendment 7).
 
 **Ordering rule:** ephemeral responses always land at the bottom of the channel; because everything new bottom-anchors, the persistent table message uses the house **sticky panel** pattern (debounced delete+repost on channel activity, per-guild lock, new message id persisted before the DB save). Every ephemeral panel carries enough context to act without scrolling: whose turn, the clock, the tile in question.
 
@@ -265,7 +345,7 @@ Embeds follow the house embed style guide throughout: accent from `resolve_accen
 Create flow labels escrow at 6× max. Table render shows two seats; claim window shows one respondent and a 6s clock; all Charleston passes label the opponent by name ("Pass 3 tiles to Wren"); settlement table shows the 2×/3× line used.
 
 ### 6.2 AFK / recovery
-Turn timeout auto-discards drawn tile (strike). Simultaneous-phase timeout auto-resolves (strike). 3 strikes → fallow per §1. Full-table inactivity 10 min → dissolve + refund. All timeouts survive bot restart via re-armed timers.
+Turn timeout auto-discards drawn tile (strike). Simultaneous-phase timeout auto-resolves (strike). 3 strikes → fallow per §1; the second strike pings the seat with a plain warning (amendment 6). A lobby that never fills dissolves + refunds after 20 min; a settle screen nobody rematches closes after 10 min (amendment 7). All timeouts survive bot restart via re-armed timers.
 
 ## 7. Tile emoji assets
 
@@ -282,7 +362,7 @@ Prefer **application-owned emoji** (uploaded to the bot application, usable in a
 - **Card management:** upload card JSON → server-side linter with inline errors → set active / schedule activation / archive. Card viewer (public, read-only page) renders the active card by section for out-of-Discord study.
 - **House rules:** claim-window seconds per mode, turn-timer seconds, phase-timer seconds, `hot_wall`, Duel wall trim (0 = off), second-Charleston availability. (`strict_exposures` is **not** shipped in v1 — no unenforced toggles.)
 - **Stakes:** allowed coins-per-point set, per-mode escrow preview.
-- **Tables report:** live tables, recent results, per-player aggregates. Shared escaped `table.js`; config mounts via `mountAsync`.
+- **Tables report:** live tables, recent results (with hand length and discards, practice rows marked, house bots named as such, and a pace line over timed real hands — amendment 7), per-player aggregates. Shared escaped `table.js`; config mounts via `mountAsync`.
 
 ## 9. Data model & compliance
 
@@ -290,7 +370,7 @@ Prefer **application-owned emoji** (uploaded to the bot application, usable in a
 |---|---|---|---|
 | `mahjong_cards` | card JSON, active flag, schedule | no | — |
 | `mahjong_tables` | serialized engine state, mode, sticky message id | yes (seats) | dissolve seat, refund escrow |
-| `mahjong_results` | mode, winner, line id, payout, flags | yes | purged |
+| `mahjong_results` | mode, winner, line id, payout, flags, hand timing, `practice` flag (practice hands record this row only — amendment 7) | yes | winner anonymised |
 | `mahjong_stats` | per-member aggregates | yes | purged |
 
 Same commit: data-register rows with the purge decisions above (no preservation ground applies to game history), conventional member-id column names, manual.html player guide + privacy line ("we store your mahjong results and aggregates"), `purge_user_data` wired.

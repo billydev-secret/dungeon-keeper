@@ -85,7 +85,9 @@ export function mount(container) {
               <div class="field-hint">Dead tiles removed from a Duel wall at the
                 deal. Leave at 0: simulation shows trimming does not speed hands up,
                 it truncates them — 35 tiles of trim cost 61 points of win rate to
-                save 10 discards. Use Quick Tables below instead.</div>
+                save 10 discards. Use Quick Tables below instead. Never applied
+                to a Quick table, and on the full deck capped so at least 60
+                live tiles remain after the deal.</div>
             </div>
             <div class="field">
               <label for="mj-short">Quick Tables (short deck)</label>
@@ -195,6 +197,7 @@ export function mount(container) {
         </div>
         <div class="card">
           <div class="section-label">Recent Hands</div>
+          <div class="field-hint" data-pace></div>
           <div data-results></div>
         </div>
         <div class="card">
@@ -360,15 +363,18 @@ export function mount(container) {
         data: rep.tables,
         emptyMsg: "No live tables.",
       });
+      root.querySelector("[data-pace]").textContent = paceLine(rep.pace);
       renderSortableTable(root.querySelector("[data-results]"), {
         columns: [
           { key: "created_at", label: "When", format: fmtTime },
-          { key: "mode", label: "Mode", format: (v) => (v === 2 ? "Duel" : "Full") },
+          { key: "mode", label: "Mode", format: (v, row) => `${v === 2 ? "Duel" : "Full"}${row.practice ? " 🌱 practice" : ""}` },
           { key: "kind", label: "End" },
-          { key: "winner_id", label: "Winner", format: (v) => (v ? lookupName(v) || v : "—") },
+          { key: "winner_id", label: "Winner", format: (v) => (v ? seatName(v) : "—") },
           { key: "line_name", label: "Line", format: (v) => v || "—" },
           { key: "base_value", label: "Pts" },
           { key: "jokerless", label: "Jokerless", format: (v) => (v ? "✓" : "") },
+          { key: "duration", label: "Length", format: fmtDuration },
+          { key: "discards", label: "Discards", format: (v) => (v == null ? "—" : v) },
         ],
         data: rep.results,
         defaultSort: "created_at",
@@ -396,6 +402,31 @@ export function mount(container) {
     function fmtTime(v) {
       if (!v) return "—";
       return new Date(v * 1000).toLocaleString();
+    }
+
+    // A hand dealt before timing was recorded has no duration — say so
+    // rather than show 0:00.
+    function fmtDuration(v) {
+      if (v == null) return "—";
+      const mins = Math.floor(v / 60);
+      const secs = Math.round(v % 60).toString().padStart(2, "0");
+      return `${mins}:${secs}`;
+    }
+
+    // Negative ids are house bots (bots plan B3) — never a member, so never
+    // a member name lookup.
+    function seatName(id) {
+      if (String(id).startsWith("-")) return "🌱 house bot";
+      return nameOf(id) || id;
+    }
+
+    function paceLine(pace) {
+      if (!pace || !pace.hands) {
+        return "Pace: no timed real hands yet — practice hands don't count, a bot's reaction delay is configured.";
+      }
+      return `Pace over ${pace.hands} timed real hand${pace.hands === 1 ? "" : "s"}: `
+        + `${pace.seconds_per_discard} s per discard, ${pace.avg_minutes} min per hand `
+        + "(practice hands excluded — a bot's reaction delay is configured).";
     }
 
     // Rebuilding the page throws away anything half-typed in House Rules, and

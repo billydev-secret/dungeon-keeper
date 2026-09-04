@@ -378,7 +378,7 @@ class CreateTableView(discord.ui.View):
                 ]
             for label, count, rank in sizes:
                 b = discord.ui.Button(
-                    label=label,
+                    label=label, row=0,
                     style=(discord.ButtonStyle.primary if rank == FULL_RANK
                            else discord.ButtonStyle.success),
                 )
@@ -395,14 +395,26 @@ class CreateTableView(discord.ui.View):
                 b.callback = pick_size
                 self.add_item(b)
             if practice_open:
-                for label, count in (("Practice Duel", 2), ("Practice Table", 4)):
+                # The quick deck leads when the house has opened it
+                # (mahjong-147): practice is where beginners are sent, and
+                # the full deck is the hour-long form. Its own row, so the
+                # staked sizes and the free ones never interleave.
+                practice = [("Practice Duel", 2, FULL_RANK),
+                            ("Practice Table", 4, FULL_RANK)]
+                if short_rank:
+                    practice = [
+                        (f"Quick Practice Duel (1–{short_rank})", 2, short_rank),
+                        (f"Quick Practice Table (1–{short_rank})", 4, short_rank),
+                    ] + practice
+                for label, count, rank in practice:
                     b = discord.ui.Button(
                         label=label, style=discord.ButtonStyle.secondary,
-                        emoji="🌱",
+                        emoji="🌱", row=1,
                     )
 
-                    async def cb(interaction: discord.Interaction, count=count):
-                        await cog.handle_create_practice(interaction, count)
+                    async def cb(interaction: discord.Interaction,
+                                 count=count, rank=rank):
+                        await cog.handle_create_practice(interaction, count, rank)
                     b.callback = cb
                     self.add_item(b)
             return

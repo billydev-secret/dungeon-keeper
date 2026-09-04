@@ -1012,6 +1012,9 @@ KNOWN_UNCOVERED = {
     # the settlement's void variants are deliberately grey — no accent path.
     "bot_modules.games.mahjong.embeds.build_mahjong_reveal",
     "bot_modules.games.mahjong.embeds.build_settlement",
+    # The table-open Game Night line is a content string, not an embed — a
+    # role mention only notifies from message content (mahjong-149).
+    "bot_modules.games.mahjong.embeds.build_table_open_ping",
     # Bios carries its own per-guild dial (`bios_embed_color`, BiosConfig) and
     # takes it as a required `embed_color=` argument rather than the optional
     # `color=` the contract probes — there is no accent path to pass through and
