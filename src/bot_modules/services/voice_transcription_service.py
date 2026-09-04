@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bot_modules.core.reports import SAFE_TEXT_CHUNK, chunk_text
+
 log = logging.getLogger("dungeonkeeper.voice_transcription")
 
 # The service runs with ProtectHome=read-only, so the default HuggingFace cache
@@ -101,26 +103,86 @@ def _get_model(model_name: str) -> Any:
         return _cache[model_name]
 
 
-#: Discord message content caps at 2000 characters. A long note has to be cut
-#: somewhere, and the cut is announced rather than silent — a transcript that
-#: simply stops mid-sentence reads like a transcription failure.
-MAX_TRANSCRIPT_CHARS = 1900
+#: The transcript budget is the repo-wide safe message size — one message,
+#: prefix included, with headroom under Discord's 2000-character cap.
+MAX_TRANSCRIPT_CHARS = SAFE_TEXT_CHUNK
 _TRUNCATED_NOTE = "\n\n*(transcript truncated — the recording was longer than one message)*"
 
+#: A transcript is prose, not lines: whisper emits one long paragraph, so a
+#: newline cut would find nothing and land mid-word at every join. Cutting on a
+#: space, and only one in the last fifth of the budget, is what keeps the
+#: visible text ending on a whole word.
+_WORD_CUT = {"boundary": " ", "min_fill": 0.8}
 
-def fit_transcript(text: str, limit: int = MAX_TRANSCRIPT_CHARS) -> str:
+#: How many messages an *uploaded* audio file may occupy. A real voice note is
+#: uncapped — someone who pressed the button wants the whole note — but the
+#: context menu also accepts any ``audio/*`` upload, and an hour-long podcast
+#: would otherwise post hundreds of messages into a channel and outlive the
+#: 15-minute interaction token part-way through. Ten parts is around 25 minutes
+#: of speech: past any real voice note, short of a flood.
+MAX_UPLOAD_PARTS = 10
+
+
+def fit_transcript(
+    text: str, limit: int = MAX_TRANSCRIPT_CHARS, prefix: str = ""
+) -> str:
     """Trim a transcript to one Discord message, saying so when it trims.
 
-    Cuts on a word boundary where there is one in the last fifth of the budget,
-    so the visible text ends on a whole word rather than mid-syllable.
+    Used by the automatic listener, which posts one message per voice note by
+    design: an auto-post nobody asked for shouldn't be able to fill a channel.
+    The on-demand context menu splits instead; see :func:`split_transcript`.
     """
-    if len(text) <= limit:
-        return text
-    head = text[:limit]
-    space = head.rfind(" ")
-    if space > limit * 0.8:
-        head = head[:space]
-    return head.rstrip() + _TRUNCATED_NOTE
+    return chunk_text(
+        text,
+        limit,
+        prefix=prefix,
+        max_parts=1,
+        overflow_note=_TRUNCATED_NOTE,
+        **_WORD_CUT,
+    )[0]
+
+
+def was_truncated(message: str) -> bool:
+    """Whether a message built by :func:`fit_transcript` had to be cut.
+
+    The listener asks because the clip is the only copy of what the cut
+    removed: deleting the audio behind a truncated transcript would destroy
+    the tail of what someone said with nothing left to recover it from.
+    """
+    return message.endswith(_TRUNCATED_NOTE)
+
+
+def split_transcript(
+    text: str,
+    limit: int = MAX_TRANSCRIPT_CHARS,
+    prefix: str = "",
+    max_parts: int | None = None,
+) -> list[str]:
+    """Spread a transcript over as many messages as it takes, losing nothing.
+
+    By default there is no cap on the number of parts: someone who explicitly
+    asked for a transcript wants the whole thing, and a cut long note reads
+    like a transcription failure. Pass *max_parts* to bound it — the last
+    allowed part is fitted rather than cut bare, so a capped transcript ends
+    with the same truncation note the listener uses and never simply stops.
+
+    Only the first part carries *prefix* — repeating ``📝 **Name:**`` on each
+    one would read as several separate notes rather than one continued.
+
+    Empty (or whitespace-only) text yields no messages at all, so a caller
+    never posts a bare prefix with nothing after it.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    return chunk_text(
+        text,
+        limit,
+        prefix=prefix,
+        max_parts=max_parts,
+        overflow_note=_TRUNCATED_NOTE,
+        **_WORD_CUT,
+    )
 
 
 def transcribe_file(path: Path, model_name: str = DEFAULT_MODEL) -> str:

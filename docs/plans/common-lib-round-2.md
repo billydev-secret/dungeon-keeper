@@ -62,6 +62,15 @@ near-clones + name families), `jsclones.mjs` — copy them forward from the
   `mountGamePanel`); mod row-select handler x4; `refresh*` x4.
 - `fmtAge`/`fmtTs` api.js vs panel variants (different inputs/rendering, per
   2ba1f7ba) — but the two identical *panel* copies do merge (D-cheap below).
+- Message chunkers, resolved 2026-09-03: `core/reports.chunk_text` is now the
+  shared one, taking `boundary`/`min_fill` (cut on spaces, not lines, for prose
+  with no newlines), `prefix` (a header paid for out of the first chunk's
+  budget) and `max_parts`/`overflow_note`. `voice_transcription_service`
+  delegates to it. `intake_reference_service._chunk_text` deliberately does
+  **not**: it is a line-accumulator that rejoins on the `\n` it split on so the
+  posted text matches the editor, which is a different algorithm, not a
+  duplicate. `docs/render.py`'s `_hard_split`/`_pack_blocks` pack blocks rather
+  than split a string — also not a duplicate.
 
 ## The queue (honest net ≈ 1,400–1,600 lines; estimates already discounted)
 

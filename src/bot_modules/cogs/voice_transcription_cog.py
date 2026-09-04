@@ -21,8 +21,11 @@ from bot_modules.services.voice_transcription_service import (
     VoiceTranscriptionConfig,
     fit_transcript,
     get_config,
+    MAX_UPLOAD_PARTS,
     is_available,
+    split_transcript,
     transcribe_file,
+    was_truncated,
 )
 
 if TYPE_CHECKING:
@@ -88,8 +91,8 @@ async def _transcribe_attachment(
         tmp_path.unlink(missing_ok=True)
 
 
-def format_transcript(speaker: str, text: str) -> str:
-    """The standalone post that replaces the voice message.
+def transcript_prefix(speaker: str) -> str:
+    """What the standalone post opens with, and what its budget must pay for.
 
     It carries the speaker's name because it is no longer a reply: once the
     audio can be deleted, a reply would render as a dangling "original message
@@ -97,7 +100,7 @@ def format_transcript(speaker: str, text: str) -> str:
     whose note it was. The name is markdown-escaped -- a display name holding
     ``*`` or ``_`` would otherwise reformat the transcript after it.
     """
-    return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** {text}"
+    return f"\U0001f4dd **{discord.utils.escape_markdown(speaker)}:** "
 
 
 class VoiceTranscriptionCog(commands.Cog):
@@ -170,10 +173,22 @@ class VoiceTranscriptionCog(commands.Cog):
             )
             return
 
+        # An explicit press asks for the whole note, so a long one spans as
+        # many messages as it takes rather than being cut. Only the first
+        # carries the speaker header; the rest read as one continued note.
+        #
+        # A real voice note is uncapped. An *uploaded* audio file is not: the
+        # menu accepts any audio/* attachment on purpose, and an hour-long
+        # podcast would flood the channel and outlive the interaction token, so
+        # it stops at MAX_UPLOAD_PARTS with the truncation note.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        await interaction.followup.send(
-            format_transcript(speaker, fit_transcript(text))
+        parts = split_transcript(
+            text,
+            prefix=transcript_prefix(speaker),
+            max_parts=None if _is_voice_message(message) else MAX_UPLOAD_PARTS,
         )
+        for part in parts:
+            await interaction.followup.send(part)
 
     def _menu_model(self, interaction: discord.Interaction) -> str:
         """The guild's chosen model in a guild, the default in a DM.
@@ -234,25 +249,44 @@ class VoiceTranscriptionCog(commands.Cog):
         if not text:
             return
 
+        # Unlike the on-demand press, an automatic post stays to one message:
+        # nobody asked for it, so it should not be able to fill a channel. The
+        # fit is what keeps it postable at all -- sending the raw text made
+        # Discord reject any note over the 2000-character cap outright, so a
+        # long note auto-transcribed to nothing at all.
         speaker = getattr(message.author, "display_name", None) or str(message.author)
-        await message.channel.send(format_transcript(speaker, text))
+        posted = fit_transcript(text, prefix=transcript_prefix(speaker))
+        await message.channel.send(posted)
 
         # Only after the transcript is safely posted, and only on success: a
         # failed transcribe returns above, so the audio is never destroyed
         # without something to show for it.
-        if cfg.delete_after_transcribe:
-            try:
-                await message.delete()
-            except discord.Forbidden:
-                log.warning(
-                    "Cannot delete voice message in #%s — the bot needs Manage "
-                    "Messages there; transcript posted, audio left in place",
-                    getattr(message.channel, "name", message.channel.id),
-                )
-            except discord.NotFound:
-                pass  # already gone; the transcript still stands
-            except discord.HTTPException:
-                log.warning("Deleting the voice message failed", exc_info=True)
+        if not cfg.delete_after_transcribe:
+            return
+
+        # A truncated transcript is not something to show for all of it. The
+        # clip is the only copy of what the cut removed, so a note too long for
+        # one message keeps its audio rather than losing its tail for good.
+        if was_truncated(posted):
+            log.info(
+                "Voice message in #%s kept: the transcript did not fit one "
+                "message, and the clip is the only copy of the rest",
+                getattr(message.channel, "name", message.channel.id),
+            )
+            return
+
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            log.warning(
+                "Cannot delete voice message in #%s — the bot needs Manage "
+                "Messages there; transcript posted, audio left in place",
+                getattr(message.channel, "name", message.channel.id),
+            )
+        except discord.NotFound:
+            pass  # already gone; the transcript still stands
+        except discord.HTTPException:
+            log.warning("Deleting the voice message failed", exc_info=True)
 
 
 async def setup(bot: Bot) -> None:

@@ -31,7 +31,20 @@ The menu path is **not** gated on the per-guild config: that dial governs which 
 
 The interaction is deferred (transcription exceeds Discord's 3s window) and the transcript is posted **publicly**, since the point is to leave the text in the conversation. Every failure mode replies **ephemerally** instead: unavailable, no audio found, transcription failed, or no speech detected. Model choice is the guild's configured model in a guild and `base.en` in a DM.
 
-Transcripts are fitted to a single message by `fit_transcript` (1900 chars, cut on a word boundary where one falls in the last fifth of the budget) with an explicit truncation note — a transcript that simply stopped mid-sentence would read as a failure.
+### Message length
+Both fitters delegate to the shared `core/reports.chunk_text`, which takes the boundary to cut on, a `min_fill` floor, a `prefix` paid for out of the first chunk, and a `max_parts`/`overflow_note` cap. The transcript settings are a space boundary with a 0.8 floor — whisper emits one long paragraph, so a newline cut would find nothing and land mid-word at every join.
+
+Discord caps message content at 2000 characters, and `MAX_TRANSCRIPT_CHARS` (the shared `SAFE_TEXT_CHUNK`, 1900) counts the whole message — `📝 **{speaker}:** ` included — so both fitters take the prefix and subtract it rather than trusting the slack to absorb it. Both cut on a word boundary where one falls in the last fifth of the budget; a single word longer than the budget has no boundary to find and is cut mid-word.
+
+The two paths then diverge, deliberately:
+
+- **On demand (context menu)** — `split_transcript` spreads the transcript over as many messages as it takes. For a genuine voice note (`IS_VOICE_MESSAGE`) there is **no cap** on the number of parts: someone who explicitly pressed the button asked for the whole note. Only the first part carries the speaker prefix and no part is marked as a continuation: repeating `📝 **Name:**` would read as several separate notes rather than one that runs on.
+  - An **uploaded audio file** is capped at `MAX_UPLOAD_PARTS` (10, around 25 minutes of speech). `_audio_attachment` accepts any `audio/*` attachment on purpose, so without a cap any member could long-press an hour-long podcast and have the bot post hundreds of messages — and a run that long outlives the 15-minute interaction token, failing part-way through with nothing to show the presser. The last allowed part is *fitted* rather than cut bare, so a capped transcript ends with the same truncation note the listener uses.
+- **Automatic (listener)** — `fit_transcript` keeps to a single message, appending the truncation note when it trims. An auto-post nobody asked for should not be able to fill a channel, and a transcript that simply stopped mid-sentence would read as a failure, so the cut is announced. The note is paid for out of the budget rather than added on top.
+
+`delete_after_transcribe` stands down whenever the fit truncated (`was_truncated`): the clip is the only copy of the part that did not fit, so an auto-post that could not carry the whole note leaves the audio in place and logs why. A whole transcript still authorises the delete as before.
+
+Until 2026-09-03 the listener posted raw text with no fitter at all: any note over the cap was rejected by Discord with a 400 raised out of the listener, so a long auto-transcribed note produced **nothing** — no transcript, and (because the send raised before it) no `delete_after_transcribe`, which at least left the audio in place.
 
 ### Availability
 If `faster-whisper` isn't installed, the cog is skipped entirely at setup (logged warning). The dashboard reports availability and per-model cache status.
