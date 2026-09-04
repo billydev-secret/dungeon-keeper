@@ -6,7 +6,15 @@ from pathlib import Path
 
 from bot_modules.games.utils.game_history import history_insert
 
-from .logic import build_history_payload, deserialize_user_ids, serialize_user_ids
+from .logic import (
+    PAYOFF_CHASE_HOURS_KEY,
+    PAYOFF_FALLBACK_HOURS_KEY,
+    PayoffDials,
+    build_history_payload,
+    deserialize_user_ids,
+    normalize_payoff_hours,
+    serialize_user_ids,
+)
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
 log = logging.getLogger(__name__)
@@ -114,6 +122,32 @@ class StateStore:
 
     async def set_max_games_per_channel(self, guild_id: int, cap: int | None) -> None:
         await asyncio.to_thread(self._set_max_games_per_channel, guild_id, cap)
+
+    def _load_payoff_dials(self) -> dict[int, PayoffDials]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT guild_id, key, value FROM config WHERE key IN (?, ?)",
+                (PAYOFF_CHASE_HOURS_KEY, PAYOFF_FALLBACK_HOURS_KEY),
+            ).fetchall()
+        raw: dict[int, dict[str, int]] = {}
+        for row in rows:
+            raw.setdefault(int(row["guild_id"]), {})[str(row["key"])] = normalize_payoff_hours(row["value"])
+        return {
+            guild_id: PayoffDials(
+                chase_hours=values.get(PAYOFF_CHASE_HOURS_KEY, 0),
+                fallback_hours=values.get(PAYOFF_FALLBACK_HOURS_KEY, 0),
+            )
+            for guild_id, values in raw.items()
+        }
+
+    async def load_payoff_dials(self) -> dict[int, PayoffDials]:
+        """Every guild's payoff dials, read fresh from the config table.
+
+        Not cached: the dashboard writes the two keys straight to the table
+        and the chaser reads them once a tick, so a dial an admin turns off
+        is off at the next tick without a restart.
+        """
+        return await asyncio.to_thread(self._load_payoff_dials)
 
     # ------------------------------------------------------------------
     # Active rounds
@@ -269,8 +303,8 @@ class StateStore:
                 INSERT INTO risky_pending_questions (
                     game_id, channel_id, guild_id, winner_id, prompt_message_id,
                     participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                    extra_questioner_id, questioners_asked, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_questioner_id, questioners_asked, created_at, chased_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -280,7 +314,8 @@ class StateStore:
                     lowest_tie_user_ids = excluded.lowest_tie_user_ids,
                     prompt_kind = excluded.prompt_kind,
                     extra_questioner_id = excluded.extra_questioner_id,
-                    questioners_asked = excluded.questioners_asked
+                    questioners_asked = excluded.questioners_asked,
+                    chased_at = excluded.chased_at
                     -- created_at is NOT refreshed: a two-questioner round
                     -- re-saves this row when the first of the two asks, and
                     -- restarting the clock there would let a half-finished
@@ -296,6 +331,7 @@ class StateStore:
                     state.extra_questioner_id,
                     serialize_user_ids(state.questioners_asked),
                     state.created_at,
+                    state.chased_at,
                 ),
             )
 
@@ -315,7 +351,7 @@ class StateStore:
                 """
                 SELECT game_id, channel_id, guild_id, winner_id, prompt_message_id,
                        participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                       extra_questioner_id, questioners_asked, created_at
+                       extra_questioner_id, questioners_asked, created_at, chased_at
                 FROM risky_pending_questions
                 """
             ).fetchall()
@@ -333,6 +369,7 @@ class StateStore:
                 extra_questioner_id=int(row["extra_questioner_id"]) if row["extra_questioner_id"] is not None else None,
                 questioners_asked=deserialize_user_ids(row["questioners_asked"]),
                 created_at=float(row["created_at"]) if row["created_at"] is not None else 0.0,
+                chased_at=float(row["chased_at"]) if row["chased_at"] is not None else None,
             )
             for row in rows
         ]
@@ -351,8 +388,9 @@ class StateStore:
                 INSERT INTO risky_posted_questions (
                     message_id, channel_id, guild_id, asker_id,
                     allowed_replier_ids, question_text,
-                    asker_rolled_100, target_rolled_1, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    asker_rolled_100, target_rolled_1, created_at,
+                    chased_at, from_bank
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(message_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -360,7 +398,9 @@ class StateStore:
                     allowed_replier_ids = excluded.allowed_replier_ids,
                     question_text = excluded.question_text,
                     asker_rolled_100 = excluded.asker_rolled_100,
-                    target_rolled_1 = excluded.target_rolled_1
+                    target_rolled_1 = excluded.target_rolled_1,
+                    chased_at = excluded.chased_at,
+                    from_bank = excluded.from_bank
                 """,
                 (
                     state.message_id, state.channel_id, state.guild_id, state.asker_id,
@@ -368,6 +408,7 @@ class StateStore:
                     state.question_text,
                     int(state.asker_rolled_100), int(state.target_rolled_1),
                     int(state.created_at),
+                    state.chased_at, int(state.from_bank),
                 ),
             )
 
@@ -387,7 +428,8 @@ class StateStore:
                 """
                 SELECT message_id, channel_id, guild_id, asker_id,
                        allowed_replier_ids, question_text,
-                       asker_rolled_100, target_rolled_1, created_at
+                       asker_rolled_100, target_rolled_1, created_at,
+                       chased_at, from_bank
                 FROM risky_posted_questions
                 """
             ).fetchall()
@@ -403,6 +445,8 @@ class StateStore:
                 asker_rolled_100=bool(row["asker_rolled_100"]),
                 target_rolled_1=bool(row["target_rolled_1"]),
                 created_at=float(row["created_at"]) if row["created_at"] is not None else time.time(),
+                chased_at=float(row["chased_at"]) if row["chased_at"] is not None else None,
+                from_bank=bool(row["from_bank"]),
             )
             for row in rows
         ]
@@ -455,8 +499,8 @@ class StateStore:
             conn.execute("DELETE FROM risky_posted_questions WHERE guild_id = ?", (guild_id,))
             conn.execute(
                 "DELETE FROM config WHERE guild_id = ? AND key IN "
-                "('risky_ping_role_id', 'risky_min_game_seconds', 'risky_max_games_per_channel')",
-                (guild_id,),
+                "('risky_ping_role_id', 'risky_min_game_seconds', 'risky_max_games_per_channel', ?, ?)",
+                (guild_id, PAYOFF_CHASE_HOURS_KEY, PAYOFF_FALLBACK_HOURS_KEY),
             )
         return game_ids
 

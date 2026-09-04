@@ -74,8 +74,8 @@ async def test_feed_view_includes_my_sent_button():
 
 @pytest.mark.asyncio
 async def test_my_sent_button_filters_terminal_whispers():
-    """Exposed / out-of-guesses-no-solve / age-locked are hidden from the
-    sender's inbox view."""
+    """Out-of-guesses-no-solve / age-locked are hidden from the sender's
+    inbox view."""
     from bot_modules.cogs.whisper_cog import WhisperFeedView
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
@@ -83,9 +83,8 @@ async def test_my_sent_button_filters_terminal_whispers():
 
     sent_rows = [
         _w(wid=10),  # pending → visible
-        _w(wid=11, exposed=True),  # exposed → hidden
         _w(wid=12, guesses_left=0, solved=False),  # out of guesses → hidden
-        _w(wid=13, solved=True),  # solved, not exposed yet → visible
+        _w(wid=13, solved=True),  # solved → still visible (reply is open)
         _w(wid=14, created_at=NOW - LOCK_DURATION_SECONDS - 1),  # locked → hidden
     ]
 

@@ -13,7 +13,7 @@ A channel-scoped dice game. Anyone in the channel presses **Roll** to roll 1–1
 | **Close Round** button | Persistent | Round opener or admin | Resolve the round (blocked until min-game-time elapses unless the round was opened with `ping:false`) |
 | **Ask Question** button | Persistent | Eligible questioner | Open the question modal |
 | **Reply** button | Persistent | Allowed replier | Open the reply modal; first valid reply locks the question |
-| Risky Rolls panel | Web (dashboard) | Admin | Configure the ping role, the min-game-time floor, and the per-channel round cap |
+| Risky Rolls panel | Web (dashboard) | Admin | Configure the ping role, the min-game-time floor, the per-channel round cap, and the two payoff dials (chase / bank fallback) |
 | Feature Rotation "Setup" | Web (dashboard) | Admin | Pick Risky Rolls as a room's featured game — a round starts automatically each day the room is featured, no command involved |
 | Scheduled Games | Web (dashboard) | Admin | Schedule recurring/one-off Risky Rolls launches in a channel, independent of (and stacking with) Feature Rotation |
 
@@ -56,6 +56,19 @@ A resolved round — whether closed by the button or by the auto-close timer —
 **Ask Question** opens a 300-character modal. On submit, the bot posts the question (in a thread for room/69 questions, in the channel for direct questions) with a **Reply** button. **Reply** opens a 300-character reply modal; the first valid reply edits the original question message in place to embed the reply text, and closes the reply window.
 
 Both the question **and** the reply are public free text, so both are screened against the shared slur/abuse denylist (`duels/filters.contains_disallowed_content`) — a match is rejected with an ephemeral "contains disallowed content" and nothing is posted.
+
+### Chasing the payoff
+
+The round's payoff is the winner's question, and most rounds never got one: in one week at least 12 rounds resolved with a winner who never pressed **Ask Question**, four of six posted questions sat unanswered for over a day, and nothing re-pinged anyone — the 7-day sweep just deleted the prompt in silence. Two dashboard dials chase it. **Both ship at 0 (off)**; a guild that never sets them behaves exactly as before, and a dial an admin turns off is off at the next tick (the chaser reads the config rows fresh, no restart).
+
+- **Chase the winner's question after N hours** (`risky_chase_hours`) — once a pending prompt is N hours old, whoever still owes a question (the winner; on a 1-rule round, whichever of the two questioners has not asked) gets **one** in-channel re-ping: "⏰ … your Risky Rolls question is still waiting. Press **Ask Question** above to send it." Once a question is posted, the answerer(s) get one re-ping of their own N hours after it was posted: "⏰ … {asker}'s question is still waiting for your reply." Each re-ping fires exactly once: `chased_at` is written to the row when it goes, so a restart cannot repeat it.
+- **Fall back to a bank question after N hours** (`risky_fallback_hours`) — once a pending prompt is N hours old with a question still owed, the bot draws a **Truth** from the Truth or Dare bank (`games.utils.question_source.get_ffa_prompt`, `kind="truth"`; the same bank the rotation rooms' prompts come from) and posts it as the winner's question, so the loser still answers. The channel's own age gate decides whether spicy rows are eligible (`channel_allows_nsfw`, i.e. Discord's `is_nsfw()` — never a bot-side toggle). The post has the same shape as a winner's own question — targets, then "{winner} ran out of time, so the deck asks for them:", then the question, with the **Reply** button — and is registered as a posted question flagged `from_bank`, so the reply render says "the deck asks for {winner}:" rather than putting the bank's words in the winner's mouth. The disabled prompt message is left reading "{winner} ran out of time — the deck asked {targets} for them: > …". A 69 room prompt gets the room version ("rolled 69 but never asked, so the deck asks the room"), in a thread off the prompt where one can be made, with no Reply button (a room question never had one). On a 1-rule prompt the fallback speaks for whichever questioner still owes — the winner first; if neither asked, the prompt is kept between the two (re-saved with the winner marked as asked, its message updated, exactly as when the first of two asks by hand) and the next tick speaks for the second questioner.
+
+Timing decisions are `logic.pending_payoff_action` and `logic.posted_chase_due`, tested bare in `tests/test_risky_roll_payoff.py`. When both dials are on and both are due at once (after a restart, or with a chase window no shorter than the fallback window), the **fallback wins** and no chase goes out — a stalled prompt gets the question, not a nag and the question. A prompt with no usable age (`created_at` NULL, pre-migration-173) is left alone rather than treated as infinitely old.
+
+The chaser is one background loop (`views.run_payoff_pass`, every `PAYOFF_TICK_SECONDS` = 5 minutes) started lazily from the game's own traffic — a roll, a round closing — rather than from cog load, so prompts restored across a restart are picked up by the first roll after it. It acts on **at most one prompt per channel per tick**: flipping a dial on over a backlog of stale prompts drains them a message every five minutes rather than dumping a week of questions into the room at once (an admin who wants a clean start can `/risky reset_state` first).
+
+**No-contact.** The pairing was gated on the draw, but the list can change in the hours before a fallback fires, and a question the bot posts *for* the winner is still the winner's question to the loser. A direct fallback whose (asker, target) pair the list now forbids is skipped silently — nothing posts, nothing says why, the prompt is left for the sweep — which is indistinguishable from the dial being off. A room fallback drops the asker's partners from its `@`-mention list, exactly as the winner's own room question does.
 
 ### No-contact enforcement
 
@@ -142,6 +155,7 @@ mentions rather than blocking cog load.
 | **Reply** when question message was deleted | "The question message no longer exists." |
 | Dashboard sends negative min-game-seconds | HTTP 400 |
 | Dashboard sends max-games-per-channel < 1 | HTTP 400 |
+| Dashboard sends a payoff dial outside 0–168 hours | HTTP 400 |
 
 ## Economy integration
 
@@ -174,6 +188,8 @@ roll time, not round close. Best-effort: an economy failure never blocks the rol
 | Ping role | unset | Optional role to ping on `/risky start` (not when `ping:false`, and not on an auto-launched round — see **Starting automatically**). Setting it to "no role" clears the row |
 | Min game seconds | unset = 0 (no floor) | Floor on round duration; blocks an early **Close Round** and delays auto-close by the same amount. Saving 0 clears the row. `ping:false` and an auto-launched round both bypass it |
 | Max games per channel | 10 | How many rounds `/risky start` will let stack in one channel before refusing (1–100). Auto-launched rounds ignore this dial — they cap at one per channel regardless |
+| Chase hours (`risky_chase_hours`) | unset = 0 (off) | Hours before the one re-ping of whoever owes a question, and of the answerer once a question is posted (0–168). Saving 0 clears the row. See **Chasing the payoff** |
+| Fallback hours (`risky_fallback_hours`) | unset = 0 (off) | Hours before a bank Truth is posted as the winner's question (0–168). Saving 0 clears the row. Set longer than the chase, or the chase never gets its turn |
 
 Per-round only (not persisted as config):
 - **Auto-close after N players** — default 25 (must be ≥ 2).
@@ -185,8 +201,8 @@ Four per-guild tables:
 
 - **Active rounds** — one row per open game: opener, message id, rolls map (deserialised), auto-close settings, special-roll outcomes. Deleted on close, after a resolved round's summary has been copied into the shared `games_game_history` table (`docs/data_register.md`, the `games_*` row).
   The table also carries a `reroll_user_ids` column, left over from a player-visible reroll flow that was never wired up; nothing reads or writes it (see **Non-goals**).
-- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock.
-- **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days.
-- Three per-guild rows in the shared config table for the ping role, the min-game-time floor, and the max-games-per-channel cap.
+- **Pending questions** — between resolution and the question being asked. Includes the "two questioners" sub-game when the loser rolled 1. Swept on bot startup once older than 7 days (migration 173): the row is deleted when the winner asks, so a winner who never asks used to leave it forever. A row re-saved mid-round (the first of two questioners asking) keeps its original timestamp rather than restarting the clock. `chased_at` (migration 210) records the one chase re-ping.
+- **Posted questions** — a question that's been sent and is awaiting a reply. Keyed by the question message id. Auto-swept on bot startup once older than 7 days. `chased_at` records the one answerer re-ping; `from_bank` marks a question the fallback drew for a winner who never asked (migration 210).
+- Five per-guild rows in the shared config table for the ping role, the min-game-time floor, the max-games-per-channel cap, and the two payoff dials.
 
 No DM data. No filesystem cache. In-flight rounds, prompts, and questions persist across restarts; the cog rebuilds in-memory state and re-attaches persistent views on next boot.

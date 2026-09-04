@@ -180,6 +180,9 @@ class PendingQuestionState:
     extra_questioner_id: int | None = None
     questioners_asked: set[int] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
+    #: When the one "your question is still waiting" re-ping went out
+    #: (``None`` = not yet). Persisted so a restart cannot send it twice.
+    chased_at: float | None = None
 
     @property
     def questions_remaining(self) -> int:
@@ -204,3 +207,8 @@ class PostedQuestionState:
     asker_rolled_100: bool = False
     target_rolled_1: bool = False
     created_at: float = field(default_factory=time.time)
+    #: When the one "still waiting for your reply" re-ping went out.
+    chased_at: float | None = None
+    #: The bot drew this question from the bank for a winner who never asked
+    #: (the fallback dial); the reply render says so.
+    from_bank: bool = False

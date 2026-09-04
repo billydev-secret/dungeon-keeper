@@ -8,7 +8,8 @@ import discord
 import pytest
 
 from bot_modules.services.whisper_models import Whisper, WhisperConfig
-from tests.fakes import FakeMember, fake_interaction
+from bot_modules.services.whisper_service import GuessOutcome
+from tests.fakes import FakeGuild, FakeMember, FakeRole, fake_interaction
 
 SENDER, TARGET = 1001, 2001
 FEED = 8001
@@ -22,8 +23,19 @@ def _w(*, solved: bool = False, guesses_left: int = 3) -> Whisper:
     )
 
 
-def _cfg(role_id: int = 7001) -> WhisperConfig:
-    return WhisperConfig(guild_id=9001, role_id=role_id, channel_id=FEED, log_channel_id=8002)
+ROLE = 7001
+
+
+def _cfg(role_id: int = ROLE, *, sender_feedback: bool = False) -> WhisperConfig:
+    return WhisperConfig(
+        guild_id=9001, role_id=role_id, channel_id=FEED, log_channel_id=8002,
+        sender_feedback=sender_feedback,
+    )
+
+
+def _pool_member(uid: int, **kw) -> FakeMember:
+    """A member holding the Whisper role — what the native picker must accept."""
+    return FakeMember(id=uid, roles=[FakeRole(id=ROLE)], **kw)
 
 
 def _make_guess_button(whisper_id: int = 42):
@@ -260,6 +272,7 @@ async def test_user_select_rejects_bot_without_consuming_guess():
     with patch.object(type(sel), "values", new_callable=PropertyMock,
                       return_value=[picked_bot]), \
          patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
         await sel.callback(interaction)
 
@@ -267,6 +280,29 @@ async def test_user_select_rejects_bot_without_consuming_guess():
     edit_kwargs = interaction.response.edit_message.call_args.kwargs
     assert edit_kwargs["view"] is None
     assert "bot" in edit_kwargs["content"].lower()
+
+
+@pytest.mark.asyncio
+async def test_user_select_rejects_member_outside_pool_without_consuming_guess():
+    """rotation-rooms-167: the native picker offers every member of the
+    server, so a pick with no Whisper role cannot be the sender. It is
+    refused as a free pass, not a burned third of the target's guesses."""
+    sel = _make_user_select()
+    interaction = fake_interaction(user=FakeMember(id=TARGET))
+    interaction.response.edit_message = AsyncMock()
+    outsider = FakeMember(id=4343, roles=[FakeRole(id=1)])
+
+    with patch.object(type(sel), "values", new_callable=PropertyMock,
+                      return_value=[outsider]), \
+         patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
+         patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
+        await sel.callback(interaction)
+
+    rec.assert_not_called()
+    edit_kwargs = interaction.response.edit_message.call_args.kwargs
+    assert edit_kwargs["view"] is None
+    assert edit_kwargs["content"] == "❌ They aren't in the Whisper pool — that one's free."
 
 
 @pytest.mark.asyncio
@@ -278,12 +314,11 @@ async def test_user_select_correct_records_and_posts_to_feed():
     feed_channel.send = AsyncMock()
     interaction.guild.get_channel = MagicMock(return_value=feed_channel)
     interaction.response.edit_message = AsyncMock()
-    cfg_mock = MagicMock(channel_id=FEED)
 
     with patch.object(type(sel), "values", new_callable=PropertyMock,
-                      return_value=[FakeMember(id=SENDER)]), \
+                      return_value=[_pool_member(SENDER)]), \
          patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_mock), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
         await sel.callback(interaction)
 
@@ -360,9 +395,8 @@ async def test_guess_select_correct_posts_to_feed_and_edits_message():
     )
     interaction.response.edit_message = AsyncMock()
 
-    cfg_mock = MagicMock(channel_id=FEED)
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w()), \
-         patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg_mock), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("bot_modules.cogs.whisper_cog._do_record_guess") as rec:
         await sel.callback(interaction)
 
@@ -382,6 +416,7 @@ async def test_guess_select_wrong_shows_remaining_count():
     interaction.response.edit_message = AsyncMock()
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=3)), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("bot_modules.cogs.whisper_cog._do_record_guess"):
         await sel.callback(interaction)
 
@@ -406,6 +441,7 @@ async def test_guess_select_exhausted_removes_guess_button_from_dm():
     interaction.user.create_dm = AsyncMock(return_value=dm_channel)
 
     with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(guesses_left=1)), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=_cfg()), \
          patch("bot_modules.cogs.whisper_cog._do_record_guess"):
         await sel.callback(interaction)
 
@@ -419,3 +455,97 @@ async def test_guess_select_exhausted_removes_guess_button_from_dm():
     edit_kwargs = interaction.response.edit_message.call_args.kwargs
     assert edit_kwargs["view"] is None
     assert "no more" in edit_kwargs["content"].lower()
+
+
+# ── Sender feedback DM (2026-09 review, rotation-rooms-159) ──────────────────
+#
+# The copy is pinned in tests/test_whisper_logic.py; these cover the cog's
+# gates around it: the dial, the sender's pool membership, the no-contact
+# degrade, and that the outcome path actually calls it.
+
+WRONG = GuessOutcome(correct=False, attempts_remaining=2, exhausted=False)
+
+
+def _guild_with(*members: FakeMember) -> FakeGuild:
+    return FakeGuild(id=9001, members={m.id: m for m in members})
+
+
+async def _notify(guild, cfg, *, guessed_id=4444, blocked=False):
+    from bot_modules.cogs.whisper_cog import _notify_sender_of_guess
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    with patch("bot_modules.cogs.whisper_cog.send_branded_dm", AsyncMock()) as dm, \
+         patch("bot_modules.cogs.whisper_cog.no_contact_service.is_no_contact",
+               return_value=blocked), \
+         patch("bot_modules.cogs.whisper_cog.build_name_fn",
+               AsyncMock(return_value=lambda uid: f"User{uid}")):
+        await _notify_sender_of_guess(
+            bot, guild, cfg, _w(), guessed_id=guessed_id, outcome=WRONG,
+        )
+    return dm
+
+
+@pytest.mark.asyncio
+async def test_sender_is_dmed_with_the_guessed_name_when_the_dial_is_on():
+    sender = _pool_member(SENDER)
+    dm = await _notify(_guild_with(sender), _cfg(sender_feedback=True))
+
+    dm.assert_awaited_once()
+    assert dm.call_args.args[0] is sender
+    embed = dm.call_args.kwargs["embed"]
+    assert embed.description == "Whisper #42 — they guessed User4444. Wrong, 2 left."
+
+
+@pytest.mark.parametrize(
+    ("cfg", "sender"),
+    [
+        pytest.param(_cfg(sender_feedback=False), _pool_member(SENDER), id="dial-off"),
+        pytest.param(_cfg(sender_feedback=True), FakeMember(id=SENDER), id="sender-opted-out"),
+        pytest.param(_cfg(sender_feedback=True), None, id="sender-left-the-server"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sender_is_not_dmed(cfg, sender):
+    """Ships dark, and honours ``/whisper optout`` — a sender who dropped the
+    role has left the game and its DMs with it."""
+    guild = _guild_with(sender) if sender is not None else _guild_with()
+    dm = await _notify(guild, cfg)
+    dm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_contact_pair_degrades_the_guessed_name_to_someone():
+    """Naming a blocked party to the other side is contact. The degraded
+    line reads like any other wrong guess, so the sender can't tell."""
+    dm = await _notify(
+        _guild_with(_pool_member(SENDER)), _cfg(sender_feedback=True), blocked=True,
+    )
+    embed = dm.call_args.kwargs["embed"]
+    assert embed.description == "Whisper #42 — they guessed someone. Wrong, 2 left."
+    assert "4444" not in embed.description
+
+
+@pytest.mark.asyncio
+async def test_guess_outcome_notifies_the_sender_after_answering_the_target():
+    """One wiring assertion: the outcome helper reaches the notifier with the
+    recorded guess, and only after the target's own reply has gone out."""
+    from bot_modules.cogs.whisper_cog import _handle_guess_outcome
+
+    bot = MagicMock()
+    bot.ctx.db_path = ":memory:"
+    guild = _guild_with(_pool_member(SENDER))
+    interaction = fake_interaction(user=FakeMember(id=TARGET), guild=guild)
+    order: list[str] = []
+    interaction.response.edit_message = AsyncMock(side_effect=lambda **_: order.append("target"))
+    notify = AsyncMock(side_effect=lambda *a, **k: order.append("sender"))
+    cfg = _cfg(sender_feedback=True)
+    whisper = _w()
+
+    with patch("bot_modules.cogs.whisper_cog._do_record_guess", return_value=True), \
+         patch("bot_modules.cogs.whisper_cog._load_config", return_value=cfg), \
+         patch("bot_modules.cogs.whisper_cog._notify_sender_of_guess", notify):
+        await _handle_guess_outcome(interaction, bot, whisper, 4444)
+
+    notify.assert_awaited_once_with(bot, guild, cfg, whisper, guessed_id=4444, outcome=WRONG)
+    assert order == ["target", "sender"]

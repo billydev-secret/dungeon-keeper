@@ -18,6 +18,8 @@ _CONFIG_DEFAULTS: dict[str, str] = {
     "whisper_channel_id": "0",
     "whisper_log_channel_id": "0",
     "whisper_launcher_message_id": "0",
+    "whisper_launcher_channel_id": "0",
+    "whisper_sender_feedback": "0",
     "whisper_cooldown_seconds": "30",
     "whisper_hourly_cap_per_target": "5",
     "whisper_guesses_per_whisper": "3",
@@ -34,6 +36,8 @@ def get_whisper_config(conn: sqlite3.Connection, guild_id: int) -> WhisperConfig
         channel_id=int(_get("whisper_channel_id") or 0),
         log_channel_id=int(_get("whisper_log_channel_id") or 0),
         launcher_message_id=int(_get("whisper_launcher_message_id") or 0),
+        launcher_channel_id=int(_get("whisper_launcher_channel_id") or 0),
+        sender_feedback=_get("whisper_sender_feedback") == "1",
         cooldown_seconds=int(_get("whisper_cooldown_seconds") or 30),
         hourly_cap_per_target=int(_get("whisper_hourly_cap_per_target") or 5),
         guesses_per_whisper=int(_get("whisper_guesses_per_whisper") or 3),
@@ -47,10 +51,23 @@ def set_whisper_config_value(
     set_config_value(conn, key, value, guild_id)
 
 
-def set_whisper_launcher_message_id(
-    conn: sqlite3.Connection, guild_id: int, message_id: int
+def set_whisper_launcher_ids(
+    conn: sqlite3.Connection, guild_id: int, channel_id: int, message_id: int
 ) -> None:
+    """Record where the launcher is. ``(0, 0)`` means "not posted"."""
+    set_config_value(conn, "whisper_launcher_channel_id", str(channel_id), guild_id)
     set_config_value(conn, "whisper_launcher_message_id", str(message_id), guild_id)
+
+
+def whisper_launcher_guilds(conn: sqlite3.Connection) -> set[int]:
+    """Guilds with a Whisper channel set — the only ones whose messages can
+    move a launcher. Published to ``core.sticky`` so the ``on_message``
+    listener rejects every other guild with a set lookup, not a DB read."""
+    rows = conn.execute(
+        "SELECT guild_id FROM config WHERE key = 'whisper_channel_id'"
+        " AND value NOT IN ('', '0')"
+    ).fetchall()
+    return {int(r[0]) for r in rows}
 
 
 def _row_to_whisper(row: sqlite3.Row) -> Whisper:
@@ -176,10 +193,6 @@ def try_consume_guess(conn: sqlite3.Connection, whisper_id: int) -> bool:
 
 def mark_solved(conn: sqlite3.Connection, whisper_id: int) -> None:
     conn.execute("UPDATE whispers SET solved = 1 WHERE id = ?", (whisper_id,))
-
-
-def mark_exposed(conn: sqlite3.Connection, whisper_id: int) -> None:
-    conn.execute("UPDATE whispers SET exposed = 1 WHERE id = ?", (whisper_id,))
 
 
 def list_received(

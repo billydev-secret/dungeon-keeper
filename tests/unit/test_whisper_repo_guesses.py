@@ -10,7 +10,6 @@ from bot_modules.services.whisper_repo import (
     insert_whisper,
     list_guesses,
     mark_solved,
-    mark_exposed,
     try_consume_guess,
 )
 
@@ -34,15 +33,6 @@ def test_mark_solved(sync_db_path: Path):
         w = get_whisper(conn, wid)
     assert w is not None
     assert w.solved is True
-
-
-def test_mark_exposed(sync_db_path: Path):
-    with open_db(sync_db_path) as conn:
-        wid = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="x")
-        mark_exposed(conn, wid)
-        w = get_whisper(conn, wid)
-    assert w is not None
-    assert w.exposed is True
 
 
 def test_guesses_cascade_delete(sync_db_path: Path):

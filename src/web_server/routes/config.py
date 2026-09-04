@@ -192,6 +192,15 @@ from bot_modules.services.voice_transcription_service import (
     set_config as _vt_set_config,
 )
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
+# The two Risky Rolls payoff dials (docs/risky_roll_spec.md, "Chasing the
+# payoff"): keys and bound come from the module that reads them, so the
+# route cannot drift from the chaser.
+from bot_modules.services.risky_roll.logic import (
+    PAYOFF_CHASE_HOURS_KEY as _RISKY_CHASE_KEY,
+    PAYOFF_FALLBACK_HOURS_KEY as _RISKY_FALLBACK_KEY,
+    PAYOFF_HOURS_MAX as _RISKY_HOURS_MAX,
+    normalize_payoff_hours as _risky_hours,
+)
 
 WORD_CLOUD_PRESET_KEYS = {p.key for p in WORD_CLOUD_PRESETS}
 WORD_CLOUD_DEFAULT_PRESET = WORD_CLOUD_PRESETS[0].key
@@ -560,6 +569,7 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "cooldown_seconds": wc.cooldown_seconds,
         "hourly_cap_per_target": wc.hourly_cap_per_target,
         "guesses_per_whisper": wc.guesses_per_whisper,
+        "sender_feedback": wc.sender_feedback,
     }
 
 
@@ -568,10 +578,15 @@ def _risky_section(conn, guild_id: int) -> dict:
     min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
     # Default "10" mirrors risky_roll.store.MAX_GAMES_PER_CHANNEL.
     max_games = get_config_value(conn, _RISKY_MAX_GAMES_KEY, "10", guild_id=guild_id)
+    # Both payoff dials ship at 0 (off); a guild that never set them chases nothing.
+    chase = get_config_value(conn, _RISKY_CHASE_KEY, "0", guild_id=guild_id)
+    fallback = get_config_value(conn, _RISKY_FALLBACK_KEY, "0", guild_id=guild_id)
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
         "max_games_per_channel": int(max_games),
+        "chase_hours": _risky_hours(chase),
+        "fallback_hours": _risky_hours(fallback),
     }
 
 
@@ -4295,6 +4310,10 @@ class RiskyConfigUpdate(BaseModel):
     ping_role_id: str | None = None
     min_game_seconds: int | None = None
     max_games_per_channel: int | None = None
+    # Hours; 0 = off. Read fresh by the chaser each tick, so no in-memory
+    # cache to update below.
+    chase_hours: int | None = None
+    fallback_hours: int | None = None
 
 
 @router.put("/config/risky")
@@ -4310,6 +4329,9 @@ async def update_risky(
         raise HTTPException(400, "min_game_seconds cannot be negative")
     if body.max_games_per_channel is not None and body.max_games_per_channel < 1:
         raise HTTPException(400, "max_games_per_channel must be at least 1")
+    for name, hours in (("chase_hours", body.chase_hours), ("fallback_hours", body.fallback_hours)):
+        if hours is not None and not (0 <= hours <= _RISKY_HOURS_MAX):
+            raise HTTPException(400, f"{name} must be between 0 and {_RISKY_HOURS_MAX}")
 
     new_ping_role: int | None = None
     clear_ping_role = False
@@ -4339,6 +4361,13 @@ async def update_risky(
             if body.max_games_per_channel is not None:
                 set_config_value(conn, _RISKY_MAX_GAMES_KEY, str(body.max_games_per_channel), guild_id)
                 new_max_games = body.max_games_per_channel
+            for key, hours in ((_RISKY_CHASE_KEY, body.chase_hours), (_RISKY_FALLBACK_KEY, body.fallback_hours)):
+                if hours is None:
+                    continue
+                if hours == 0:
+                    delete_config_value(conn, key, guild_id)
+                else:
+                    set_config_value(conn, key, str(hours), guild_id)
         return {"ok": True}
 
     result = await run_query(_q)
@@ -4690,6 +4719,10 @@ class WhisperConfigUpdate(BaseModel):
     cooldown_seconds: int | None = None
     hourly_cap_per_target: int | None = None
     guesses_per_whisper: int | None = None
+    # DM the sender after each guess on their whisper. Ships off (2026-09
+    # review, rotation-rooms-159) so whispers already in flight don't start
+    # DMing their senders until an admin opts the server in.
+    sender_feedback: bool | None = None
 
 
 @router.put("/config/whisper")
@@ -4727,9 +4760,20 @@ async def update_whisper_config(
                     conn, guild_id, "whisper_guesses_per_whisper",
                     str(min(10, max(1, body.guesses_per_whisper))),
                 )
+            if body.sender_feedback is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_sender_feedback",
+                    "1" if body.sender_feedback else "0",
+                )
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # Let the cog republish its launcher-guild set and post (or move) the
+    # launcher without a restart — its on_message fast path only knows the
+    # guilds it read at boot.
+    if ctx.bot:
+        ctx.bot.dispatch("whisper_config_change", guild_id)
+    return result
 
 
 # ── Bot identity (per-guild) ─────────────────────────────────────────

@@ -326,11 +326,12 @@
     <div class="cmd-block">
       <span class="cmd-name">/risky start</span>
       <span class="cmd-perm"><span class="perm perm-all">Everyone</span></span>
-      <span class="cmd-desc">Open a Risky Rolls round — a dice-based dare ladder. pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. Sessions and prompt config live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panels.</span>
+      <span class="cmd-desc">Open a Risky Rolls round — a dice game: everyone presses <strong>Roll</strong> for a number from 1 to 100, the highest roll asks a question, the lowest roll answers it. Pass <code>ping:false</code> to open a round quietly (no ping, no minimum game time); <code>/risky reset_state</code> (mod) clears stuck rounds in the channel. The ping role, round rules and the payoff reminders live on the dashboard's <a href="/#/config-risky-rolls">Risky Rolls</a> panel.</span>
       <div class="cmd-params">
         Optional auto-close limits: <strong>auto_close_players</strong> — close signups once this many players join (default 25); <strong>auto_close_minutes</strong> — close signups after this long (default 120).
       </div>
     </div>
+    <p>When the round closes, the winner gets an <strong>Ask Question</strong> button and the loser gets a <strong>Reply</strong> button once the question is posted — a 69 asks the whole room in a thread, a 100 asks the bottom two, a 1 lets the top two both ask. The loser is asked to reply; nothing forces it. Two dashboard dials, both off until an admin sets them, keep a round from fizzling: <strong>Chase the winner's question after N hours</strong> sends one reminder to whoever still owes a question (and one to whoever owes the reply, once a question is up), and <strong>Fall back to a bank question after N hours</strong> has the bot draw a Truth from the Truth or Dare question bank and post it as the winner's question, so the loser still answers — spicy ones only in age-restricted channels. The <strong>Help</strong> button on the round names both windows when they're on.</p>
 
     <h3 id="games-cmds">Player Utilities</h3>
 
@@ -459,7 +460,7 @@
          6. WHISPER
     ═══════════════════════════════════════════════════════════ -->
     <h2 id="whisper" class="section-break"><span class="section-num">6</span> Whisper</h2>
-    <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, hide it for later, or reply anonymously.</p>
+    <p>Anonymous message-guessing game. Send a secret message to an opted-in member via DM; they can try to guess who sent it, share it to the server feed, remove it from their inbox, or reply anonymously.</p>
 
     <table>
       <thead><tr><th>Command</th><th>Permission</th><th>What it does</th></tr></thead>
@@ -476,7 +477,9 @@
       <span class="callout-icon">ℹ️</span>
       <div class="callout-body">
         <strong>Inbox actions</strong>
-        <p>When a whisper arrives in your DM you'll see buttons to <strong>Guess</strong> the sender (limited attempts), <strong>Share</strong> it to the public feed, <strong>Hide</strong> it from your main inbox, <strong>Reply</strong> anonymously, or <strong>Report</strong> it to moderators. Identities are always logged for moderators even though senders appear anonymous to recipients.</p>
+        <p>When a whisper arrives in your DM you'll see buttons to <strong>Guess</strong> the sender (limited attempts), <strong>Share</strong> it to the public feed, <strong>Delete</strong> it from your inbox (the sender still sees it in their sent list), <strong>Reply</strong> anonymously, or <strong>Report</strong> it to moderators. Identities are always logged for moderators even though senders appear anonymous to recipients.</p>
+        <p>Guessing from the server (the feed's Guess button or your inbox) uses Discord's member picker, which lists everyone — a pick who isn't in the Whisper pool is refused with "They aren't in the Whisper pool — that one's free" and does <em>not</em> use up a guess. Guessing from the DM shows only the pool.</p>
+        <p>If the server has turned on <strong>Tell the sender how the guessing goes</strong> (off unless an admin enables it), the sender also gets a one-line DM after each guess: who was guessed and that it was wrong ("Wrong, 2 left"), that they were caught, or that the recipient is out of guesses and they're safe. Opting out of Whisper stops those DMs.</p>
       </div>
     </div>
 

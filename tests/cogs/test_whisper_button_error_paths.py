@@ -159,32 +159,6 @@ async def test_delete_button_blocks_non_target():
 # ── Expose button error branches ─────────────────────────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_expose_button_whisper_missing():
-    from bot_modules.cogs.whisper_cog import WhisperExposeButton
-    btn = WhisperExposeButton(_bot(), WID)
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=None):
-        await btn.callback(interaction)
-    assert "not found" in interaction.response.send_message.call_args.args[0].lower()
-
-
-@pytest.mark.asyncio
-async def test_expose_button_blocks_unsolved():
-    from bot_modules.cogs.whisper_cog import WhisperExposeButton
-    btn = WhisperExposeButton(_bot(), WID)
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-    with patch(
-        "bot_modules.cogs.whisper_cog._do_load_whisper",
-        return_value=_w(solved=False),
-    ):
-        await btn.callback(interaction)
-    msg = interaction.response.send_message.call_args.args[0].lower()
-    assert "solved" in msg
-
-
 # ── Reply button error branches ──────────────────────────────────────────────
 
 

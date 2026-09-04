@@ -1352,6 +1352,35 @@ def test_get_config_whisper_guess_cap_defaults_to_three(authed_client):
     ] == 3
 
 
+@pytest.mark.parametrize(
+    ("sent", "stored"),
+    [
+        pytest.param(True, True, id="on"),
+        pytest.param(False, False, id="off"),
+    ],
+)
+def test_update_whisper_persists_the_sender_feedback_dial(
+    authed_client, fake_ctx, sent, stored
+):
+    """The sender-feedback DM ships dark (2026-09 review, rotation-rooms-159):
+    it reads False until an admin flips it, and round-trips both ways."""
+    assert authed_client.get("/api/config").json()["whisper"]["sender_feedback"] is False
+    resp = authed_client.put("/api/config/whisper", json={"sender_feedback": sent})
+    assert resp.status_code == 200
+    assert authed_client.get("/api/config").json()["whisper"]["sender_feedback"] is stored
+
+
+def test_update_whisper_pokes_the_bot(authed_client, fake_ctx):
+    """The launcher's on_message fast path only knows the guilds read at
+    boot, so a save dispatches to the cog to republish and re-stick."""
+    fake_ctx.bot = MagicMock()
+    resp = authed_client.put("/api/config/whisper", json={"channel_id": "8001"})
+    assert resp.status_code == 200
+    fake_ctx.bot.dispatch.assert_called_once_with(
+        "whisper_config_change", fake_ctx.guild_id
+    )
+
+
 # ── /config/dms ──────────────────────────────────────────────────────
 
 

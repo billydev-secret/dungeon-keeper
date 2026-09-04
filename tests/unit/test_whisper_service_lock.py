@@ -17,12 +17,11 @@ def _w(
     *,
     created_at: float = NOW,
     solved: bool = False,
-    exposed: bool = False,
     guesses_left: int = 3,
 ) -> Whisper:
     return Whisper(
         id=1, guild_id=9001, sender_id=SENDER, target_id=TARGET, message="x",
-        created_at=created_at, state="pending", solved=solved, exposed=exposed,
+        created_at=created_at, state="pending", solved=solved,
         guesses_left=guesses_left, channel_msg_id=None, dm_msg_id=None,
     )
 
@@ -50,13 +49,10 @@ def test_pending_in_flight_is_not_terminal():
     assert is_terminal_for_sender(_w(), now=NOW) is False
 
 
-def test_solved_but_not_exposed_is_not_terminal():
-    """Target may still hit Expose — sender keeps it visible."""
+def test_solved_is_not_terminal():
+    """A solved whisper can still be replied to — sender keeps it visible
+    until the age lock."""
     assert is_terminal_for_sender(_w(solved=True), now=NOW) is False
-
-
-def test_exposed_is_terminal():
-    assert is_terminal_for_sender(_w(exposed=True), now=NOW) is True
 
 
 def test_out_of_guesses_without_solve_is_terminal():
@@ -71,5 +67,5 @@ def test_age_locked_is_terminal():
 
 def test_solved_with_remaining_guesses_not_terminal():
     """Edge: target solved on first try, two guesses unused — sender keeps it visible
-    until exposure (or age lock)."""
+    until the age lock."""
     assert is_terminal_for_sender(_w(solved=True, guesses_left=2), now=NOW) is False

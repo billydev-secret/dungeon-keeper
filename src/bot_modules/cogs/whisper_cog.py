@@ -12,9 +12,10 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.branding import DEFAULT_ACCENT_COLOR, safe_resolve_accent
 from bot_modules.services.dm_branding import send_branded_dm
 from bot_modules.core.db_utils import open_db
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.services.name_resolver import NameFn, build_name_fn, mention
 from bot_modules.services.whisper_models import (
     STATE_PENDING,
@@ -37,13 +38,13 @@ from bot_modules.services.whisper_repo import (
     insert_whisper,
     list_received_in_states,
     list_sent,
-    mark_exposed,
     mark_solved,
-    set_whisper_launcher_message_id,
+    set_whisper_launcher_ids,
     set_whisper_message_ids,
     soft_delete_whisper,
     try_consume_guess,
     update_whisper_state,
+    whisper_launcher_guilds,
 )
 from bot_modules.services.whisper_service import (
     ERROR_BOT_DM_FAILED,
@@ -52,14 +53,15 @@ from bot_modules.services.whisper_service import (
     ERROR_GUESS_NOT_TARGET,
     ERROR_NOT_CONFIGURED,
     MAX_MESSAGE_LENGTH,
+    GuessOutcome,
     GuessValidationError,
     SendValidationError,
     TransitionValidationError,
     evaluate_guess,
+    guess_candidate_rejection,
     is_configured,
     is_terminal_for_sender,
     validate_delete,
-    validate_expose,
     validate_reply,
     validate_send,
     validate_share,
@@ -83,16 +85,17 @@ from bot_modules.whisper.logic import (
     check_send_cooldown,
     filter_whispers_by_message,
     format_cooldown_message,
-    format_expose_dm_suffix,
     format_hourly_cap_message,
     format_reply_dm_body,
     format_send_dm_body,
+    format_sender_guess_feedback,
     fuzzy_score_members,
     inbox_action_buttons,
     inbox_select_placeholder,
     member_picker_placeholder,
     prune_recent_target_sends,
     recompute_inbox_after_delete,
+    sender_feedback_wanted,
 )
 
 if TYPE_CHECKING:
@@ -169,11 +172,6 @@ def _do_update_state(db_path: Path, whisper_id: int, new_state: WhisperState) ->
         update_whisper_state(conn, whisper_id, new_state)
 
 
-def _do_mark_exposed(db_path: Path, whisper_id: int) -> None:
-    with open_db(db_path) as conn:
-        mark_exposed(conn, whisper_id)
-
-
 def _do_list_received_in_states(
     db_path: Path,
     *,
@@ -204,9 +202,16 @@ def _do_count_replies(db_path: Path, whisper_id: int) -> int:
         return count_replies(conn, whisper_id)
 
 
-def _do_set_launcher_id(db_path: Path, guild_id: int, message_id: int) -> None:
+def _do_set_launcher_ids(
+    db_path: Path, guild_id: int, channel_id: int, message_id: int
+) -> None:
     with open_db(db_path) as conn:
-        set_whisper_launcher_message_id(conn, guild_id, message_id)
+        set_whisper_launcher_ids(conn, guild_id, channel_id, message_id)
+
+
+def _do_launcher_guilds(db_path: Path) -> set[int]:
+    with open_db(db_path) as conn:
+        return whisper_launcher_guilds(conn)
 
 
 def _do_insert_reply(
@@ -549,87 +554,6 @@ class WhisperDeleteButton(
         await interaction.response.send_message(
             "Whisper removed from your inbox.", ephemeral=True
         )
-
-
-class WhisperExposeButton(
-    discord.ui.DynamicItem[discord.ui.Button],
-    template=re.compile(r"whisper:expose:(?P<id>\d+)"),
-):
-    def __init__(
-        self,
-        bot: Bot,
-        whisper_id: int,
-        *,
-        index: int | None = None,
-        row: int | None = None,
-    ) -> None:
-        label = f"Expose #{index}" if index else "Expose"
-        super().__init__(
-            discord.ui.Button(
-                label=label,
-                style=discord.ButtonStyle.danger,
-                custom_id=f"whisper:expose:{whisper_id}",
-                row=row,
-            )
-        )
-        self.bot = bot
-        self.whisper_id = whisper_id
-
-    @classmethod
-    async def from_custom_id(  # type: ignore[override]
-        cls,
-        interaction: discord.Interaction,
-        item: discord.ui.Button,
-        match: re.Match[str],
-    ) -> WhisperExposeButton:
-        return cls(interaction.client, int(match["id"]))  # type: ignore[arg-type]
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        whisper = await asyncio.to_thread(
-            _do_load_whisper, self.bot.ctx.db_path, self.whisper_id
-        )
-        if whisper is None:
-            await interaction.response.send_message("❌ Whisper not found.", ephemeral=True)
-            return
-        try:
-            validate_expose(whisper, invoker_id=interaction.user.id)
-        except TransitionValidationError as e:
-            await interaction.response.send_message(e.message, ephemeral=True)
-            return
-
-        await asyncio.to_thread(
-            _do_mark_exposed, self.bot.ctx.db_path, self.whisper_id
-        )
-
-        sender_member = (
-            interaction.guild.get_member(whisper.sender_id)
-            if interaction.guild else None
-        )
-        sender_label = (
-            sender_member.mention if sender_member else f"<@{whisper.sender_id}>"
-        )
-
-        # Reveal sender in the recipient's DM inbox
-        if whisper.dm_msg_id:
-            try:
-                dm_channel = await interaction.user.create_dm()
-                dm_msg = await dm_channel.fetch_message(whisper.dm_msg_id)
-                await dm_msg.edit(
-                    content=(dm_msg.content or "") + format_expose_dm_suffix(sender_label),
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.HTTPException:
-                log.warning("Failed to edit DM on expose")
-
-        # Remove the Expose button from the channel message
-        if interaction.message:
-            try:
-                await interaction.message.edit(view=None)
-            except discord.HTTPException:
-                log.warning("Failed to clear expose view from channel message")
-
-        await interaction.response.send_message("Revealed in your inbox.", ephemeral=True)
 
 
 class WhisperReplyButton(
@@ -1140,6 +1064,57 @@ class WhisperDmView(discord.ui.View):
 
 # ── Guess outcome helper + select view ──────────────────────────────────────
 
+
+async def _notify_sender_of_guess(
+    bot: Bot,
+    guild: discord.Guild,
+    cfg: WhisperConfig,
+    whisper: Whisper,
+    *,
+    guessed_id: int,
+    outcome: GuessOutcome,
+) -> None:
+    """DM the sender one line about the guess just made on their whisper.
+
+    Best-effort and last in the flow, after the target's own response. The
+    gates live in ``sender_feedback_wanted`` (guild dial, sender still in the
+    pool). The guessed member is named by resolved display name — except when
+    the sender holds a no-contact pair with them, where the name degrades to
+    "someone": naming a blocked party to the other side is contact, and the
+    degraded line reads the same as any other wrong guess.
+    """
+    sender = guild.get_member(whisper.sender_id)
+    if sender is None:
+        return
+    if not sender_feedback_wanted(cfg, sender_role_ids={r.id for r in sender.roles}):
+        return
+    blocked = await asyncio.to_thread(
+        no_contact_service.is_no_contact,
+        bot.ctx.db_path, guild.id, whisper.sender_id, guessed_id,
+    )
+    if blocked:
+        label = "someone"
+    else:
+        name_fn = await build_name_fn(
+            guild=guild, db_path=bot.ctx.db_path, guild_id=guild.id,
+            user_ids=[guessed_id],
+        )
+        label = name_fn(guessed_id)
+    try:
+        await send_branded_dm(
+            sender,
+            db_path=bot.ctx.db_path,
+            guild=guild,
+            embed=discord.Embed(
+                description=format_sender_guess_feedback(
+                    whisper_id=whisper.id, guessed_label=label, outcome=outcome,
+                )
+            ),
+        )
+    except discord.HTTPException:
+        log.warning("Failed to DM whisper sender about a guess on #%s", whisper.id)
+
+
 async def _handle_guess_outcome(
     interaction: discord.Interaction,
     bot: Bot,
@@ -1167,8 +1142,9 @@ async def _handle_guess_outcome(
         )
         return
 
+    guild = interaction.guild or bot.get_guild(whisper.guild_id)
+    cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
     if outcome.correct:
-        guild = interaction.guild or bot.get_guild(whisper.guild_id)
         await interaction.response.edit_message(content="You solved it!", view=None)
 
         # Quest hook: solving the guessing game. Fires only after the
@@ -1180,7 +1156,6 @@ async def _handle_guess_outcome(
             bot, whisper.guild_id, interaction.user.id, "whisper_guess",
             occurrence=str(whisper.id),
         )
-        cfg = await asyncio.to_thread(_load_config, bot.ctx.db_path, whisper.guild_id)
         if guild:
             feed_channel = guild.get_channel(cfg.channel_id)
             if isinstance(feed_channel, discord.TextChannel):
@@ -1207,6 +1182,10 @@ async def _handle_guess_outcome(
         await interaction.response.edit_message(
             content=f"Wrong! {outcome.attempts_remaining} guesses left.",
             view=None,
+        )
+    if guild is not None:
+        await _notify_sender_of_guess(
+            bot, guild, cfg, whisper, guessed_id=guessed_id, outcome=outcome,
         )
 
 
@@ -1250,11 +1229,18 @@ class WhisperGuessUserSelect(discord.ui.UserSelect):  # type: ignore[type-arg]
                 content=ERROR_GUESS_NO_ATTEMPTS, view=None
             )
             return
-        # A stray pick (bot) must not burn an attempt — bail before evaluating.
-        if getattr(guessed, "bot", False):
-            await interaction.response.edit_message(
-                content="❌ That's a bot — pick a real member.", view=None
-            )
+        # A stray pick — a bot, or a member outside the opt-in pool — must not
+        # burn an attempt: the native picker offers the whole server, and the
+        # DM-side string picker only ever offered the pool. Refuse before
+        # anything is consumed so the two entry points play by one rule.
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, whisper.guild_id)
+        rejection = guess_candidate_rejection(
+            cfg,
+            candidate_role_ids={r.id for r in getattr(guessed, "roles", [])},
+            candidate_is_bot=bool(getattr(guessed, "bot", False)),
+        )
+        if rejection is not None:
+            await interaction.response.edit_message(content=rejection, view=None)
             return
         await _handle_guess_outcome(interaction, self.bot, whisper, guessed.id)
 
@@ -2227,94 +2213,112 @@ class WhisperCog(commands.Cog):
 
     def __init__(self, bot: Bot) -> None:
         self.bot = bot
-        self._launcher_locks: dict[int, asyncio.Lock] = {}
-        self._pending_refresh: set[int] = set()
+        # The channel-bottom Send / My Inbox / My Sent launcher, on the shared
+        # machinery in core.sticky (per-guild lock, TTL id cache, known-guilds
+        # fast path, post-before-delete, shielded placement). Until 2026-09
+        # this cog carried the last-but-one hand-rolled copy: no debounce, a
+        # threaded DB read for every message in every guild before it had
+        # looked at the channel, and delete-then-post — a failed send left the
+        # channel with no launcher at all. This cog now only says where the
+        # ids live and what the launcher looks like.
+        self.launcher = StickyPanel(
+            "whisper launcher",
+            bot,
+            load_ids=self._launcher_ids,
+            save_ids=self._save_launcher_ids,
+            build=self._build_launcher,
+        )
         self._last_send_at: dict[int, float] = {}  # sender_id -> ts
         self._target_sends: dict[tuple[int, int, int], list[float]] = {}  # (guild_id, sender_id, target_id) -> [ts...]
 
-    def _get_launcher_lock(self, guild_id: int) -> asyncio.Lock:
-        lock = self._launcher_locks.get(guild_id)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._launcher_locks[guild_id] = lock
-        return lock
+    # ── the launcher's sticky callbacks (core.sticky) ─────────────────────
+
+    def _launcher_ids(self, guild_id: int) -> tuple[int, int]:
+        """Where the launcher actually is, or (0, 0) for "not posted".
+
+        Reads the launcher's own channel rather than ``channel_id`` so the
+        placer's delete aims at the message's real channel after an admin
+        repoints the feed. A launcher posted before ``launcher_channel_id``
+        existed has a message id and no channel id — those fall back to the
+        feed channel, which is where they were posted.
+        """
+        cfg = _load_config(self.bot.ctx.db_path, guild_id)
+        if not cfg.launcher_message_id:
+            return 0, 0
+        return cfg.launcher_channel_id or cfg.channel_id, cfg.launcher_message_id
+
+    def _save_launcher_ids(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        _do_set_launcher_ids(self.bot.ctx.db_path, guild_id, channel_id, message_id)
+
+    async def _build_launcher(self, guild: discord.Guild) -> PanelContent:
+        accent = await safe_resolve_accent(
+            self.bot.ctx, guild, default=DEFAULT_ACCENT_COLOR, log_label="whisper"
+        )
+        return PanelContent(
+            embed=discord.Embed(description=LAUNCHER_MESSAGE_BODY, color=accent),
+            view=WhisperFeedView(self.bot),
+        )
 
     async def cog_load(self) -> None:
         # Register persistent views so static-id buttons survive restart.
         self.bot.add_view(WhisperFeedView(self.bot))
-        # Register dynamic-id buttons so per-whisper Guess/Share/Delete/Expose
+        # Register dynamic-id buttons so per-whisper Guess/Share/Delete
         # button clicks on existing DMs and feed messages still route after
         # a bot restart (custom_ids embed the whisper_id).
         self.bot.add_dynamic_items(
             WhisperGuessButton,
             WhisperShareButton,
             WhisperDeleteButton,
-            WhisperExposeButton,
             WhisperReplyButton,
             WhisperReportButton,
             WhisperReportReplyButton,
         )
-        # Bootstrap launcher in every configured guild so the button bar is
-        # at the bottom of the channel from boot. Run in parallel with a
-        # semaphore to avoid a thundering-herd against Discord on large bots.
+        # Publish the launcher-guild set so the on_message listener rejects
+        # the overwhelming majority of messages with a set lookup, not a DB
+        # read — then make sure each of those guilds has its launcher at the
+        # bottom of the feed. only_if_buried: a launcher that is already the
+        # last message stays put across a restart instead of being churned.
+        configured = await asyncio.to_thread(_do_launcher_guilds, self.bot.ctx.db_path)
+        self.launcher.set_known_guilds(configured)
         sem = asyncio.Semaphore(5)
 
-        async def _bootstrap_one(guild: discord.Guild) -> None:
+        async def _bootstrap_one(guild_id: int) -> None:
             async with sem:
                 try:
-                    await self.refresh_whisper_launcher(guild.id)
+                    await self.refresh_whisper_launcher(guild_id, only_if_buried=True)
                 except Exception:
                     log.exception(
-                        "Failed to bootstrap whisper launcher for guild %s", guild.id
+                        "Failed to bootstrap whisper launcher for guild %s", guild_id
                     )
 
-        await asyncio.gather(*[_bootstrap_one(g) for g in self.bot.guilds])
+        await asyncio.gather(
+            *[_bootstrap_one(g.id) for g in self.bot.guilds if g.id in configured]
+        )
 
-    async def refresh_whisper_launcher(self, guild_id: int) -> None:
-        """Delete the previous launcher (if any) and post a fresh one at the
-        bottom of the configured whisper channel. Serialized per-guild.
+    async def cog_unload(self) -> None:
+        self.launcher.cancel_all()
 
-        Multiple concurrent calls for the same guild are coalesced: only one
-        actual delete+post cycle runs at a time, and a second cycle fires only
-        if at least one more call arrived while the first held the lock.
+    async def refresh_whisper_launcher(
+        self, guild_id: int, *, only_if_buried: bool = False
+    ) -> None:
+        """Move the launcher to the bottom of the configured whisper channel.
+
+        Delegates to ``core.sticky`` — the per-guild lock, post-before-delete
+        and the shielded placement all live there. Kept as a method because
+        three call sites (send, share, the boot bootstrap) already speak it.
+        ``only_if_buried`` skips the repost when the launcher is already the
+        channel's last message.
         """
-        self._pending_refresh.add(guild_id)
-        async with self._get_launcher_lock(guild_id):
-            if guild_id not in self._pending_refresh:
-                return  # another invocation already did the work for us
-            self._pending_refresh.discard(guild_id)
-
-            cfg = await asyncio.to_thread(
-                _load_config, self.bot.ctx.db_path, guild_id
-            )
-            if cfg.channel_id == 0:
-                return
-            guild = self.bot.get_guild(guild_id)
-            if guild is None:
-                return
-            channel = guild.get_channel(cfg.channel_id)
-            if not isinstance(channel, discord.TextChannel):
-                return
-            if cfg.launcher_message_id:
-                try:
-                    old = await channel.fetch_message(cfg.launcher_message_id)
-                    await old.delete()
-                except discord.HTTPException:
-                    pass
-            try:
-                sent = await channel.send(
-                    LAUNCHER_MESSAGE_BODY,
-                    view=WhisperFeedView(self.bot),
-                    allowed_mentions=discord.AllowedMentions.none(),
-                )
-            except discord.HTTPException:
-                log.warning(
-                    "Failed to post whisper launcher to channel %s", cfg.channel_id
-                )
-                return
-            await asyncio.to_thread(
-                _do_set_launcher_id, self.bot.ctx.db_path, guild_id, sent.id
-            )
+        cfg = await asyncio.to_thread(_load_config, self.bot.ctx.db_path, guild_id)
+        if cfg.channel_id == 0:
+            return
+        guild = self.bot.get_guild(guild_id)
+        if guild is None:
+            return
+        channel = guild.get_channel(cfg.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+        await self.launcher.place(guild, channel, only_if_buried=only_if_buried)
 
     @commands.Cog.listener("on_guild_remove")
     async def _on_guild_remove(self, guild: discord.Guild) -> None:
@@ -2328,24 +2332,44 @@ class WhisperCog(commands.Cog):
                 "whisper_channel_id",
                 "whisper_log_channel_id",
                 "whisper_launcher_message_id",
+                "whisper_launcher_channel_id",
             ):
                 delete_config_value(conn, key, guild_id)
+        self.launcher.forget(guild_id)
 
     @commands.Cog.listener("on_message")
     async def _on_message_launcher_bump(self, message: discord.Message) -> None:
-        if message.author.bot:
+        """Keep the launcher at the bottom of the whisper channel.
+
+        One line now: the bot filter, the known-guilds gate, the TTL id cache
+        and the debounce all live in ``core.sticky``.
+        """
+        await self.launcher.on_message(message)
+
+    @commands.Cog.listener()
+    async def on_whisper_config_change(self, guild_id: int) -> None:
+        """A dashboard save of the Whisper config (``PUT /config/whisper``).
+
+        The ``on_message`` fast path only knows the guilds read at boot, so a
+        feed channel set afterwards would get no launcher until a restart —
+        the hand-rolled listener this replaced re-read the config on every
+        message and so never had the gap. Republish the set, then re-stick
+        the launcher where the channel now points (``place`` deletes the old
+        one through its stored channel if the feed was repointed).
+        """
+        configured = await asyncio.to_thread(_do_launcher_guilds, self.bot.ctx.db_path)
+        self.launcher.set_known_guilds(configured)
+        if guild_id not in configured:
+            self.launcher.forget(guild_id)
             return
-        if not message.guild:
-            return
-        cfg = await asyncio.to_thread(
-            _load_config, self.bot.ctx.db_path, message.guild.id
-        )
-        if cfg.channel_id == 0 or message.channel.id != cfg.channel_id:
-            return
-        # Skip the launcher message itself to avoid an infinite loop.
-        if cfg.launcher_message_id and message.id == cfg.launcher_message_id:
-            return
-        await self.refresh_whisper_launcher(message.guild.id)
+        await self.refresh_whisper_launcher(guild_id, only_if_buried=True)
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_launcher_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        """Clear the launcher's ids if its channel was deleted."""
+        await self.launcher.on_channel_delete(channel)
 
     async def _optin_impl(self, interaction: discord.Interaction) -> None:
         """Pure shared implementation, easy to test directly."""

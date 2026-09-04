@@ -19,11 +19,13 @@ export function mount(container) {
     const r = config.risky || {};
     // Stored in seconds, edited in minutes — the unit is in the field label.
     const minMinutes = Math.round((r.min_game_seconds || 0) / 60);
+    const chaseHours = r.chase_hours || 0;
+    const fallbackHours = r.fallback_hours || 0;
 
     container.innerHTML = `
       <div class="panel">
         <header>
-          <h2>Risky Roller</h2>
+          <h2>Risky Rolls</h2>
           <div class="subtitle">A dice game members start with <code>/risky start</code></div>
         </header>
         ${renderMetaWarning()}
@@ -58,6 +60,29 @@ export function mount(container) {
               <div class="field-hint">Once a channel has this many open rounds,
                 <code>/risky start</code> is refused there until one finishes. Keeps a
                 busy channel from filling with half-played games.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-label">The Payoff</div>
+            <div class="field">
+              <label for="rr-chase">Chase the winner's question after N hours</label>
+              <input type="number" name="chase_hours" id="rr-chase" required
+                min="0" max="168" step="1" value="${chaseHours}" style="max-width:140px;" />
+              <div class="field-hint">A round's payoff is the winner's question, and most
+                winners walk off without asking it. After this many hours the winner gets
+                one reminder to ask; once a question is posted, the person who owes the
+                reply gets one reminder too. 0 sends no reminders.</div>
+            </div>
+            <div class="field">
+              <label for="rr-fallback">Fall back to a bank question after N hours</label>
+              <input type="number" name="fallback_hours" id="rr-fallback" required
+                min="0" max="168" step="1" value="${fallbackHours}" style="max-width:140px;" />
+              <div class="field-hint">If the winner still hasn't asked after this many hours,
+                the bot draws a Truth from the Truth or Dare question bank and posts it as
+                the winner's question, so the loser still answers. Spicy questions only
+                appear in age-restricted channels. 0 leaves an unasked round unasked.
+                Set this longer than the reminder above, or the reminder never gets its turn.</div>
             </div>
           </div>
 
@@ -108,6 +133,20 @@ export function mount(container) {
         form.querySelector("[name=max_games_per_channel]").focus();
         return;
       }
+      const hourFields = [
+        ["chase_hours", "Chase the winner's question"],
+        ["fallback_hours", "Fall back to a bank question"],
+      ];
+      const hours = {};
+      for (const [name, label] of hourFields) {
+        const value = parseInt(fd.get(name), 10);
+        if (!Number.isFinite(value) || value < 0 || value > 168) {
+          showStatus(status, false, `${label} must be a number of hours from 0 to 168`);
+          form.querySelector(`[name=${name}]`).focus();
+          return;
+        }
+        hours[name] = value;
+      }
       try {
         await apiPut("/api/config/risky", {
           // Role id stays a string; minutes are still converted back to the
@@ -115,11 +154,13 @@ export function mount(container) {
           ping_role_id: rolePicker.getValue() || "0",
           min_game_seconds: mins * 60,
           max_games_per_channel: maxGames,
+          chase_hours: hours.chase_hours,
+          fallback_hours: hours.fallback_hours,
         });
         showStatus(status, true);
       } catch (err) {
         showStatus(status, false, err.message);
       }
     });
-  }, { errorMsg: "Couldn’t load the Risky Roller settings." });
+  }, { errorMsg: "Couldn’t load the Risky Rolls settings." });
 }

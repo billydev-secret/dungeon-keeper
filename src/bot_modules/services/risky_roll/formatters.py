@@ -16,6 +16,7 @@ from bot_modules.services.name_resolver import (
 )
 from bot_modules.core.branding import apply_section_spacing
 from . import state as app_state
+from .logic import PayoffDials, unasked_questioners
 from .models import PendingQuestionState, PostedQuestionState, PromptKind, RiskyRollState
 
 log = logging.getLogger(__name__)
@@ -167,17 +168,84 @@ def build_pending_prompt_content(state: PendingQuestionState) -> str:
     )
 
 
-def build_pending_question_summary(state: PendingQuestionState, question_text: str, asker_id: int | None = None) -> str:
+def build_pending_question_summary(
+    state: PendingQuestionState,
+    question_text: str,
+    asker_id: int | None = None,
+    *,
+    from_bank: bool = False,
+) -> str:
+    """The text the disabled Ask Question prompt is left showing.
+
+    ``from_bank`` is the fallback dial: the winner never asked, so the bot
+    drew the question for them, and the summary says so rather than putting
+    the bank's words in the winner's mouth.
+    """
     if state.prompt_kind == PromptKind.TWO_QUESTIONERS:
         uid = asker_id if asker_id is not None else state.winner_id
         target_mentions = format_user_mentions(state.participant_user_ids)
+        if from_bank:
+            return f"<@{uid}> ran out of time — the deck asked {target_mentions} for them:\n> {question_text}"
         return f"<@{uid}> asked {target_mentions}:\n> {question_text}"
 
     if state.prompt_kind == PromptKind.DIRECT:
         target_mentions = format_user_mentions(state.participant_user_ids)
+        if from_bank:
+            return (
+                f"<@{state.winner_id}> ran out of time — the deck asked {target_mentions} for them:\n"
+                f"> {question_text}"
+            )
         return f"<@{state.winner_id}> asked {target_mentions}:\n> {question_text}"
 
+    if from_bank:
+        return f"<@{state.winner_id}> rolled 69 but never asked — the deck asked the room:\n> {question_text}"
     return f"<@{state.winner_id}> rolled 69 and asked:\n> {question_text}"
+
+
+def build_pending_chase_content(state: PendingQuestionState, dials: PayoffDials) -> str:
+    """The one re-ping of whoever still owes the round a question.
+
+    Message content, not an embed, so the ``<@id>`` mentions resolve. Names
+    the fallback window when that dial is on, so the winner knows the deck
+    will ask for them if they don't.
+    """
+    owed = format_user_mentions(set(unasked_questioners(state)))
+    line = f"⏰ {owed} — your Risky Rolls question is still waiting. Press **Ask Question** above to send it."
+    if dials.fallback_hours > 0:
+        line += f" If it's still unasked after {_hours(dials.fallback_hours)}, the deck asks one for you."
+    return line
+
+
+def build_posted_chase_content(state: PostedQuestionState) -> str:
+    """The one re-ping of the answerer(s) once a question has been posted."""
+    targets = format_user_mentions(state.allowed_replier_ids)
+    whose = "the deck's" if state.from_bank else f"<@{state.asker_id}>'s"
+    return f"⏰ {targets} — {whose} question is still waiting for your reply. Press **Reply** above to answer it."
+
+
+def build_fallback_question_content(
+    state: PendingQuestionState,
+    asker_id: int,
+    question_text: str,
+    pinged_user_ids: set[int],
+) -> str:
+    """The question the bot posts for a winner who ran out of time.
+
+    Same shape as the winner's own question message (targets, then the
+    asker line, then the question) so the Reply flow and the reply render
+    read the same; the asker line just says who really wrote it.
+    """
+    pings = format_user_mentions(pinged_user_ids)
+    if state.prompt_kind == PromptKind.ROOM:
+        return (
+            f"{pings}\n🔥 <@{asker_id}> rolled 69 but never asked, so the deck asks the room:\n"
+            f"{question_text}"
+        )
+    return f"{pings}\n<@{asker_id}> ran out of time, so the deck asks for them:\n{question_text}"
+
+
+def _hours(hours: int) -> str:
+    return f"{hours} hour{'s' if hours != 1 else ''}"
 
 
 def build_embed(
@@ -273,21 +341,43 @@ def build_question_reply_content(
     reply_text: str,
 ) -> str:
     target_mentions = format_user_mentions(state.allowed_replier_ids)
-    return f"{target_mentions}\n<@{state.asker_id}> asks:\n{state.question_text}\n\n<@{replier_id}>: {reply_text}"
-
-
-def build_how_to_play_content() -> str:
-    return (
-        "**🎲 How to Play**\n"
-        "**Roll** — Each player presses **Roll** once. You roll a number from **1** to **100**.\n"
-        "**Win** — Highest unique roll wins the round; lowest roll is the loser.\n"
-        "**Ties for highest** — Tied players auto-reroll until one wins.\n"
-        "**Question** — The winner asks the loser a question; the loser must reply.\n"
-        "🔥 **Rolled 69** — The winner asks the whole room (in a thread).\n"
-        "⭐ **Rolled 100** — The winner asks the bottom 2 players.\n"
-        "☠️ **Rolled 1** — The top 2 players each ask the loser.\n"
-        "**Close** — Only the round opener (or an admin) can close early."
+    asks = (
+        f"the deck asks for <@{state.asker_id}>:" if state.from_bank
+        else f"<@{state.asker_id}> asks:"
     )
+    return f"{target_mentions}\n{asks}\n{state.question_text}\n\n<@{replier_id}>: {reply_text}"
+
+
+def build_how_to_play_content(dials: PayoffDials | None = None) -> str:
+    """The Help button's rules card.
+
+    The question line promises only what the game enforces — the loser is
+    *asked* to reply; nothing makes them. With a payoff dial on, the card
+    names the window so the promise matches what actually happens.
+    """
+    dials = dials or PayoffDials()
+    lines = [
+        "**🎲 How to Play**",
+        "**Roll** — Each player presses **Roll** once. You roll a number from **1** to **100**.",
+        "**Win** — Highest unique roll wins the round; lowest roll is the loser.",
+        "**Ties for highest** — Tied players auto-reroll until one wins.",
+        "**Question** — The winner asks the loser a question, and the loser is asked to reply.",
+        "🔥 **Rolled 69** — The winner asks the whole room (in a thread).",
+        "⭐ **Rolled 100** — The winner asks the bottom 2 players.",
+        "☠️ **Rolled 1** — The top 2 players each ask the loser.",
+    ]
+    if dials.chase_hours > 0:
+        lines.append(
+            f"⏰ **Reminders** — An unasked question, or an unanswered one, gets one nudge after "
+            f"{_hours(dials.chase_hours)}."
+        )
+    if dials.fallback_hours > 0:
+        lines.append(
+            f"🃏 **The deck** — If the winner hasn't asked after {_hours(dials.fallback_hours)}, "
+            "the deck asks a question for them and the loser still answers."
+        )
+    lines.append("**Close** — Only the round opener (or an admin) can close early.")
+    return "\n".join(lines)
 
 
 async def get_text_channel(

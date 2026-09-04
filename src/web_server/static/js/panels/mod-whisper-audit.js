@@ -1,18 +1,17 @@
 import { api } from "../api.js";
 import { auditPanel, badge, tsColumn } from "../audit-helpers.js";
 
+// Exactly the states a whisper can be in (whisper_models.WhisperState); a
+// test enumerates this block against the model so the filter can't drift
+// into offering states that never return anything.
 const STATE_LABELS = {
-  pending:  "Pending",
-  expired:  "Expired",
-  rejected: "Rejected",
-  accepted: "Accepted",
+  pending: "In inbox",
+  shared:  "Shared to feed",
 };
 
 const STATE_BADGE = {
-  pending:  "badge-info",
-  expired:  "badge-dim",
-  rejected: "badge-danger",
-  accepted: "badge-success",
+  pending: "badge-info",
+  shared:  "badge-success",
 };
 
 function yesNo(val, yesCls, noCls) {
@@ -44,7 +43,6 @@ export function mount(container) {
         render: (e) => badge(STATE_LABELS[e.state] || e.state, STATE_BADGE[e.state] || ""),
       },
       { label: "Solved", render: (e) => yesNo(e.solved, "badge-success", "badge-dim") },
-      { label: "Exposed", render: (e) => yesNo(e.exposed, "badge-warning", "badge-dim") },
       {
         label: "Reports",
         render: (e) => (e.report_count > 0 ? badge(String(e.report_count), "badge-danger") : "0"),
