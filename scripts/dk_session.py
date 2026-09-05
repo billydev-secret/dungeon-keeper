@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import contextlib
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -871,23 +872,175 @@ def orphan_scratch_dirs(sessions_root: Path,
     return out
 
 
+#: A worktree nothing is looking after. Three states, and only one is sweepable.
+@dataclass
+class OrphanTree:
+    path: Path
+    name: str
+    branch: str
+    kind: str          # "session" | "workflow"
+    commits: int       # unmerged, vs main
+    dirty: int         # uncommitted tracked files
+    recent: bool       # touched inside the age floor — assume someone is using it
+
+    @property
+    def parked(self) -> bool:
+        """Holds work that exists nowhere else. Never swept, always reported."""
+        return bool(self.commits or self.dirty)
+
+    @property
+    def sweepable(self) -> bool:
+        return not self.parked and not self.recent
+
+
+def touched_within(path: Path, hours: float, *, depth: int = 3) -> bool:
+    """Has anything in the worktree changed lately?
+
+    A tmux window is not proof of life: `dk_session.py new --no-window` makes a
+    worktree deliberately without one, and an agent working in it looks exactly
+    like a month-dead session to the window test. Recency tells those apart, so
+    a worktree in use is never swept out from under whoever is using it.
+
+    Pure Python rather than `find -mmin`: the test runner is Windows, where
+    that shells out to something else entirely and the check silently reports
+    "not touched" for every path — which reads as "abandoned" for all of them.
+    Bounded depth and an early exit keep it cheap; `.venv` is skipped because
+    it is a symlink to the prod checkout in every session worktree.
+    """
+    cutoff = time.time() - hours * 3600
+
+    def walk(d: Path, level: int) -> bool:
+        try:
+            entries = list(os.scandir(d))
+        except OSError:
+            return False
+        for e in entries:
+            if e.name in (".venv", ".git", "__pycache__", "node_modules"):
+                continue
+            try:
+                if e.stat(follow_symlinks=False).st_mtime > cutoff:
+                    return True
+            except OSError:
+                continue
+            if e.is_dir(follow_symlinks=False) and level < depth:
+                if walk(Path(e.path), level + 1):
+                    return True
+        return False
+
+    try:
+        if path.stat().st_mtime > cutoff:
+            return True
+    except OSError:
+        return False
+    return walk(path, 1)
+
+
+def orphan_worktrees(main_repo: Path, age_hours: float = 24.0) -> list[OrphanTree]:
+    """Worktrees whose window is gone — the ones nothing else cleans up.
+
+    Teardown removes the session it is told about. Nothing removes a session
+    whose tmux window simply died, so its worktree stays on disk indefinitely.
+    That is how a finished privacy disclosure sat unnoticed for a month, and
+    how 89 workflow worktrees reached 4.5 GB.
+
+    A worktree that still holds commits or uncommitted files is reported and
+    **never** returned as sweepable: the whole failure mode is losing work
+    nobody remembers, and a sweep that quietly deleted it would be the same
+    bug with a faster trigger.
+    """
+    windows = tmux_windows()
+    sessions_root = sessions_dir(main_repo)
+    out: list[OrphanTree] = []
+    for wt in parse_worktrees(git_out(main_repo, "worktree", "list", "--porcelain")):
+        path = Path(wt["path"])
+        if path == main_repo:
+            continue
+        if path.parent == sessions_root:
+            kind = "session"
+        elif ".claude/worktrees" in path.as_posix():
+            kind = "workflow"
+        else:
+            continue  # somebody else's worktree; not ours to judge
+        if path.name in windows:
+            continue  # live
+        branch = wt.get("branch") or "(detached)"
+        commits = 0
+        if branch and not branch.startswith("("):
+            raw = run(["git", "-C", str(main_repo), "rev-list", "--count",
+                       f"main..{branch}"], check=False).stdout.strip()
+            commits = int(raw) if raw.isdigit() else 0
+        dirty = len(run(["git", "-C", str(path), "status", "--porcelain", "-uno"],
+                        check=False).stdout.split("\n")) - 1
+        out.append(OrphanTree(path, path.name, branch, kind, commits,
+                              max(dirty, 0), touched_within(path, age_hours)))
+    return out
+
+
 def cmd_sweep(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
-    orphans = orphan_scratch_dirs(sessions_dir(main_repo))
-    if not orphans:
-        print("no orphaned scratch dirs")
-        return 0
     total = 0
-    for d in orphans:
-        raw = run(["du", "-sb", str(d)], check=False).stdout.split("\t")[0]
-        total += int(raw) if raw.isdigit() else 0
-        human = run(["du", "-sh", str(d)], check=False).stdout.split("\t")[0]
-        print(f"  {human:>6}  {d.name}")
-        if args.apply:
-            shutil.rmtree(d, ignore_errors=True)
+    removed = 0
+
+    orphans = orphan_scratch_dirs(sessions_dir(main_repo))
+    if orphans:
+        print("── scratch dirs (session already gone) " + "─" * 20)
+        for d in orphans:
+            raw = run(["du", "-sb", str(d)], check=False).stdout.split("\t")[0]
+            total += int(raw) if raw.isdigit() else 0
+            human = run(["du", "-sh", str(d)], check=False).stdout.split("\t")[0]
+            print(f"  {human:>6}  {d.name}")
+            if args.apply:
+                shutil.rmtree(d, ignore_errors=True)
+        removed += len(orphans)
+
+    trees = orphan_worktrees(main_repo, args.older_than)
+    sweepable = [t for t in trees if t.sweepable]
+    parked = [t for t in trees if t.parked]
+    recent = [t for t in trees if t.recent and not t.parked]
+
+    if sweepable:
+        print("\n── worktrees with no window and nothing in them " + "─" * 11)
+        for t in sweepable:
+            raw = run(["du", "-sb", str(t.path)], check=False).stdout.split("\t")[0]
+            total += int(raw) if raw.isdigit() else 0
+            human = run(["du", "-sh", str(t.path)], check=False).stdout.split("\t")[0]
+            print(f"  {human:>6}  {t.name}  ({t.kind})")
+            if args.apply:
+                run(["git", "-C", str(main_repo), "worktree", "remove",
+                     "--force", str(t.path)], check=False)
+                if t.branch and not t.branch.startswith("("):
+                    # -d, never -D: it refuses an unmerged branch, which is the
+                    # last guard if the commit count above was ever wrong.
+                    run(["git", "-C", str(main_repo), "branch", "-d", t.branch],
+                        check=False)
+        removed += len(sweepable)
+
+    if parked:
+        print("\n── PARKED — a dead session still holding work " + "─" * 13)
+        for t in parked:
+            bits = []
+            if t.commits:
+                bits.append(f"{t.commits} unmerged commit(s)")
+            if t.dirty:
+                bits.append(f"{t.dirty} uncommitted file(s)")
+            print(f"  {t.name}  [{t.branch}]  {', '.join(bits)}")
+        print("  Left alone on purpose. This work exists nowhere else — merge it,")
+        print("  or tear the session down by name once you know what it is.")
+
+    if recent:
+        print(f"\n── skipped: touched in the last {args.older_than:g}h " + "─" * 20)
+        for t in recent:
+            print(f"  {t.name}  ({t.kind}) — no window, but in use")
+
+    if not orphans and not trees:
+        print("nothing orphaned — every worktree has a live window")
+        return 0
+
     print()
     verb = "removed" if args.apply else "would remove"
-    print(f"{verb} {len(orphans)} dir(s), {total / 1e9:.2f} GB")
+    print(f"{verb} {removed} item(s), {total / 1e9:.2f} GB")
+    if parked:
+        print(f"kept {len(parked)} parked worktree(s) holding work")
     if not args.apply:
         print("dry run — pass --apply to delete")
     return 0
@@ -1084,6 +1237,31 @@ def report_ungated_merges(main_repo: Path) -> None:
               "run `python scripts/gate.py` on main when this batch is done")
 
 
+def report_orphans(main_repo: Path) -> None:
+    """One line at teardown about worktrees nothing is looking after.
+
+    Teardown is the only moment anyone reliably reads this script's output, and
+    it is the moment a session count changes — so it is where an accumulating
+    pile is cheapest to notice. Printed, never acted on: sweeping as a side
+    effect of tearing down an unrelated session is exactly the kind of surprise
+    deletion this whole feature exists to prevent.
+    """
+    try:
+        trees = orphan_worktrees(main_repo)
+    except Exception:  # pragma: no cover - never let a report break a teardown
+        return
+    stale = [t for t in trees if t.sweepable]
+    parked = [t for t in trees if t.parked]
+    if stale:
+        print(f"{len(stale)} orphaned worktree(s) with no window and nothing in "
+              "them — `python scripts/dk_session.py sweep` to see them")
+    if parked:
+        names = ", ".join(sorted(t.name for t in parked)[:3])
+        more = f" (+{len(parked) - 3} more)" if len(parked) > 3 else ""
+        print(f"{len(parked)} dead session(s) still holding unmerged work: "
+              f"{names}{more}")
+
+
 def cmd_teardown(args: argparse.Namespace) -> int:
     main_repo = find_main_repo()
     name = normalize_name([args.name])
@@ -1121,6 +1299,7 @@ def cmd_teardown(args: argparse.Namespace) -> int:
         print(f"kept branch {name} — not merged into main", file=sys.stderr)
 
     report_ungated_merges(main_repo)
+    report_orphans(main_repo)
 
     window = args.window or name
     run(["tmux", "kill-window", "-t", window], check=False)
@@ -1164,9 +1343,14 @@ def main(argv: list[str] | None = None) -> int:
     p_list.set_defaults(func=cmd_list)
 
     p_sweep = sub.add_parser(
-        "sweep", help="remove agent scratch dirs left by already-gone sessions",
+        "sweep",
+        help="remove scratch dirs and worktrees left by sessions whose window is gone",
     )
     p_sweep.add_argument("--apply", action="store_true", help="actually delete (default: dry run)")
+    p_sweep.add_argument(
+        "--older-than", type=float, default=24.0, metavar="HOURS",
+        help="only sweep worktrees untouched this long (default: 24)",
+    )
     p_sweep.set_defaults(func=cmd_sweep)
 
     p_snap = sub.add_parser(

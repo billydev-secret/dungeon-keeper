@@ -263,10 +263,34 @@ tmpfs, one of them 1.9 GB on its own. The symptom is a full /tmp that looks
 like a pytest problem and isn't — pytest's own footprint stays flat at ~20 KB via
 tmp_path_retention_count = 1.
 
-To clear scratch left by sessions torn down before the fix:
+To clear what dead sessions leave behind:
 
     python scripts/dk_session.py sweep            # dry run, lists what it would take
     python scripts/dk_session.py sweep --apply
+
+`sweep` covers two things, because **nothing cleans up after a session whose tmux
+window simply died** — teardown only removes the session it is told about. That gap
+is how 89 workflow worktrees reached 4.5 GB in `.claude/worktrees/`, and how a
+finished privacy disclosure sat unnoticed in a dead session for a month.
+
+- **Scratch dirs** under /tmp whose worktree is already gone.
+- **Worktrees with no live window** — session and workflow both.
+
+Three states, and only one is deleted:
+
+| state | swept? |
+|---|---|
+| no window, clean, no unmerged commits, untouched for 24h | yes |
+| touched inside the last 24h | no — `new --no-window` is a real worktree with no window, and an agent may be working in it |
+| holds unmerged commits or uncommitted files | **never** — reported as PARKED |
+
+The parked rule is the point: the failure being prevented is losing work nobody
+remembers writing, so a sweep that deleted it would be the same bug with a faster
+trigger. `--older-than HOURS` moves the recency floor.
+
+Teardown prints a one-line count of both categories, so a growing pile is noticed at
+the moment someone is already reading this script's output rather than when the disk
+fills.
 
 The sweep only ever considers directories whose name was mangled from
 dk-sessions/ **and** whose worktree no longer exists, so a live session's

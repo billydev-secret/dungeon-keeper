@@ -9,6 +9,7 @@ all have to agree — so each transform gets a case. The subprocess plumbing
 from __future__ import annotations
 
 import os
+import time
 import shlex
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -890,3 +891,48 @@ def test_post_qa_card_records_a_nonzero_exit(tmp_path, monkeypatch) -> None:
 def test_qa_card_log_survives_an_unwritable_git_dir(tmp_path) -> None:
     """No .git to write into: still silent, still no exception."""
     dk_session.qa_card_log(tmp_path, "widget", "anything")
+
+
+# ── orphan worktrees: what the sweep may and may not delete ───────────
+
+
+def _tree(**kw):
+    base = dict(path=Path("/tmp/x"), name="x", branch="b", kind="session",
+                commits=0, dirty=0, recent=False)
+    base.update(kw)
+    return dk_session.OrphanTree(**base)
+
+
+@pytest.mark.parametrize(
+    ("kw", "parked", "sweepable"),
+    [
+        pytest.param({}, False, True, id="empty-and-old-is-sweepable"),
+        pytest.param({"commits": 6}, True, False, id="unmerged-commits-parked"),
+        pytest.param({"dirty": 12}, True, False, id="uncommitted-files-parked"),
+        pytest.param({"commits": 6, "dirty": 12}, True, False, id="both-parked"),
+        pytest.param({"recent": True}, False, False, id="recently-touched-is-spared"),
+        pytest.param({"commits": 6, "recent": True}, True, False, id="parked-beats-recent"),
+    ],
+)
+def test_only_an_empty_stale_worktree_is_sweepable(kw, parked, sweepable):
+    """The failure this guards is losing work nobody remembers writing. A
+    worktree holding commits or edits is reported and never deleted."""
+    t = _tree(**kw)
+    assert t.parked is parked
+    assert t.sweepable is sweepable
+
+
+def test_a_no_window_worktree_in_use_is_not_swept(tmp_path):
+    """`new --no-window` makes a worktree with no tmux window on purpose, so
+    the window test alone would call an actively-used checkout dead."""
+    (tmp_path / "file.txt").write_text("just written", encoding="utf-8")
+    assert dk_session.touched_within(tmp_path, 24.0) is True
+
+
+def test_a_long_abandoned_worktree_reads_as_stale(tmp_path):
+    old = time.time() - 40 * 24 * 3600
+    f = tmp_path / "file.txt"
+    f.write_text("a month ago", encoding="utf-8")
+    os.utime(f, (old, old))
+    os.utime(tmp_path, (old, old))
+    assert dk_session.touched_within(tmp_path, 24.0) is False
