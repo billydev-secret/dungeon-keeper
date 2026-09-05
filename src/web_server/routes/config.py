@@ -43,6 +43,9 @@ from bot_modules.services.birthday_service import (
 from bot_modules.services import intake_reference_service as intake_ref
 from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import pools_metrics
+# presets only — importing word_cloud.render here would pull matplotlib
+# into the web process for two dropdown values.
+from bot_modules.word_cloud.presets import PRESETS as WORD_CLOUD_PRESETS
 from bot_modules.services import xp_rollup_service
 from bot_modules.services.message_store import (
     SUPPORTED_STORAGE_LEVELS,
@@ -188,6 +191,8 @@ from bot_modules.services.voice_transcription_service import (
     set_config as _vt_set_config,
 )
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
+
+WORD_CLOUD_PRESET_KEYS = {p.key for p in WORD_CLOUD_PRESETS}
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -1344,6 +1349,14 @@ async def get_config(
                     "spoiler_required_channels": _id_str_list(conn, "spoiler_required_channels", guild_id),
                 },
                 "nsfw_classifier": _nsfw_classifier_section(conn, guild_id),
+                "word_cloud": {
+                    "message_cap": _int_val(
+                        conn, "word_cloud_message_cap", 12000, guild_id
+                    ),
+                    "default_preset": _str_val(
+                        conn, "word_cloud_default_preset", "midnight", guild_id
+                    ),
+                },
                 "auto_role": {
                     "auto_role_ids": _id_str_list(conn, "auto_role_ids", guild_id),
                 },
@@ -2876,6 +2889,45 @@ async def update_spoiler(
 
     result = await run_query(_q)
     # on_message reads spoiler channels via ctx.guild_config(gid); refresh it.
+    ctx.invalidate_guild_config(guild_id)
+    return result
+
+
+class WordCloudConfigUpdate(BaseModel):
+    message_cap: int | None = None
+    default_preset: str | None = None
+
+
+@router.put("/config/word-cloud")
+async def update_word_cloud(
+    request: Request,
+    body: WordCloudConfigUpdate,
+    _: AuthenticatedUser = Depends(require_perms({"admin"})),
+):
+    """Dials for the moderator-only ``/wordcloud`` command.
+
+    The cap is clamped rather than rejected: it is a performance guard, not a
+    correctness one, and a moderator typing a large number should get the
+    ceiling rather than an error they have to decode.
+    """
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            if body.message_cap is not None:
+                cap = max(100, min(12000, int(body.message_cap)))
+                set_config_value(conn, "word_cloud_message_cap", str(cap), guild_id)
+            if body.default_preset is not None:
+                preset = body.default_preset.strip().lower()
+                if preset not in WORD_CLOUD_PRESET_KEYS:
+                    raise HTTPException(400, "Unknown word cloud preset.")
+                set_config_value(
+                    conn, "word_cloud_default_preset", preset, guild_id
+                )
+        return {"ok": True}
+
+    result = await run_query(_q)
     ctx.invalidate_guild_config(guild_id)
     return result
 

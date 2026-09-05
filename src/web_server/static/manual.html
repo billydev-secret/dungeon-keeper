@@ -1808,6 +1808,26 @@
       </div>
     </div>
 
+    <h3 id="word-cloud">Word Cloud <span class="perm perm-mod">Mod</span></h3>
+
+    <div class="cmd-block">
+      <span class="cmd-name">/wordcloud window:7d channel:#general</span>
+      <span class="cmd-perm"><span class="perm perm-mod">Mod</span></span>
+      <span class="cmd-desc">Draws a picture of the words a channel has been using, sized by how often they came up. The reply is only visible to you. Add <strong>member</strong> for one person's words, <strong>everywhere</strong> for every channel you can read at once, and <strong>preset</strong> to change the look.</span>
+      <div class="cmd-params">
+        <strong>window</strong> — how far back, like <code>30m</code>, <code>6h</code> or <code>7d</code>. Defaults to the last 24 hours.<br>
+        <strong>color</strong> — <em>By mood</em> (the default) tints each word by how happy the messages using it were: warm for cheerful, cool for unhappy. <em>By palette</em> just uses the style's colours.
+      </div>
+    </div>
+
+    <p>You can only cloud channels <strong>you</strong> can read — the command checks your own permissions, not the bot's, so it can never show you a room you don't have access to.</p>
+
+    <p>Bot messages are left out, and so are messages that have since been deleted. Links, custom emoji, @-mentions and code blocks are stripped before counting, along with common filler words, so what's left is what people actually talked about.</p>
+
+    <p><strong>How far back it can see depends on the server.</strong> Where message archiving is switched on, a cloud can reach back as far as the archive goes. Where it isn't, the bot has no stored text to read and falls back to fetching the <strong>last 10 minutes</strong> of chat live — so a longer window quietly becomes ten minutes, and the reply tells you that's what happened. See <a href="#your-data">Your Data &amp; Privacy</a> for which applies here.</p>
+
+    <p>The message limit and the default style are set on the dashboard at <a href="/#/word-cloud">Word Cloud</a>.</p>
+
     <h3 id="threads-in-metrics">Threads and Channel Metrics</h3>
     <p>Anywhere the dashboard lists <strong>channels</strong> — the Channels panel, the per-channel heatmaps, the homepage's busiest-channels tile — a thread is never a row of its own. Whatever gets said in a thread counts toward the channel the thread was started from, so a channel whose conversation has moved into its threads still reads as busy rather than dead.</p>
 
