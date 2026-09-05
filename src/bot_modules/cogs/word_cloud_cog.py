@@ -61,12 +61,31 @@ def _readable_channel_ids(
     enforced for the "everywhere" scope. Threads are included: the archive
     stores a thread's own id as ``channel_id``, so leaving them out would drop
     whole conversations.
+
+    A *private* thread needs its own check: ``Thread.permissions_for`` only
+    inherits the parent channel's overwrites, so a moderator who was never
+    added to one still comes back "allowed". Discord's own rule is invitation
+    or Manage Threads, and only the second half is knowable from the cache, so
+    that is what is required — otherwise "every channel you can read" would
+    quietly include rooms the invoker cannot open.
     """
     out: list[int] = []
     for channel in list(guild.text_channels) + list(guild.threads):
-        perms = channel.permissions_for(member)
-        if perms.read_messages and perms.read_message_history:
-            out.append(channel.id)
+        try:
+            perms = channel.permissions_for(member)
+        except discord.ClientException:
+            # A thread whose parent isn't cached can't be permission-checked.
+            # One such thread must not sink the whole command.
+            continue
+        if not (perms.read_messages and perms.read_message_history):
+            continue
+        if (
+            isinstance(channel, discord.Thread)
+            and channel.is_private()
+            and not perms.manage_threads
+        ):
+            continue
+        out.append(channel.id)
     return out
 
 
@@ -84,11 +103,26 @@ class WordCloudCog(commands.Cog):
         Bundled into one worker-thread hop: ``guild_config`` loads from sqlite
         on a cache miss, and this handler has already deferred, so there is no
         reason to make the event loop wait for either read.
+
+        Both dials are read strictly, without the legacy ``guild_id=0``
+        fallback: these keys are new, so a row at 0 could only be the home
+        guild's, and a second guild inheriting someone else's cap and colour
+        scheme is exactly the silent cross-guild bleed that flag exists to
+        stop. The dashboard reads them the same way, so panel and command
+        can't disagree.
         """
         retains = self.bot.ctx.guild_config(guild_id).retains_content
         with self.bot.ctx.open_db() as conn:
-            raw_cap = get_config_value(conn, CAP_KEY, str(DEFAULT_CAP), guild_id)
-            preset = get_config_value(conn, PRESET_KEY, presets.DEFAULT_PRESET, guild_id)
+            raw_cap = get_config_value(
+                conn, CAP_KEY, str(DEFAULT_CAP), guild_id, allow_legacy_fallback=False
+            )
+            preset = get_config_value(
+                conn,
+                PRESET_KEY,
+                presets.DEFAULT_PRESET,
+                guild_id,
+                allow_legacy_fallback=False,
+            )
         try:
             cap = int(raw_cap)
         except (TypeError, ValueError):
@@ -109,16 +143,26 @@ class WordCloudCog(commands.Cog):
         cap: int,
         author_id: int | None,
     ) -> tuple[list[logic.Doc], bool]:
+        """Read the window, plus the "is there any text at all" answer.
+
+        ``cap`` is asked for one *over* the caller's ceiling so ``apply_cap``
+        can tell a window that merely fits from one that was truncated — a
+        query capped at exactly N always looks like it fit.
+
+        ``archive_has_content`` only matters when nothing came back: it exists
+        to tell "quiet week" apart from "this guild keeps no text", and with
+        docs in hand the first is already established.
+        """
         with self.bot.ctx.open_db() as conn:
             docs = corpus.fetch_archive(
                 conn,
                 guild_id=guild_id,
                 channel_ids=channel_ids,
                 since_ts=since_ts,
-                cap=cap,
+                cap=cap + 1,
                 author_id=author_id,
             )
-            has_content = corpus.archive_has_content(conn, guild_id)
+            has_content = bool(docs) or corpus.archive_has_content(conn, guild_id)
         return docs, has_content
 
     def _rank_channels(
@@ -293,6 +337,12 @@ class WordCloudCog(commands.Cog):
         notes: list[str] = []
         now = time.time()
 
+        # The span the cloud actually covers. The live path clamps it, and the
+        # card is labelled with this rather than the ask — a headline reading
+        # "over the last 7 days" above ten minutes of chat is wrong even with
+        # a note underneath explaining it.
+        effective_span = span
+
         if retains:
             since_ts = int(now - span.total_seconds())
             docs, has_content = await asyncio.to_thread(
@@ -303,6 +353,7 @@ class WordCloudCog(commands.Cog):
                 retains = False  # dial says "all" but nothing landed yet
         if not retains:
             live_span, clamped = logic.clamp_live_window(span)
+            effective_span = live_span
             if clamped:
                 notes.append(
                     "This server doesn't keep message text, so this is the last "
@@ -322,8 +373,9 @@ class WordCloudCog(commands.Cog):
             after = discord.Object(
                 id=discord.utils.time_snowflake(discord.utils.utcnow() - live_span)
             )
+            # One over the cap, for the same reason the archive reads one over.
             docs = await self._read_live(
-                guild, channel_ids, after, cap, author_id, since_ts
+                guild, channel_ids, after, cap + 1, author_id, since_ts
             )
             source = "the last few minutes of live chat"
 
@@ -355,7 +407,7 @@ class WordCloudCog(commands.Cog):
             title="Word cloud",
             description=(
                 f"**{len(docs):,}** messages{who} in {scope_label}, "
-                f"over the last {self._span_label(span)} — from {source}."
+                f"over the last {self._span_label(effective_span)} — from {source}."
             ),
             color=await safe_resolve_accent(self.bot, guild),
         )

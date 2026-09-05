@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 
+import discord
 import pytest
 
 from bot_modules.cogs.word_cloud_cog import (
@@ -90,6 +91,65 @@ def test_readable_channels_filters_threads_too():
 
 def test_readable_channels_on_an_empty_guild():
     assert _readable_channel_ids(_guild(), object()) == []
+
+
+class _Thread(discord.Thread):
+    """A real ``discord.Thread`` for the isinstance branch, without a client."""
+
+    def __init__(self, cid: int, perms, *, private: bool, parent_cached: bool = True):
+        self.id = cid
+        self._perms = perms
+        self._private = private
+        self._parent_cached = parent_cached
+
+    def permissions_for(self, _member):
+        if not self._parent_cached:
+            raise discord.ClientException("Parent channel not found")
+        return self._perms
+
+    def is_private(self) -> bool:
+        return self._private
+
+
+def _thread_perms(*, manage_threads: bool):
+    perms = _Perms(True, True)
+    perms.manage_threads = manage_threads
+    return perms
+
+
+def test_readable_channels_excludes_a_private_thread_the_member_isnt_in():
+    """``Thread.permissions_for`` only inherits the parent's overwrites, so a
+    private thread the moderator was never added to still reads as allowed.
+
+    Without the explicit check, `everywhere` would cloud the words of a room
+    the invoker cannot open — the one thing this command promises it can't do.
+    """
+    guild = _guild(threads=[_Thread(9, _thread_perms(manage_threads=False), private=True)])
+    assert _readable_channel_ids(guild, object()) == []
+
+
+def test_readable_channels_keeps_a_private_thread_for_manage_threads():
+    """Manage Threads is Discord's own way into a private thread."""
+    guild = _guild(threads=[_Thread(9, _thread_perms(manage_threads=True), private=True)])
+    assert _readable_channel_ids(guild, object()) == [9]
+
+
+def test_readable_channels_keeps_public_threads_without_manage_threads():
+    guild = _guild(threads=[_Thread(9, _thread_perms(manage_threads=False), private=False)])
+    assert _readable_channel_ids(guild, object()) == [9]
+
+
+def test_readable_channels_skips_a_thread_whose_parent_isnt_cached():
+    """One uncached parent raises ClientException; it must not sink the lot."""
+    guild = _guild(
+        text_channels=[_Channel(1, _Perms(True, True))],
+        threads=[
+            _Thread(
+                9, _thread_perms(manage_threads=True), private=False, parent_cached=False
+            )
+        ],
+    )
+    assert _readable_channel_ids(guild, object()) == [1]
 
 
 # --------------------------------------------------------------------------

@@ -81,9 +81,16 @@ def parse_window(text: str) -> timedelta:
         )
     if amount <= 0:
         raise WindowError("The window has to be more than zero.")
-    window = unit * amount
+    too_far = "That's further back than I keep — two years is the most."
+    try:
+        window = unit * amount
+    except OverflowError as exc:
+        # ``timedelta`` refuses magnitudes past ~999,999,999 days, so a fat
+        # finger on the number ("9999999999999d") blows up *before* the
+        # MAX_WINDOW check can turn it into a message the member can read.
+        raise WindowError(too_far) from exc
     if window > MAX_WINDOW:
-        raise WindowError("That's further back than I keep — two years is the most.")
+        raise WindowError(too_far)
     return window
 
 

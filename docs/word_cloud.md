@@ -22,6 +22,16 @@ the named channel, and used to build the channel list for `everywhere`. There
 is deliberately **no NSFW gate**: the reply never leaves the invoking
 moderator, and an age-gated room is one they can already read.
 
+**Private threads need their own check.** `Thread.permissions_for` only
+inherits the parent channel's overwrites — it knows nothing about who was
+invited — so a private thread the moderator was never added to would otherwise
+come back "readable" and land in an `everywhere` cloud. Discord's own rule is
+invitation *or* Manage Threads, and only the second half is knowable from the
+cache, so `_readable_channel_ids` requires `manage_threads` for any private
+thread. Archived threads are absent from `guild.threads` and so are never
+clouded by `everywhere`; running the command *inside* a thread still clouds
+that thread, since `interaction.channel` is proof of access.
+
 ## Command
 
 `/wordcloud [window] [channel] [member] [everywhere] [preset] [color]`
@@ -89,8 +99,12 @@ Dashboard → Configuration → Channels & Messages → **Word Cloud** (route id
 
 | Key | Default | Notes |
 |---|---|---|
-| `word_cloud_message_cap` | 12000 | Clamped to 100–12000 on save. A cap that bites is reported on the card. |
+| `word_cloud_message_cap` | 12000 | Clamped to 100–12000 on save. A cap that bites is reported on the card — both corpus paths read `cap + 1` rows so "exactly full" can be told from "truncated". |
 | `word_cloud_default_preset` | `midnight` | An unknown key degrades to the default rather than raising. |
+
+Both are read **without** the legacy `guild_id=0` fallback, by the cog and by
+`GET /api/config` alike. They are new keys, so a row at `0` could only ever be
+the home guild's, and a second guild must not inherit it.
 
 ## Rendering
 

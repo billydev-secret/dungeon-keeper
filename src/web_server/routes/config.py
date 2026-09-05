@@ -1349,12 +1349,17 @@ async def get_config(
                     "spoiler_required_channels": _id_str_list(conn, "spoiler_required_channels", guild_id),
                 },
                 "nsfw_classifier": _nsfw_classifier_section(conn, guild_id),
+                # Read strictly: the cog does too, so a guild that never saved
+                # these sees the same defaults on the panel and in Discord
+                # instead of the home guild's rows.
                 "word_cloud": {
                     "message_cap": _int_val(
-                        conn, "word_cloud_message_cap", 12000, guild_id
+                        conn, "word_cloud_message_cap", 12000, guild_id,
+                        allow_legacy_fallback=False,
                     ),
                     "default_preset": _str_val(
-                        conn, "word_cloud_default_preset", "midnight", guild_id
+                        conn, "word_cloud_default_preset", "midnight", guild_id,
+                        allow_legacy_fallback=False,
                     ),
                 },
                 "auto_role": {

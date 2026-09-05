@@ -78,6 +78,20 @@ def test_parse_window_rejects_absurd_window():
         parse_window("5000d")
 
 
+@pytest.mark.parametrize(
+    "text", ["99999999999999999999d", "9" * 40 + "m", "99999999999h"]
+)
+def test_parse_window_rejects_a_number_timedelta_cannot_hold(text):
+    """A fat finger on the number must still come back as a readable message.
+
+    ``timedelta`` raises OverflowError past ~999,999,999 days, which happens
+    *before* the MAX_WINDOW comparison — so without a guard the member gets
+    the tree's generic "Command failed" instead of being told the limit.
+    """
+    with pytest.raises(WindowError, match="two years"):
+        parse_window(text)
+
+
 # --------------------------------------------------------------------------
 # The live-fetch ceiling
 # --------------------------------------------------------------------------
