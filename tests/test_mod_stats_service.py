@@ -436,6 +436,10 @@ def test_presence_stops_at_the_live_edge(db_conn):
 
     assert all(v is not None for v in presence.by_hour[: hour + 1])
     assert all(v is None for v in presence.by_hour[hour + 1 :])
+    # ...and the last of the drawn hours is the one still being lived, so the
+    # chart can mark it rather than let four quiet minutes read as an
+    # unwatched hour.
+    assert presence.partial_index == hour
 
 
 def test_no_mod_role_is_distinguishable_from_nobody_watching(db_conn):
@@ -447,6 +451,8 @@ def test_no_mod_role_is_distinguishable_from_nobody_watching(db_conn):
 
     assert presence.configured is False
     assert presence.by_hour == [None] * 24
+    # Nothing is drawn, so there is no live edge to mark either.
+    assert presence.partial_index is None
 
 
 def test_stats_lines_show_the_peak_beside_the_mod_count():

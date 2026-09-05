@@ -391,6 +391,22 @@ fan-out (two different panels, each colouring an unbounded server-supplied
 list by hand) and pinned by
 `test_chart_conventions.py::test_no_panel_cycles_role_colors_by_hand`.
 
+**A period in progress is drawn to its live edge and marked there.** The bucket
+being lived through is a real count of a fraction of an hour, and drawn like
+every settled point it reads as a crash — at 15:05 a roaring hour and a dead one
+are the same five minutes of data. Do not blank it: that fixes the misreading by
+discarding the one thing the reader opened the chart for. Do not project it
+either — scaling by the fraction elapsed multiplies five quiet minutes by twelve,
+which is a guess wearing the same ink as a measurement. Mark it: the last segment
+**dashed to an open ring**, and the caption says so in words. Two encodings,
+because a dash is a convention a reader has to be taught, while an unfilled point
+at the end of a line reads as "not closed yet" on its own and survives both
+colour-vision deficiency and a phone-width render. `liveEdgeProps` in charts.js
+applies it from `data.partial_from`; matplotlib's side is `_plot_live_edge` in
+`activity_graphs.py`, and the two are deliberately the same picture. A line that
+is *already* dashed (an extra series) takes the ring only — a second dash pattern
+beside the first says nothing decodable.
+
 **Canvas draws the plot; HTML draws everything you'd want to select, resize,
 or have read aloud.** Chart.js's own title and legend are canvas text: they
 cannot use the page's type, cannot be selected, and do not exist for a screen

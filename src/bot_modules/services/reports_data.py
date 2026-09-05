@@ -608,6 +608,13 @@ class ActivityData(TypedDict):
     counts_smooth: Sequence[float | None]
     #: Width of that mean in hours; 1 when the line is drawn raw.
     smooth_window: int
+    #: Overlay views only; ``None`` elsewhere. The first index of `counts` /
+    #: `counts_smooth` that is provisional - the hour being lived through, and
+    #: for the smoothed line the neighbour its centred window already pulled
+    #: toward that hour. The panel marks from there rather than drawing a
+    #: fraction of an hour as though it were a whole one.
+    partial_from: int | None
+    partial_from_smooth: int | None
     member_counts: list[int]
     show_members: bool
     y_label: str
@@ -742,6 +749,9 @@ def get_activity_data(
         "counts": counts,
         "counts_smooth": [],
         "smooth_window": 1,
+        # Timeline views end on a completed bucket, so nothing is provisional.
+        "partial_from": None,
+        "partial_from_smooth": None,
         "member_counts": member_counts,
         "show_members": show_members,
         "y_label": y_label,
@@ -826,6 +836,12 @@ def _get_overlay_data(
         "counts": result_ov.current,
         "counts_smooth": result_ov.current_smooth,
         "smooth_window": result_ov.smooth_window,
+        # First provisional index for each of the two lines above. The panel
+        # picks the one matching whichever it plots: a centred mean makes the
+        # point *before* the live edge provisional too, so the raw index would
+        # leave that sag looking like a settled measurement.
+        "partial_from": result_ov.partial_from,
+        "partial_from_smooth": result_ov.partial_from_smooth,
         "member_counts": [],
         "show_members": False,
         "y_label": "XP Earned" if mode == "xp" else "Messages",

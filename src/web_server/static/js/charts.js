@@ -729,6 +729,51 @@ export function renderChartTable(host, { labels, datasets, indexLabel = "Period"
  * passes the smoothed series here and names it in `currentNote`, while keeping
  * the raw one for the table and the totals.
  */
+/** The live edge's dash. Short enough to read as one line, not a row of ticks. */
+const PROVISIONAL_DASH = [2, 2];
+
+/**
+ * Dataset props that draw a current-period line's live edge as provisional.
+ *
+ * The last bucket of a period in progress holds a real count of a fraction of
+ * an hour, and drawn like every other point it reads as a crash — at 15:05 a
+ * roaring hour and a dead one are the same five minutes of data. So the tail
+ * is marked rather than dropped, which would throw away the one thing the
+ * reader came for: what is happening right now.
+ *
+ * Two encodings. The dash needs explaining; the hollow ring at the end of the
+ * line reads as "not closed yet" on its own, and survives both colour-vision
+ * deficiency and the phone-sized render where a dash pattern is a smudge.
+ *
+ * `partialFrom` is the FIRST provisional index, which for a smoothed line sits
+ * before the live edge — a centred mean has already pulled its neighbour
+ * toward the partial hour. The ring goes on the last drawn point either way.
+ *
+ * An already-dashed line (an extra series) gets the ring only: a second dash
+ * pattern beside the first says nothing a reader can decode.
+ */
+function liveEdgeProps(values, partialFrom, color, { dashed = false } = {}) {
+  if (!Number.isInteger(partialFrom) || partialFrom < 0) return {};
+  const points = Array.isArray(values) ? values : [];
+  let last = -1;
+  for (let i = 0; i < points.length; i += 1) {
+    if (points[i] !== null && points[i] !== undefined) last = i;
+  }
+  if (last < partialFrom) return {};
+  const props = {
+    pointRadius: (ctx) => (ctx.dataIndex === last ? 4 : 0),
+    pointBackgroundColor: CHART_SURFACE,
+    pointBorderColor: color,
+    pointBorderWidth: 2,
+  };
+  if (!dashed) {
+    props.segment = {
+      borderDash: (ctx) => (ctx.p1DataIndex > partialFrom - 1 ? PROVISIONAL_DASH : undefined),
+    };
+  }
+  return props;
+}
+
 export function makeOverlayChart(
   canvas, data,
   { subject, typical, isWeek, currentTotal, typicalToDate, extraSeries = [], currentNote = "" }
@@ -796,6 +841,9 @@ export function makeOverlayChart(
     spanGaps: false,
     legendValue: currentTotal,
     order: 1,
+    // ...and the hour we ARE in is drawn while incomplete, so it is marked
+    // provisional rather than left to read as a collapse.
+    ...liveEdgeProps(data.counts, data.partial_from, OVERLAY_NOW),
   });
   // Extra lines ride the SAME y-axis as everything else. A second scale would
   // make where this line sits relative to the band an artefact of autoscaling
@@ -803,10 +851,11 @@ export function makeOverlayChart(
   // members chart out to avoid. A caller whose extra series is not in the same
   // unit as `data.counts` must draw its own chart, not pass it here.
   extraSeries.forEach((s, i) => {
+    const extraColor = s.color || OVERLAY_EXTRA[i % OVERLAY_EXTRA.length];
     datasets.push({
       label: s.label,
       data: s.data,
-      borderColor: s.color || OVERLAY_EXTRA[i % OVERLAY_EXTRA.length],
+      borderColor: extraColor,
       backgroundColor: "transparent",
       // Dotted, so this line separates from the solid current period and the
       // dashed median without relying on colour.
@@ -818,6 +867,14 @@ export function makeOverlayChart(
       spanGaps: false,
       legendValue: s.total,
       order: 0,
+      // An extra series runs to the same live edge the current line does — it
+      // is the same period, sliced differently — so it wears the ring too.
+      ...liveEdgeProps(
+        s.data,
+        s.partialFrom ?? data.partial_from,
+        extraColor,
+        { dashed: true },
+      ),
     });
   });
 

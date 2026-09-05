@@ -158,6 +158,15 @@ fabricated neighbour would bend the line toward the floor exactly where the
 reader looks hardest — the start of the week and the live edge. Unlived hours
 stay `null` in the smoothed series too, so nothing bridges the gap.
 
+It does, however, average the *partial* hour in — that hour is lived, just not
+finished — so the point before the live edge sags with it. The provisional span
+the chart marks therefore reaches back the half-window
+(`OverlayResult.partial_from_smooth`, `partial_index - window // 2`) rather than
+covering the last point alone: marking only the live edge would leave that sag
+looking like a settled measurement, which is the same misread one hour to the
+left. The raw line has nothing pulled toward it and marks the partial hour
+only.
+
 **The day overlay is left raw** (`OVERLAY_SMOOTH_WINDOW["day"] = 1`). 24 points
 an hour apart are the reading, not noise around it. Mod Coverage's own overlay
 is unchanged for the same reason — it is a day.

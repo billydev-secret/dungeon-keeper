@@ -461,8 +461,6 @@ export function mount(container, initialParams) {
     // to the hours actually lived through.
     const typicalToDate = hasBand ? sum(data.band_mid.slice(0, lived)) : 0;
 
-    captionEl.textContent = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
-
     // A week is 168 hourly points on an axis that can label one tick a day, and
     // a single week is one realisation of it — drawn raw it reads as hash. The
     // server hands down a centred rolling mean of the current line and the
@@ -476,9 +474,23 @@ export function mount(container, initialParams) {
     // the numbers stay raw — the totals beside the legend and every cell of the
     // table are built from `data.counts`, so the exact hour is one click away.
     const smoothWindow = (data.counts_smooth || []).length ? data.smooth_window || 1 : 1;
-    const plotted = smoothWindow > 1 ? data.counts_smooth : data.counts;
+    const smoothed = smoothWindow > 1;
+    const plotted = smoothed ? data.counts_smooth : data.counts;
 
-    chart = makeOverlayChart(canvas, { ...data, counts: plotted }, {
+    // The hour in progress is drawn from the minutes lived so far, so the line
+    // is marked there rather than diving to the floor and reading as a crash.
+    // Which index that starts at depends on the line being plotted: a centred
+    // mean has already pulled the point before the live edge toward it.
+    // Said in words as well as in the mark, because a dash pattern is a
+    // convention and the caption is where a reader learns it.
+    const partialFrom = smoothed ? data.partial_from_smooth : data.partial_from;
+    const partialNote = Number.isInteger(partialFrom)
+      ? " · dashed, open end = the hour in progress"
+      : "";
+    captionEl.textContent =
+      `${data.y_label} — ${data.window_label} (${data.tz_label})${partialNote}`;
+
+    chart = makeOverlayChart(canvas, { ...data, counts: plotted, partial_from: partialFrom }, {
       subject, typical, isWeek, currentTotal, typicalToDate,
       currentNote: smoothWindow > 1 ? `${smoothWindow}-hour average` : "",
     });

@@ -100,6 +100,13 @@ def test_activity_overlay_shape(
     assert data["show_members"] is False
     assert data["smooth_window"] == smooth_window
     assert len(data["counts_smooth"]) == (points if smooth_window > 1 else 0)
+    # Which point the panel must draw as provisional. The smoothed line's
+    # reaches back the half-window a centred mean has already dragged toward
+    # the partial hour; the raw line's is the partial hour itself.
+    assert isinstance(data["partial_from"], int)
+    assert data["partial_from_smooth"] == max(
+        0, data["partial_from"] - smooth_window // 2
+    )
 
 
 def _seed_overlay_history(db_path, guild_id, weeks, period="week"):

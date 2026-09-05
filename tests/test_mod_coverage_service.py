@@ -388,3 +388,18 @@ def test_empty_include_set_applies_no_filter(conn):
     )
 
     assert got.current[h] == 2
+
+
+def test_report_names_the_hour_in_progress(conn):
+    """Both lines of that chart are today, sliced two ways, so one live edge
+    covers them — and without it the panel drew the partial hour like a
+    finished one and today looked like it had collapsed."""
+    mid = _local_midnight()
+    now = mid + 12 * 3600
+    _seed(conn, mid, [(1, 9, MEMBER)])
+
+    data = mcs.compute_mod_coverage(conn, GUILD, mod_ids=[MOD_A], gap_days=10, now=now)
+
+    lived = [i for i, v in enumerate(data["server_current"]) if v is not None]
+    assert data["partial_from"] == lived[-1]
+

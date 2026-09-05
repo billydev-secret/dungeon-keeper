@@ -152,6 +152,24 @@ of the clock. So "usual" sums the band's median over *only the hours today
 has lived*, and the members figure truncates every comparison day at the same
 local hour.
 
+**The hour in progress is drawn, and marked as such.** Hours the day has not
+reached are `None` and go unplotted — but the hour we are *inside* is a real
+count of the minutes lived so far, and drawn like a settled hour it reads as a
+collapse: at 15:05 a roaring hour and a dead one are the same five minutes of
+data. Blanking it would fix the misreading by throwing away the one thing a
+reader opens the panel for, so both lines run to their live edge and the last
+segment is **dashed to an open ring**, with `Dashed, open end = the hour still
+in progress.` under the title. Two encodings, not one: a dash is a convention
+somebody has to be told about, while an unfilled point at the end of a line
+reads as "not closed yet" on its own, and survives the phone-sized render where
+a dash pattern is a smudge.
+
+Both lines wear it. The mod presence line has the same defect for the same
+reason — one moderator who has not spoken in the four minutes so far is drawn
+as nobody watching — and fixing only the traffic line would have left half the
+picture lying. `OverlayResult.partial_index` and `ModPresence.partial_index`
+name the bucket; nothing recomputes it per surface.
+
 *On track for* is the one number that deliberately reaches past now: today's
 actual total plus what the remaining hours usually hold. Anchored on what today
 has done rather than scaled up from it, so a busy morning does not multiply

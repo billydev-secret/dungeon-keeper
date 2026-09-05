@@ -8,6 +8,7 @@ tested for matplotlib PNG magic; pixel content is not validated.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -28,6 +29,7 @@ from bot_modules.services.activity_graphs import (
     _WINDOW_LABELS,
     OVERLAY_SMOOTH_WINDOW,
     OverlayChart,
+    OverlayResult,
     overlay_labels,
     overlay_period_cap,
     overlay_period_start,
@@ -57,6 +59,7 @@ from bot_modules.services.activity_graphs import (
     PresenceSeries,
     StackedBarChart,
     smooth_series,
+    split_provisional,
 )
 from tests.db_template import migrated_db
 
@@ -1385,6 +1388,80 @@ def test_overlay_day_is_drawn_raw(db_conn):
     assert res.current_smooth == []
 
 
+# ── The live edge: the one hour that is drawn while still incomplete ───
+
+
+@pytest.mark.parametrize(
+    "values,partial_from,settled,provisional",
+    [
+        # Nothing provisional: a period that has already ended comes back whole,
+        # which is what the archive views want.
+        ([1.0, 2.0, 3.0], None, [1.0, 2.0, 3.0], [None, None, None]),
+        # The ordinary case. The tail KEEPS the last settled point, so the
+        # dashed segment joins the solid line instead of floating past its end.
+        ([1.0, 2.0, 3.0, None], 2, [1.0, 2.0, None, None], [None, 2.0, 3.0, None]),
+        # The first hour of a new day: there is no settled point to join to, so
+        # the whole line is provisional and it is one open ring.
+        ([5.0, None], 0, [None, None], [5.0, None]),
+        # A day nobody has lived an hour of has nothing to mark either way.
+        ([None, None], 0, [None, None], [None, None]),
+        ([], 0, [], []),
+    ],
+)
+def test_split_provisional(values, partial_from, settled, provisional):
+    assert split_provisional(values, partial_from) == (settled, provisional)
+
+
+def test_split_provisional_leaves_the_input_alone():
+    """Both halves are copies: the raw series is read again for the totals."""
+    raw = [1.0, 2.0, 3.0]
+    split_provisional(raw, 1)
+    assert raw == [1.0, 2.0, 3.0]
+
+
+def test_overlay_names_the_hour_in_progress(db_conn):
+    """The live edge is the last drawn point, not the first undrawn one.
+
+    Regression: it was drawn like every settled hour, so a card rendered five
+    minutes past the hour showed the day falling off a cliff — the defect the
+    reader reported as "activity always crashes for this hour".
+    """
+    _seed_days(db_conn, 0.0, {1: 4, 2: 3})
+    res = query_activity_overlay(
+        db_conn, 10, "day", mode="messages", compare_periods=7, utc_offset_hours=0.0
+    )
+    lived = [i for i, v in enumerate(res.current) if v is not None]
+    assert res.partial_index == lived[-1]
+    # An unsmoothed line has nothing pulled toward the partial hour, so the
+    # provisional span is that hour and nothing else.
+    assert res.partial_from == res.partial_index
+
+
+def test_overlay_week_marks_the_smoothed_line_further_back(db_conn):
+    """A centred mean drags its neighbour toward the partial hour with it.
+
+    Marking only the live edge would leave that sag looking like a settled
+    measurement, which is the same misread one point to the left.
+    """
+    _seed_weeks(db_conn, 0.0, {1: 4, 2: 3})
+    res = query_activity_overlay(
+        db_conn, 10, "week", mode="messages", compare_periods=4, utc_offset_hours=0.0
+    )
+    assert res.smooth_window == 3
+    assert res.partial_from_smooth == max(0, res.partial_index - 1)
+
+
+def test_overlay_partial_span_is_absent_when_the_edge_is_unknown():
+    """Nothing to mark when nothing is in progress — a guard for the archive
+    views that build an OverlayResult without a live period."""
+    empty = OverlayResult(
+        labels=[], current=[], band_low=[], band_mid=[], band_high=[],
+        periods_requested=0, periods_sampled=0, clamped=False,
+    )
+    assert empty.partial_from is None
+    assert empty.partial_from_smooth is None
+
+
 # ── Overlay renderer (the moderator stats panel's image) ──────────────
 
 
@@ -1425,6 +1502,25 @@ def test_render_overlay_panel_survives_a_day_with_no_data_at_all():
 def test_render_overlay_panel_needs_a_chart():
     with pytest.raises(ValueError):
         render_overlay_panel([])
+
+
+def test_render_overlay_panel_marks_the_hour_in_progress():
+    """The mark shares the line's colour and axes, so nothing about the
+    figure's shape would reveal it going missing — pin that it is drawn."""
+    plain = render_overlay_panel([_overlay_chart()])
+    marked = render_overlay_panel(
+        [dataclasses.replace(_overlay_chart(), partial_from=9)]
+    )
+    assert plain != marked
+
+
+def test_render_overlay_panel_ignores_a_live_edge_past_the_data():
+    """A partial index beyond the drawn points marks nothing rather than
+    raising — the clock can roll between the query and the render."""
+    png = render_overlay_panel(
+        [dataclasses.replace(_overlay_chart(), partial_from=23)]
+    )
+    assert png.startswith(PNG_MAGIC)
 
 
 # ── The mod stats panel: all-time XP and its three-row renderer ───────
@@ -1548,6 +1644,36 @@ def test_presence_line_changes_what_is_drawn():
     )
 
     assert without != with_mods
+
+
+def test_mod_stats_panel_marks_the_hour_in_progress():
+    """Both lines run to the same live edge, and both are drawn there."""
+    settled = render_mod_stats_panel(
+        _overlay_stub(), PresenceSeries(values=[2] * 24), [_stack([1.0, 2.0])]
+    )
+    marked = render_mod_stats_panel(
+        dataclasses.replace(_overlay_stub(), partial_from=23),
+        PresenceSeries(values=[2] * 24, partial_from=23),
+        [_stack([1.0, 2.0])],
+    )
+    assert settled != marked
+
+
+def test_mod_stats_panel_marks_the_presence_line_on_its_own():
+    """Regression: the fix landed on the overlay only, and the purple line went
+    on diving to the floor at the same hour — half the reported defect, still
+    on screen."""
+    overlay_only = render_mod_stats_panel(
+        dataclasses.replace(_overlay_stub(), partial_from=23),
+        PresenceSeries(values=[2] * 24),
+        [_stack([1.0, 2.0])],
+    )
+    both = render_mod_stats_panel(
+        dataclasses.replace(_overlay_stub(), partial_from=23),
+        PresenceSeries(values=[2] * 24, partial_from=23),
+        [_stack([1.0, 2.0])],
+    )
+    assert overlay_only != both
 
 
 def test_unconfigured_presence_draws_no_line():

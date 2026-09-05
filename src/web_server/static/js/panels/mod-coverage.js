@@ -138,7 +138,13 @@ function render(container, d) {
   const windowLabel = hasBand
     ? `Today vs Last ${d.periods_sampled} ${esc(d.weekday || "day")}s`
     : `Today (no past ${esc(d.weekday || "day")}s to compare against yet)`;
-  captionEl.textContent = `Messages — ${windowLabel} (${d.tz_label})`;
+  // The hour in progress is a real count of a few minutes, so both lines are
+  // marked there rather than left to read as a crash. Named in words too: the
+  // mark is a convention, and this is where a reader learns it.
+  const partialNote = Number.isInteger(d.partial_from)
+    ? " · open end = the hour in progress"
+    : "";
+  captionEl.textContent = `Messages — ${windowLabel} (${d.tz_label})${partialNote}`;
 
   // The overlay data shape the shared chart builder expects. `counts` is the
   // server line; the moderators ride in as an extra series so this panel adds
@@ -150,6 +156,7 @@ function render(container, d) {
     band_mid: d.band_mid,
     band_high: d.band_high,
     y_label: "Messages",
+    partial_from: d.partial_from,
   };
   const chart = makeOverlayChart(container.querySelector("[data-chart]"), chartData, {
     subject: "Server today",

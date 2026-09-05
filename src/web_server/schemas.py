@@ -279,6 +279,13 @@ class ActivityResponse(BaseModel):
     # behind the table and the period total.
     counts_smooth: list[float | None] = []
     smooth_window: int = 1
+    # Overlay views only: the first index of the line above that is
+    # provisional. The hour in progress holds a real count of a few minutes,
+    # and drawn like a settled hour it reads as a crash; the panel marks from
+    # here instead. The smoothed line's index sits earlier — a centred mean
+    # has already dragged the neighbouring point toward the partial hour.
+    partial_from: int | None = None
+    partial_from_smooth: int | None = None
     member_counts: list[int]
     show_members: bool
     y_label: str

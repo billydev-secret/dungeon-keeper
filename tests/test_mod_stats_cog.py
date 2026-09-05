@@ -13,7 +13,13 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_modules.cogs.mod_stats_cog import CHANNEL_KEY, MESSAGE_KEY, ModStatsCog
+from bot_modules.cogs.mod_stats_cog import (
+    CHANNEL_KEY,
+    MESSAGE_KEY,
+    ModStatsCog,
+    _chart,
+)
+from bot_modules.services.activity_graphs import OverlayResult
 from bot_modules.core.db_utils import open_db, set_config_value
 from tests.db_template import migrated_db
 
@@ -162,3 +168,23 @@ def test_mod_ids_is_empty_when_no_role_is_configured(tmp_path):
     guild.id = GUILD
 
     assert cog._mod_ids(guild) == set()
+
+
+def test_chart_takes_the_live_edge_of_the_line_it_drew():
+    """The panel copies the smoothed line when there is one, so it has to take
+    the smoothed live edge with it. Taking the raw index for a smoothed line
+    would leave the point the centred mean already dragged down looking like a
+    settled measurement — the same misread, one hour to the left."""
+    smoothed = OverlayResult(
+        labels=[], current=[1.0] * 5, current_smooth=[1.0] * 5, smooth_window=3,
+        band_low=[], band_mid=[], band_high=[],
+        periods_requested=4, periods_sampled=4, clamped=False, partial_index=4,
+    )
+    raw = OverlayResult(
+        labels=[], current=[1.0] * 5, band_low=[], band_mid=[], band_high=[],
+        periods_requested=4, periods_sampled=4, clamped=False, partial_index=4,
+    )
+
+    assert _chart("t", smoothed).partial_from == 3
+    assert _chart("t", raw).partial_from == 4
+
