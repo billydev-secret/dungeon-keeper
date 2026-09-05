@@ -6,4 +6,4 @@
 #
 # Regenerate the lock after editing:
 #   uv pip compile requirements-mcp.txt -o requirements-mcp.lock --universal -p 3.14
-mcp>=2.0
+mcp>=2.1.1
