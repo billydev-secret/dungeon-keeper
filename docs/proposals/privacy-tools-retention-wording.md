@@ -25,46 +25,31 @@ question.
 
 ## The text
 
----
+The complete new body is in **`privacy-tools-body.md`** beside this file, ready
+to paste into the Docs panel whole. It is the live doc as it stood on
+2026-09-05 21:19 plus one new `## How long it's kept` section and one clause on
+the message carve-out. Nothing else is altered.
 
-## How long it's kept
+## Two things that changed after this proposal was first written
 
-Most of it, honestly: for as long as the server runs. A few things expire on a
-clock, and those are worth knowing.
+**The doc was retitled and trimmed on 2026-09-05.** It is now
+*"Privacy & Data Retention"* — a heading that promises retention information the
+body did not contain. The hedged "on servers that archive message content"
+wording is also no longer needed: this doc is guild-scoped and its guild is at
+`message_storage_level=all`, so the 12-month rule can be stated plainly.
 
-**Expires on its own:**
+**The 7-day anonymity claim was false and is not reproduced.** See F9 in the
+review. Confessions write to `anon_audit_log`, so the author link lives 90 days,
+not 7. The draft says 90.
 
-- **What you post, as text** — cleared after **12 months** on servers that
-  archive message content. The message itself stays (who, where, when); the
-  words go.
-- **Who you interacted with** — reactions, replies, who followed whom into
-  voice, role pings, joins and leaves: **180 days**.
-- **The link between a confession and you** — **7 days**, then it's gone for
-  good, including from the mod log.
-- **A confession waiting for approval** — deleted the moment a mod approves or
-  rejects it, or after **7 days** if neither happens.
-- **Questions asked in Risky Rolls** — **7 days**.
-- **The anonymous-games audit trail** — **90 days**.
-- **Wellness records, once you opt out** — **30 days**.
-- **An archived bio, once you leave** — **12 months**.
-- **Off-site backups** — **14 days**. This is the one place your data can
-  briefly outlive an erasure.
+## Sequencing
 
-**Kept for as long as the server runs:** your coin balance and every ledger
-entry, moderation records, XP and levels, game and casino history, bios and
-birthdays you chose to add, and the record that you posted a message even after
-its text has gone.
+`update_doc` re-renders every placement live, so saving from the Docs panel
+updates both posted messages by itself — but a direct database write would not,
+and would leave the channels showing the old text. **Save from the panel; do not
+write the row directly.**
 
-If you want to know how long something specific is kept, ask — there's a written
-record of every one, and whoever answers will read it to you rather than guess.
-
----
-
-## One caveat on the 12-month line
-
-`message_storage_level` is **per guild**, and on 2026-09-05 only one of the eight
-guilds was set to `all`. On the other seven there is no message text to clear and
-the line reads as a promise about something that never happens. It is written
-conditionally ("on servers that archive message content") for that reason. If
-this doc is ever posted somewhere guild-specific, say plainly which applies there
-instead.
+The 12-month and 180-day lines describe sweeps that ship in `ab775b0e` and are
+**inert until the next restart**. Everything else in the list is already
+enforced and verified against live data. Restarting before saving keeps the
+document true on the day it is posted.

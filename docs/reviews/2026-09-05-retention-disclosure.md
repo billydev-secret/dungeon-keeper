@@ -247,6 +247,31 @@ Separately: a memory note claimed the Anthropic disclosure was "written but
 unshipped since 08-05" and that `manual.html` "still says nothing". **Stale** —
 §Where your data goes names Anthropic, what is sent, and what is not. Corrected.
 
+## F9 — "Anonymous for 7 days" was a false promise *(fixed)*
+
+Found while drafting the Discord-side wording, by checking a claim rather than
+copying it across.
+
+`manual.html` said: *"the link between a confession and its author self-destructs
+after 7 days, and the anonymous-games audit trail is swept after 90 days"* — two
+facts presented as separate. They are not separate. **Confessions write to
+`anon_audit_log`**: 59 `confession_posted` and 164 `reply_posted` rows live in
+production, every one carrying both `actor_id` and `message_id`. So the
+author↔confession link is reconstructable for **90 days**, not 7.
+
+The 7-day figure is real but belongs to `confession_threads`, the routing record
+that lets the bot notify an author of replies. Losing it does not anonymise
+anything.
+
+This is the worst class of defect this review could produce — a member deciding
+whether to post something sensitive, told the link dies in a week when it lives
+for three months. It was pre-existing in `manual.html`, and I had copied it
+verbatim into the first draft of the Discord-side text before verifying it.
+
+Precise position, from live data: the 90-day log covers **confessions, AMA,
+compliments and WYR**. **Whisper and Guess are not in it at all** and are kept
+until the member clears them. Both surfaces now say exactly that.
+
 ---
 
 ## What shipped
