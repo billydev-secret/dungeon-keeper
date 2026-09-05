@@ -74,7 +74,8 @@ async def fetch_active_games(db: GamesDb) -> list[HotPotatoGame]:
 
 async def fetch_resolved_games(db: GamesDb) -> list[HotPotatoGame]:
     rows = await db.fetchall(
-        "SELECT * FROM hot_potato_games WHERE state IN ('RESOLVED', 'NICKED')"
+        "SELECT * FROM hot_potato_games "
+        "WHERE state IN ('RESOLVED', 'RESOLVED_NO_NICK', 'NICKED', 'NO_NICK_SET')"
     )
     return [game_from_row(r) for r in rows]
 

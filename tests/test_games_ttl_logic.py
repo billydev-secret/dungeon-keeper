@@ -25,6 +25,7 @@ from bot_modules.games_ttl.logic import (
     roster_ids,
     add_submission,
     compute_recap_winners,
+    is_lobby_row,
     mark_played,
     parse_lie_index,
     played_ids_from_payload,
@@ -762,3 +763,21 @@ async def test_recap_resolvers_name_the_embed_and_ping_only_in_content(sync_db_p
     # honest fallback inside the embed; they are still never pinged.
     assert "<@9>" in by_name["🎯 Best Guesser"]
     assert mentions == {"<@1>", "<@2>"}
+
+
+# ── Boot recovery: lobby or guessing underway? ───────────────────────────────
+#
+# Rows created before 'guessing' was written on Start Guessing are still
+# 'joining' mid-game; a scored round is the tell that guessing is underway.
+@pytest.mark.parametrize(
+    ("state", "payload", "expected"),
+    [
+        pytest.param("joining", {"submissions": {}, "scores": {}}, True, id="fresh-lobby"),
+        pytest.param("joining", {"submissions": {"1": {}}, "scores": {}}, True, id="lobby-with-submissions"),
+        pytest.param("joining", {"scores": {"1": {"fooled": 2}}}, False, id="legacy-row-mid-guessing"),
+        pytest.param("joining", {"scores": {}, "played": ["1"]}, False, id="legacy-row-played-list"),
+        pytest.param("guessing", {"scores": {}}, False, id="guessing-state"),
+    ],
+)
+def test_is_lobby_row_treats_a_scored_joining_row_as_guessing(state, payload, expected):
+    assert is_lobby_row(state, payload) is expected

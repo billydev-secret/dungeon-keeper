@@ -12,7 +12,11 @@ from typing import Any
 import discord
 
 from bot_modules.core.utils import disable_all_items
-from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_payload
+from bot_modules.games.utils.game_roster import (
+    ANON_ROSTER_TYPES,
+    NO_ROSTER_TYPES,
+    roster_from_payload,
+)
 
 log = logging.getLogger(__name__)
 
@@ -548,15 +552,21 @@ async def end_game(
     log.info("Game %s ended and removed.", game_id)
 
     coins_paid = 0
+    # An anonymous game's roster is paid but never reaches the session:
+    # /recap names session players, which would out every replier (F2).
+    names_roster = game_type not in ANON_ROSTER_TYPES
     if bot is not None and player_ids:
         coins_paid = await _pay_party_rewards(bot, row, payload, player_ids)
-        await _fire_session_join(bot, db, row, player_ids)
-    elif roster and game_type not in NO_ROSTER_TYPES:
+        await _fire_session_join(bot, db, row, player_ids, merge_roster=names_roster)
+    elif roster and game_type not in NO_ROSTER_TYPES and reason != LOBBY_TIMEOUT_REASON:
         # Not a paying end, but the room still played: give the recap the
-        # roster and keep the session window open past this game.
+        # roster and keep the session window open past this game. The idle
+        # sweep's cancel of a lobby nobody played is the exception — its
+        # join list is not a game night, so it opens no session (G1).
         try:
             await update_session(
-                db, row["channel_id"], game_id, roster, game_type=game_type,
+                db, row["channel_id"], game_id, roster if names_roster else [],
+                game_type=game_type,
             )
         except Exception:
             log.exception("session merge failed for %s", game_id)
@@ -567,19 +577,24 @@ async def end_game(
     )
 
 
-async def _fire_session_join(bot, db, row, player_ids: Sequence[int | str]) -> None:
+async def _fire_session_join(
+    bot, db, row, player_ids: Sequence[int | str], *, merge_roster: bool = True,
+) -> None:
     """Merge the real roster into the channel's game-night session and fire
     the session_join quest for every player, keyed on the session id — the
     per-occurrence claim collision makes later games in the same session
     no-ops, so "attend a game night" pays once per night. Never raises.
 
     Start-time update_session calls only carry the host, so this end-of-game
-    merge is also what gives the recap a complete roster.
+    merge is also what gives the recap a complete roster. ``merge_roster``
+    False (``ANON_ROSTER_TYPES``) still lands the game in the session and
+    fires the quest, but the roster itself stays out of it.
     """
     try:
         ids = [int(p) for p in player_ids]
         session_id = await update_session(
-            db, row["channel_id"], row["game_id"], ids, game_type=row["game_type"],
+            db, row["channel_id"], row["game_id"], ids if merge_roster else [],
+            game_type=row["game_type"],
         )
         channel = bot.get_channel(row["channel_id"])
         guild = getattr(channel, "guild", None)
@@ -713,6 +728,10 @@ async def is_game_expired(db, game_id: str, max_seconds: int = 86400) -> bool:
 
 SESSION_WINDOW = timedelta(minutes=30)
 
+# The ``reason`` the idle-lobby sweep (``game_start_ping_service``) and a
+# lobby's own timeout archive with; an end carrying it opens no session.
+LOBBY_TIMEOUT_REASON = "lobby_timeout"
+
 # game_id -> monotonic time of its last session touch. modify_payload runs on
 # every vote, so the touch is rate-limited per game rather than written each
 # time; end_game pops the entry.
@@ -746,6 +765,8 @@ async def touch_session(
         return None
     _session_touched[game_id] = now
     players, _rounds = roster_from_payload(row["game_type"], payload or {})
+    if row["game_type"] in ANON_ROSTER_TYPES:
+        players = []  # keep the window open; never name the repliers (F2)
     return await update_session(
         db, int(row["channel_id"]), game_id, players, game_type=row["game_type"],
     )

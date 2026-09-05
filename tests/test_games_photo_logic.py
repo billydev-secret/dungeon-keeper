@@ -227,6 +227,15 @@ async def test_backfill_records_a_card_nobody_answered_as_answered(sync_db_path)
     assert await _backfill(sync_db_path, now=CARD_TS + BACKFILL_WINDOW_SECONDS + 99) == 0
 
 
+async def test_backfill_leaves_a_card_older_than_thirty_days_alone(sync_db_path):
+    # The age floor compared strftime('%s') TEXT against an INTEGER, which in
+    # SQLite is always true, so the 30-day floor never held.
+    _seed_card(sync_db_path, started=CARD_TS - 31 * 86400)
+    _seed_image(sync_db_path, author_id=11, ts=CARD_TS - 31 * 86400 + 60)
+    assert await _backfill(sync_db_path, now=CARD_TS) == 0
+    assert _card_row(sync_db_path)["player_count"] == 0
+
+
 # ── Yesterday's recap (photo-external-105) ───────────────────────────────────
 #
 # Members posted into a stream and never heard back. The next card carries a

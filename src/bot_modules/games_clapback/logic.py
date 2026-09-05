@@ -63,6 +63,7 @@ def admit_pending_players(
     players: list[Any],
     pending: list[Any] | None,
     max_players: int,
+    left: list[Any] | None = None,
 ) -> tuple[list[Any], list[Any], list[Any]]:
     """Fold latecomers into the roster at a round boundary.
 
@@ -77,6 +78,11 @@ def admit_pending_players(
     turned away rather than quietly ignored so the caller can say so. They
     start on zero points, which is a real disadvantage — that is the honest
     consequence of joining late, not a bug.
+
+    ``left`` is the payload's withdrawn list (:func:`withdraw_player`), pruned
+    **in place** of anyone admitted: a leaver who rejoins is playing again,
+    and left on it they would render struck through below the board and be
+    skipped for the win while they play.
     """
     roster = list(players)
     admitted: list[Any] = []
@@ -91,6 +97,8 @@ def admit_pending_players(
         seen.add(str(uid))
         roster.append(uid)
         admitted.append(uid)
+    if left is not None:
+        left[:] = [x for x in left if not any(str(x) == str(a) for a in admitted)]
     return roster, admitted, turned_away
 
 
@@ -164,11 +172,17 @@ def admit_player_now(
             verdict = "joined-unbenched"
         else:
             queued = payload.setdefault("pending_players", [])
-            if not any(str(q) == str(uid) for q in queued):
-                queued.append(uid)
+            if any(str(q) == str(uid) for q in queued):
+                return "already-queued"
+            queued.append(uid)
             return "queued-parity"
 
     players.append(uid)
+    # A leaver who rejoins is playing again: off the withdrawn list, or the
+    # board keeps striking them through and skipping them for the win.
+    left = payload.get("left")
+    if left:
+        left[:] = [x for x in left if str(x) != str(uid)]
     payload.setdefault("scores", {}).setdefault(str(uid), 0)
     payload.setdefault("scores_checkpoint", {}).setdefault(str(uid), 0)
     payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
@@ -250,6 +264,12 @@ def all_eligible_voted(
         return False
     contestants = {str(p) for p in pair}
     expected = roster - contestants - {str(b) for b in byes}
+    if not expected:
+        # Nobody to wait for (a 3-player game whose third player withdrew,
+        # or a no-contact bye benched them): an empty electorate is not a
+        # finished one, so the full timer runs rather than closing on zero
+        # votes after the grace.
+        return False
     return expected <= voters
 
 
@@ -308,7 +328,18 @@ def withdraw_player(payload: dict, uid: Any) -> bool:
     (clapback-17, option a). The score itself is kept, marked in ``left``,
     so the board can still show it as withdrawn rather than pretend they were
     never there.
+
+    A latecomer still in ``pending_players`` (waiting for the round boundary)
+    is simply pulled from the queue — they have no score, so nothing goes on
+    ``left`` — rather than told they are not in the game and seated next
+    round anyway.
     """
+    queued = payload.get("pending_players") or []
+    waiting = [q for q in queued if str(q) == str(uid)]
+    if waiting:
+        for q in waiting:
+            queued.remove(q)
+        return True
     players = payload.setdefault("players", [])
     match = [p for p in players if str(p) == str(uid)]
     if not match:

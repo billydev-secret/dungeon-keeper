@@ -43,6 +43,7 @@ from bot_modules.cogs.casino.views import (
     BaccaratBetButton,
     CoinflipSideView,
     StepView,
+    consume_step,
     BaccaratBetModal,
     BaccaratNextView,
     BetModal,
@@ -1029,6 +1030,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await interaction.response.edit_message(
                 content=content, embed=None, view=view
             )
+            consume_step(interaction)  # the step this one replaced, if any
         else:
             await interaction.response.send_message(
                 content=content, view=view, ephemeral=True,
@@ -1064,6 +1066,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         async def _cancel(interaction: discord.Interaction) -> None:
             _release()
             await interaction.response.defer()
+            consume_step(interaction)
             await self._repaint_window(ui, guild, round_id)
 
         async def _expiry() -> None:
@@ -1086,6 +1089,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await interaction.response.edit_message(
                 content=content, embed=None, view=view
             )
+            consume_step(interaction)  # the ladder Back was pressed on
             if isinstance(view, StepView):
                 view.bind(interaction)  # the re-rendered step expires too
 
@@ -1292,6 +1296,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
             await interaction.response.edit_message(
                 content=None, embed=embed, view=view
             )
+            consume_step(interaction)  # the step the machine replaced
         elif view is not None:
             await interaction.response.send_message(
                 embed=embed, view=view, ephemeral=True,
@@ -2516,6 +2521,7 @@ class CasinoCog(PoolsMixin, commands.Cog, name="CasinoCog"):
         bettor, so debouncing only ever made their own board lag behind
         their own click.
         """
+        consume_step(interaction)  # the board comes back over the step either way
         if err is not None:
             await safe_ephemeral(interaction, f"❌ {err}")
             # The refusal arrived from the amount step, which is standing

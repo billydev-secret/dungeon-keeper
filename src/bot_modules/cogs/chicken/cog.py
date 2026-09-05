@@ -255,15 +255,14 @@ class ChickenCog(BaseGame, name="ChickenCog"):
         # The meter is drawn over max_climb; the crash lands somewhere in
         # [min_climb, max_climb] and is never shown, so the bar can blow at
         # 60% and nobody can count it out (duels-party-113). Seeded and logged
-        # for the same reason as the tie-break.
+        # for the same reason as the tie-break — the seed alone, since INFO
+        # reaches the dashboard's live log stream and an admin at the table
+        # could read the crash point off it; the post-crash line says where.
         min_climb = float(cfg["min_climb"])
         max_climb = max(min_climb, float(cfg["max_climb"]))
         seed = random.getrandbits(32)
         crash_at = roll_crash_at(min_climb, max_climb, random.Random(seed))
-        log.info(
-            "chicken game %s climb: max=%.1fs crash_at=%.1fs seed=%s",
-            game.id, max_climb, crash_at, seed,
-        )
+        log.info("chicken game %s climb: max=%.1fs seed=%s", game.id, max_climb, seed)
         now = time.time()
         await self._db_set_state(
             game.id, "ACTIVE",

@@ -148,6 +148,21 @@ def fallback_blocked(
     )
 
 
+def posted_chase_blocked(
+    posted: PostedQuestionState, blocked_pairs: set[tuple[int, int]]
+) -> bool:
+    """Whether the answerer re-ping for a posted question must be skipped.
+
+    Same reasoning as `fallback_blocked`: the pairing was gated on the draw,
+    but the list can change in the hours before the chase fires, and the
+    chase pings the answerer(s) with the asker's question attached. It is
+    one message to everyone who may reply, so **any** answerer on the list
+    with the asker skips the whole chase — a deck question included, since
+    the reply still goes to the asker. *blocked_pairs* is keyed low-first.
+    """
+    return fallback_blocked(posted.asker_id, posted.allowed_replier_ids, blocked_pairs)
+
+
 def build_history_payload(state: RiskyRollState) -> dict:
     """The ``games_game_history`` payload for a resolved round.
 

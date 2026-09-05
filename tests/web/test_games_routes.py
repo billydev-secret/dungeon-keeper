@@ -790,6 +790,20 @@ def test_pool_import_skips_texts_already_in_target(open_client, fake_ctx):
     assert resp.json() == {"imported": 1, "skipped": 1}
 
 
+def test_pool_import_dedups_a_prose_wyr_row_against_its_stored_shape(open_client, fake_ctx):
+    # The target bank stores WYR as "A | B" but the skip check compared the raw
+    # pool text, so a prose pool row was imported again on every press.
+    p1 = _seed_question(fake_ctx.db_path, "global", text="Would you rather fly, or be invisible?")
+    body = {"game_type": "wyr", "question_ids": [p1]}
+    assert open_client.post(f"{BASE}/bank/pool/import", json=body).json() == {"imported": 1, "skipped": 0}
+    assert open_client.post(f"{BASE}/bank/pool/import", json=body).json() == {"imported": 0, "skipped": 1}
+    with open_db(fake_ctx.db_path) as conn:
+        rows = conn.execute(
+            "SELECT question_text FROM games_question_bank WHERE game_type = 'wyr'",
+        ).fetchall()
+    assert [r["question_text"] for r in rows] == ["fly | be invisible"]
+
+
 def test_pool_import_ignores_non_pool_and_unknown_ids(open_client, fake_ctx):
     wyr_q = _seed_question(fake_ctx.db_path, "wyr", text="Not pooled?")
     resp = open_client.post(

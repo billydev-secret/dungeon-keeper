@@ -345,7 +345,10 @@ class FFAEmbedReplyModal(discord.ui.Modal, title="Anonymous Reply"):
         # Bump THIS message's running count and refresh its own footer. Each
         # posted prompt tracks replies independently, so a reply to an earlier
         # prompt never disturbs a later one's count. The replier id goes in
-        # too — the roster the close pays; it is never rendered.
+        # too — the roster the close pays. It is recorded for payout only:
+        # ``ffa`` is in ``game_roster.ANON_ROSTER_TYPES``, so neither this
+        # write's session touch nor the close merges it into the game-night
+        # session, and /recap never names a replier.
         replier_id = interaction.user.id
 
         def _bump(payload):

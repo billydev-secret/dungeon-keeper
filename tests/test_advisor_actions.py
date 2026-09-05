@@ -650,3 +650,30 @@ def test_apply_rechecks_admin_only_against_the_clicker(tmp_path):
     assert conn.execute(
         "SELECT value FROM config WHERE key = 'jailed_role_id'"
     ).fetchone()[0] == str(ROLE_ID)
+
+
+@pytest.mark.parametrize(
+    ("prop", "slug"),
+    [
+        pytest.param(
+            aa.ConfigProposal("whisper_channel_id", str(CH_ID), "x"),
+            "whisper",
+            id="config-key-names-its-feature",
+        ),
+        pytest.param(
+            aa.ConfigProposal(
+                "role_id", str(ROLE_ID), "x", target="grant_role", grant_name="nsfw"
+            ),
+            None,
+            id="grant-role-has-no-feature-cog",
+        ),
+    ],
+)
+def test_apply_names_the_feature_it_changed(tmp_path, prop, slug):
+    """The cog dispatches ``<slug>_config_change`` after a click, the way a
+    dashboard save does — a feature that caches its config at boot (the
+    whisper launcher's known-guild set) would otherwise not learn of an
+    advisor-applied channel until a restart. A grant-role write has no
+    listening cog, so it names nothing."""
+    path = _grant_db_file(tmp_path)
+    assert aa.apply_config_change(path, _guild(), prop, is_admin=True) == slug

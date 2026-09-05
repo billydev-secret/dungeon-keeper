@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import pytest
 
-from bot_modules.games.utils.game_roster import NO_ROSTER_TYPES, roster_from_payload
+from bot_modules.games.utils.game_roster import (
+    ANON_ROSTER_TYPES,
+    NO_ROSTER_TYPES,
+    roster_from_payload,
+)
 from bot_modules.games_fantasies.logic import build_result_entry
 
 
@@ -24,8 +28,19 @@ from bot_modules.games_fantasies.logic import build_result_entry
         # compliment / mfk — the join pool.
         ("compliment", {"participants": [7, 8]}, ([7, 8], 0)),
         ("mfk", {"participants": [1, 2, 3, 4]}, ([1, 2, 3, 4], 0)),
-        # story — the writer list.
+        # story — the writer list...
         ("story", {"players": [5, 6]}, ([5, 6], 0)),
+        # ...minus a Leave-presser who never wrote (``left`` is persisted by
+        # the turn loop), mirroring the reveal's ``roster_for_payout`` (S3)...
+        ("story", {
+            "players": [5, 6, 7], "left": ["7"],
+            "sentences": [{"author_id": None, "text": "Once"}],
+        }, ([5, 6], 0)),
+        # ...while a leaver who did write a line is still paid.
+        ("story", {
+            "players": [5, 6, 7], "left": [7],
+            "sentences": [{"author_id": 7, "text": "upon"}],
+        }, ([5, 6, 7], 0)),
         # legitlibs — players, one scored round.
         ("legitlibs", {"players": [9, 10]}, ([9, 10], 1)),
         # rushmore — the draft roster the view seeds from the payload.
@@ -66,6 +81,8 @@ from bot_modules.games_fantasies.logic import build_result_entry
         ("risky_roll", {"players": [10, 11], "rolls": {"10": 40, "11": 90}}, ([10, 11], 1)),
         ("chicken", {"players": [1, 2, 3], "winner_id": 3}, ([1, 2, 3], 1)),
         ("quickdraw", {"players": ["1", "2"], "winner_id": 2}, ([1, 2], 1)),
+        # mahjong — a settled hand self-recorded with its human seats (M3).
+        ("mahjong", {"players": [21, 22, 23], "winner_id": 22, "hand_no": 3}, ([21, 22, 23], 1)),
         # Prompt-style types have no joined roster and must stay unpaid.
         ("ffa", {"prompt": "x", "seen": ["x"]}, ([], 0)),
         ("photo", {"submissions": {"1": "url"}}, ([], 0)),
@@ -77,6 +94,15 @@ from bot_modules.games_fantasies.logic import build_result_entry
 )
 def test_roster_from_payload(game_type, payload, expected):
     assert roster_from_payload(game_type, payload) == expected
+
+
+def test_anonymous_types_are_paid_but_never_named():
+    """ffa's repliers are a roster for the faucet and nothing else: the type is
+    in ANON_ROSTER_TYPES (the session merge skips it) and not in
+    NO_ROSTER_TYPES (the sweep still pays it)."""
+    assert ANON_ROSTER_TYPES == {"ffa"}
+    assert not (ANON_ROSTER_TYPES & NO_ROSTER_TYPES)
+    assert roster_from_payload("ffa", {"prompts": [{"repliers": [4, 9]}]}) == ([4, 9], 1)
 
 
 @pytest.mark.parametrize("game_type", sorted(NO_ROSTER_TYPES))

@@ -25,6 +25,7 @@ from bot_modules.services.whisper_models import (
     WhisperState,
 )
 from bot_modules.services.whisper_repo import (
+    backfill_whisper_launcher_channel,
     count_replies,
     delete_reply,
     delete_whisper,
@@ -212,6 +213,12 @@ def _do_set_launcher_ids(
 def _do_launcher_guilds(db_path: Path) -> set[int]:
     with open_db(db_path) as conn:
         return whisper_launcher_guilds(conn)
+
+
+def _do_backfill_launcher_channels(db_path: Path, guild_ids: set[int]) -> None:
+    with open_db(db_path) as conn:
+        for guild_id in guild_ids:
+            backfill_whisper_launcher_channel(conn, guild_id)
 
 
 def _do_insert_reply(
@@ -2239,8 +2246,9 @@ class WhisperCog(commands.Cog):
         Reads the launcher's own channel rather than ``channel_id`` so the
         placer's delete aims at the message's real channel after an admin
         repoints the feed. A launcher posted before ``launcher_channel_id``
-        existed has a message id and no channel id — those fall back to the
-        feed channel, which is where they were posted.
+        existed has a message id and no channel id — ``cog_load`` pins those
+        to the feed channel (where they were posted) before any repoint can
+        happen; the fallback here covers the same case read before boot ran.
         """
         cfg = _load_config(self.bot.ctx.db_path, guild_id)
         if not cfg.launcher_message_id:
@@ -2279,6 +2287,14 @@ class WhisperCog(commands.Cog):
         # bottom of the feed. only_if_buried: a launcher that is already the
         # last message stays put across a restart instead of being churned.
         configured = await asyncio.to_thread(_do_launcher_guilds, self.bot.ctx.db_path)
+        # A launcher posted before ``whisper_launcher_channel_id`` existed has
+        # a message id and no channel; the bootstrap below only writes the
+        # channel when it reposts, and a launcher already at the bottom never
+        # reposts. Pin it now, while the feed channel is still where it lives,
+        # so a later repoint deletes it there rather than in the new channel.
+        await asyncio.to_thread(
+            _do_backfill_launcher_channels, self.bot.ctx.db_path, configured
+        )
         self.launcher.set_known_guilds(configured)
         sem = asyncio.Semaphore(5)
 

@@ -266,3 +266,70 @@ def test_204_backfills_live_rows_from_the_channel_allowlist(sync_db_path):
         _run_204_backfill(conn)
         got = dict(conn.execute("SELECT game_id, guild_id FROM games_active_games").fetchall())
     assert got == {"known": 500, "legacy": 0, "unlisted": 0, "kept": 600}
+
+
+# ── migration 211: confession aliases get a clock, backfilled from their thread ──
+
+
+def _run_211_backfill(conn):
+    """The migration's own UPDATE, taken from the file so the test cannot
+    drift from what prod runs."""
+    from pathlib import Path
+
+    sql = Path("src/migrations/211_confession_alias_created_at.sql").read_text(
+        encoding="utf-8"
+    )
+    code = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    statements = [
+        s for s in code.split(";") if "UPDATE confession_emoji_assignments" in s
+    ]
+    assert len(statements) == 1
+    conn.execute(statements[0])
+
+
+def test_211_backfills_unstamped_aliases_from_their_thread(sync_db_path):
+    """Every pre-211 alias row is at 0. One on a thread still inside its week
+    must keep serving — the member gets the same name on their next reply —
+    so it takes the thread's own clock; one with no thread row (an FFA
+    prompt, or a thread the sweep already took) is stamped now and gets a
+    full week; one on an already-stale thread ages out with it."""
+    import time
+
+    from bot_modules.services.confessions_service import purge_old_thread_posts
+
+    now = int(time.time())
+    fresh, stale = now - 86400, now - 10 * 86400
+    with open_db(sync_db_path) as conn:
+        conn.executemany(
+            "INSERT INTO confession_threads (guild_id, message_id, channel_id,"
+            " root_message_id, original_author_id, created_at) VALUES (?, ?, 1, ?, 9, ?)",
+            [(500, 100, 100, fresh), (500, 200, 200, stale)],
+        )
+        conn.executemany(
+            "INSERT INTO confession_emoji_assignments"
+            " (guild_id, root_message_id, user_id, emoji_index, name_index, created_at)"
+            " VALUES (?, ?, 7, 0, 0, ?)",
+            [(500, 100, 0), (500, 200, 0), (500, 300, 0), (500, 400, fresh + 5)],
+        )
+        _run_211_backfill(conn)
+        got = dict(
+            conn.execute(
+                "SELECT root_message_id, created_at FROM confession_emoji_assignments"
+            ).fetchall()
+        )
+    assert got[100] == fresh
+    assert got[200] == stale
+    assert now <= got[300] <= now + 5  # no thread row: a week from the migration
+    assert got[400] == fresh + 5  # already stamped: untouched
+
+    purge_old_thread_posts(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        left = {
+            r[0]
+            for r in conn.execute(
+                "SELECT root_message_id FROM confession_emoji_assignments"
+            )
+        }
+    assert left == {100, 300, 400}

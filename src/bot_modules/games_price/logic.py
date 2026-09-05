@@ -107,11 +107,14 @@ def lobby_players(payload: dict[str, Any]) -> list[int]:
     return out
 
 
-def expected_submitters(payload: dict[str, Any]) -> int | None:
-    """How many prices a round waits for before closing early — the lobby
-    roster, or None (run the full timer) for a game with no roster."""
-    roster = lobby_players(payload)
-    return len(roster) or None
+def roster_all_in(expected_ids: set[int], submitted_ids: set[int]) -> bool:
+    """May the round close early? Only once every *joined* player has named
+    a price. Submission is open to the whole channel, so the rule is on ids,
+    never a headcount — a spectator's price used to fill a joined player's
+    seat and close a three-seat round with the third player locked out. An
+    empty roster runs the full timer."""
+    return bool(expected_ids) and expected_ids <= submitted_ids
+
 
 # Suffix multipliers recognized by :func:`parse_price`. Order matters
 # only when one suffix is a prefix of another (none currently are), but

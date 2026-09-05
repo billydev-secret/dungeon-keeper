@@ -1233,7 +1233,9 @@ class BaseGame(commands.Cog):
             await self._refuse(interaction, "This only works in a server.")
             return
         presser = interaction.user.id
-        ante = await self._game_ante(game_id)
+        # The old game is settled, so its wager rows are no longer live —
+        # read the ante they carried, not the (empty) live pot.
+        ante = await self._game_ante(game_id, live_only=False)
         wager = ante if ante > 0 else None
         nick_stake = game_is_nick_stake(game)
         custom = custom_stakes_from(getattr(game, "stakes_text", None))
@@ -1264,7 +1266,18 @@ class BaseGame(commands.Cog):
         )
         if new_id is None:
             return  # refused before a lobby was posted
-        others = [int(u) for u in roster if int(u) != presser and guild.get_member(int(u))]
+        # The ping is the presser reaching out to each name on it, so anyone
+        # kept apart from the host simply isn't on it — the join gate would
+        # turn them away anyway, and the shorter list is nothing anyone can
+        # tell from an ordinary "they've left the server" omission.
+        kept_apart = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
+            self._no_contact_db_path(), guild.id, presser,
+        )
+        others = [
+            int(u) for u in roster
+            if int(u) != presser and int(u) not in kept_apart and guild.get_member(int(u))
+        ]
         if others:
             mentions = " ".join(f"<@{u}>" for u in others)
             try:
@@ -2153,15 +2166,19 @@ class BaseGame(commands.Cog):
 
         await asyncio.to_thread(_work)
 
-    async def _game_ante(self, game_id: int) -> int:
-        """This game's per-player ante (0 = not a wagered game)."""
+    async def _game_ante(self, game_id: int, *, live_only: bool = True) -> int:
+        """This game's per-player ante (0 = not a wagered game). A finished
+        game's rows are settled or refunded, so a reader of the ante it
+        *carried* (Run It Back) passes ``live_only=False``."""
         ctx = getattr(self.bot, "ctx", None)
         if ctx is None:
             return 0
 
         def _read() -> int:
             with ctx.open_db() as conn:
-                return wager_svc.game_ante(conn, self.GAME_KEY, game_id)
+                return wager_svc.game_ante(
+                    conn, self.GAME_KEY, game_id, live_only=live_only
+                )
 
         return await asyncio.to_thread(_read)
 

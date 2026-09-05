@@ -112,7 +112,8 @@ async def fetch_active_games(db: GamesDb) -> list[PressureGame]:
 
 async def fetch_resolved_games(db: GamesDb) -> list[PressureGame]:
     rows = await db.fetchall(
-        "SELECT * FROM pressure_games WHERE state IN ('RESOLVED', 'NICKED')"
+        "SELECT * FROM pressure_games "
+        "WHERE state IN ('RESOLVED', 'RESOLVED_NO_NICK', 'NICKED', 'NO_NICK_SET')"
     )
     return [game_from_row(r) for r in rows]
 

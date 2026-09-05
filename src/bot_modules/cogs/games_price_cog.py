@@ -79,11 +79,11 @@ from bot_modules.games_price.logic import (
     collect_all_players,
     compute_highlight,
     compute_recap_awards,
-    expected_submitters,
     format_price,
     lobby_players,
     parse_price,
     resolve_source,
+    roster_all_in,
     tally_winners,
     toggle_player,
     vote_possible,
@@ -171,6 +171,12 @@ class HostScenarioModal(discord.ui.Modal, title="Write a Scenario"):
         """Resolve with no text — the caller draws from the bank instead."""
         self._result = None
         self._event.set()
+
+    @property
+    def resolved(self) -> bool:
+        """Has a scenario been submitted (or the bank chosen)? Discord never
+        reports a dismissed modal, so *opening* must not count."""
+        return self._event.is_set()
 
     async def wait_for_result(self, timeout: float = SCENARIO_WAIT_SECONDS) -> str | None:
         try:
@@ -283,7 +289,9 @@ class ScenarioPromptView(discord.ui.View):
     Sits on the game message instead of a public ``<@host>`` ping. For the
     ``host`` source only the host or a mod may write (or hand the round to
     the bank); for ``players`` anyone may write and the first submission
-    wins. A second press after a submission is told so.
+    wins. A second press after a submission is told so — after a *dismissed*
+    modal the button simply opens it again, since Discord never reports the
+    dismissal and the host used to be locked out for the whole wait.
     """
 
     def __init__(self, modal: HostScenarioModal, host_id: int, *, open_to_all: bool):
@@ -291,7 +299,6 @@ class ScenarioPromptView(discord.ui.View):
         self._modal = modal
         self.host_id = host_id
         self.open_to_all = open_to_all
-        self._taken = False
 
     def _may_write(self, interaction: discord.Interaction) -> bool:
         return self.open_to_all or is_host_or_mod(interaction, self.host_id)
@@ -302,10 +309,9 @@ class ScenarioPromptView(discord.ui.View):
         if not self._may_write(interaction):
             await interaction.response.send_message("❌ Only the host or a mod can write the scenario.", ephemeral=True)
             return
-        if self._taken:
+        if self._modal.resolved:
             await interaction.response.send_message("Someone already submitted a scenario!", ephemeral=True)
             return
-        self._taken = True
         await interaction.response.send_modal(self._modal)
 
     @discord.ui.button(label="🎲 Draw From the Bank", style=discord.ButtonStyle.secondary, custom_id="price_draw_bank", row=0)
@@ -447,7 +453,7 @@ class PriceGameView(discord.ui.View):
         db,
         bot,
         cog: "PriceCog",
-        expected_players: int | None = None,
+        expected_ids: set[int] | None = None,
         accent: discord.Color | None = None,
         settings: dict | None = None,
     ):
@@ -462,9 +468,10 @@ class PriceGameView(discord.ui.View):
         self.db = db
         self.bot = bot
         self.cog = cog
-        # The lobby roster: the round closes as soon as this many prices are
-        # in. None (no roster) runs the full timer.
-        self.expected_players = expected_players
+        # The lobby roster: the round closes as soon as every one of these
+        # ids has priced. Anyone in the channel may submit, so this is a set
+        # of ids, never a headcount. Empty (no roster) runs the full timer.
+        self.expected_ids: set[int] = set(expected_ids or ())
         # Guild accent resolved once at view creation and reused on every
         # refresh — never re-resolve per modal submit / per embed refresh.
         self.accent = accent
@@ -475,8 +482,9 @@ class PriceGameView(discord.ui.View):
         self._closed = False
 
     def everyone_in(self) -> bool:
-        """Has everyone who joined named a price?"""
-        return bool(self.expected_players) and len(self.prices) >= (self.expected_players or 0)
+        """Has everyone who joined named a price? (A spectator's price counts
+        in the reveal but fills nobody's seat.)"""
+        return roster_all_in(self.expected_ids, set(self.prices))
 
     def _build_embed(self) -> discord.Embed:
         return build_scenario_embed(
@@ -486,8 +494,11 @@ class PriceGameView(discord.ui.View):
             self.total_rounds,
             self._timer.remaining if self._timer else self.timer_secs,
             len(self.prices),
-            self.expected_players,
+            len(self.expected_ids) or None,
             color=self.accent,
+            roster_submitted=(
+                len(self.expected_ids & set(self.prices)) if self.expected_ids else None
+            ),
         )
 
     async def refresh_embed(self):
@@ -1048,8 +1059,8 @@ class PriceCog(commands.Cog):
             db=self.db,
             bot=self.bot,
             cog=self,
-            # The lobby roster: the round closes once everyone has answered.
-            expected_players=expected_submitters(payload),
+            # The lobby roster: the round closes once everyone on it has answered.
+            expected_ids=set(lobby_players(payload)),
             accent=accent,
             settings=settings,
         )

@@ -47,7 +47,8 @@ export function mount(container) {
           </div>
         </div>
         <div class="field-hint" style="margin:2px 0 8px;">Unique Players counts members who took part
-          (voted, joined, answered). A photo card counts everyone who posted a photo in the day after it.</div>
+          (voted, joined, answered). Photo Challenge posters are counted on each card's own history row,
+          not here — a card records no member ids.</div>
         <div class="card-grid" data-region="stats">
           ${renderLoading("Loading stats…")}
         </div>

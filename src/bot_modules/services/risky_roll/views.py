@@ -31,6 +31,7 @@ from .logic import (
     effective_min_game_seconds,
     fallback_blocked,
     has_blocked_edge,
+    posted_chase_blocked,
     pending_payoff_action,
     posted_chase_due,
     unasked_questioners,
@@ -494,17 +495,34 @@ async def _chase_pending(
 
 
 async def _chase_posted(client: discord.Client, posted: PostedQuestionState, now: float) -> bool:
+    """The one re-ping of the answerer(s) of a posted question.
+
+    Only the answerers ring: the asker's ``<@id>`` is in the content so it
+    renders as a name, not so they get pinged about their own question. A
+    pairing the no-contact list now forbids is skipped the same silent way
+    as the fallback — the row is still stamped as chased so the next tick
+    does not pick it again, which is indistinguishable from the dial being
+    off.
+    """
     channel = await get_text_channel(client, posted.channel_id)
     if channel is None:
         return False
-    await channel.send(
-        content=build_posted_chase_content(posted),
-        allowed_mentions=discord.AllowedMentions(users=True),
+    blocked_pairs = await _blocked_pairs_in_ids(
+        posted.guild_id, posted.allowed_replier_ids | {posted.asker_id}
     )
+    sent = False
+    if not posted_chase_blocked(posted, blocked_pairs):
+        await channel.send(
+            content=build_posted_chase_content(posted),
+            allowed_mentions=discord.AllowedMentions(
+                users=[discord.Object(id=uid) for uid in sorted(posted.allowed_replier_ids)]
+            ),
+        )
+        sent = True
     posted.chased_at = now
     if app_state.store is not None:
         await app_state.store.save_posted_question(posted)
-    return True
+    return sent
 
 
 async def draw_fallback_question(games_db, allow_nsfw: bool) -> str | None:

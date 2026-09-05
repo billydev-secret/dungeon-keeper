@@ -78,7 +78,7 @@ async def backfill_card_counts(
         "AND (player_count IS NULL OR player_count = 0) "
         "AND json_extract(COALESCE(payload, '{}'), '$.counted') IS NULL "
         "AND strftime('%s', started_at) + ? <= ? "
-        "AND strftime('%s', started_at) >= ? "
+        "AND CAST(strftime('%s', started_at) AS INTEGER) >= ? "
         "ORDER BY history_id DESC LIMIT ?",
         (
             int(channel_id),

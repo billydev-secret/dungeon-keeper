@@ -159,15 +159,27 @@ async def test_a_zero_cooldown_lets_the_pair_play_again_at_once(db, sync_db_path
 # ── Run It Back on a duel ─────────────────────────────────────────────────────
 
 
-async def _settled_duel(db, sync_db_path, *, ante: int = 0, age: float = 30.0) -> int:
+async def _settled_duel(cog, db, sync_db_path, *, ante: int = 0, age: float = 30.0) -> int:
+    """A finished wager duel, settled the way the bot settles one: through
+    ``_db_set_state`` so ``_on_terminal_state`` pays the pot and flips the
+    wager rows to ``settled`` — the state a real result card sits on."""
     gid = await hpdb.create_game(db, GUILD, CH, 1, 2, None if ante == 0 else "coins", nick_stake=False)
     if ante:
         for uid in (1, 2):
             _stake(sync_db_path, "hot_potato", gid, uid, ante)
-    await hpdb.set_game_state(
-        db, gid, "RESOLVED_NO_NICK", winner_id=1, loser_id=2,
+    await cog._db_set_state(
+        gid, "RESOLVED_NO_NICK", winner_id=1, loser_id=2,
         resolved_at=time.time() - age, result_message_id=700,
     )
+    if ante:
+        with open_db(sync_db_path) as conn:
+            states = {
+                r["state"] for r in conn.execute(
+                    "SELECT state FROM econ_game_wagers WHERE game_type = ? AND game_id = ?",
+                    ("hot_potato", gid),
+                )
+            }
+        assert states == {"settled"}
     return gid
 
 
@@ -175,7 +187,7 @@ async def test_run_it_back_reposts_the_challenge_with_the_same_wager(db, sync_db
     _seed_economy(sync_db_path, 1, 2)
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50)
+    old = await _settled_duel(cog, db, sync_db_path, ante=50)
     interaction = _interaction(bot, 2)  # the loser wants revenge
 
     await cog._handle_rematch(interaction, old)
@@ -201,7 +213,7 @@ async def test_run_it_back_is_for_the_two_who_played(db, sync_db_path):
     _seed_economy(sync_db_path, 1, 2, 3)
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2, 3])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50)
+    old = await _settled_duel(cog, db, sync_db_path, ante=50)
 
     interaction = _interaction(bot, 3)
     await cog._handle_rematch(interaction, old)
@@ -215,7 +227,7 @@ async def test_run_it_back_stops_working_after_five_minutes(db, sync_db_path):
     _seed_economy(sync_db_path, 1, 2)
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50, age=REMATCH_WINDOW_SECONDS + 5)
+    old = await _settled_duel(cog, db, sync_db_path, ante=50, age=REMATCH_WINDOW_SECONDS + 5)
 
     interaction = _interaction(bot, 1)
     await cog._handle_rematch(interaction, old)
@@ -233,7 +245,7 @@ async def test_run_it_back_goes_through_the_enabled_switch(db, sync_db_path):
         )
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50)
+    old = await _settled_duel(cog, db, sync_db_path, ante=50)
 
     interaction = _interaction(bot, 1)
     await cog._handle_rematch(interaction, old)
@@ -248,7 +260,7 @@ async def test_run_it_back_honours_the_no_contact_list(db, sync_db_path):
     _seed_economy(sync_db_path, 1, 2)
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50)
+    old = await _settled_duel(cog, db, sync_db_path, ante=50)
     ncs.add_pair(sync_db_path, GUILD, 2, 1, created_by=2, protected_user_id=2)
 
     interaction = _interaction(bot, 1)
@@ -260,13 +272,14 @@ async def test_run_it_back_honours_the_no_contact_list(db, sync_db_path):
 
 async def test_run_it_back_refuses_a_presser_who_cannot_cover_the_wager(db, sync_db_path):
     """The old pot was 50 a side; the loser staked their last 50 on it and
-    has nothing left to declare a new one with."""
+    is left with only the participation reward — not enough to declare a new
+    one with."""
     _seed_economy(sync_db_path, 1, amount=500)
     _seed_economy(sync_db_path, 2, amount=50)
     bot = FakeEconGamesBot(db, sync_db_path, [1, 2])
     cog = HotPotatoDuel(bot)  # type: ignore[arg-type]
-    old = await _settled_duel(db, sync_db_path, ante=50)
-    assert _balance(sync_db_path, 2) == 0
+    old = await _settled_duel(cog, db, sync_db_path, ante=50)
+    assert _balance(sync_db_path, 2) < 50
 
     interaction = _interaction(bot, 2)
     await cog._handle_rematch(interaction, old)
@@ -304,6 +317,25 @@ async def test_run_it_back_reopens_a_lobby_and_pings_the_old_roster(db, sync_db_
     ping = interaction.followup.send.await_args.args[0]
     assert "<@2>" in ping and "<@3>" in ping and "<@1>" not in ping
     assert "✋ Join" in ping
+
+
+async def test_run_it_back_roster_ping_skips_the_hosts_no_contact_partners(db, sync_db_path):
+    """The lobby itself goes up (the host holds no pair with the lobby, only
+    with one player), but the public roster ping the host sends afterwards
+    leaves that player off — the rest are still called back."""
+    bot = FakeEconGamesBot(db, sync_db_path, [1, 2, 3, 4])
+    cog = ChickenCog(bot)  # type: ignore[arg-type]
+    old = await _settled_chicken(db, [1, 2, 3, 4])
+    ncs.add_pair(sync_db_path, GUILD, 3, 1, created_by=3, protected_user_id=3)
+
+    interaction = _interaction(bot, 1)
+    await cog._handle_rematch(interaction, old)
+
+    new = await chdb.get_game(db, old + 1)
+    assert new is not None and new.state == "LOBBY"
+    ping = interaction.followup.send.await_args.args[0]
+    assert "<@2>" in ping and "<@4>" in ping
+    assert "<@3>" not in ping
 
 
 async def test_run_it_back_on_a_group_game_is_the_hosts_button(db, sync_db_path):

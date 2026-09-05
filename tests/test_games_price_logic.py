@@ -25,9 +25,9 @@ from bot_modules.games_price.embeds import (
 from bot_modules.games_price.logic import (
     MIN_PLAYERS,
     MIN_VOTERS,
-    expected_submitters,
     lobby_players,
     resolve_source,
+    roster_all_in,
     toggle_player,
     vote_possible,
     MAX_PRICE,
@@ -430,6 +430,14 @@ def test_build_scenario_embed_shows_total_when_provided() -> None:
     assert by_name["Submissions"].startswith("💵 Submitted: **2**/4 — ")
 
 
+def test_build_scenario_embed_counts_the_lobby_separately_from_the_crowd() -> None:
+    embed = build_scenario_embed(
+        "Alice", "x", 1, 1, 30, submitted=3, total_players=3, roster_submitted=2
+    )
+    by_name = {f.name: f.value for f in embed.fields}
+    assert by_name["Submissions"].startswith("💵 Submitted: **3** (2/3 who joined")
+
+
 def test_build_scenario_embed_escapes_markdown_in_scenario() -> None:
     embed = build_scenario_embed("Alice", "**bold**", 1, 1, 30, submitted=0)
     by_name = {f.name: f.value for f in embed.fields}
@@ -728,10 +736,22 @@ def test_lobby_players_coerces_and_dedupes():
     assert lobby_players({}) == []
 
 
-def test_expected_submitters_is_the_roster_or_none():
-    assert expected_submitters({"players": [1, 2, 3]}) == 3
-    assert expected_submitters({"players": []}) is None
-    assert expected_submitters({}) is None
+@pytest.mark.parametrize(
+    "roster,submitted,expected",
+    [
+        # A spectator's price never fills a joined player's seat (P5): with
+        # 3 joined and 3 prices in, the round used to close on a headcount
+        # and lock the third joined player out.
+        pytest.param({1, 2, 3}, {1, 2, 4}, False, id="spectator-fills-no-seat"),
+        pytest.param({1, 2, 3}, {1, 2, 3, 4}, True, id="roster-complete-plus-spectator"),
+        pytest.param({1, 2, 3}, {1, 2, 3}, True, id="roster-complete"),
+        pytest.param({1, 2, 3}, {1, 2}, False, id="one-short"),
+        pytest.param(set(), {1, 2, 3}, False, id="no-roster-runs-the-timer"),
+        pytest.param(set(), set(), False, id="nothing-at-all"),
+    ],
+)
+def test_roster_all_in(roster, submitted, expected):
+    assert roster_all_in(roster, submitted) is expected
 
 
 def test_lobby_floor_is_mirrored_in_the_sweep_registry():
@@ -789,21 +809,27 @@ class _FakeTimer:
         self.skipped = True
 
 
-def _game_view(bot, expected: int | None, **kw):
+def _game_view(bot, expected: set[int], **kw):
     cog = price_cog.PriceCog(bot)  # type: ignore[arg-type]
     return price_cog.PriceGameView(
         game_id=kw.get("game_id", "g"), host_id=1, host_name="Host", scenario="Eat a bug",
         round_num=1, total_rounds=3, timer_secs=30, db=bot.games_db, bot=bot, cog=cog,
-        expected_players=expected, settings={"rounds": 3},
+        expected_ids=expected, settings={"rounds": 3},
     )
 
 
 @pytest.mark.parametrize(
     ("expected", "prices", "closes"),
     [
-        pytest.param(2, {1: 10, 2: 20}, True, id="everyone-in-closes"),
-        pytest.param(3, {1: 10, 2: 20}, False, id="one-short-waits"),
-        pytest.param(None, {1: 10, 2: 20}, False, id="no-roster-runs-the-timer"),
+        pytest.param({1, 2}, {1: 10, 2: 20}, True, id="everyone-in-closes"),
+        pytest.param({1, 2, 3}, {1: 10, 2: 20}, False, id="one-short-waits"),
+        # Submission is open to the room: a spectator's price counts in the
+        # reveal but fills nobody's seat, so three prices for a three-seat
+        # roster with one joined player still waiting keeps the round open
+        # (it used to close on the headcount and lock that player out).
+        pytest.param({1, 2, 3}, {1: 10, 2: 20, 9: 30}, False, id="spectator-fills-no-seat"),
+        pytest.param({1, 2, 3}, {1: 10, 2: 20, 9: 30, 3: 40}, True, id="roster-in-plus-spectator-closes"),
+        pytest.param(set(), {1: 10, 2: 20}, False, id="no-roster-runs-the-timer"),
     ],
 )
 async def test_price_modal_closes_the_round_when_the_roster_has_answered(sync_db_path, expected, prices, closes):
@@ -846,7 +872,7 @@ async def test_end_early_keeps_this_rounds_prices_and_pays_through_the_recap(mon
         "scores": {"reasonable_wins": {}, "unhinged_wins": {}},
     }
     gid = await create_game(bot.games_db, 100, 1, "price", payload=payload)
-    view = _game_view(bot, 3, game_id=gid)
+    view = _game_view(bot, {1, 2, 3}, game_id=gid)
     view.round_num = 2
     view.prices = {3: 50}
     view._timer = _FakeTimer()  # type: ignore[assignment]

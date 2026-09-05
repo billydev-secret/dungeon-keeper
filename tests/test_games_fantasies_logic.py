@@ -27,6 +27,7 @@ from bot_modules.games_fantasies.logic import (
     build_result_entry,
     compute_recap_summary,
     get_round_entries,
+    round_in_progress,
     tally_entry_votes,
 )
 
@@ -939,3 +940,20 @@ def test_fantasies_is_a_lobby_game():
     assert "fantasies" in LOBBY_GAME_TYPES
     assert LOBBY_START_BUTTON["fantasies"] == "Start Round"
     assert LOBBY_MIN_PLAYERS["fantasies"] == 1
+
+
+# ── Start Round guard ────────────────────────────────────────────────────────
+#
+# A second press while a round runs used to start a concurrent round and
+# overwrite the main view's live submit view.
+@pytest.mark.parametrize(
+    ("active_submit", "active_vote", "running", "expected"),
+    [
+        pytest.param(None, None, False, False, id="idle"),
+        pytest.param(object(), None, False, True, id="submit-phase"),
+        pytest.param(None, object(), False, True, id="vote-phase"),
+        pytest.param(None, None, True, True, id="between-phases"),
+    ],
+)
+def test_round_in_progress(active_submit, active_vote, running, expected):
+    assert round_in_progress(active_submit, active_vote, running=running) is expected

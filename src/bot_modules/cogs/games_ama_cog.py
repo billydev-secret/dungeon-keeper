@@ -783,14 +783,26 @@ class AMAView(discord.ui.View):
         except Exception as e:
             log.debug("Failed to refresh AMA status bar: %s", e)
 
+    def _cancel_hot_seat_timer(self) -> None:
+        """Cancel the hour timer — unless it is the task we are running in.
+
+        The timed-out rotation re-arms (or clears) the timer from inside the
+        timer's own task; cancelling that task lands at its next ``await`` and
+        silently kills the new-seat announcement and the seat clearing
+        (``except Exception`` never sees a ``CancelledError``). A firing timer
+        is about to return anyway, so it is simply left alone.
+        """
+        task = self._hot_seat_timer_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+
     def _start_hot_seat_timer(self, channel, seconds: int = HOT_SEAT_SECONDS):
         """Start (or restart) the auto-rotate timer for the current hot seat.
 
         ``seconds`` is the full hour on a fresh seat; ``recover_game`` passes
         what is left of it after a restart (social-prompt-42).
         """
-        if self._hot_seat_timer_task and not self._hot_seat_timer_task.done():
-            self._hot_seat_timer_task.cancel()
+        self._cancel_hot_seat_timer()
 
         async def _timeout():
             await asyncio.sleep(seconds)
@@ -1050,14 +1062,13 @@ class AMAView(discord.ui.View):
         self._suppress_resend = True
         try:
             if self._closed:
-                # Game is closing — end immediately regardless of queue
-                await self._do_close(channel)
+                # A card resolved after 🏁 End AMA confirmed: the close has
+                # already run (or is running) — never close a second time.
                 return
 
             if not self.queue:
                 # No one queued — announce turn is done, seat opens up
-                if self._hot_seat_timer_task and not self._hot_seat_timer_task.done():
-                    self._hot_seat_timer_task.cancel()
+                self._cancel_hot_seat_timer()
                 self.hot_seat_id = None
                 self._hot_seat_name = None
                 self.questions_this_turn = 0
@@ -1191,9 +1202,13 @@ class AMAView(discord.ui.View):
         await self._do_close(channel, reason=reason)
 
     async def _do_close(self, channel, *, reason: str | None = None):
+        # Idempotent: the flag is set before the first await, so a second
+        # caller (a late card's rotation, a sweep racing the host) returns
+        # here rather than posting a second recap.
+        if self._closed:
+            return
         self._closed = True
-        if self._hot_seat_timer_task and not self._hot_seat_timer_task.done():
-            self._hot_seat_timer_task.cancel()
+        self._cancel_hot_seat_timer()
 
         # Remove the bottom bar immediately when the game closes.
         cog = self.bot.get_cog("AMACog")

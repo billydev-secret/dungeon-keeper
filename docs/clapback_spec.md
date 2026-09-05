@@ -140,7 +140,9 @@ over a dead view (clapback-13).
    bye who has not voted (a bye may vote and is then counted, but is never
    waited for) — after a `VOTE_CLOSE_GRACE_SECONDS` (5 s) grace for a
    spectator mid-click. A vote from **outside the roster** reopens the
-   electorate and the full timer runs.
+   electorate and the full timer runs, as it does when **nobody** is
+   eligible (a 3-player game whose third player withdrew, or whose bye is a
+   no-contact bench — §2.3): an empty electorate is not a finished one.
    > **Decision D1, 2026-09-04 — reverses ab27201b (June).** When voting was
    > opened to spectators the loop lost its early exit on purpose, since
    > "everyone eligible has voted" was no longer knowable. Prod data since:
@@ -245,6 +247,21 @@ withdrawn". The reply says so ("… left Clapback — their score is withdrawn
 from the board."). `end_game` gets the roster as it stands, so a leaver is
 paid nothing, and `game_rewards._winners_clapback` skips withdrawn scores so
 the game-win goes to the same player the recap crowns.
+
+A leaver who presses **Join** again is playing again: both admission paths
+(`admit_player_now` and `admit_pending_players`, which takes the payload's
+`left` list and prunes it in place) take the id back off `left`, so their
+old score ranks on the board once more rather than sitting struck through
+below it while they play. A latecomer still queued in `pending_players` who
+leaves is simply pulled from the queue — `withdraw_player` returns True,
+nothing goes on `left` (they have no score), and they are not seated at the
+next boundary.
+
+A withdrawal can also empty a matchup's electorate — a 3-player game whose
+third player leaves mid-vote, or a 3-player roster whose bye is a no-contact
+bench. `all_eligible_voted` treats an empty electorate as *not* finished, so
+the matchup runs its full timer rather than closing on zero votes after the
+spectator grace (§2, step 5).
 
 > **Changed 2026-09-04 (clapback-17, option a).** A leaver's score used to
 > stay on the board, so someone who left in round 4 while leading was 🥇 on

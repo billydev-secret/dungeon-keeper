@@ -58,6 +58,7 @@ from bot_modules.games_fantasies.logic import (
     everyone_has_voted,
     get_round_entries,
     roster_from_results,
+    round_in_progress,
 )
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 
@@ -132,12 +133,16 @@ class FantasiesMainView(discord.ui.View):
         # The round loop's live pieces, so End Game can wake and disable them.
         self._active_submit_view: SubmitRoundView | None = None
         self._active_vote_view: FantasiesVoteView | None = None
+        self._round_running = False
 
     @discord.ui.button(label="Start Round", style=discord.ButtonStyle.primary, custom_id="fan_start_round")
     async def start_round(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host or a mod can start rounds.", ephemeral=True)
+            return
+        if round_in_progress(self._active_submit_view, self._active_vote_view, running=self._round_running):
+            await interaction.response.send_message("❌ A round is already running.", ephemeral=True)
             return
 
         self.round_num += 1
@@ -147,14 +152,18 @@ class FantasiesMainView(discord.ui.View):
         # and a game with a round underway is not idle.
         await update_game_state(self.db, self.game_id, "playing")
 
-        await self.cog._run_round(
-            game_id=self.game_id,
-            host_id=self.host_id,
-            host_name=interaction.user.display_name,
-            round_num=self.round_num,
-            channel=interaction.channel,
-            main_view=self,
-        )
+        self._round_running = True
+        try:
+            await self.cog._run_round(
+                game_id=self.game_id,
+                host_id=self.host_id,
+                host_name=interaction.user.display_name,
+                round_num=self.round_num,
+                channel=interaction.channel,
+                main_view=self,
+            )
+        finally:
+            self._round_running = False
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="fan_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):

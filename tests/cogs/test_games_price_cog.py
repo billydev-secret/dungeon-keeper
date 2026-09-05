@@ -20,7 +20,13 @@ from unittest.mock import AsyncMock
 import pytest
 
 import bot_modules.cogs.games_price_cog as cog_module
-from bot_modules.cogs.games_price_cog import PriceCog, PriceRecapView
+from bot_modules.cogs.games_price_cog import (
+    HostScenarioModal,
+    PriceCog,
+    PriceGameView,
+    PriceRecapView,
+    ScenarioPromptView,
+)
 from bot_modules.games.utils.game_manager import create_game, relaunch_refusal
 from bot_modules.services.games_db import GamesDb
 
@@ -292,3 +298,71 @@ async def test_recover_game_re_registers_a_lobby(sync_db_path):
     assert await cog.recover_game(row, payload, _Channel(), message) is True
     view = cog.bot.active_views["g1"]
     assert isinstance(view, cog_module.PriceLobbyView) and view.message is message
+
+
+# ── P5: the board counts the lobby separately from the crowd ────────────────
+# (the close-on-roster rule itself is pinned in tests/test_games_price_logic.py)
+
+
+def _round_view(expected_ids: set[int]) -> PriceGameView:
+    view = PriceGameView(
+        game_id="gid", host_id=HOST, host_name="Host", scenario="x",
+        round_num=1, total_rounds=1, timer_secs=30, db=None, bot=None,
+        cog=None,  # type: ignore[arg-type]
+        expected_ids=expected_ids,
+    )
+    view._timer = SimpleNamespace(remaining=10)  # type: ignore[assignment]
+    return view
+
+
+def _price_interaction(user_id: int):
+    return SimpleNamespace(
+        user=SimpleNamespace(id=user_id, display_name=f"u{user_id}"),
+        guild=None,
+        channel=SimpleNamespace(id=CHAN, name="games", guild=None),
+        response=SimpleNamespace(send_message=AsyncMock(), send_modal=AsyncMock(), defer=AsyncMock()),
+    )
+
+
+async def test_round_embed_counts_the_lobby_separately_from_the_crowd():
+    view = _round_view({1, 2, 3})
+    view.prices = {1: 5, 2: 6, 4: 7}
+    by_name = {f.name: f.value for f in view._build_embed().fields}
+    assert by_name["Submissions"].startswith("💵 Submitted: **3** (2/3 who joined")
+
+
+# ── P3: a dismissed Write Scenario modal can be reopened ─────────────────────
+
+
+def _scenario_prompt() -> tuple[HostScenarioModal, ScenarioPromptView]:
+    modal = HostScenarioModal()
+    return modal, ScenarioPromptView(modal, HOST, open_to_all=False)
+
+
+async def test_write_scenario_reopens_after_a_dismissed_modal():
+    """Discord never reports a dismissed modal, so opening it must not
+    count as taking the slot — a host who closed the modal was told
+    'Someone already submitted' for the whole two-minute wait."""
+    modal, view = _scenario_prompt()
+    first, second = _price_interaction(HOST), _price_interaction(HOST)
+
+    await view.write.callback(first)  # type: ignore[arg-type]
+    await view.write.callback(second)  # type: ignore[arg-type]
+
+    first.response.send_modal.assert_awaited_once_with(modal)
+    second.response.send_modal.assert_awaited_once_with(modal)
+    second.response.send_message.assert_not_awaited()
+
+
+async def test_write_scenario_refuses_once_a_scenario_is_in():
+    modal, view = _scenario_prompt()
+    opened, submit, again = _price_interaction(HOST), _price_interaction(HOST), _price_interaction(HOST)
+
+    await view.write.callback(opened)  # type: ignore[arg-type]
+    modal.scenario._value = "How much to eat a bug?"
+    await modal.on_submit(submit)  # type: ignore[arg-type]
+    await view.write.callback(again)  # type: ignore[arg-type]
+
+    again.response.send_modal.assert_not_awaited()
+    assert "already submitted" in again.response.send_message.await_args.args[0]
+    assert await modal.wait_for_result(timeout=0.01) == "How much to eat a bug?"

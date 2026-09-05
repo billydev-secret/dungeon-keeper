@@ -708,6 +708,20 @@ Stage 2.
   replaces the message) keeps that behaviour and does not also write the
   expiry copy — the two would race. A failed edit is swallowed: the member
   dismissing the message is the ordinary end of an abandoned step.
+  **The clock stops when the step does** (games-deep-review K1,
+  2026-09-05): discord.py keeps a replaced view's timeout running — an
+  edit with a new view cancels nothing — so a coinflip picker whose message
+  had become the result card woke 120s later and wrote the expiry copy over
+  the card and its Play Again button (and the ladder's 600s clock over a
+  blackjack hand still in play). Every press on a step notes the step on
+  `interaction.extras` (`StepView.interaction_check`; the Custom… modal
+  carries it as `step` because its submit is a fresh interaction), and each
+  path that writes something else into that message — `_show_step`,
+  `_respond_private`, `_back_to`, the private-round Back and
+  `_finish_window_bet` — calls `consume_step`, which stops the view; an
+  expiry that still arrives after that is a no-op. A press that only opens
+  a modal or an apology consumes nothing: that step is still standing and
+  still expires out loud.
 - **The amount ladder** (2026-09-01, todo #96 / audit M2): choosing a stake
   is buttons, not typing. `logic.bet_amount_options` builds at most four
   rungs — **Last · Half · Double · Max** off the remembered last stake, or
@@ -723,7 +737,10 @@ Stage 2.
   only if that step still owns the board (`_window_steps`): discord.py starts
   a fresh timeout per view and cancels none of the ones it replaces, so an
   abandoned step would otherwise wake minutes later and repaint over whatever
-  the player is in the middle of. A **refused** bet repaints too, since the
+  the player is in the middle of (a step whose own press replaced it is also
+  stopped outright — see *The clock stops when the step does* above; the
+  claim still covers a board repainted by something other than a press, such
+  as the resolve sweep). A **refused** bet repaints too, since the
   step is standing where the board was and the old modal left it intact.
   Coinflip and Mines choose a side/risk first, so their ladder carries Back
   as well, re-rendering that picker. The number step spends rows 0 and 1 on

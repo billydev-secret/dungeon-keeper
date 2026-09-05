@@ -167,16 +167,19 @@ def drop_pending(
 
 
 def game_ante(
-    conn: sqlite3.Connection, game_type: str, game_id: int
+    conn: sqlite3.Connection, game_type: str, game_id: int, *, live_only: bool = True
 ) -> int:
     """The game's per-player ante (0 = not a wagered game).
 
     Every row of a game carries the same amount, so the first live row answers
-    it — this is how a lobby joiner learns what to pay.
+    it — this is how a lobby joiner learns what to pay. ``live_only=False``
+    reads the first row in any state: a finished game's rows are all
+    ``settled`` / ``refunded``, and Run It Back needs the ante they carried.
     """
+    state_clause = "AND state IN ('pending', 'held') " if live_only else ""
     row = conn.execute(
         "SELECT amount FROM econ_game_wagers "
-        "WHERE game_type = ? AND game_id = ? AND state IN ('pending', 'held') "
+        f"WHERE game_type = ? AND game_id = ? {state_clause}"
         "ORDER BY id ASC LIMIT 1",
         (game_type, game_id),
     ).fetchone()

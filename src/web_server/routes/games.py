@@ -650,13 +650,15 @@ async def import_from_pool(
             to_add: list[tuple[str, str, str]] = []
             skipped = 0
             for tags_raw, text in rows:
-                text = text.strip()
+                # Compare and store the target bank's own shape (WYR is kept
+                # as "A | B"), or a prose pool row re-imports on every press.
+                text = _normalise_wyr_text(body.game_type, text.strip())
                 if text in existing:
                     skipped += 1
                     continue
                 existing.add(text)
                 tags = override if override is not None else _parse_tags_col(tags_raw)
-                to_add.append((body.game_type, json.dumps(tags), _normalise_wyr_text(body.game_type, text)))
+                to_add.append((body.game_type, json.dumps(tags), text))
             if to_add:
                 conn.executemany(
                     "INSERT INTO games_question_bank (game_type, tags, question_text) VALUES (?, ?, ?)",

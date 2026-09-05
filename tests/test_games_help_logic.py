@@ -212,6 +212,20 @@ def test_legitlibs_help_names_classic_as_the_default():
     assert "Quiplash mode (default)" not in text
 
 
+def test_ttl_floor_matches_the_start_guard():
+    """The picker line and help card say what Start Guessing enforces (T1)."""
+    from bot_modules.games_ttl.logic import MIN_PLAYERS
+
+    assert GAME_MIN_PLAYERS["ttl"] == MIN_PLAYERS
+
+
+def test_mahjong_is_named_but_not_on_the_menu():
+    """Settled hands write history rows as 'mahjong' (Play Statistics needs
+    a display name); the table is a room, not a /games play launch (M3)."""
+    assert GAME_NAMES["mahjong"] == "Meadow Mahjong"
+    assert "mahjong" not in GAME_ICONS
+
+
 def test_photo_has_no_dead_how_to_play():
     """Photo Challenge left the games menu; its HOW_TO_PLAY entry was text
     nothing rendered."""

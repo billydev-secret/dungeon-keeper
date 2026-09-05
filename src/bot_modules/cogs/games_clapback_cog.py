@@ -1065,6 +1065,7 @@ class ClapbackCog(commands.Cog):
                 payload.get("players", []),
                 payload.get("pending_players", []),
                 MAX_PLAYERS,
+                left=payload.get("left"),
             )
             if admitted or turned_away:
                 payload["players"] = roster

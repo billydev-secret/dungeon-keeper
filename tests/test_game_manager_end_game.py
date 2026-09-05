@@ -307,14 +307,88 @@ async def test_an_end_with_no_roster_opens_no_session(db_path):
     assert _sessions(db_path) == []
 
 
-@pytest.mark.parametrize("game_type", ["photo", "ffa"])
+@pytest.mark.parametrize("game_type", ["photo"])
 async def test_a_bot_post_never_opens_a_session(db_path, game_type):
-    """The daily photo post used to open a one-player 'session' every day."""
+    """The daily photo post used to open a one-player 'session' every day.
+    (ffa left this table when it grew a roster; see the anonymity tests
+    below — it keeps its host-only session and never merges a replier.)"""
     db = GamesDb(db_path)
     gid = await create_game(db, CH, 1, game_type, payload={"prompt": "x"}, guild_id=GUILD)
     assert await update_session(db, CH, gid, [1]) is None  # the start-time call
     await end_game(db, gid)
     assert _sessions(db_path) == []
+
+
+@pytest.mark.parametrize(
+    "state, reason, expect_session",
+    [
+        # The idle-lobby sweep: a `joining` row nobody played must not become
+        # a /recap session on the strength of its join list (G1).
+        pytest.param("joining", "lobby_timeout", False, id="idle-lobby-cancel"),
+        # A crash cleanup of a game in play still hands the recap the room.
+        pytest.param("playing", "crash", True, id="crash-mid-game"),
+    ],
+)
+async def test_a_lobby_timeout_opens_no_session(db_path, state, reason, expect_session):
+    db = GamesDb(db_path)
+    gid = await create_game(
+        db, CH, 1, "clapback", payload={"players": [1, 2]}, guild_id=GUILD, state=state,
+    )
+
+    await end_game(db, gid, reason=reason)
+
+    row = _history(db_path, gid)
+    assert row["player_count"] == 2  # recorded either way
+    assert json.loads(row["payload"])["reason"] == reason
+    rows = _sessions(db_path)
+    if expect_session:
+        assert len(rows) == 1 and sorted(json.loads(rows[0]["player_ids"])) == [1, 2]
+    else:
+        assert rows == []
+
+
+# ── F2: an anonymous roster is paid, never named ─────────────────────────────
+
+
+async def test_an_anonymous_game_pays_its_repliers_but_never_names_them(db_path):
+    """FFA's Close pays the repliers; /recap renders session players by name,
+    so the roster must stay out of games_session_tracker."""
+    _enable(db_path)
+    db = GamesDb(db_path)
+    payload = {"mode": "embed", "prompts": [{"message_id": 5, "repliers": [2, 3], "reply_count": 2}]}
+    gid = await create_game(db, CH, 1, "ffa", payload=payload, guild_id=GUILD)
+    await update_session(db, CH, gid, [1])  # the launch-time call names the host
+    bot: Any = _Bot(db_path, [_member(1), _member(2), _member(3)])
+
+    ended = await end_game(db, gid, payload=payload, bot=bot, player_ids=[2, 3], reason="ended")
+
+    assert ended is not None and ended.player_count == 2
+    assert _history(db_path, gid)["player_count"] == 2
+    assert ended.coins_paid == _bal(db_path, 2) + _bal(db_path, 3) > 0
+    rows = _sessions(db_path)
+    assert len(rows) == 1 and json.loads(rows[0]["game_ids"]) == [gid]
+    assert json.loads(rows[0]["player_ids"]) == [1]
+
+
+async def test_a_touch_and_the_sweep_never_name_anonymous_repliers(db_path):
+    """Every reply writes the payload (a session touch) and the 24h sweep is
+    a bare end that derives the roster — neither may merge a replier."""
+    db = GamesDb(db_path)
+    gid = await create_game(db, CH, 1, "ffa", payload={"mode": "embed", "prompts": []}, guild_id=GUILD)
+    await update_session(db, CH, gid, [1])
+
+    def _reply(p):
+        p["prompts"].append({"message_id": 5, "repliers": [2], "reply_count": 1})
+
+    await modify_payload(db, gid, _reply)
+    assert json.loads(_sessions(db_path)[0]["player_ids"]) == [1]
+
+    await end_game(db, gid, reason="expired")
+
+    assert _history(db_path, gid)["player_count"] == 1
+    rows = _sessions(db_path)
+    assert len(rows) == 1 and json.loads(rows[0]["game_ids"]) == [gid]
+    assert json.loads(rows[0]["player_ids"]) == [1]
 
 
 async def test_update_session_takes_the_type_when_the_row_is_gone(db_path):

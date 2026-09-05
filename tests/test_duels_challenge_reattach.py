@@ -81,6 +81,33 @@ async def test_dead_or_cardless_challenges_are_left_to_the_sweep(db, sync_db_pat
     assert bot.views == []
 
 
+@pytest.mark.parametrize("state", ["RESOLVED_NO_NICK", "NO_NICK_SET", "RESOLVED", "NICKED"])
+async def test_a_result_card_inside_its_rematch_window_is_reattached(
+    db, sync_db_path, monkeypatch, state
+):
+    """Every settled state's result card carries Run It Back for five
+    minutes, so every one of them is re-attached on load — the fetch used to
+    stop at RESOLVED / NICKED, and a wager-only game (always
+    RESOLVED_NO_NICK) restarted into a dead button."""
+    from bot_modules.duels.views import ResultView
+
+    bot = RecordingBot(db, sync_db_path, [1, 2])
+    cog = QuickdrawDuel(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog._expire_loop, "start", lambda: None)
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await qdb.set_game_state(
+        db, gid, state, winner_id=1, loser_id=2,
+        resolved_at=time.time() - 30, result_message_id=700,
+    )
+
+    await cog.cog_load()
+
+    (view, message_id), = bot.views
+    assert isinstance(view, ResultView) and message_id == 700
+    assert view.game_id == gid
+    assert any(getattr(c, "custom_id", "") == f"rematch:{gid}" for c in view.children)
+
+
 # ── the re-attached view ──────────────────────────────────────────────────────
 
 def _view(deadline: float, calls: list):

@@ -58,7 +58,10 @@ async def fetch_lobby_games(db: GamesDb) -> list[MusicalChairsGame]:
 
 
 async def fetch_resolved_games(db: GamesDb) -> list[MusicalChairsGame]:
-    rows = await db.fetchall("SELECT * FROM mc_games WHERE state IN ('RESOLVED', 'NICKED')")
+    rows = await db.fetchall(
+        "SELECT * FROM mc_games "
+        "WHERE state IN ('RESOLVED', 'RESOLVED_NO_NICK', 'NICKED', 'NO_NICK_SET')"
+    )
     return [game_from_row(r) for r in rows]
 
 

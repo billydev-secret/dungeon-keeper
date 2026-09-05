@@ -513,14 +513,18 @@ def purge_old_thread_posts(db_path: Path, max_age_seconds: int = THREAD_METADATA
     ``confession_emoji_assignments`` (user → pseudonym, per root message) had
     no clock until migration 211 and outlived every thread it served —
     anon-tail-69 found 445 thread-less rows in prod, each still naming a
-    member beside an alias. A thread older than a week has already lost its
-    routing row, so nothing still replyable loses its identity here.
+    member beside an alias. Migration 211 backfilled every existing row from
+    its thread's own clock (or the migration moment where no thread row
+    remained), and a row still at 0 is never purged: an unstamped alias is a
+    row we know nothing about, not an old one, and taking it would hand a
+    member a new name mid-thread.
     """
     cutoff = now_ts() - max_age_seconds
     with open_db(db_path) as conn:
         threads = conn.execute("DELETE FROM confession_threads WHERE created_at < ?", (cutoff,))
         aliases = conn.execute(
-            "DELETE FROM confession_emoji_assignments WHERE created_at < ?", (cutoff,)
+            "DELETE FROM confession_emoji_assignments WHERE created_at > 0 AND created_at < ?",
+            (cutoff,),
         )
         return max(threads.rowcount, 0) + max(aliases.rowcount, 0)
 

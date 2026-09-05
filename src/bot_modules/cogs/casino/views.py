@@ -85,6 +85,10 @@ class _AmountBetModal(discord.ui.Modal):
             max_length=10,
         )
         self.add_item(self.amount)
+        #: The step this box was opened over (Custom…), if any. The step
+        #: stays live under the modal — the member may cancel it — so it is
+        #: the submit that hands off, and the submit has to know the step.
+        self.step: StepView | None = None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
@@ -94,6 +98,8 @@ class _AmountBetModal(discord.ui.Modal):
         if amount is None:
             await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
             return
+        if self.step is not None:
+            interaction.extras[STEP_EXTRA] = self.step
         await self._place(cog, interaction, amount)
 
     async def _place(
@@ -243,6 +249,9 @@ class DiceBetModal(_AmountBetModal):
 # ── bet steps with a shelf life ────────────────────────────────────────
 
 STEP_EXPIRED_MSG = "This step expired — press the table button on the panel again."
+#: ``Interaction.extras`` key under which a press notes the step it came
+#: from, so whatever the press replaces the step's message with can stop it.
+STEP_EXTRA = "casino_step"
 
 
 class StepView(discord.ui.View):
@@ -259,17 +268,43 @@ class StepView(discord.ui.View):
     the response is sent, and it lives ~15 minutes — every step's timeout
     is comfortably inside that. A failed edit (the member dismissed the
     message) is the ordinary end of an abandoned step, not an error.
+
+    The clock has to stop when the step does. discord.py keeps a replaced
+    view's timeout running — an edit with a new view cancels nothing — so
+    a coinflip picker whose message had become the result card would wake
+    120s later and write the expiry copy over the card and its Play Again
+    button. Every press on a step notes the step on the interaction
+    (``interaction_check``), and the cog **consumes** it (``consume_step``)
+    once that press has replaced the message; an expiry that still arrives
+    after that is a no-op.
     """
 
     def __init__(self, *, timeout: float) -> None:
         super().__init__(timeout=timeout)
         self._bound: discord.Interaction | None = None
+        self._consumed = False
 
     def bind(self, interaction: discord.Interaction) -> None:
         """Remember the interaction whose response this step is."""
         self._bound = interaction
 
+    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
+        interaction.extras[STEP_EXTRA] = self
+        return True
+
+    def consume(self) -> None:
+        """The message now shows something else — stop the clock for good.
+
+        ``is_finished()`` can't be the guard: discord.py marks the view
+        finished *before* it schedules ``on_timeout``, so a genuine expiry
+        would read as consumed too.
+        """
+        self._consumed = True
+        self.stop()
+
     async def expire(self) -> None:
+        if self._consumed:
+            return
         for item in self.children:
             if isinstance(item, (discord.ui.Button, discord.ui.Select)):
                 item.disabled = True
@@ -284,6 +319,15 @@ class StepView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         await self.expire()
+
+
+def consume_step(interaction: discord.Interaction) -> None:
+    """Stop the step a press came from, once the press has replaced its
+    message. A press from anywhere else (the hub, a board) noted no step
+    and this is a no-op."""
+    step = interaction.extras.pop(STEP_EXTRA, None)
+    if isinstance(step, StepView):
+        step.consume()
 
 
 # ── the amount ladder (one tap for the usual stake) ────────────────────
@@ -315,7 +359,10 @@ class _CustomAmountButton(discord.ui.Button):
         self._make_modal = make_modal
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(self._make_modal())
+        modal = self._make_modal()
+        if isinstance(self.view, StepView):
+            modal.step = self.view
+        await interaction.response.send_modal(modal)
 
 
 class _BackButton(discord.ui.Button):

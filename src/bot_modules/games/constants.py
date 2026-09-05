@@ -16,7 +16,10 @@ GAME_ICONS = {
     'ffa_banner': '🃏',
     # 'photo' is intentionally absent — Photo Challenge left the games menu and
     # the /games help list (it's scheduled-only now). GAME_NAMES keeps its
-    # display name for logs/scheduler lookups.
+    # display name for logs/scheduler lookups. 'mahjong' is absent for the
+    # same reason: it is a channel-native table (listed under Rooms & Tables
+    # by the help cog), not a /games play launch, and its settled hands are
+    # self-recorded history rows that only need a display name.
     'traditional': '🎲',
     'compliment': '💛',
     'mfk': '💍',
@@ -60,6 +63,7 @@ GAME_NAMES = {
     'ffa': 'Anonymous Truth or Dare',
     'ffa_banner': 'Truth or Dare Card',
     'photo': 'Photo Challenge',
+    'mahjong': 'Meadow Mahjong',
     'traditional': 'Truth or Dare',
     'compliment': 'Spin the Compliment',
     'mfk': 'Marry, Fornicate, Kiss',
@@ -210,8 +214,9 @@ HOSTING_LABEL = {
 # line each ``/games play`` subcommand shows in Discord's picker
 # (discovery-13) and the /games help panel reads the same rows, so the two
 # surfaces can't drift apart. Floors mirror the cogs: LOBBY_MIN_PLAYERS for
-# the lobby games, ``games_ttl.logic``'s two-player guessing floor, the duel
-# rosters, Musical Chairs' default lobby.
+# the lobby games, ``games_ttl.logic.MIN_PLAYERS`` (three — Start Guessing
+# refuses fewer, tested in tests/test_games_help_logic.py), the duel rosters,
+# Musical Chairs' default lobby.
 GAME_MIN_PLAYERS = {
     'ffa': 1,
     'ffa_banner': 1,
@@ -221,7 +226,7 @@ GAME_MIN_PLAYERS = {
     'wyr': 2,
     'nhie': 2,
     'mlt': 3,
-    'ttl': 2,
+    'ttl': 3,
     'hottakes': 2,
     'story': 2,
     'ama': 2,

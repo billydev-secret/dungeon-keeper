@@ -257,3 +257,14 @@ def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
     if not expected_set:
         return False
     return expected_set <= {int(u) for u in voted}
+
+
+def round_in_progress(active_submit: Any, active_vote: Any, *, running: bool = False) -> bool:
+    """True while a round is running — the Start Round guard.
+
+    A live submit or vote view means a phase is open; ``running`` covers the
+    gaps between phases, when neither view is set but the round loop is still
+    awaiting. A second press used to start a concurrent round and overwrite
+    the main view's live submit view.
+    """
+    return running or active_submit is not None or active_vote is not None

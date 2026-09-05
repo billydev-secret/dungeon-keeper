@@ -1710,6 +1710,49 @@ def test_admit_player_now_recognises_a_second_press_while_queued():
     assert payload["pending_players"] == [3]
 
 
+def test_admit_player_now_recognises_a_second_press_after_a_parity_queue():
+    """Four players and no bye: a fifth would need one, so the first press
+    queues them for parity. A second press must say they are already queued,
+    not report a fresh "in from the next round" success."""
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4]}
+    assert admit_player_now(payload, 5, 10) == "queued-parity"
+
+    assert admit_player_now(payload, 5, 10) == "already-queued"
+
+    assert payload["pending_players"] == [5]
+    assert payload["players"] == [1, 2, 3, 4]
+
+
+def test_admit_player_now_clears_a_rejoiner_from_the_withdrawn_list():
+    """Leave, then Join again while answers are open: they are back on the
+    roster and their score must rank again, not sit struck through below the
+    board as "left mid-game" while they play."""
+    payload = {
+        "phase": "submitting", "players": [1, 2, 3, 4],
+        "scores": {"1": 90, "2": 40, "3": 10, "4": 5},
+    }
+    assert withdraw_player(payload, 1) is True
+
+    assert admit_player_now(payload, 1, 10) == "joined"
+
+    assert payload["left"] == []
+    standing, withdrawn = board_scores(payload)
+    assert standing[0] == ("1", 90)
+    assert withdrawn == []
+
+
+def test_admit_pending_players_clears_a_rejoiner_from_the_withdrawn_list():
+    """Same as above at the round boundary: a leaver who queued back in comes
+    off ``left`` when they are seated."""
+    left = ["1", "9"]
+
+    roster, admitted, _ = admit_pending_players([2, 3], [1], 10, left=left)
+
+    assert roster == [2, 3, 1]
+    assert admitted == [1]
+    assert left == ["9"]
+
+
 # ── every render site in the cog passes a resolver ───────────────────────────
 
 
@@ -1764,6 +1807,10 @@ def _roster(n):
         # 3 players, round-robin: the one player not in the pair decides it.
         pytest.param(_roster(3), ("1", "2"), [], ["3"], True, id="3-third-voted"),
         pytest.param(_roster(3), ("1", "2"), [], [], False, id="3-nobody-yet"),
+        # Nobody left to wait for (the third player withdrew, or a no-contact
+        # bye benched them): nothing to close on, so the full timer runs.
+        pytest.param(_roster(2), ("1", "2"), [], [], False, id="nobody-eligible"),
+        pytest.param(_roster(3), ("1", "2"), ["3"], [], False, id="nobody-eligible-bye"),
         # 5 players with a pre-picked bye: two are waited for, the bye is not.
         pytest.param(_roster(5), ("1", "2"), ["5"], ["3", "4"], True, id="5-bye-silent"),
         pytest.param(_roster(5), ("1", "2"), ["5"], ["3", "4", "5"], True, id="5-bye-voted"),
@@ -1913,6 +1960,19 @@ def test_withdraw_player_ignores_someone_not_playing():
     assert withdraw_player(payload, 9) is False
 
     assert payload["players"] == [2, 3]
+    assert "left" not in payload
+
+
+def test_withdraw_player_pulls_a_queued_latecomer_out_of_the_queue():
+    """A latecomer still waiting for the round boundary who leaves is taken
+    out of the queue rather than told they aren't in the game and seated next
+    round anyway. They have no score, so nothing goes on ``left``."""
+    payload = {"players": [2, 3], "pending_players": [9], "scores": {"2": 40}}
+
+    assert withdraw_player(payload, 9) is True
+
+    assert payload["players"] == [2, 3]
+    assert payload["pending_players"] == []
     assert "left" not in payload
 
 

@@ -229,11 +229,62 @@ async def test_cog_load_publishes_known_guilds_and_bootstraps_only_those():
     cog.launcher = MagicMock()
     cog.refresh_whisper_launcher = AsyncMock()  # type: ignore[method-assign]
 
-    with patch("bot_modules.cogs.whisper_cog._do_launcher_guilds", return_value={9001}):
+    with (
+        patch("bot_modules.cogs.whisper_cog._do_launcher_guilds", return_value={9001}),
+        patch("bot_modules.cogs.whisper_cog._do_backfill_launcher_channels") as backfill,
+    ):
         await cog.cog_load()
 
+    backfill.assert_called_once_with(cog.bot.ctx.db_path, {9001})
     cog.launcher.set_known_guilds.assert_called_once_with({9001})
     cog.refresh_whisper_launcher.assert_awaited_once_with(9001, only_if_buried=True)
+
+
+@pytest.mark.asyncio
+async def test_cog_load_pins_a_legacy_launcher_so_a_repoint_deletes_it_in_place(
+    sync_db_path: Path,
+):
+    """``whisper_launcher_channel_id`` shipped with no backfill and the boot
+    bootstrap only writes it on a repost — a launcher already at the bottom of
+    the feed kept a message id with no channel. Repointing the feed then ran
+    the placer with the NEW channel already saved, so the fallback aimed the
+    delete at the new channel (NotFound, swallowed) and the old launcher stayed
+    live where it was. Boot pins the legacy id to the feed channel it was
+    posted in, so the later repoint deletes it from the OLD channel."""
+    from bot_modules.core.sticky import PanelContent
+
+    old_feed, new_feed = _make_text_channel(8001), _make_text_channel(8003)
+    for ch in (old_feed, new_feed):
+        ch.last_message_id = None
+        ch.send = AsyncMock(return_value=MagicMock(id=777))
+        ch.get_partial_message.return_value.delete = AsyncMock()
+    guild = FakeGuild(id=GUILD_ID, channels={8001: old_feed, 8003: new_feed})
+    cog = _make_cog(sync_db_path)
+    cog.bot.guilds = []  # no bootstrap repost — the launcher is already at the bottom
+    cog.bot.get_guild = lambda gid: guild
+    with open_db(sync_db_path) as conn:
+        set_whisper_config_value(conn, GUILD_ID, "whisper_channel_id", "8001")
+        set_whisper_config_value(conn, GUILD_ID, "whisper_launcher_message_id", "555")
+
+    await cog.cog_load()
+
+    with open_db(sync_db_path) as conn:
+        assert get_whisper_config(conn, GUILD_ID).launcher_channel_id == 8001
+        # The admin repoints the feed; the PUT commits before the cog hears.
+        set_whisper_config_value(conn, GUILD_ID, "whisper_channel_id", "8003")
+
+    with patch.object(
+        cog, "_build_launcher",
+        AsyncMock(return_value=PanelContent(embed=discord.Embed(description="x"))),
+    ):
+        await cog.on_whisper_config_change(GUILD_ID)
+
+    new_feed.send.assert_awaited_once()
+    old_feed.get_partial_message.assert_called_once_with(555)
+    new_feed.get_partial_message.assert_not_called()
+    with open_db(sync_db_path) as conn:
+        cfg = get_whisper_config(conn, GUILD_ID)
+    assert (cfg.launcher_channel_id, cfg.launcher_message_id) == (8003, 777)
 
 
 @pytest.mark.parametrize(

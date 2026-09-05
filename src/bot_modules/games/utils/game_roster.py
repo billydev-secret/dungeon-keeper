@@ -63,8 +63,17 @@ def _mfk(p: dict) -> tuple[list[int], int]:
 
 
 def _story(p: dict) -> tuple[list[int], int]:
-    """games_story_cog:490 — the writer list."""
-    return _ints(p.get("players")), 0
+    """games_story_cog._reveal_story — ``roster_for_payout``: the writer list
+    minus anyone in ``left`` who never authored a sentence. The turn loop
+    persists each Leave press as ``payload["left"]`` so this path pays the
+    same room the reveal does; before that a never-wrote leaver was paid by
+    the sweep and ``/games end`` (S3).
+    """
+    from bot_modules.games_story.logic import roster_for_payout  # noqa: PLC0415
+
+    return roster_for_payout(
+        _ints(p.get("players")), p.get("sentences") or [], _ints(p.get("left")),
+    ), 0
 
 
 def _legitlibs(p: dict) -> tuple[list[int], int]:
@@ -246,6 +255,9 @@ _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
     "hot_potato_group": _recorded_players,
     "chicken": _recorded_players,
     "musical_chairs": _recorded_players,
+    # Settled hands are self-recorded by mahjong_service with the human
+    # seats under ``players`` (mahjong-153); the row feeds Play Statistics.
+    "mahjong": _recorded_players,
 }
 
 # Types with no joined roster, listed so their absence above reads as a decision
@@ -255,6 +267,13 @@ _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
 # sweep archives — pays its repliers; the banner card, with no prompts entry,
 # simply yields an empty roster.
 NO_ROSTER_TYPES = frozenset({"photo"})
+
+# Types whose roster is paid but must never be *named*: FFA replies are
+# anonymous, and the game-night session (``games_session_tracker``) renders
+# its players by name in ``/recap``. ``end_game`` and ``touch_session`` merge
+# the game into the session without its roster for these, so the launch-time
+# host entry is all the recap ever lists (F2).
+ANON_ROSTER_TYPES = frozenset({"ffa"})
 
 
 def roster_from_payload(game_type: str, payload: dict | None) -> tuple[list[int], int]:

@@ -59,6 +59,23 @@ def set_whisper_launcher_ids(
     set_config_value(conn, "whisper_launcher_message_id", str(message_id), guild_id)
 
 
+def backfill_whisper_launcher_channel(conn: sqlite3.Connection, guild_id: int) -> bool:
+    """Pin a legacy launcher to the channel it was posted in.
+
+    ``whisper_launcher_channel_id`` arrived without a migration and is only
+    written when the placer reposts, so a launcher that was already at the
+    bottom of the feed kept a message id with no channel. Run at boot — and
+    only at boot — the feed channel is where that launcher lives; after a
+    repoint it is not, which is exactly why the placer needs the real channel
+    stored. Returns whether anything was written; a no-op the second time.
+    """
+    cfg = get_whisper_config(conn, guild_id)
+    if not cfg.launcher_message_id or cfg.launcher_channel_id or not cfg.channel_id:
+        return False
+    set_whisper_launcher_ids(conn, guild_id, cfg.channel_id, cfg.launcher_message_id)
+    return True
+
+
 def whisper_launcher_guilds(conn: sqlite3.Connection) -> set[int]:
     """Guilds with a Whisper channel set — the only ones whose messages can
     move a launcher. Published to ``core.sticky`` so the ``on_message``

@@ -46,6 +46,7 @@ from bot_modules.services.risky_roll.logic import (
     fallback_blocked,
     normalize_payoff_hours,
     pending_payoff_action,
+    posted_chase_blocked,
     posted_chase_due,
     unasked_questioners,
 )
@@ -193,6 +194,23 @@ def test_posted_chase_due(posted_kwargs, dials, age_hours, expected):
 )
 def test_fallback_blocked(asker, targets, pairs, expected):
     assert fallback_blocked(asker, targets, pairs) is expected
+
+
+@pytest.mark.parametrize(
+    "posted_kwargs, pairs, expected",
+    [
+        pytest.param({}, set(), False, id="no pairs"),
+        pytest.param({}, {(WINNER, LOSER)}, True, id="asker and answerer are the pair"),
+        pytest.param({"from_bank": True}, {(WINNER, LOSER)}, True, id="a deck question is still the asker's"),
+        pytest.param(
+            {"allowed_replier_ids": {LOSER, SECOND}}, {(WINNER, SECOND)}, True,
+            id="any answerer blocked skips the whole chase",
+        ),
+        pytest.param({}, {(LOSER, SECOND)}, False, id="a pair not involving the asker"),
+    ],
+)
+def test_posted_chase_blocked(posted_kwargs, pairs, expected):
+    assert posted_chase_blocked(_posted(**posted_kwargs), pairs) is expected
 
 
 # ── store: dials and the two new columns ─────────────────────────────
@@ -456,6 +474,43 @@ async def test_pass_chases_the_answerer_once_a_question_is_posted(wired):
     assert posted.message_id in rr_state.posted_questions  # still awaiting its reply
 
     assert await rr_views.run_payoff_pass(wired.client, now=T0 + 90 * H) == 0
+
+
+async def test_posted_chase_pings_only_the_answerers(wired):
+    """The asker's ``<@id>`` is in the content so it renders as a name; the
+    allow-list keeps it from ringing them for their own question."""
+    _set_dials(wired.db_path, 1, chase=2)
+    await _register_posted(_posted(allowed_replier_ids={LOSER, SECOND}))
+
+    assert await rr_views.run_payoff_pass(wired.client, now=T0 + 3 * H) == 1
+    (sent,) = wired.channel.sent
+    assert f"<@{WINNER}>'s question" in sent["content"]
+    allowed = sent["allowed_mentions"]
+    assert sorted(u.id for u in allowed.users) == [LOSER, SECOND]
+
+
+async def test_posted_chase_is_silently_skipped_for_a_pair_the_list_now_forbids(wired):
+    """Like the fallback: the pairing was gated on the draw, but the list can
+    change in the hours before the chase fires. Nothing is sent, and the row
+    is stamped as chased so the next tick does not re-select it."""
+    _set_dials(wired.db_path, 1, chase=2)
+    posted = _posted()
+    await _register_posted(posted)
+
+    with patch(
+        "bot_modules.services.no_contact_service.no_contact_pairs_among",
+        return_value={(WINNER, LOSER)},
+    ):
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 3 * H) == 0
+        assert wired.channel.sent == []
+        assert posted.chased_at == T0 + 3 * H
+        assert rr_state.store is not None
+        (stored,) = await rr_state.store.load_posted_questions()
+        assert stored.chased_at == T0 + 3 * H
+        assert posted.message_id in rr_state.posted_questions  # still awaiting its reply
+        # The next tick has nothing left to chase, blocked or not.
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 90 * H) == 0
+    assert wired.channel.sent == []
 
 
 async def test_draw_fallback_question_is_a_truth_from_the_bank(wired):

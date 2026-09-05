@@ -10,10 +10,28 @@
 -- PER-USER DATA. Rows now carry `created_at` and share the threads' seven-day
 -- TTL (`confessions_service.purge_old_thread_posts`), FFA clears its own
 -- prompts' rows when the host closes the game, and `purge_user_data` deletes
--- a member's rows outright. Existing rows default to 0 and go on the next
--- sweep: a thread older than a week has already lost its routing row, so
--- nothing that can still be replied to loses its alias. See
--- docs/data_register.md.
+-- a member's rows outright. See docs/data_register.md.
+--
+-- Existing rows are BACKFILLED, not left at 0: an alias whose thread is still
+-- inside its week must keep serving — a member who replied on Monday must get
+-- the same name and colour on Friday, and a live Anonymous Truth or Dare
+-- prompt keeps its aliases across the restart. Each row takes its root
+-- thread's own `created_at` (so it ages out with the thread it serves) and,
+-- where no thread row exists — an FFA prompt, or a thread the sweep has
+-- already taken — the moment of migration, giving it a full week from now.
+-- The sweep additionally never touches a row still at 0, so an unstamped
+-- row can never be purged by accident.
 
 ALTER TABLE confession_emoji_assignments
     ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0;
+
+UPDATE confession_emoji_assignments
+   SET created_at = COALESCE(
+        (SELECT t.created_at
+           FROM confession_threads t
+          WHERE t.guild_id = confession_emoji_assignments.guild_id
+            AND t.message_id = confession_emoji_assignments.root_message_id
+            AND t.created_at > 0),
+        CAST(strftime('%s', 'now') AS INTEGER)
+   )
+ WHERE created_at = 0;

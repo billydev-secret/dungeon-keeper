@@ -506,6 +506,12 @@ class StoryCog(commands.Cog):
                     delete_after=15,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+            if leaving:
+                # Persist the leavers: the sweep and ``/games end`` rebuild
+                # the roster from the payload (``game_roster._story``) and
+                # must drop a never-wrote leaver the way the reveal does.
+                payload["left"] = sorted(left)
+                await update_game_payload(self.db, game_id, payload)
             drop: set[int] = set(leaving)
 
             missed = turn_view._skipped and not turn_view._submitted_text

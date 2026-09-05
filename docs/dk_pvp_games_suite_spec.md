@@ -181,10 +181,15 @@ the other's to press, so nobody's coins or nickname go on the line without them 
 a wager is declared now and taken at accept exactly as a typed challenge is. The lobby host's
 press reopens a lobby with the same custom stakes, wager and nickname flag, seats the host
 (taking their ante), pings the old roster to press Join, and the lobby starts itself when full.
-Both go through `_base_challenge` / `_base_lobby`, so they hit every gate the command does: the
-enabled switch, the channel allowlist, the no-contact list, the sentence and cooldown
-preflights, and the wager precheck (the persisted `stakes_text` gives the custom half back via
-`filters.custom_stakes_from`, and the ante via `wager_svc.game_ante`). Reaching `RESOLVED` /
+That public ping leaves off anyone the host holds a no-contact pair with — they are simply not
+named, the same shape as a player who has since left the server, so nothing marks them out
+(the join gate would have turned them away regardless). Both go through `_base_challenge` /
+`_base_lobby`, so they hit every gate the command does: the enabled switch, the channel
+allowlist, the no-contact list, the sentence and cooldown preflights, and the wager precheck
+(the persisted `stakes_text` gives the custom half back via `filters.custom_stakes_from`, and
+the ante via `wager_svc.game_ante(..., live_only=False)` — the finished game's wager rows are
+all `settled` / `refunded` by then, so the live-rows read a lobby joiner uses would answer 0
+and quietly drop the wager from the rematch). Reaching `RESOLVED` /
 `RESOLVED_NO_NICK` also writes the
 game's one `games_game_history` row from `_on_terminal_state` (`game_id` `"<GAME_KEY>:<id>"`,
 `game_type` = `GAME_KEY`, host = the challenger or lobby host, `player_count` = everyone who
@@ -488,8 +493,11 @@ fully rehydrates after a restart.
   crash (Chicken), and music/scramble windows (Musical Chairs) are per-game `asyncio` tasks
   keyed to the game id; cancelled/rescheduled on the relevant interactions.
 - **Restart recovery** — `BaseGame.cog_load` reloads active games (re-attach the game View,
-  call `on_game_resume` to re-arm timers), resolved games (re-attach the `📝 Name the loser`
-  View), open lobbies (re-attach the lobby View), and — duels only — pending challenges still
+  call `on_game_resume` to re-arm timers), settled games in any of the four settled states
+  (`fetch_resolved_games` returns `RESOLVED` / `RESOLVED_NO_NICK` / `NICKED` / `NO_NICK_SET`;
+  the result View is re-attached with `📝 Name the Loser` and/or `🔁 Run It Back` as the
+  state and the rematch window allow, and skipped once it would carry no button), open
+  lobbies (re-attach the lobby View), and — duels only — pending challenges still
   inside their response window (a persistent `ChallengeView` with the card's original
   deadline; see §3). Rows whose message is gone, and challenges already past their deadline,
   are left to the sweep.

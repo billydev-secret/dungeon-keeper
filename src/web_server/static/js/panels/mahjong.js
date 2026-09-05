@@ -408,8 +408,11 @@ export function mount(container) {
     // rather than show 0:00.
     function fmtDuration(v) {
       if (v == null) return "—";
-      const mins = Math.floor(v / 60);
-      const secs = Math.round(v % 60).toString().padStart(2, "0");
+      // Round the whole figure first: rounding the remainder alone turns
+      // 119.6s into "1:60".
+      const total = Math.round(v);
+      const mins = Math.floor(total / 60);
+      const secs = (total % 60).toString().padStart(2, "0");
       return `${mins}:${secs}`;
     }
 

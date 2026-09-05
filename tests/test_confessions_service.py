@@ -555,12 +555,19 @@ def test_the_seven_day_sweep_takes_stale_aliases_with_the_threads(sync_db_path: 
     assert _alias_rows(sync_db_path) == [(500, 7)]
 
 
-def test_a_pre_migration_alias_with_no_stamp_goes_on_the_first_sweep(sync_db_path: Path):
+def test_an_unstamped_alias_is_never_swept(sync_db_path: Path):
+    """A row still at 0 is one we know nothing about, not an old one.
+
+    Migration 211 backfills every pre-existing row, but the sweep must not
+    lean on that: purging a zero-stamp alias hands the member a new name and
+    colour mid-thread (the first cut of 211 did exactly that to every alias
+    on a thread still inside its week)."""
     get_or_assign_anon_identity(sync_db_path, GUILD, 500, 7)
+    upsert_thread_post(sync_db_path, GUILD, 500, 10, 500, 7)
     with open_db(sync_db_path) as conn:
         conn.execute("UPDATE confession_emoji_assignments SET created_at = 0")
-    assert purge_old_thread_posts(sync_db_path) == 1
-    assert _alias_rows(sync_db_path) == []
+    assert purge_old_thread_posts(sync_db_path) == 0
+    assert _alias_rows(sync_db_path) == [(500, 7)]
 
 
 def test_clear_anon_identities_drops_only_the_named_roots(sync_db_path: Path):

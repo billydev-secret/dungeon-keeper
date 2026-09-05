@@ -74,7 +74,8 @@ async def fetch_active_games(db: GamesDb) -> list[QuickdrawGame]:
 
 async def fetch_resolved_games(db: GamesDb) -> list[QuickdrawGame]:
     rows = await db.fetchall(
-        "SELECT * FROM quickdraw_games WHERE state IN ('RESOLVED', 'NICKED')"
+        "SELECT * FROM quickdraw_games "
+        "WHERE state IN ('RESOLVED', 'RESOLVED_NO_NICK', 'NICKED', 'NO_NICK_SET')"
     )
     return [game_from_row(r) for r in rows]
 

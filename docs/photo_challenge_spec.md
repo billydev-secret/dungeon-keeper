@@ -68,11 +68,15 @@ dashboard section (see History).
    excluded. The row's payload gets `counted: true` so a genuine 0 is not
    re-read, a legacy `guild_id = 0` is repaired to the channel's guild, and
    only cards from the last 30 days, ten per launch, are considered — a
-   channel that fell behind catches up over a few days. This is what makes
-   the Ping Response report's "Played" cell and Play Statistics' unique
-   players real for photo (a card younger than a day still reads 0 and the
-   report shows it blank, photo-external-104). Counting never blocks the
-   launch: a failure is logged and the card still posts.
+   channel that fell behind catches up over a few days (until 2026-09-05
+   the age floor compared `strftime('%s')` text against an integer and never
+   held). This is what makes the Ping Response report's "Played" cell and
+   Play Statistics' per-game counts real for photo (a card younger than a
+   day still reads 0 and the report shows it blank, photo-external-104).
+   The row holds counts only, never poster ids — `photo` is in
+   `NO_ROSTER_TYPES` — so photo posters are not part of Play Statistics'
+   **Unique Players**, which is rebuilt from archived rosters. Counting never
+   blocks the launch: a failure is logged and the card still posts.
 
 **NSFW:** prompt selection passes `allow_nsfw=channel_allows_nsfw(channel)` —
 gated on Discord's own `channel.is_nsfw()` (threads inherit the parent;

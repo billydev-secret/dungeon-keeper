@@ -104,6 +104,18 @@ def mark_played(payload: dict[str, Any], subject_id: int | str) -> None:
         played.append(uid_str)
 
 
+def is_lobby_row(state: str | None, payload: dict[str, Any]) -> bool:
+    """True when a persisted game is still a lobby, for boot recovery.
+
+    Start Guessing writes ``state = 'guessing'``, but rows created before it
+    did stay ``'joining'`` for the whole game; a scored round (``scores`` or
+    the ``played`` list) is the tell that guessing is underway on such a row.
+    """
+    if state != "joining":
+        return False
+    return not payload.get("scores") and not payload.get("played")
+
+
 def played_ids_from_payload(payload: dict[str, Any]) -> set[str]:
     """The set of subjects whose rounds have been revealed.
 

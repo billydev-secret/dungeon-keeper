@@ -166,12 +166,15 @@ def build_scenario_embed(
     submitted: int,
     total_players: int | None = None,
     color: discord.Color | None = None,
+    roster_submitted: int | None = None,
 ) -> discord.Embed:
     """Per-round submission embed shown alongside the Name-Your-Price button.
 
     ``timer_secs`` is rendered as a Discord countdown timestamp.
     ``submitted`` / ``total_players`` drive the live submission counter
-    that the cog refreshes after every modal submit. ``color`` is the guild
+    that the cog refreshes after every modal submit; ``roster_submitted``
+    is how many of ``total_players`` have answered when the crowd may also
+    submit, so a spectator's price never reads as a joined player's. ``color`` is the guild
     accent (playing is a non-winner phase); ``PHASE_PLAYING`` is the no-guild
     fallback.
     """
@@ -191,7 +194,12 @@ def build_scenario_embed(
         inline=False,
     )
     sub_text = f"💵 Submitted: **{submitted}**"
-    if total_players is not None:
+    if total_players is not None and roster_submitted is not None:
+        sub_text += (
+            f" ({roster_submitted}/{total_players} who joined"
+            " — the round closes once everyone who joined has answered)"
+        )
+    elif total_players is not None:
         sub_text += f"/{total_players} — the round closes once everyone has answered"
     sub_text += "\n⏭️ The host can press **Skip** to close it early."
     embed.add_field(name="Submissions", value=sub_text, inline=False)

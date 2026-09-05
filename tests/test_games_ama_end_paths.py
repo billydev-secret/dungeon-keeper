@@ -12,6 +12,7 @@ open question cards are retired when the game closes.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
@@ -113,6 +114,9 @@ class _Channel:
         self._next_id = 9000
 
     async def send(self, content=None, **kwargs):
+        # A real send suspends; a stub that never yields would let a
+        # self-cancelled timer run to completion and hide the defect.
+        await asyncio.sleep(0)
         self._next_id += 1
         msg = _Message(self._next_id, self.guild, with_embed="embed" in kwargs)
         self.messages[msg.id] = msg
@@ -363,6 +367,64 @@ async def test_the_seat_rotates_on_answers_not_asks(sync_db_path, stubs):
     await view.after_question_resolved(g.channel, g.seat.id)
     assert view.hot_seat_id is None, "two answers on a two-question dial rotate the seat"
     assert any("turn complete" in (s[0] or "") for s in g.channel.sends)
+
+
+@pytest.mark.parametrize(
+    "queued, expected_line",
+    [
+        pytest.param(True, "is in the hot seat!", id="next-volunteer-seated"),
+        pytest.param(False, "turn complete", id="empty-queue-opens-the-seat"),
+    ],
+)
+async def test_a_timed_out_seat_rotates_without_cancelling_its_own_timer(
+    sync_db_path,
+    stubs,
+    queued,
+    expected_line,
+):
+    """The firing timer re-arms (or clears) the timer it is running in; the
+    cancel must never land on the rotation's own next await (A1)."""
+    g = await _live_game(sync_db_path)
+    view: AMAView = g.view
+    await view._set_hot_seat(g.seat, g.channel, announce=False)
+    if queued:
+        view.queue.append(g.asker.id)
+    view._start_hot_seat_timer(g.channel, seconds=0)
+    firing = view._hot_seat_timer_task
+    assert firing is not None
+    for _ in range(200):
+        if firing.done():
+            break
+        await asyncio.sleep(0.01)
+    try:
+        assert firing.done() and not firing.cancelled(), (
+            "the timer swallowed its own cancel"
+        )
+        assert any(expected_line in (s[0] or "") for s in g.channel.sends)
+        payload = await get_game_payload(g.bot.games_db, g.game_id)
+        assert payload["hot_seat_id"] == (g.asker.id if queued else None)
+        assert view.hot_seat_id == (g.asker.id if queued else None)
+    finally:
+        if view._hot_seat_timer_task:
+            view._hot_seat_timer_task.cancel()
+
+
+async def test_a_card_resolved_after_the_close_posts_no_second_recap(
+    sync_db_path, stubs, monkeypatch
+):
+    """A Reply modal that passed its ``_closed`` check before End AMA confirmed
+    still resolves; the rotation it triggers must not close the game again (A3)."""
+    g = await _live_game(sync_db_path)
+    monkeypatch.setattr(ama_mod, "end_game", AsyncMock())
+    view: AMAView = g.view
+    await view._set_hot_seat(g.seat, g.channel, announce=False)
+    view.questions_this_turn = view.per_turn - 1
+    await view.close_now(g.channel, reason=REASON_HOST_ENDED)
+    assert len(_recap_posts(g.channel)) == 1
+
+    await view.after_question_resolved(g.channel, g.seat.id)
+    await view.check_turn_rotation(g.channel)
+    assert len(_recap_posts(g.channel)) == 1, "the close ran twice"
 
 
 async def test_questions_per_turn_dial_is_clamped_and_persisted(sync_db_path, stubs):

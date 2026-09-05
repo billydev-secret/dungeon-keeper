@@ -40,6 +40,7 @@ from bot_modules.games_ttl.logic import (
     MIN_PLAYERS,
     add_submission,
     compute_recap_winners,
+    is_lobby_row,
     mark_played,
     parse_lie_index,
     played_ids_from_payload,
@@ -635,7 +636,9 @@ class TTLCog(commands.Cog):
         """
         game_id = row["game_id"]
         host_id = int(row["host_id"])
-        if row["state"] == "joining":
+        # A pre-'guessing' row that already holds a scored round is a game
+        # mid-guessing, not a lobby (Hot Takes guards the same case).
+        if is_lobby_row(row["state"], payload):
             view = TTLSubmitView(
                 game_id, host_id, self.db, self.bot, self, prompt=payload.get("prompt"),
             )
