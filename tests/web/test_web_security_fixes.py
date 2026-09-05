@@ -17,10 +17,10 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.services.wellness_service import add_cap, opt_in_user
+from tests.web.conftest import WEB_HOST, set_session_cookie, web_client
 from web_server.auth import SESSION_COOKIE, DiscordOAuthAuth
 from web_server.server import create_app
 
@@ -28,28 +28,15 @@ _ADMIN_BITS = 0x8
 _MOD_BITS = 0x2000  # MANAGE_MESSAGES — moderator, decidedly not admin
 _OTHER_GUILD = 456
 
-#: The client speaks **https**, and every hand-minted cookie is pinned to this
-#: host. Both matter, and only together: a route that re-signs the session sets
-#: the new cookie ``Secure`` whenever ``DASHBOARD_BASE_URL`` is https (which
-#: production's is), so an http client stores it and never sends it back; and a
-#: domain-less ``cookies.set`` is a *different* jar key from the server's, so
-#: the stale one survives alongside it and wins. Under http with a bare set,
-#: the guild-switch tests below would therefore keep replaying the pre-switch
-#: cookie and read its permissions back as proof of a leak that isn't there.
-_HOST = "testserver"
-_COOKIE_DOMAIN = f"{_HOST}.local"  # http.cookiejar's form for a dotless host
+#: The client speaks **https** and every hand-minted cookie is pinned to its
+#: host — see ``web_client`` / ``set_session_cookie`` in ``conftest.py`` for
+#: why both are load-bearing for any test that asserts on a re-signed session.
+_HOST = WEB_HOST
+_client = web_client
+_set_session = set_session_cookie
 
 
 # ── Session helpers ──────────────────────────────────────────────────
-
-
-def _client(app) -> TestClient:
-    return TestClient(app, base_url=f"https://{_HOST}")
-
-
-def _set_session(client: TestClient, value: str) -> None:
-    """Install a session cookie the server's own ``Set-Cookie`` will replace."""
-    client.cookies.set(SESSION_COOKIE, value, domain=_COOKIE_DOMAIN, path="/")
 
 
 def _auth_client(fake_ctx, *, bits: int, guild_id: int | None = None, guilds=None):
@@ -269,11 +256,18 @@ def test_revocation_survives_a_restart(fake_ctx):
     ("headers", "expected"),
     [
         pytest.param({}, 200, id="no-origin-header-is-allowed"),
-        pytest.param({"Origin": "http://testserver"}, 200, id="same-origin"),
+        pytest.param({"Origin": f"https://{_HOST}"}, 200, id="same-origin"),
+        # The check is host-only by design: a reverse-proxied dashboard and a
+        # LAN one differ in scheme and port without differing in trust.
         pytest.param(
-            {"Origin": "http://testserver:9999"}, 200, id="same-host-other-port"
+            {"Origin": f"http://{_HOST}"}, 200, id="same-host-other-scheme"
         ),
-        pytest.param({"Referer": "http://testserver/#/home"}, 200, id="same-referer"),
+        pytest.param(
+            {"Origin": f"http://{_HOST}:9999"}, 200, id="same-host-other-port"
+        ),
+        pytest.param(
+            {"Referer": f"https://{_HOST}/#/home"}, 200, id="same-referer"
+        ),
         pytest.param({"Origin": "https://evil.example"}, 403, id="cross-origin"),
         pytest.param(
             {"Referer": "https://evil.example/page"}, 403, id="cross-origin-referer"

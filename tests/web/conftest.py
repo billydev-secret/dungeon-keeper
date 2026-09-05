@@ -63,42 +63,34 @@ class FakeCtx:
         return value
 
 
-# ── Environment hermeticity ──────────────────────────────────────────
+# ── Client + cookie transport ────────────────────────────────────────
 
-#: Dashboard settings the web layer reads from the process environment at
-#: request time. ``bot_modules.core.config`` calls ``load_dotenv(override=True)``
-#: at *module scope*, so importing anything under ``web_server`` pulls the
-#: developer's real ``.env`` into ``os.environ`` — and the production checkout
-#: has one. That silently made two B-SEC1 tests fail there and pass everywhere
-#: else (a live ``DASHBOARD_BASE_URL`` of ``https://…`` flips the session
-#: cookie to ``Secure``, which the http-speaking TestClient then refuses to
-#: send back). Scrub them so a web test reads the same environment on every
-#: machine; a test that needs a value sets it with ``monkeypatch.setenv``,
-#: which runs after this and therefore still wins.
-_DASHBOARD_ENV_VARS = (
-    "DASHBOARD_BASE_URL",
-    "DASHBOARD_RETURN_TO_URLS",
-    "DASHBOARD_OPEN_AUTH",
-    "SUPPORT_USER_ID",
-    "DISCORD_CLIENT_ID",
-    "SESSION_SECRET",
-    "SPOTIFY_CLIENT_ID",
-    "SPOTIFY_CLIENT_SECRET",
-)
+#: Every web TestClient speaks **https** and pins its hand-minted cookies to
+#: this host. Both matter, and only together: a route that re-signs the session
+#: sets the new cookie ``Secure`` whenever ``DASHBOARD_BASE_URL`` is https
+#: (production's is), so an http client stores it and never sends it back; and
+#: a domain-less ``cookies.set`` is a *different* ``http.cookiejar`` key from
+#: the server's, so the stale one survives alongside it and wins. A test that
+#: asserts on a re-signed session then keeps replaying its pre-switch cookie
+#: and reads the answer back as proof of a bug that isn't there.
+WEB_HOST = "testserver"
+COOKIE_DOMAIN = f"{WEB_HOST}.local"  # http.cookiejar's form for a dotless host
 
 
-@pytest.fixture(autouse=True)
-def _hermetic_dashboard_env(monkeypatch):
-    """Unset every dashboard env var a developer's ``.env`` might define.
+def web_client(app) -> TestClient:
+    """A TestClient whose transport can carry a ``Secure`` session cookie."""
+    return TestClient(app, base_url=f"https://{WEB_HOST}")
 
-    Absent rather than pinned to a fixed value on purpose: absent is what CI
-    and a fresh clone see, so it is the configuration the assertions were
-    written against. It also makes ``_auto_detect_auth`` fail closed if a
-    future test forgets to pass ``auth=`` instead of quietly picking up the
-    real Discord client id.
-    """
-    for name in _DASHBOARD_ENV_VARS:
-        monkeypatch.delenv(name, raising=False)
+
+def set_session_cookie(client: TestClient, value: str) -> None:
+    """Install a session cookie the server's own ``Set-Cookie`` will replace."""
+    client.cookies.set(SESSION_COOKIE, value, domain=COOKIE_DOMAIN, path="/")
+
+
+# Environment hermeticity is global — ``tests/conftest.py`` scrubs the settings
+# a developer's ``.env`` defines for *every* test, not just the ones under this
+# directory, because the dashboard's surface is not ``tests/web/``. See
+# ``SCRUBBED_ENV_VARS`` there and ``tests/test_env_hermeticity.py``.
 
 
 @pytest.fixture
@@ -201,7 +193,7 @@ def live_guild(fake_ctx):
 def open_client(fake_ctx) -> Generator[TestClient, None, None]:
     """TestClient with no auth (OpenAuth mode)."""
     app = create_app(fake_ctx, auth=OpenAuth())
-    client = TestClient(app)
+    client = web_client(app)
     invalidate_report_cache()
     yield client
     client.close()
@@ -213,7 +205,7 @@ def authed_client(fake_ctx) -> Generator[TestClient, None, None]:
     """TestClient with a Discord OAuth session cookie (primary guild)."""
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     app = create_app(fake_ctx, auth=auth)
-    client = TestClient(app)
+    client = web_client(app)
     cookie = auth.create_session_cookie(
         user_id=1,
         username="tester",
@@ -222,7 +214,7 @@ def authed_client(fake_ctx) -> Generator[TestClient, None, None]:
         guild_id=fake_ctx.guild_id,
         guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
     )
-    client.cookies.set(SESSION_COOKIE, cookie)
+    set_session_cookie(client, cookie)
     invalidate_report_cache()
     yield client
     client.close()
