@@ -1406,6 +1406,10 @@ def test_overlay_day_is_drawn_raw(db_conn):
         # A day nobody has lived an hour of has nothing to mark either way.
         ([None, None], 0, [None, None], [None, None]),
         ([], 0, [], []),
+        # A negative index means "nothing is provisional", not "all of it" —
+        # the same reading liveEdgeProps in charts.js takes, so the two
+        # renderers cannot draw different pictures from one series.
+        ([1.0, 2.0], -1, [1.0, 2.0], [None, None]),
     ],
 )
 def test_split_provisional(values, partial_from, settled, provisional):
@@ -1521,6 +1525,20 @@ def test_render_overlay_panel_ignores_a_live_edge_past_the_data():
         [dataclasses.replace(_overlay_chart(), partial_from=23)]
     )
     assert png.startswith(PNG_MAGIC)
+    # Nothing provisional was drawn, so the figure is the unmarked one — the
+    # ring must not fall back onto the last SETTLED point and call a finished
+    # hour live.
+    assert png == render_overlay_panel([_overlay_chart()])
+
+
+def test_render_overlay_panel_ring_never_lands_on_a_settled_point():
+    """`_overlay_chart` stops at hour 9, so a live edge at 10 has no plotted
+    point of its own. The join point at 9 belongs to the settled line; marking
+    it would say a finished hour is still in progress."""
+    marked = render_overlay_panel(
+        [dataclasses.replace(_overlay_chart(), partial_from=10)]
+    )
+    assert marked == render_overlay_panel([_overlay_chart()])
 
 
 # ── The mod stats panel: all-time XP and its three-row renderer ───────
@@ -1657,6 +1675,27 @@ def test_mod_stats_panel_marks_the_hour_in_progress():
         [_stack([1.0, 2.0])],
     )
     assert settled != marked
+
+
+def test_mod_stats_panel_captions_only_what_it_drew():
+    """The note explains a mark, so it is printed only when one went on the
+    picture — never from `partial_from` alone, which the clock can leave
+    pointing past the end of the data. Byte-identical to the same chart with no
+    live edge at all: no dash, no ring, and no sentence promising them."""
+    stopped_at_ten = dataclasses.replace(
+        _overlay_stub(), current=[1.0] * 10 + [None] * 14
+    )
+    presence = PresenceSeries(values=[2] * 10 + [None] * 14)
+
+    past_the_end = render_mod_stats_panel(
+        dataclasses.replace(stopped_at_ten, partial_from=20),
+        presence,
+        [_stack([1.0, 2.0])],
+    )
+
+    assert past_the_end == render_mod_stats_panel(
+        stopped_at_ten, presence, [_stack([1.0, 2.0])]
+    )
 
 
 def test_mod_stats_panel_marks_the_presence_line_on_its_own():

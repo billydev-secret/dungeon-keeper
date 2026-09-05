@@ -714,21 +714,6 @@ export function renderChartTable(host, { labels, datasets, indexLabel = "Period"
 }
 
 
-/**
- * The band chart: this period against a p25–p75 envelope over the last N.
- *
- * The envelope is a *pair* of line datasets with a fill between them, which is
- * how Chart.js draws a band. Only the upper one carries the legend entry — the
- * lower is scaffolding and opts out via `skipLegend`, so nobody can toggle off
- * half a band and be left with a stray line.
- *
- * Draw order matters: the band goes in first so the two lines sit on top of it
- * rather than under a translucent wash.
- *
- * `data.counts` is drawn as handed over: a caller smoothing the current line
- * passes the smoothed series here and names it in `currentNote`, while keeping
- * the raw one for the table and the totals.
- */
 /** The live edge's dash. Short enough to read as one line, not a row of ticks. */
 const PROVISIONAL_DASH = [2, 2];
 
@@ -774,6 +759,21 @@ function liveEdgeProps(values, partialFrom, color, { dashed = false } = {}) {
   return props;
 }
 
+/**
+ * The band chart: this period against a p25–p75 envelope over the last N.
+ *
+ * The envelope is a *pair* of line datasets with a fill between them, which is
+ * how Chart.js draws a band. Only the upper one carries the legend entry — the
+ * lower is scaffolding and opts out via `skipLegend`, so nobody can toggle off
+ * half a band and be left with a stray line.
+ *
+ * Draw order matters: the band goes in first so the two lines sit on top of it
+ * rather than under a translucent wash.
+ *
+ * `data.counts` is drawn as handed over: a caller smoothing the current line
+ * passes the smoothed series here and names it in `currentNote`, while keeping
+ * the raw one for the table and the totals.
+ */
 export function makeOverlayChart(
   canvas, data,
   { subject, typical, isWeek, currentTotal, typicalToDate, extraSeries = [], currentNote = "" }

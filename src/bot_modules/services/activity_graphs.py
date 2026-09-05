@@ -876,18 +876,21 @@ def split_provisional(
     than a continuation of it.
 
     ``partial_from`` of ``None`` means nothing is provisional — a period that
-    has already ended — and the whole series comes back settled.
+    has already ended — and the whole series comes back settled. A negative
+    index says the same thing rather than "all of it": ``liveEdgeProps`` in
+    charts.js reads one that way, and the two renderers are meant to draw the
+    same picture from the same inputs.
     """
     settled = list(values)
-    if partial_from is None:
+    if partial_from is None or partial_from < 0:
         return settled, [None] * len(settled)
-    start = max(0, partial_from)
     provisional: list[float | None] = [None] * len(settled)
-    for i in range(max(0, start - 1), len(settled)):
+    for i in range(max(0, partial_from - 1), len(settled)):
         provisional[i] = settled[i]
-    for i in range(start, len(settled)):
+    for i in range(partial_from, len(settled)):
         settled[i] = None
     return settled, provisional
+
 
 # Full weekday names, Sunday-first to match _DOW_LABELS. Spelled out rather
 # than taken from strftime("%A"), which follows the process locale.
@@ -2087,7 +2090,7 @@ def _plot_live_edge(
     color: str,
     label: str | None = None,
     **line_kw,
-) -> None:
+) -> bool:
     """Plot *values*, drawing the period's live edge as provisional.
 
     Two encodings, not one: the tail is dashed **and** its final point is a
@@ -2098,12 +2101,23 @@ def _plot_live_edge(
 
     Only the settled line is labelled, so a series contributes one legend entry
     however many pieces it is drawn in.
+
+    Returns whether the mark was actually drawn, so a caller can caption it
+    only when it is on the picture. Nothing is drawn when the provisional span
+    holds no plotted point — a ``partial_from`` past the end of the data, which
+    the clock can produce by rolling between the query and the render. The ring
+    is only ever placed **at or after** ``partial_from``: the join point one
+    step back belongs to the settled line and marking it would call a finished
+    hour live.
     """
     settled, provisional = split_provisional(values, partial_from)
     ax.plot(x[: len(settled)], settled, color=color, label=label, **line_kw)
-    live = [i for i, v in enumerate(provisional) if v is not None]
+    # `split_provisional` has already blanked the tail for a None or negative
+    # index, so this only has to skip the join point the split kept.
+    start = 0 if partial_from is None else max(0, partial_from)
+    live = [i for i, v in enumerate(provisional) if v is not None and i >= start]
     if not live:
-        return
+        return False
     tail_kw = dict(line_kw)
     tail_kw["linestyle"] = _PROVISIONAL_DASH
     ax.plot(x[: len(provisional)], provisional, color=color, **tail_kw)
@@ -2119,6 +2133,7 @@ def _plot_live_edge(
         linestyle="none",
         zorder=int(line_kw.get("zorder", 3)) + 2,
     )
+    return True
 
 
 #: Said under the title when either line runs to a live edge. One sentence for
@@ -2414,7 +2429,7 @@ def render_mod_stats_panel(
             zorder=2,
             label=f"{overlay.band_label} (median)",
         )
-    _plot_live_edge(
+    live = _plot_live_edge(
         ax,
         x,
         overlay.current,
@@ -2445,7 +2460,7 @@ def render_mod_stats_panel(
         band_ceiling = max(overlay.band_high, default=0.0)
         ceiling = max(ceiling, band_ceiling)
         factor = (ceiling * 0.7 / peak) if peak and ceiling else 1.0
-        _plot_live_edge(
+        presence_live = _plot_live_edge(
             ax,
             list(range(len(presence.values))),
             [None if v is None else v * factor for v in presence.values],
@@ -2458,6 +2473,7 @@ def render_mod_stats_panel(
             zorder=4,
             label=f"Mods around (0-{peak}, rescaled)",
         )
+        live = live or presence_live
     elif presence is not None and presence.empty_note:
         ax.text(
             0.01,
@@ -2472,10 +2488,10 @@ def render_mod_stats_panel(
 
     # The note, not a fifth legend entry: this legend is already four entries
     # in two columns below a 6-inch figure, and a third row of it costs more of
-    # the phone's screen than the sentence does.
-    live = overlay.partial_from is not None or (
-        presence is not None and presence.has_data and presence.partial_from is not None
-    )
+    # the phone's screen than the sentence does. Said only when a mark was
+    # actually drawn — `live` is what the plotting reported, not a second guess
+    # at it, so the caption can never explain something that is not on the
+    # picture.
     _title(ax, overlay.title, PROVISIONAL_NOTE if live else "")
     ax.set_ylabel("Messages", color=_TEXT, fontsize=10)
     ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=5))
