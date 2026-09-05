@@ -20,17 +20,20 @@ across 183 tables that hold a member id. That is a real result and the 08-06 /
 09-02 work earned it.
 
 The weakness is not accuracy. It is that **"indefinite" appeared in 44 of the
-79 rows**, and almost none of those recorded a decision. They recorded a default
+78 rows**, and almost none of those recorded a decision. They recorded a default
 that was never revisited. The register was honest about what we do; it did not
 show that anyone chose it.
 
 > **On the number.** The brief for this review said "46 indefinite, 2 bounded".
 > 46 is a whole-file grep and catches two hits outside the Retention column;
-> column-scoped it is 44, of which 30 cells were the bare word and nothing else.
+> column-scoped it is 44 of 78 data rows, of which 30 cells were the bare word
+> and nothing else. (78, not 79: the table ends with a `_(bundles append
+> below)_` placeholder that parses as a row but names no table.)
 > The "2 bounded" counted occurrences of the string "7 days" — the real figure
 > was ~12 rows stating a period. Cross-checked with the parallel
 > `gdpr-disclosure-report` session, which parses the column by position and
-> independently got 44.
+> independently got 44 — and which also caught the 79/78 error, and two rows
+> this session had left unlabelled.
 
 Three defects follow from that, and one is a genuine inconsistency between
 surfaces rather than a matter of posture.
@@ -295,6 +298,6 @@ and a new guild is covered from its first day.
 
 - **`xp_events` is the owner's toggle**, on Moderation &amp; Privacy → XP
   settings. 651k rows go on the first pass. Not switched on by this session.
-- **19 rows remain `undecided`** — the honest backlog, down from an apparent 44.
+- **20 rows remain `undecided`** — the honest backlog, down from 44.
   Mostly small or self-limiting stores; none is a `messages`-scale question.
 - **F1** needs applying from the Docs panel and re-posting to both channels.
