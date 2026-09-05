@@ -31,25 +31,40 @@ from discord.ext import commands
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_config_value
-from bot_modules.word_cloud import corpus, logic, presets, render
+from bot_modules.word_cloud import corpus, embeds, logic, presets, render
+from bot_modules.word_cloud.embeds import FILENAME
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger(__name__)
 
-CAP_KEY = "word_cloud_message_cap"
-PRESET_KEY = "word_cloud_default_preset"
-DEFAULT_CAP = 12000
-#: Ceiling on the dial itself. JakeBot, the most featureful of the existing
-#: word cloud bots, stops at 12,000; past that the tail of the cloud is words
-#: nobody can read anyway, and the render cost keeps climbing.
-MAX_CAP = 12000
-#: How many channels a live "everywhere" fans out over. Each is one Discord
-#: round trip, so this is the difference between a slow command and a hung one.
-LIVE_CHANNEL_FANOUT = 25
 
-_FILENAME = "wordcloud.png"
+
+def _can_read(channel: object, member: discord.Member) -> bool:
+    """Whether ``member`` may read ``channel``'s history.
+
+    The single definition of this command's gate, used both for a named
+    channel and for every candidate in the "everywhere" fan-out, so the two
+    can never disagree about what "you can read it" means.
+
+    A *private* thread needs more than the inherited answer:
+    ``Thread.permissions_for`` only applies the parent channel's overwrites and
+    knows nothing about who was invited, so a moderator never added to one
+    still comes back "allowed". Discord's own rule is invitation or Manage
+    Threads, and only the second half is knowable from the cache.
+    """
+    try:
+        perms = channel.permissions_for(member)  # type: ignore[attr-defined]
+    except discord.ClientException:
+        # A thread whose parent isn't cached can't be permission-checked, and
+        # one stale thread must not sink the whole command.
+        return False
+    if not (perms.read_messages and perms.read_message_history):
+        return False
+    if isinstance(channel, discord.Thread) and channel.is_private():
+        return bool(perms.manage_threads)
+    return True
 
 
 def _readable_channel_ids(
@@ -57,36 +72,17 @@ def _readable_channel_ids(
 ) -> list[int]:
     """Every channel in ``guild`` whose history ``member`` may read.
 
-    Read permission is the whole gate on this command, so this is where it is
-    enforced for the "everywhere" scope. Threads are included: the archive
-    stores a thread's own id as ``channel_id``, so leaving them out would drop
-    whole conversations.
-
-    A *private* thread needs its own check: ``Thread.permissions_for`` only
-    inherits the parent channel's overwrites, so a moderator who was never
-    added to one still comes back "allowed". Discord's own rule is invitation
-    or Manage Threads, and only the second half is knowable from the cache, so
-    that is what is required — otherwise "every channel you can read" would
-    quietly include rooms the invoker cannot open.
+    Threads are included: the archive stores a thread's own id as
+    ``channel_id``, so leaving them out would drop whole conversations.
+    Archived threads are absent from ``guild.threads`` and so are never swept
+    up by "everywhere" — running the command inside one still clouds it, since
+    being in it is proof of access.
     """
-    out: list[int] = []
-    for channel in list(guild.text_channels) + list(guild.threads):
-        try:
-            perms = channel.permissions_for(member)
-        except discord.ClientException:
-            # A thread whose parent isn't cached can't be permission-checked.
-            # One such thread must not sink the whole command.
-            continue
-        if not (perms.read_messages and perms.read_message_history):
-            continue
-        if (
-            isinstance(channel, discord.Thread)
-            and channel.is_private()
-            and not perms.manage_threads
-        ):
-            continue
-        out.append(channel.id)
-    return out
+    return [
+        channel.id
+        for channel in list(guild.text_channels) + list(guild.threads)
+        if _can_read(channel, member)
+    ]
 
 
 class WordCloudCog(commands.Cog):
@@ -114,24 +110,20 @@ class WordCloudCog(commands.Cog):
         retains = self.bot.ctx.guild_config(guild_id).retains_content
         with self.bot.ctx.open_db() as conn:
             raw_cap = get_config_value(
-                conn, CAP_KEY, str(DEFAULT_CAP), guild_id, allow_legacy_fallback=False
+                conn,
+                logic.CAP_KEY,
+                str(logic.DEFAULT_CAP),
+                guild_id,
+                allow_legacy_fallback=False,
             )
             preset = get_config_value(
                 conn,
-                PRESET_KEY,
+                logic.PRESET_KEY,
                 presets.DEFAULT_PRESET,
                 guild_id,
                 allow_legacy_fallback=False,
             )
-        try:
-            cap = int(raw_cap)
-        except (TypeError, ValueError):
-            cap = DEFAULT_CAP
-        # A dial blanked to 0 or saved negative would render nothing at all;
-        # treat anything unusable as "no cap set" rather than "cloud nothing".
-        if cap <= 0:
-            cap = DEFAULT_CAP
-        return min(cap, MAX_CAP), preset, retains
+        return logic.clamp_cap(raw_cap), preset, retains
 
     # -- corpus -----------------------------------------------------------
 
@@ -251,17 +243,36 @@ class WordCloudCog(commands.Cog):
         preset: app_commands.Choice[str] | None = None,
         color: app_commands.Choice[str] | None = None,
     ) -> None:
+        # Every gate lives in logic.plan_scope; this resolves the Discord
+        # objects it needs and does what it is told.
         guild = interaction.guild
-        if guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message(
-                "This only works in a server.", ephemeral=True
-            )
-            return
+        invoker = interaction.user
+        in_guild = guild is not None and isinstance(invoker, discord.Member)
 
-        if not self.bot.ctx.is_mod(interaction):
-            await interaction.response.send_message(
-                "That's a moderator command.", ephemeral=True
-            )
+        target = channel or interaction.channel if in_guild else None
+        if not isinstance(target, (discord.TextChannel, discord.Thread)):
+            target = None
+
+        target_readable = False
+        if target is not None and isinstance(invoker, discord.Member):
+            target_readable = _can_read(target, invoker)
+
+        scope = logic.plan_scope(
+            is_mod=in_guild and self.bot.ctx.is_mod(interaction),
+            in_guild=in_guild,
+            everywhere=everywhere,
+            everywhere_ids=(
+                _readable_channel_ids(guild, invoker)
+                if everywhere and in_guild and isinstance(invoker, discord.Member)
+                else ()
+            ),
+            target_id=target.id if target is not None else None,
+            target_readable=target_readable,
+            target_label=target.mention if target is not None else "",
+            picked_channel=channel is not None,
+        )
+        if isinstance(scope, logic.Refusal):
+            await interaction.response.send_message(scope.message, ephemeral=True)
             return
 
         try:
@@ -272,8 +283,9 @@ class WordCloudCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
+        assert guild is not None
         try:
-            await self._run(interaction, guild, span, channel, member, everywhere, preset, color)
+            await self._run(interaction, guild, span, scope, member, preset, color)
         except Exception:
             log.exception("word cloud failed")
             await interaction.followup.send(
@@ -285,63 +297,30 @@ class WordCloudCog(commands.Cog):
         interaction: discord.Interaction,
         guild: discord.Guild,
         span: timedelta,
-        channel: discord.TextChannel | None,
+        scope: logic.Scope,
         member: discord.Member | None,
-        everywhere: bool,
         preset_choice: app_commands.Choice[str] | None,
         color_choice: app_commands.Choice[str] | None,
     ) -> None:
-        invoker = interaction.user
-        assert isinstance(invoker, discord.Member)
-
         cap, default_preset, retains = await asyncio.to_thread(
             self._read_dials, guild.id
         )
         preset = presets.resolve_preset(
             preset_choice.value if preset_choice else default_preset
         )
-        want_sentiment = (color_choice.value if color_choice else "sentiment") == "sentiment"
+        want_sentiment = (
+            color_choice.value if color_choice else "sentiment"
+        ) == "sentiment"
 
-        # -- scope, gated on what the moderator can actually read ----------
-        if everywhere:
-            # In-memory permission maths over the channel cache — no I/O, so
-            # it stays on the loop rather than crossing a thread boundary.
-            channel_ids = _readable_channel_ids(guild, invoker)
-            scope_label = "every channel you can read"
-        else:
-            target = channel or interaction.channel
-            if target is None or not isinstance(
-                target, (discord.TextChannel, discord.Thread)
-            ):
-                await interaction.followup.send(
-                    "Pick a text channel for this.", ephemeral=True
-                )
-                return
-            perms = target.permissions_for(invoker)
-            if not (perms.read_messages and perms.read_message_history):
-                await interaction.followup.send(
-                    "You can't read that channel's history.", ephemeral=True
-                )
-                return
-            channel_ids = [target.id]
-            scope_label = target.mention
-
-        if not channel_ids:
-            await interaction.followup.send(
-                "There's nothing here you can read.", ephemeral=True
-            )
-            return
-
-        # -- corpus --------------------------------------------------------
         author_id = member.id if member else None
-        notes: list[str] = []
+        channel_ids = list(scope.channel_ids)
+        notes: list[str] = [scope.note] if scope.note else []
         now = time.time()
 
         # The span the cloud actually covers. The live path clamps it, and the
-        # card is labelled with this rather than the ask — a headline reading
-        # "over the last 7 days" above ten minutes of chat is wrong even with
-        # a note underneath explaining it.
+        # card is labelled with this rather than the ask.
         effective_span = span
+        live_reason: str | None = None
 
         if retains:
             since_ts = int(now - span.total_seconds())
@@ -350,22 +329,28 @@ class WordCloudCog(commands.Cog):
             )
             source = "stored history"
             if not docs and not has_content:
-                retains = False  # dial says "all" but nothing landed yet
-        if not retains:
+                # The dial says "all" but nothing has landed yet — a different
+                # story from a guild that keeps no text, and it must not be
+                # told as if it were.
+                live_reason = logic.LIVE_EMPTY_ARCHIVE
+        else:
+            live_reason = logic.LIVE_NO_STORAGE
+
+        if live_reason is not None:
             live_span, clamped = logic.clamp_live_window(span)
             effective_span = live_span
             if clamped:
-                notes.append(
-                    "This server doesn't keep message text, so this is the last "
-                    "10 minutes rather than the window you asked for."
-                )
-            if len(channel_ids) > LIVE_CHANNEL_FANOUT:
+                notes.append(logic.live_clamp_note(live_reason))
+            if len(channel_ids) > logic.LIVE_CHANNEL_FANOUT:
                 channel_ids = await asyncio.to_thread(
-                    self._rank_channels, guild.id, channel_ids, LIVE_CHANNEL_FANOUT
+                    self._rank_channels,
+                    guild.id,
+                    channel_ids,
+                    logic.LIVE_CHANNEL_FANOUT,
                 )
                 notes.append(
-                    f"Reading the {LIVE_CHANNEL_FANOUT} busiest channels, to keep "
-                    "this quick."
+                    f"Reading the {logic.LIVE_CHANNEL_FANOUT} busiest channels, "
+                    "to keep this quick."
                 )
             since_ts = now - live_span.total_seconds()
             # Ask Discord to start after this point rather than paging back
@@ -382,14 +367,19 @@ class WordCloudCog(commands.Cog):
         docs, capped = logic.apply_cap(docs, cap)
         if capped:
             notes.append(
-                f"Capped at the most recent {cap:,} messages, so this covers less "
-                "than the full window."
+                f"Capped at the most recent {cap:,} messages, so this covers "
+                "less than the full window."
             )
 
         stats = await asyncio.to_thread(logic.build_stats, docs)
         if not stats:
             await interaction.followup.send(
-                self._empty_message(retains, member, scope_label), ephemeral=True
+                logic.empty_message(
+                    live_reason,
+                    member.display_name if member else None,
+                    scope.label,
+                ),
+                ephemeral=True,
             )
             return
 
@@ -401,56 +391,21 @@ class WordCloudCog(commands.Cog):
             render.render_png, stats, preset, by_sentiment=by_sentiment
         )
 
-        # -- reply ---------------------------------------------------------
-        who = f" from {member.display_name}" if member else ""
-        embed = discord.Embed(
-            title="Word cloud",
-            description=(
-                f"**{len(docs):,}** messages{who} in {scope_label}, "
-                f"over the last {self._span_label(effective_span)} — from {source}."
-            ),
+        embed = embeds.build_cloud_embed(
+            message_count=len(docs),
+            member_name=member.display_name if member else None,
+            scope_label=scope.label,
+            span=effective_span,
+            source_label=source,
+            by_sentiment=by_sentiment,
+            notes=notes,
             color=await safe_resolve_accent(self.bot, guild),
         )
-        if by_sentiment:
-            embed.add_field(
-                name="Colour",
-                value="Warm words came up in happier messages, cool ones in unhappier.",
-                inline=False,
-            )
-        if notes:
-            embed.add_field(name="Worth knowing", value="\n".join(notes), inline=False)
-        embed.set_image(url=f"attachment://{_FILENAME}")
-
         await interaction.followup.send(
             embed=embed,
-            file=discord.File(fp=io.BytesIO(png), filename=_FILENAME),
+            file=discord.File(fp=io.BytesIO(png), filename=FILENAME),
             ephemeral=True,
         )
-
-    @staticmethod
-    def _span_label(span: timedelta) -> str:
-        minutes = int(span.total_seconds() // 60)
-        if minutes < 60:
-            return f"{minutes} minute{'s' if minutes != 1 else ''}"
-        hours = minutes // 60
-        if hours < 48:
-            return f"{hours} hour{'s' if hours != 1 else ''}"
-        days = hours // 24
-        return f"{days} day{'s' if days != 1 else ''}"
-
-    @staticmethod
-    def _empty_message(
-        retains: bool, member: discord.Member | None, scope_label: str
-    ) -> str:
-        """Say *why* the cloud is empty — the two reasons are not the same."""
-        if not retains:
-            return (
-                "Nothing to draw. This server doesn't keep message text, so I can "
-                "only read the last 10 minutes of live chat — and there wasn't "
-                "enough of it just now."
-            )
-        who = f" from {member.display_name}" if member else ""
-        return f"Nothing to draw{who} in {scope_label} over that window."
 
 
 async def setup(bot: "Bot") -> None:

@@ -45,6 +45,7 @@ from bot_modules.services import intake_service as intake_svc
 from bot_modules.services import pools_metrics
 # presets only — importing word_cloud.render here would pull matplotlib
 # into the web process for two dropdown values.
+from bot_modules.word_cloud import logic as word_cloud_logic
 from bot_modules.word_cloud.presets import PRESETS as WORD_CLOUD_PRESETS
 from bot_modules.services import xp_rollup_service
 from bot_modules.services.message_store import (
@@ -193,6 +194,7 @@ from bot_modules.services.voice_transcription_service import (
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
 
 WORD_CLOUD_PRESET_KEYS = {p.key for p in WORD_CLOUD_PRESETS}
+WORD_CLOUD_DEFAULT_PRESET = WORD_CLOUD_PRESETS[0].key
 
 _STARBOARD_EXCLUDED_BUCKET = "starboard_excluded_channels"
 _RISKY_PING_KEY = "risky_ping_role_id"
@@ -1354,13 +1356,26 @@ async def get_config(
                 # instead of the home guild's rows.
                 "word_cloud": {
                     "message_cap": _int_val(
-                        conn, "word_cloud_message_cap", 12000, guild_id,
+                        conn,
+                        word_cloud_logic.CAP_KEY,
+                        word_cloud_logic.DEFAULT_CAP,
+                        guild_id,
                         allow_legacy_fallback=False,
                     ),
                     "default_preset": _str_val(
-                        conn, "word_cloud_default_preset", "midnight", guild_id,
+                        conn,
+                        word_cloud_logic.PRESET_KEY,
+                        WORD_CLOUD_DEFAULT_PRESET,
+                        guild_id,
                         allow_legacy_fallback=False,
                     ),
+                    # The panel renders its own bounds from these rather than
+                    # re-typing the numbers, so the ceiling lives in one place.
+                    "min_cap": word_cloud_logic.MIN_CAP,
+                    "max_cap": word_cloud_logic.MAX_CAP,
+                    "presets": [
+                        {"key": p.key, "label": p.label} for p in WORD_CLOUD_PRESETS
+                    ],
                 },
                 "auto_role": {
                     "auto_role_ids": _id_str_list(conn, "auto_role_ids", guild_id),
@@ -2921,14 +2936,19 @@ async def update_word_cloud(
     def _q():
         with ctx.open_db() as conn:
             if body.message_cap is not None:
-                cap = max(100, min(12000, int(body.message_cap)))
-                set_config_value(conn, "word_cloud_message_cap", str(cap), guild_id)
+                cap = max(
+                    word_cloud_logic.MIN_CAP,
+                    min(word_cloud_logic.MAX_CAP, int(body.message_cap)),
+                )
+                set_config_value(
+                    conn, word_cloud_logic.CAP_KEY, str(cap), guild_id
+                )
             if body.default_preset is not None:
                 preset = body.default_preset.strip().lower()
                 if preset not in WORD_CLOUD_PRESET_KEYS:
                     raise HTTPException(400, "Unknown word cloud preset.")
                 set_config_value(
-                    conn, "word_cloud_default_preset", preset, guild_id
+                    conn, word_cloud_logic.PRESET_KEY, preset, guild_id
                 )
         return {"ok": True}
 

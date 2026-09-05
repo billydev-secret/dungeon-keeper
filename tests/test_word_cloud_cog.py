@@ -11,18 +11,12 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
-from datetime import timedelta
 from types import SimpleNamespace
 
 import discord
-import pytest
 
-from bot_modules.cogs.word_cloud_cog import (
-    DEFAULT_CAP,
-    MAX_CAP,
-    WordCloudCog,
-    _readable_channel_ids,
-)
+from bot_modules.cogs.word_cloud_cog import WordCloudCog, _readable_channel_ids
+from bot_modules.word_cloud.logic import DEFAULT_CAP, MAX_CAP
 
 GUILD = 7
 
@@ -195,63 +189,25 @@ def test_read_dials_defaults_when_unset():
     assert preset == "midnight"
 
 
-@pytest.mark.parametrize("stored", ["0", "-5"])
-def test_read_dials_treats_a_useless_cap_as_unset(stored):
-    """A cap of 0 must mean "no cap set", never "render nothing"."""
-    cap, _, _ = _cog({"word_cloud_message_cap": stored})._read_dials(GUILD)
-    assert cap == DEFAULT_CAP
-
-
-def test_read_dials_clamps_an_oversized_cap():
+def test_read_dials_runs_the_stored_cap_through_the_clamp():
+    """The clamping itself is logic.clamp_cap's contract, tested there; this
+    is only that the dial reaches it."""
     cap, _, _ = _cog({"word_cloud_message_cap": "999999"})._read_dials(GUILD)
     assert cap == MAX_CAP
 
 
-def test_read_dials_survives_a_non_numeric_cap():
-    cap, _, _ = _cog({"word_cloud_message_cap": "lots"})._read_dials(GUILD)
+def test_read_dials_ignores_another_guilds_row():
+    """Read strictly: a guild that never saved must not inherit home's dials."""
+    cog = _cog({})
+    with cog.bot.ctx.open_db() as conn:
+        conn.execute(
+            "INSERT INTO config (guild_id, key, value) VALUES (0, ?, ?)",
+            ("word_cloud_message_cap", "250"),
+        )
+    cap, _, _ = cog._read_dials(GUILD)
     assert cap == DEFAULT_CAP
 
 
 def test_read_dials_reports_a_content_free_guild():
     _, _, retains = _cog({}, retains=False)._read_dials(GUILD)
     assert retains is False
-
-
-# --------------------------------------------------------------------------
-# Reply copy
-# --------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("span", "expected"),
-    [
-        (timedelta(minutes=1), "1 minute"),
-        (timedelta(minutes=30), "30 minutes"),
-        (timedelta(hours=1), "1 hour"),
-        (timedelta(hours=24), "24 hours"),
-        (timedelta(days=7), "7 days"),
-        (timedelta(days=1), "24 hours"),
-    ],
-)
-def test_span_label_reads_naturally(span, expected):
-    assert WordCloudCog._span_label(span) == expected
-
-
-def test_empty_message_names_the_missing_archive():
-    """"Quiet week" and "this server keeps no text" must not read alike."""
-    msg = WordCloudCog._empty_message(False, None, "#general")
-    assert "doesn't keep message text" in msg
-
-
-def test_empty_message_for_a_quiet_window_names_the_scope():
-    msg = WordCloudCog._empty_message(True, None, "#general")
-    assert "#general" in msg
-    assert "doesn't keep message text" not in msg
-
-
-def test_empty_message_names_the_member_by_display_name():
-    """An embed never carries a raw <@id> — see docs/embed_style_guide.md."""
-    member = SimpleNamespace(display_name="Robin")
-    msg = WordCloudCog._empty_message(True, member, "#general")
-    assert "Robin" in msg
-    assert "<@" not in msg

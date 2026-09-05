@@ -17,10 +17,19 @@ opt-out and a `data_register.md` decision; neither exists, because neither was
 built.
 
 **Read permission is the gate.** A moderator can cloud any channel they can
-read, and no channel they cannot — checked with `permissions_for(invoker)` on
-the named channel, and used to build the channel list for `everywhere`. There
-is deliberately **no NSFW gate**: the reply never leaves the invoking
+read, and no channel they cannot. Every gate lives in `logic.plan_scope`, which
+takes plain data and returns a `Scope` or a `Refusal`, so each denial is
+asserted directly rather than through a Discord mock. The order is: in a guild,
+then staff, then able to read what was asked for — a non-moderator gets the
+same wording whether or not the channel exists. `cogs/word_cloud_cog._can_read`
+is the single definition of "may read", used both for a named channel and for
+every candidate in the `everywhere` fan-out.
+
+There is deliberately **no NSFW gate**: the reply never leaves the invoking
 moderator, and an age-gated room is one they can already read.
+
+`everywhere` and `channel` overlap. `everywhere` wins, and the card says so
+rather than discarding the picked channel silently.
 
 **Private threads need their own check.** `Thread.permissions_for` only
 inherits the parent channel's overwrites — it knows nothing about who was
@@ -49,8 +58,14 @@ that thread, since `interaction.channel` is proof of access.
 
 | Guild | Path | Window |
 |---|---|---|
-| `message_storage_level = all` | Archive SQL (`corpus.fetch_archive`) | full, back to the archive's start |
-| anything else | `channel.history()`, stored nowhere | **clamped to 10 minutes** |
+| `message_storage_level = all`, archive has text | Archive SQL (`corpus.fetch_archive`) | full, back to the archive's start |
+| `message_storage_level = all`, archive empty | live, `LIVE_EMPTY_ARCHIVE` | **clamped to 10 minutes** |
+| anything else | live, `LIVE_NO_STORAGE` | **clamped to 10 minutes** |
+
+The two live reasons carry **different copy**. A guild that archives content but
+has nothing stored yet (newly enabled, or just purged) is told "nothing is
+stored for this server yet" — telling it that it "doesn't keep message text"
+would be false and would contradict its own privacy notice.
 
 Only the home guild archives content; the other seven keep ids and timestamps
 but no text. The reply always says which path ran, because "a quiet week" and
@@ -68,10 +83,19 @@ Measured over seven days of home-guild traffic, the top raw tokens were `white`
 (17,357) and `square` (11,861) — a bot's board art. With bot authors excluded,
 `https`/`com`/`gifs`/`klipy` rose to replace them. So:
 
-- **Bot authors excluded** via `core.bot_exclusion.bot_filter_clause` (~21% of
-  stored volume). Naming an `author_id` overrides this — asking for one
-  account's words means that account, bot or not.
-- **Deleted messages excluded** (`deleted_at IS NULL`). The archive outlives
+The archive predicate is built by
+`services/message_search_service.build_where` from a `MessageFilters`, not by
+hand: it is the repo's one description of what a filtered read of `messages`
+means, and a second one here would let the two archive readers drift on
+questions like what "exclude bots" covers. `corpus.recent_channel_ids` is
+deliberately *not* built on it — that ranks rooms by last traffic and must
+count every row, including the bot-authored, deleted and content-free ones a
+filtered read drops.
+
+- **Bot authors excluded** (~21% of stored volume) by `build_where`'s own rule.
+  Naming an author turns that exclusion off, which is the behaviour wanted:
+  asking for one account's words means that account, bot or not.
+- **Deleted messages excluded** (`deleted=DELETED_LIVE`). The archive outlives
   Discord deletions by design; 40,431 home-guild rows carry the column. A cloud
   that ignored it would resurface words a member removed on purpose.
 - **URLs, custom emoji, mentions, code fences and inline code stripped** before
@@ -117,6 +141,21 @@ import exactly as `services/activity_graphs` does — the unit runs
 `pyplot` is never touched (`WordCloud.to_image()` returns a PIL image), so this
 needs none of the serialisation `services/pyplot_lock` exists for. The render
 runs in `asyncio.to_thread`.
+
+## Layering
+
+`logic.py` owns the dial keys and `clamp_cap`, the window parsing and clamp,
+tokenising and counting, `plan_scope`, and every line of reply copy.
+`embeds.py` builds the card and escapes the member's display name — an
+unescaped `__Robin__` would reformat the description. `corpus.py` reads,
+`render.py` draws, `presets.py` styles (its fonts are keys into
+`quote_renderer.FONT_STYLES` rather than a second catalogue of the same five
+files). The cog resolves Discord objects, calls those, and sends.
+
+The cap's floor and ceiling exist once, in `logic.py`. `GET /api/config`
+returns them alongside the preset list so the dashboard panel renders its own
+bounds instead of re-typing the numbers, and the panel uses `selectValueOrAdd`
+so a stored preset key this build doesn't know is never silently overwritten.
 
 ## No new tables
 

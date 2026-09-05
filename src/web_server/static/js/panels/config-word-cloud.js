@@ -5,20 +5,19 @@ import {
   guardForm,
   renderMetaWarning,
   mountAsync,
+  selectValueOrAdd,
 } from "../config-helpers.js";
 
-// Mirrors bot_modules/word_cloud/presets.py. Kept as a literal rather than
-// fetched: five names that change with a release, not with configuration.
-const PRESETS = [
-  { key: "midnight", label: "Midnight", hint: "Dark background, clean sans." },
-  { key: "parchment", label: "Parchment", hint: "Warm paper, serif." },
-  { key: "meadow", label: "Meadow", hint: "Light and green, condensed." },
-  { key: "neon", label: "Neon", hint: "Near-black with bright colours." },
-  { key: "notebook", label: "Notebook", hint: "Off-white, handwritten." },
-];
-
-const CAP_MIN = 100;
-const CAP_MAX = 12000;
+// The preset list and the cap bounds come from the API, which reads them from
+// bot_modules/word_cloud/logic.py and presets.py — re-typing them here is how
+// the ceiling ends up meaning three different things.
+const HINTS = {
+  midnight: "Dark background, clean sans.",
+  parchment: "Warm paper, serif.",
+  meadow: "Light and green, condensed.",
+  neon: "Near-black with bright colours.",
+  notebook: "Off-white, handwritten.",
+};
 
 export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading settings…</div></div>`;
@@ -28,13 +27,15 @@ export function mount(container) {
     async () => {
       const config = await loadConfig();
       const wc = config.word_cloud || {};
+      const presets = wc.presets || [];
+      const CAP_MIN = Number(wc.min_cap ?? 100);
+      const CAP_MAX = Number(wc.max_cap ?? 12000);
       const cap = Number(wc.message_cap ?? CAP_MAX);
-      const current = wc.default_preset || "midnight";
+      const current = wc.default_preset || "";
 
-      const presetOptions = PRESETS.map(
-        (p) =>
-          `<option value="${p.key}" ${p.key === current ? "selected" : ""}>${p.label}</option>`,
-      ).join("");
+      const presetOptions = presets
+        .map((p) => `<option value="${p.key}">${p.label}</option>`)
+        .join("");
 
       container.innerHTML = `
         <div class="panel">
@@ -86,9 +87,13 @@ export function mount(container) {
       const presetSelect = form.querySelector('[data-field="default_preset"]');
       const presetHint = form.querySelector("[data-preset-hint]");
 
+      // Never silently drop a stored key this build doesn't know: without
+      // this the select falls back to the first option and the next Save
+      // overwrites whatever was really configured.
+      selectValueOrAdd(presetSelect, current, (v) => v);
+
       const syncPresetHint = () => {
-        const found = PRESETS.find((p) => p.key === presetSelect.value);
-        presetHint.textContent = found ? found.hint : "";
+        presetHint.textContent = HINTS[presetSelect.value] || "";
       };
       syncPresetHint();
       presetSelect.addEventListener("change", syncPresetHint);

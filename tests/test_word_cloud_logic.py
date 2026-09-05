@@ -11,7 +11,7 @@ from datetime import timedelta
 
 import pytest
 
-from bot_modules.word_cloud import presets
+from bot_modules.word_cloud import logic, presets
 from bot_modules.word_cloud.logic import (
     LIVE_FETCH_MAX,
     Doc,
@@ -305,3 +305,175 @@ def test_every_preset_names_a_font_that_exists_in_the_repo():
     for preset in presets.PRESETS:
         assert preset.font_path.suffix == ".ttf"
         assert preset.font_path.parent.name == "fonts"
+
+
+# --------------------------------------------------------------------------
+# The dial
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("500", 500),
+        (500, 500),
+        ("  500  ", 500),
+        ("999999", logic.MAX_CAP),
+        ("50", logic.MIN_CAP),
+        ("lots", logic.DEFAULT_CAP),
+        ("", logic.DEFAULT_CAP),
+        (None, logic.DEFAULT_CAP),
+    ],
+)
+def test_clamp_cap(raw, expected):
+    assert logic.clamp_cap(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_clamp_cap_treats_a_useless_value_as_unset(raw):
+    """A blanked dial must mean "no cap set", never "render nothing"."""
+    assert logic.clamp_cap(raw) == logic.DEFAULT_CAP
+
+
+# --------------------------------------------------------------------------
+# plan_scope — every gate on the command
+# --------------------------------------------------------------------------
+
+
+def _scope(**kw):
+    params = dict(
+        is_mod=True,
+        in_guild=True,
+        everywhere=False,
+        target_id=5,
+        target_readable=True,
+        target_label="#general",
+    )
+    params.update(kw)
+    return logic.plan_scope(**params)
+
+
+def test_plan_scope_allows_a_moderator_reading_their_own_channel():
+    scope = _scope()
+    assert isinstance(scope, logic.Scope)
+    assert scope.channel_ids == (5,)
+    assert scope.label == "#general"
+
+
+def test_plan_scope_refuses_outside_a_guild():
+    refusal = _scope(in_guild=False)
+    assert isinstance(refusal, logic.Refusal)
+    assert "in a server" in refusal.message
+
+
+def test_plan_scope_refuses_a_non_moderator():
+    """The mod gate is what the whole no-data-register argument rests on."""
+    refusal = _scope(is_mod=False)
+    assert isinstance(refusal, logic.Refusal)
+    assert "moderator" in refusal.message
+
+
+def test_plan_scope_refuses_a_non_moderator_before_looking_at_the_channel():
+    """Wording must not tell a non-moderator whether the channel exists."""
+    hidden = _scope(is_mod=False, target_id=None, target_readable=False)
+    plain = _scope(is_mod=False)
+    assert isinstance(hidden, logic.Refusal)
+    assert hidden.message == plain.message
+
+
+def test_plan_scope_refuses_a_channel_the_moderator_cannot_read():
+    """Read permission is the entire gate on this command."""
+    refusal = _scope(target_readable=False)
+    assert isinstance(refusal, logic.Refusal)
+    assert "can't read" in refusal.message
+
+
+def test_plan_scope_refuses_when_there_is_no_channel_to_use():
+    refusal = _scope(target_id=None)
+    assert isinstance(refusal, logic.Refusal)
+    assert "text channel" in refusal.message
+
+
+def test_plan_scope_everywhere_uses_the_readable_list():
+    scope = _scope(everywhere=True, everywhere_ids=[1, 2, 3])
+    assert isinstance(scope, logic.Scope)
+    assert scope.channel_ids == (1, 2, 3)
+    assert scope.label == "every channel you can read"
+
+
+def test_plan_scope_everywhere_refuses_when_nothing_is_readable():
+    refusal = _scope(everywhere=True, everywhere_ids=[])
+    assert isinstance(refusal, logic.Refusal)
+    assert "nothing here you can read" in refusal.message
+
+
+def test_plan_scope_everywhere_is_still_gated_on_being_a_moderator():
+    refusal = _scope(is_mod=False, everywhere=True, everywhere_ids=[1])
+    assert isinstance(refusal, logic.Refusal)
+    assert "moderator" in refusal.message
+
+
+def test_plan_scope_says_when_everywhere_overrode_a_picked_channel():
+    """Two overlapping options must not resolve silently."""
+    scope = _scope(everywhere=True, everywhere_ids=[1], picked_channel=True)
+    assert isinstance(scope, logic.Scope)
+    assert scope.note is not None
+    assert "everywhere" in scope.note
+
+
+def test_plan_scope_is_quiet_when_everywhere_was_asked_for_alone():
+    scope = _scope(everywhere=True, everywhere_ids=[1], picked_channel=False)
+    assert isinstance(scope, logic.Scope)
+    assert scope.note is None
+
+
+# --------------------------------------------------------------------------
+# Reply copy
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("span", "expected"),
+    [
+        (timedelta(minutes=1), "1 minute"),
+        (timedelta(minutes=30), "30 minutes"),
+        (timedelta(hours=1), "1 hour"),
+        (timedelta(hours=24), "24 hours"),
+        (timedelta(days=1), "24 hours"),
+        (timedelta(days=7), "7 days"),
+    ],
+)
+def test_span_label_reads_naturally(span, expected):
+    assert logic.span_label(span) == expected
+
+
+def test_live_note_for_a_guild_that_keeps_no_text():
+    note = logic.live_clamp_note(logic.LIVE_NO_STORAGE)
+    assert "doesn't keep message text" in note
+
+
+def test_live_note_for_a_guild_whose_archive_is_merely_empty():
+    """Telling a guild that DOES archive that it keeps no text is false, and
+    contradicts its own privacy notice."""
+    note = logic.live_clamp_note(logic.LIVE_EMPTY_ARCHIVE)
+    assert "doesn't keep message text" not in note
+    assert "Nothing is stored" in note
+
+
+def test_empty_message_distinguishes_all_three_reasons():
+    no_storage = logic.empty_message(logic.LIVE_NO_STORAGE, None, "#general")
+    empty_archive = logic.empty_message(logic.LIVE_EMPTY_ARCHIVE, None, "#general")
+    quiet = logic.empty_message(None, None, "#general")
+    assert "doesn't keep message text" in no_storage
+    assert "Nothing is stored" in empty_archive
+    assert "doesn't keep message text" not in empty_archive
+    assert "#general" in quiet
+    assert len({no_storage, empty_archive, quiet}) == 3
+
+
+def test_empty_message_names_the_member_and_escapes_them():
+    """A display name is member-supplied text and this is sent as content."""
+    msg = logic.empty_message(None, "__Robin__", "#general")
+    assert "Robin" in msg
+    assert "__Robin__" not in msg
+    assert "<@" not in msg

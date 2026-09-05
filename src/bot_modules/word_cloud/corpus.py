@@ -15,7 +15,11 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 
-from bot_modules.core.bot_exclusion import bot_filter_clause
+from bot_modules.services.message_search_service import (
+    DELETED_LIVE,
+    MessageFilters,
+    build_where,
+)
 
 from .logic import Doc
 
@@ -31,50 +35,48 @@ def fetch_archive(
 ) -> list[Doc]:
     """Read stored message content for a window, newest first.
 
+    The predicate is built by ``message_search_service.build_where`` rather
+    than by hand: it is the repo's one description of what a filtered read of
+    ``messages`` means, and a second one here would let the two archive readers
+    drift on questions like what "exclude bots" covers.
+
+    Three of its filters carry this feature's rules:
+
+    * ``deleted=DELETED_LIVE`` — the archive outlives Discord deletions by
+      design, so a cloud that ignored the column would resurface words a member
+      deliberately removed.
+    * ``min_length=1`` — ``LENGTH(NULL)`` is NULL and ``NULL >= 1`` is not true,
+      so this drops both the content-free rows and the empty ones in a single
+      predicate.
+    * ``author`` — naming one turns *off* ``build_where``'s bot exclusion,
+      which is exactly the behaviour wanted: a moderator asking for one
+      account's words gets them whether or not that account is a bot.
+
     ``channel_ids`` is the set the requesting moderator can actually read —
     read permission is the gate on this command, so the caller resolves it and
-    passes the result rather than this layer guessing. An empty set means
-    there is nothing they may see, which is not an error: it returns no docs
-    and the caller renders "nothing to show".
-
-    Bot authors are excluded by default, because they are ~21% of stored
-    volume and their flattened embed text swamps everything a member said.
-    Naming an ``author_id`` overrides that: a moderator who explicitly asks for
-    one account's words gets them even if the account is a bot.
+    passes the result rather than this layer guessing. An empty set means there
+    is nothing they may see, which is not an error.
     """
     if not channel_ids or cap <= 0:
         return []
 
-    channel_ph = ",".join("?" * len(channel_ids))
-    sql = [
-        "SELECT content, sentiment FROM messages",
-        f"WHERE guild_id = ? AND channel_id IN ({channel_ph})",
-        "AND ts >= ?",
-        "AND content IS NOT NULL AND content <> ''",
-        # The archive outlives Discord deletions on purpose, so a cloud that
-        # ignored this column would resurface words a member deliberately
-        # removed. 40k rows in the home guild carry it.
-        "AND deleted_at IS NULL",
-    ]
-    params: list[object] = [guild_id, *channel_ids, since_ts]
-
-    if author_id is not None:
-        sql.append("AND author_id = ?")
-        params.append(author_id)
-
-    # Splice the bot clause and its params together — the fragment is
-    # positional, so appending one without the other silently mis-binds.
-    clause, clause_params = bot_filter_clause(
-        guild_id, include_bots=author_id is not None
+    filters = MessageFilters(
+        channel=[str(c) for c in channel_ids],
+        after=since_ts,
+        min_length=1,
+        deleted=DELETED_LIVE,
+        author=[str(author_id)] if author_id is not None else None,
+        sort="newest",
     )
-    if clause:
-        sql.append(clause.strip())
-        params.extend(clause_params)
+    where = build_where(conn, guild_id, filters)
+    if where.impossible:
+        return []
 
-    sql.append("ORDER BY ts DESC LIMIT ?")
-    params.append(cap)
-
-    rows = conn.execute(" ".join(sql), params).fetchall()
+    rows = conn.execute(
+        f"SELECT m.content, m.sentiment FROM messages m WHERE {where.sql} "
+        "ORDER BY m.ts DESC LIMIT ?",
+        [*where.params, cap],
+    ).fetchall()
     return [Doc(text=str(r[0]), sentiment=r[1]) for r in rows]
 
 
@@ -110,6 +112,11 @@ def recent_channel_ids(
 
     Falls back to the caller's own order for channels the archive has never
     seen, so a brand-new channel is not silently unreachable.
+
+    Deliberately *not* built on ``build_where``: this ranks rooms by when they
+    last saw traffic, so it must count every row — bot-authored, deleted and
+    content-free alike. Those are exactly the rows a filtered read drops, and
+    dropping them here would rank a busy room as dead.
     """
     if not channel_ids or limit <= 0:
         return []

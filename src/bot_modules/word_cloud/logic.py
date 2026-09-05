@@ -17,8 +17,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
+
+# A pure string function, not a Discord object — importing it keeps this layer
+# testable while making it impossible for a caller to forget the escape.
+from discord.utils import escape_markdown
 
 #: A live Discord fetch is capped at ten minutes of history, by product
 #: decision. Guilds that don't archive message content can only ever be clouded
@@ -264,3 +269,169 @@ def build_stats(
         if len(stats) >= max_words:
             break
     return stats
+
+
+# --------------------------------------------------------------------------
+# Dials
+# --------------------------------------------------------------------------
+
+CAP_KEY = "word_cloud_message_cap"
+PRESET_KEY = "word_cloud_default_preset"
+DEFAULT_CAP = 12000
+#: Floor and ceiling on the dial. JakeBot, the most featureful of the existing
+#: word cloud bots, stops at 12,000; past that the tail of the cloud is words
+#: nobody can read and the render cost keeps climbing.
+MIN_CAP = 100
+MAX_CAP = 12000
+
+#: How many channels a live "everywhere" fans out over. Each is one Discord
+#: round trip, so this is the difference between a slow command and a hung one.
+LIVE_CHANNEL_FANOUT = 25
+
+
+def clamp_cap(raw: object) -> int:
+    """Turn a stored dial value into a usable cap.
+
+    Lives here rather than in the cog so the command, the dashboard route and
+    the panel all read one ceiling instead of three copies of the number.
+    A value of 0 or less means "no cap set", never "cloud nothing" — a blanked
+    field must not silently render an empty picture.
+    """
+    try:
+        cap = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_CAP
+    if cap <= 0:
+        return DEFAULT_CAP
+    return max(MIN_CAP, min(cap, MAX_CAP))
+
+
+# --------------------------------------------------------------------------
+# Scope: the read-permission gate
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Scope:
+    """The channels a cloud will be built from, and what to call them."""
+
+    channel_ids: tuple[int, ...]
+    label: str
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """Why the command will not run, in words meant for the member."""
+
+    message: str
+
+
+def plan_scope(
+    *,
+    is_mod: bool,
+    in_guild: bool,
+    everywhere: bool,
+    everywhere_ids: Sequence[int] = (),
+    target_id: int | None = None,
+    target_readable: bool = False,
+    target_label: str = "",
+    picked_channel: bool = False,
+) -> Scope | Refusal:
+    """Decide what a request may read, or refuse it.
+
+    Every gate on this command is here, as plain data in and out, so each
+    refusal can be asserted directly instead of through a Discord mock. Order
+    matters: being in a guild, then being staff, then being able to read the
+    thing asked for — a non-moderator must not learn from the wording whether a
+    channel exists.
+    """
+    if not in_guild:
+        return Refusal("This only works in a server.")
+    if not is_mod:
+        return Refusal("That's a moderator command.")
+
+    if everywhere:
+        if not everywhere_ids:
+            return Refusal("There's nothing here you can read.")
+        note = None
+        if picked_channel:
+            # The two options overlap; say which won rather than silently
+            # discarding what the moderator typed.
+            note = (
+                "You picked a channel and also asked for everywhere — this "
+                "covers everywhere."
+            )
+        return Scope(
+            channel_ids=tuple(everywhere_ids),
+            label="every channel you can read",
+            note=note,
+        )
+
+    if target_id is None:
+        return Refusal("Pick a text channel for this.")
+    if not target_readable:
+        return Refusal("You can't read that channel's history.")
+    return Scope(channel_ids=(target_id,), label=target_label)
+
+
+# --------------------------------------------------------------------------
+# Why the live path ran, and what to say about it
+# --------------------------------------------------------------------------
+
+#: The guild's storage dial is off — it has never kept message text.
+LIVE_NO_STORAGE = "no_storage"
+#: The dial is on, but nothing has landed in the archive yet.
+LIVE_EMPTY_ARCHIVE = "empty_archive"
+
+
+def live_clamp_note(reason: str) -> str:
+    """Explain a shortened window truthfully.
+
+    The two reasons are not interchangeable: telling a guild that *does*
+    archive message content that it "doesn't keep message text" contradicts its
+    own privacy notice.
+    """
+    if reason == LIVE_EMPTY_ARCHIVE:
+        return (
+            "Nothing is stored for this server yet, so this is the last 10 "
+            "minutes of live chat rather than the window you asked for."
+        )
+    return (
+        "This server doesn't keep message text, so this is the last 10 "
+        "minutes rather than the window you asked for."
+    )
+
+
+def empty_message(
+    reason: str | None, member_name: str | None, scope_label: str
+) -> str:
+    """Say *why* a cloud is empty — the reasons are not the same answer."""
+    if reason == LIVE_EMPTY_ARCHIVE:
+        return (
+            "Nothing to draw. Nothing is stored for this server yet, so I can "
+            "only read the last 10 minutes of live chat — and there wasn't "
+            "enough of it just now."
+        )
+    if reason == LIVE_NO_STORAGE:
+        return (
+            "Nothing to draw. This server doesn't keep message text, so I can "
+            "only read the last 10 minutes of live chat — and there wasn't "
+            "enough of it just now."
+        )
+    # A display name is member-supplied text, and this string is sent as plain
+    # message content where markdown still renders.
+    who = f" from {escape_markdown(member_name)}" if member_name else ""
+    return f"Nothing to draw{who} in {scope_label} over that window."
+
+
+def span_label(span: timedelta) -> str:
+    """A window in the largest unit that still reads naturally."""
+    minutes = int(span.total_seconds() // 60)
+    if minutes < 60:
+        return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hour{'s' if hours != 1 else ''}"
+    days = hours // 24
+    return f"{days} day{'s' if days != 1 else ''}"

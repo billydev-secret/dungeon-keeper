@@ -12,12 +12,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-_FONT_DIR = Path("assets") / "fonts"
+from bot_modules.services.quote_renderer import FONT_STYLES
 
 
 @dataclass(frozen=True)
 class Preset:
     """One visual style.
+
+    ``font`` is a key into ``quote_renderer.FONT_STYLES``, the repo's existing
+    catalogue of the bundled faces — a second list of the same five files
+    beside it would be one more thing to keep in step.
 
     ``palette`` colours words by frequency rank when sentiment colouring is
     off. ``sentiment_stops`` is (negative, neutral, positive) and is used when
@@ -33,14 +37,14 @@ class Preset:
 
     @property
     def font_path(self) -> Path:
-        return _FONT_DIR / self.font
+        return FONT_STYLES[self.font]
 
 
 PRESETS: tuple[Preset, ...] = (
     Preset(
         key="midnight",
         label="Midnight",
-        font="Inter-Regular.ttf",
+        font="inter",
         background="#11131a",
         palette=("#8ab4f8", "#c58af9", "#78d9a0", "#f6c177", "#e78ca3"),
         sentiment_stops=("#7aa2f7", "#9aa5b1", "#f2a65a"),
@@ -48,7 +52,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="parchment",
         label="Parchment",
-        font="PlayfairDisplay-Regular.ttf",
+        font="playfair",
         background="#f4ecd8",
         palette=("#7a5c3e", "#a3623a", "#5d6b4a", "#8a6d3b", "#4a4a44"),
         sentiment_stops=("#3f6f9f", "#7a7466", "#b4531f"),
@@ -56,7 +60,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="meadow",
         label="Meadow",
-        font="Oswald-Regular.ttf",
+        font="oswald",
         background="#f7fbf4",
         palette=("#2f6f4f", "#4a8f5f", "#7aa05a", "#3e7d7a", "#5f6f3a"),
         sentiment_stops=("#2f6f9f", "#6b7280", "#b06a1f"),
@@ -64,7 +68,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="neon",
         label="Neon",
-        font="BebasNeue-Regular.ttf",
+        font="bebas",
         background="#08080c",
         palette=("#00e5ff", "#ff3db8", "#9dff3d", "#ffd23d", "#b06bff"),
         sentiment_stops=("#00b8ff", "#8b8b9a", "#ff7a3d"),
@@ -72,7 +76,7 @@ PRESETS: tuple[Preset, ...] = (
     Preset(
         key="notebook",
         label="Notebook",
-        font="Caveat-Regular.ttf",
+        font="caveat",
         background="#fffdf7",
         palette=("#2f4858", "#33658a", "#86bbd8", "#758e4f", "#f26419"),
         sentiment_stops=("#33658a", "#6b7280", "#d1590f"),
