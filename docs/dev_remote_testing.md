@@ -33,9 +33,17 @@ The suite is portable, which was checked rather than assumed:
       --python-platform x86_64-pc-windows-msvc
   ```
 
-**Nothing secret is synced, and nothing secret is needed.** The suite reads no
-`.env`, no database, and no model weights — `tests/conftest.py` touches no
-environment variables at all. A plain `git clone` is a complete test host.
+**Nothing secret is synced, and nothing secret is needed.** No database and no
+model weights are required, and a plain `git clone` is a complete test host.
+
+The suite does, however, *inherit* a `.env` where one exists:
+`bot_modules.core.config` calls `load_dotenv(override=True)` at module scope,
+so importing almost anything merges it into `os.environ` — which is why a test
+could pass here and fail in the production checkout. `tests/conftest.py`
+scrubs those settings back out for every test (`SCRUBBED_ENV_VARS`, gated by
+`tests/test_env_hermeticity.py`), so the runner and the prod box agree. See
+`docs/web_testing.md` § Environment hermeticity. A runner still needs no
+secrets: the point of the scrub is that having them changes nothing.
 
 ### The known risk
 

@@ -63,6 +63,36 @@ class FakeCtx:
         return value
 
 
+# ── Client + cookie transport ────────────────────────────────────────
+
+#: Every web TestClient speaks **https** and pins its hand-minted cookies to
+#: this host. Both matter, and only together: a route that re-signs the session
+#: sets the new cookie ``Secure`` whenever ``DASHBOARD_BASE_URL`` is https
+#: (production's is), so an http client stores it and never sends it back; and
+#: a domain-less ``cookies.set`` is a *different* ``http.cookiejar`` key from
+#: the server's, so the stale one survives alongside it and wins. A test that
+#: asserts on a re-signed session then keeps replaying its pre-switch cookie
+#: and reads the answer back as proof of a bug that isn't there.
+WEB_HOST = "testserver"
+COOKIE_DOMAIN = f"{WEB_HOST}.local"  # http.cookiejar's form for a dotless host
+
+
+def web_client(app) -> TestClient:
+    """A TestClient whose transport can carry a ``Secure`` session cookie."""
+    return TestClient(app, base_url=f"https://{WEB_HOST}")
+
+
+def set_session_cookie(client: TestClient, value: str) -> None:
+    """Install a session cookie the server's own ``Set-Cookie`` will replace."""
+    client.cookies.set(SESSION_COOKIE, value, domain=COOKIE_DOMAIN, path="/")
+
+
+# Environment hermeticity is global — ``tests/conftest.py`` scrubs the settings
+# a developer's ``.env`` defines for *every* test, not just the ones under this
+# directory, because the dashboard's surface is not ``tests/web/``. See
+# ``SCRUBBED_ENV_VARS`` there and ``tests/test_env_hermeticity.py``.
+
+
 @pytest.fixture
 def web_db(tmp_path) -> Path:
     """A fresh SQLite database with full schema applied."""
@@ -163,7 +193,7 @@ def live_guild(fake_ctx):
 def open_client(fake_ctx) -> Generator[TestClient, None, None]:
     """TestClient with no auth (OpenAuth mode)."""
     app = create_app(fake_ctx, auth=OpenAuth())
-    client = TestClient(app)
+    client = web_client(app)
     invalidate_report_cache()
     yield client
     client.close()
@@ -175,7 +205,7 @@ def authed_client(fake_ctx) -> Generator[TestClient, None, None]:
     """TestClient with a Discord OAuth session cookie (primary guild)."""
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     app = create_app(fake_ctx, auth=auth)
-    client = TestClient(app)
+    client = web_client(app)
     cookie = auth.create_session_cookie(
         user_id=1,
         username="tester",
@@ -184,7 +214,7 @@ def authed_client(fake_ctx) -> Generator[TestClient, None, None]:
         guild_id=fake_ctx.guild_id,
         guilds=[{"id": fake_ctx.guild_id, "name": "Test Guild", "icon": None}],
     )
-    client.cookies.set(SESSION_COOKIE, cookie)
+    set_session_cookie(client, cookie)
     invalidate_report_cache()
     yield client
     client.close()

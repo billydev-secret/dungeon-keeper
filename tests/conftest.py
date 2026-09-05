@@ -21,6 +21,88 @@ from tests.db_template import migrated_db, reap
 from tests.fakes import FakeGuild, FakeRole, FakeUser, fake_interaction as _fake_interaction
 
 
+#: Application settings a developer's ``.env`` defines and the code reads at
+#: run time. ``bot_modules.core.config`` calls ``load_dotenv(override=True)`` at
+#: **module scope**, so importing almost anything merges the real ``.env`` into
+#: ``os.environ`` — and the production checkout has one. That is not undoable
+#: from outside pytest (the file wins over the process environment by design),
+#: so it is undone here instead, after the import and before every test.
+#:
+#: It is global rather than per-directory for the same reason the scrubbers
+#: below are: the dashboard's surface is not ``tests/web/``. ``tests/
+#: test_web_routes.py`` builds its own dashboard app outside that directory,
+#: and ``DASHBOARD_BASE_URL`` / ``SUPPORT_USER_ID`` are read by two bot-side
+#: services as well. A per-directory fixture cannot reach either.
+#:
+#: ``tests/test_env_hermeticity.py`` fails if a name read by ``src/web_server``
+#: or ``src/bot_modules`` is in neither this tuple nor ``ENV_NOT_SCRUBBED``,
+#: so a new ``os.getenv`` forces the choice rather than inheriting one.
+SCRUBBED_ENV_VARS = (
+    # Dashboard / OAuth
+    "DASHBOARD_BASE_URL",
+    "DASHBOARD_RETURN_TO_URLS",
+    "DASHBOARD_OPEN_AUTH",
+    "DISCORD_CLIENT_ID",
+    "DISCORD_CLIENT_SECRET",
+    "SESSION_SECRET",
+    "SUPPORT_USER_ID",
+    # Integrations reached from both the bot and the dashboard
+    "SPOTIFY_CLIENT_ID",
+    "SPOTIFY_CLIENT_SECRET",
+    "ANTHROPIC_API_KEY",
+    "LAVALINK_HOST",
+    "LAVALINK_PORT",
+    "LAVALINK_PASSWORD",
+    "LAVALINK_HEAP_MB",
+    "LLAMA_MODEL_PATH",
+    "LLAMA_HF_REPO",
+    "LLAMA_HF_FILE",
+    "LLAMA_N_CTX",
+    "LLAMA_N_BATCH",
+    "LLAMA_N_THREADS",
+    "LLAMA_N_GPU_LAYERS",
+    "LLAMA_SERVER_URL",
+    "LLAMA_SERVER_TIMEOUT",
+    "LLAMA_SERVER_ALLOW_PUBLIC",
+)
+
+#: Reads that must **survive** the scrub, and why. Machine plumbing rather than
+#: application settings: removing these changes where a library looks for a
+#: toolchain or a cache, which has nothing to do with test hermeticity and can
+#: break a runner outright.
+ENV_NOT_SCRUBBED = {
+    "JAVA_HOME": "toolchain location — Lavalink needs the real JVM path",
+    "HF_HOME": "HuggingFace cache dir; scrubbing it would re-download models",
+    "LOCALAPPDATA": "Windows path lookup on the remote runner",
+    "BOT_ENV": "selects dev/prod config; a test that cares sets it explicitly",
+    "GUILD_ID": "resolved from the DB in tests; see resolve_guild_id's fallback",
+    "RESET_DEV_DB": "dev-bootstrap flag, inert under BOT_ENV=dev in tests",
+    "SEED_DEV_FIXTURES": "dev-bootstrap flag, inert under BOT_ENV=dev in tests",
+}
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_env():
+    """Unset every application setting a developer's ``.env`` might define.
+
+    Scrubbed to *absent*, not pinned to a fixed value: absent is what CI and a
+    fresh clone see, so it is the configuration the assertions were written
+    against. It also makes the dashboard's ``_auto_detect_auth`` fail closed if
+    a test forgets to pass ``auth=`` rather than quietly picking up the real
+    Discord client id.
+
+    A test that needs a value sets it with ``monkeypatch.setenv``, which runs
+    after this fixture and therefore still wins.
+    """
+    import os  # noqa: PLC0415
+
+    saved = {n: os.environ.pop(n) for n in SCRUBBED_ENV_VARS if n in os.environ}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
+
+
 @pytest.fixture(autouse=True)
 def _reset_shared_module_state():
     """Clear process-wide module caches that leak between tests.

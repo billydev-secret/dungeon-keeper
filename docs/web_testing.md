@@ -9,6 +9,56 @@ cross-cutting sweeps guard properties that no single route test owns. Two tiers:
   Playwright/Chromium isn't installed. Needs `python -m playwright install
   chromium` on a new machine.
 
+## Environment hermeticity
+
+`bot_modules.core.config` calls `load_dotenv(override=True)` at **module
+scope**, so importing almost anything merges the developer's real `.env` into
+`os.environ` — and the production checkout has one. A test that reads an
+application setting therefore behaved differently on the machine that serves
+the dashboard than on CI or in a worktree. It cannot be undone from outside
+pytest (the file wins over the process environment by design), so it is undone
+inside: `tests/conftest.py` has an autouse `_hermetic_env` fixture that removes
+every name in `SCRUBBED_ENV_VARS` for the duration of each test.
+
+**Global, not per-directory.** The dashboard's surface is not `tests/web/`:
+`tests/test_web_routes.py` builds its own dashboard app outside that directory,
+and `DASHBOARD_BASE_URL` / `SUPPORT_USER_ID` are read by two bot-side services
+(`advisor_service`, `auto_delete_service`) as well. A fixture scoped to
+`tests/web/` reaches none of them.
+
+Scrubbed to *absent*, not pinned to a value: absent is what CI and a fresh
+clone see, and it makes `_auto_detect_auth` fail closed if a test forgets to
+pass `auth=` rather than quietly picking up the real Discord client id. A test
+that needs a value sets it with `monkeypatch.setenv`, which runs after the
+fixture and still wins.
+
+`tests/test_env_hermeticity.py` is the gate. It greps `src/web_server` and
+`src/bot_modules` for every `os.getenv` / `os.environ` read and **fails** if a
+name is in neither `SCRUBBED_ENV_VARS` nor `ENV_NOT_SCRUBBED` — the companion
+list of reads that must survive, each with its reason (`JAVA_HOME` is a
+toolchain path, `HF_HOME` a model cache, `BOT_ENV` a config selector). So a new
+environment read forces that classification at the commit that adds it, rather
+than surfacing later as a test that is red on one machine only. Two further
+tests fail on a stale entry and on a name classified both ways.
+
+**Cookie transport.** `DASHBOARD_BASE_URL` is the one that bites hardest.
+`routes/oauth._is_secure()` reads it, and every route that re-signs the session
+cookie (`/api/guilds/{id}/select`, the OAuth callback) passes the result as the
+cookie's `Secure` flag. An https value plus an http-speaking `TestClient` means
+httpx **stores the new cookie and never sends it back** — and a domain-less
+`client.cookies.set(SESSION_COOKIE, …)` is a different jar key from the
+server's, so the stale pre-switch cookie survives beside it and wins. That
+combination made two B-SEC1 tests read a leak that the server never had.
+
+The transport half is built into the shared fixtures rather than left to
+each test to remember: `web_client(app)` in `tests/web/conftest.py` speaks
+`https://testserver`, and `set_session_cookie(client, value)` pins the cookie
+to `testserver.local` (`http.cookiejar`'s form for a dotless host) so the
+server's own `Set-Cookie` displaces it instead of landing beside it.
+`open_client` and `authed_client` both use them, and any hand-rolled client
+should too. `test_web_security_fixes.py` additionally parametrizes the two
+guild-switch tests across both dashboard schemes.
+
 ## Default-suite sweeps
 
 ### Authorization — `test_authz_sweep.py`
