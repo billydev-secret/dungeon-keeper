@@ -185,7 +185,7 @@ class WordCloudCog(commands.Cog):
             if len(docs) >= cap:
                 break
             channel = guild.get_channel_or_thread(channel_id)
-            if channel is None or not hasattr(channel, "history"):
+            if not isinstance(channel, discord.abc.Messageable):
                 continue
             try:
                 # oldest_first is implied True whenever ``after`` is given, which
@@ -263,7 +263,7 @@ class WordCloudCog(commands.Cog):
             everywhere=everywhere,
             everywhere_ids=(
                 _readable_channel_ids(guild, invoker)
-                if everywhere and in_guild and isinstance(invoker, discord.Member)
+                if everywhere and guild is not None and isinstance(invoker, discord.Member)
                 else ()
             ),
             target_id=target.id if target is not None else None,
@@ -321,6 +321,11 @@ class WordCloudCog(commands.Cog):
         # card is labelled with this rather than the ask.
         effective_span = span
         live_reason: str | None = None
+        # One of the two paths below always runs — the archive path hands the
+        # live path a reason whenever it has no story to tell — but say so in
+        # the bindings rather than leaving it to be inferred.
+        docs: list[logic.Doc] = []
+        source = ""
 
         if retains:
             since_ts = int(now - span.total_seconds())
