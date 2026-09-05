@@ -152,6 +152,21 @@ def test_body_emoji_failure_degrades_without_crashing(monkeypatch) -> None:
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
 
 
+def _flower_edge(qr, border):
+    """The floral edge as the *renderer* reads it, not as the caller asked for.
+
+    ``render_quote_card`` sizes its canvas to the frame's own aspect — a 900x500
+    ask becomes 900x507 for this frame — so an edge scanned at 900x500 is a
+    different curve, tens of pixels tighter at the rows the last lines land on.
+    Scanning at the real card size is what makes every bound below the
+    renderer's own, rather than a lookalike that happens to agree: measured
+    against the wrong curve these assertions had no margin at all, and a
+    two-pixel shift in the alpha scan between Pillow builds was enough to fail
+    a card that was drawn correctly.
+    """
+    return qr.slim_flower_left_edge(border, *qr.card_size_for_border(900, 500, border))
+
+
 # --- Attribution placement ---------------------------------------------------
 # The bug: a long, emoji-bearing name ("Chi-Gal 🩵 (#FUCK ICE)") was centred on
 # the avatar via `pfp_cx - attr_w // 2`. Any name wider than the disc drove that
@@ -337,7 +352,7 @@ def test_attribution_keeps_clear_of_the_floral_corner(monkeypatch) -> None:
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
         pytest.skip("bundled frame not resolvable from this CWD")
-    edge = qr.slim_flower_left_edge(border, 900, 500)
+    edge = _flower_edge(qr, border)
     assert edge is not None
 
     # A mid-length quote pushes the byline down into the flowers' rows.
@@ -444,7 +459,7 @@ def test_body_text_stays_clear_of_the_flowers(monkeypatch) -> None:
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
         pytest.skip("bundled frame not resolvable from this CWD")
-    edge = qr.slim_flower_left_edge(border, 900, 500)
+    edge = _flower_edge(qr, border)
     assert edge is not None
 
     drawn: list[tuple[str, int, int]] = []
@@ -505,7 +520,7 @@ def test_banner_text_stays_clear_of_the_flowers(monkeypatch) -> None:
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
         pytest.skip("bundled frame not resolvable from this CWD")
-    edge = qr.slim_flower_left_edge(border, 900, 500)
+    edge = _flower_edge(qr, border)
     assert edge is not None
     font = qr._load_font(max(32, 900 // 19))
     line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
@@ -566,7 +581,7 @@ def test_default_border_is_resolved_before_layout(monkeypatch) -> None:
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
         pytest.skip("bundled frame not resolvable from this CWD")
-    edge = qr.slim_flower_left_edge(border, 900, 500)
+    edge = _flower_edge(qr, border)
     assert edge is not None
     font = qr._load_font(max(32, 900 // 19))
     line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
@@ -632,7 +647,7 @@ def test_ellipsized_last_line_respects_the_flower_bound(monkeypatch) -> None:
     border = qr.BORDERS["golden_poppy"]
     if not border.path.exists():
         pytest.skip("bundled frame not resolvable from this CWD")
-    edge = qr.slim_flower_left_edge(border, 900, 500)
+    edge = _flower_edge(qr, border)
     assert edge is not None
     font = qr._load_font(max(32, 900 // 19))
     line_h = font.getbbox("Ag")[3] - font.getbbox("Ag")[1]
