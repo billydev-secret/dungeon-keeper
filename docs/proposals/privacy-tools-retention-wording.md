@@ -1,4 +1,4 @@
-# Proposed wording — `privacy-tools` doc, retention section
+# Proposed wording — the `privacy-tools` doc, split in two
 
 **Status: PROPOSAL. Not applied.** The live `privacy-tools` doc is production
 data, authored on the dashboard Docs panel and posted to two channels
@@ -53,3 +53,43 @@ The 12-month and 180-day lines describe sweeps that ship in `ab775b0e` and are
 **inert until the next restart**. Everything else in the list is already
 enforced and verified against live data. Restarting before saving keeps the
 document true on the day it is posted.
+
+
+---
+
+# The split (decided 2026-09-05)
+
+The live doc was retitled *"Privacy & Data Retention"* and trimmed earlier that
+day, which cut the safety tools out. Rather than restore them into a doc whose
+own title no longer covers them, they become a second doc. Two subjects, two
+docs:
+
+| Doc | `doc_key` | Covers |
+|---|---|---|
+| **Privacy & Data Retention** | `privacy-tools` *(existing — key stays)* | The promise, the carve-outs, how long things are kept, and the tools that change what is kept |
+| **Safety Tools** | `safety-tools` *(new)* | Blocking, `/nocontact`, DM permissions, feature opt-outs, and the ticket route |
+
+Bodies: `privacy-tools-body.md` and `safety-tools-body.md`, both ready to paste.
+
+**The access route is restored deliberately.** The trim had removed the only
+text telling a member how to request a copy or an erasure — an Art 15/17 route,
+not a nicety. It now appears in both docs, framed for each: "a copy of
+everything held about you, or a full erasure" under retention, "someone who is
+bothering you, or a copy / erasure / correction" under safety. A member landing
+on either finds the way through.
+
+**Every reference verified against production**, because the trimmed text was
+old enough to have rotted:
+
+- `<#1469766598800838736>` — the DM-permissions panel channel, confirmed live in
+  `dm_panel_settings` for this guild, with a panel message posted.
+- `<#1469781592854630580>` — the ticket channel, confirmed live: the intake
+  reference blocks still direct newcomers to it.
+- `/nocontact`, `/delete_me`, `/whisper forget-me`, `/whisper optout`,
+  `/guess optout`, `/bank shop` — all still exist in source. `/bank shop`
+  survived the shop reorganisation.
+
+**Placement.** `privacy-tools` currently sits in `1470847624704950395` and
+`1523516810685845636` (the rules/FAQ channel). `safety-tools` most naturally
+goes to the same two, so a member scrolling either channel meets both halves —
+but that is a placement decision, not a wording one.

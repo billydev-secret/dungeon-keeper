@@ -46,3 +46,6 @@ If you want to know how long something specific is kept, ask. There is a written
 
 - `/delete_me` — clears your messages from the server, all of them or just the images.
 - **Leave one feature instead of all of it:** `/whisper forget-me`, `/guess optout`, and the opt-out controls in `/bank shop` and Wellness. All work on their own, no need to ask.
+- **A copy of everything held about you, or a full erasure** — open a ticket in <#1469781592854630580>. You don't have to give a reason, and asking isn't a complaint. Whoever runs an erasure will tell you exactly what was kept and why.
+
+Protecting yourself from another member — blocking, `/nocontact`, DM permissions — is a separate subject with its own doc: see **Safety Tools**.
