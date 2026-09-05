@@ -253,7 +253,9 @@ export function makeLineChart(canvas, { labels, series, title: _title }) {
 
 // ── Bar chart (simple) ──────────────────────────────────────────────────
 
-export function makeBarChart(canvas, { labels, data, title: _title, xLabel, yLabel, color }) {
+export function makeBarChart(
+  canvas, { labels, data, title: _title, xLabel, yLabel, color, partialFrom = null }
+) {
   const chart = new Chart(canvas, {
     type: "bar",
     data: {
@@ -264,6 +266,10 @@ export function makeBarChart(canvas, { labels, data, title: _title, xLabel, yLab
         borderWidth: 0,
         barPercentage: 0.85,
         categoryPercentage: 0.9,
+        // A bucket still filling up is outlined rather than drawn solid — the
+        // rightmost bar of an hourly view is minutes old, and a solid short
+        // bar there reads as the room going quiet.
+        ...liveEdgeBarProps(partialFrom, color || BAR),
       }],
     },
     options: merge(COMMON_OPTIONS, {
@@ -717,6 +723,61 @@ export function renderChartTable(host, { labels, datasets, indexLabel = "Period"
 /** The live edge's dash. Short enough to read as one line, not a row of ticks. */
 const PROVISIONAL_DASH = [2, 2];
 
+// The two sentences that explain the two marks, so a panel never hand-rolls
+// its own wording. Lines get the dash and the ring; bars get the outline —
+// different marks because the shapes differ, one meaning because they say the
+// same thing. `activity_graphs.PROVISIONAL_NOTE` is the bot side's twin.
+export const PROVISIONAL_CAPTION = "dashed, open end = the hour in progress";
+export const PROVISIONAL_BAR_CAPTION = "outlined bar = the hour in progress";
+
+/**
+ * Will a live-edge mark actually land on this series?
+ *
+ * The one predicate behind both the mark and the words about it. A caption
+ * derived from the index alone is a second guess at what the drawing did, and
+ * the two can disagree — the index can point past the end of the plotted data
+ * when the clock rolls between the query and the render, and then the chart
+ * says "the hour in progress" over a picture with no mark on it. The bot side
+ * fixes this by having its plotter report back; this is the same fix in the
+ * shape a Chart.js dataset allows.
+ */
+export function marksLiveEdge(values, partialFrom) {
+  if (!Number.isInteger(partialFrom) || partialFrom < 0) return false;
+  const points = Array.isArray(values) ? values : [];
+  let last = -1;
+  for (let i = 0; i < points.length; i += 1) {
+    if (points[i] !== null && points[i] !== undefined) last = i;
+  }
+  return last >= partialFrom;
+}
+
+/**
+ * Dataset props that draw one bar of a bar chart as provisional.
+ *
+ * The bar's answer to the line's open ring, and the same idea: the partial
+ * bucket is drawn as an *outline* of itself — surface fill, its own colour as
+ * the border — so it reads as "not filled in yet" rather than as a short bar.
+ * Hollowing rather than shading keeps it legible under colour-vision
+ * deficiency and at phone width, where a tint is just a slightly different bar.
+ *
+ * `restingBorder` / `restingWidth` are what every other bar keeps. A stacked
+ * chart passes the 2px surface-coloured separator its palette requires as a
+ * secondary encoding; the marked column loses that gap but gains an outline in
+ * each segment's own hue, which separates the segments at least as well.
+ */
+export function liveEdgeBarProps(
+  partialFrom, color, { restingBorder = null, restingWidth = 0 } = {}
+) {
+  if (!Number.isInteger(partialFrom) || partialFrom < 0) return {};
+  const at = (ctx) => ctx.dataIndex === partialFrom;
+  return {
+    backgroundColor: (ctx) => (at(ctx) ? CHART_SURFACE : color),
+    borderColor: (ctx) => (at(ctx) ? color : (restingBorder ?? color)),
+    borderWidth: (ctx) => (at(ctx) ? 2 : restingWidth),
+    borderSkipped: false,
+  };
+}
+
 /**
  * Dataset props that draw a current-period line's live edge as provisional.
  *
@@ -737,14 +798,13 @@ const PROVISIONAL_DASH = [2, 2];
  * An already-dashed line (an extra series) gets the ring only: a second dash
  * pattern beside the first says nothing a reader can decode.
  */
-function liveEdgeProps(values, partialFrom, color, { dashed = false } = {}) {
-  if (!Number.isInteger(partialFrom) || partialFrom < 0) return {};
+export function liveEdgeProps(values, partialFrom, color, { dashed = false } = {}) {
+  if (!marksLiveEdge(values, partialFrom)) return {};
   const points = Array.isArray(values) ? values : [];
   let last = -1;
   for (let i = 0; i < points.length; i += 1) {
     if (points[i] !== null && points[i] !== undefined) last = i;
   }
-  if (last < partialFrom) return {};
   const props = {
     pointRadius: (ctx) => (ctx.dataIndex === last ? 4 : 0),
     pointBackgroundColor: CHART_SURFACE,

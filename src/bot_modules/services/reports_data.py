@@ -741,6 +741,14 @@ def get_activity_data(
     if mode == "xp" and resolution in ("hour_of_day", "day_of_week"):
         window_label = xp_histogram_window_label(window_label)
 
+    # `hour` is the one timeline resolution whose last bucket is still filling:
+    # `_hour_buckets` snaps to calendar-hour boundaries, so the rightmost bar is
+    # however many minutes old the hour is. The others are rolling windows that
+    # end at *now* (`_day_buckets` and friends say so), and the two histograms
+    # have no "latest" bucket at all - hour-of-day is a shape, not a timeline.
+    # Nothing here is smoothed, so the two indices coincide.
+    partial_from = len(labels) - 1 if resolution == "hour" and labels else None
+
     result: ActivityData = {
         "resolution": resolution,
         "window_label": window_label,
@@ -749,9 +757,8 @@ def get_activity_data(
         "counts": counts,
         "counts_smooth": [],
         "smooth_window": 1,
-        # Timeline views end on a completed bucket, so nothing is provisional.
-        "partial_from": None,
-        "partial_from_smooth": None,
+        "partial_from": partial_from,
+        "partial_from_smooth": partial_from,
         "member_counts": member_counts,
         "show_members": show_members,
         "y_label": y_label,

@@ -9,7 +9,10 @@
 // Beneath it, the pattern the hero only hints at: per hour of the local clock,
 // on what share of recent days was a moderator talking while the server was.
 import { api, esc } from "../api.js";
-import { makeOverlayChart, renderChartLegend, renderChartTable } from "../charts.js";
+import {
+  makeOverlayChart, marksLiveEdge, renderChartLegend, renderChartTable,
+  PROVISIONAL_CAPTION,
+} from "../charts.js";
 import { mountAsync } from "../config-helpers.js";
 import { renderLoading } from "../states.js";
 
@@ -140,9 +143,12 @@ function render(container, d) {
     : `Today (no past ${esc(d.weekday || "day")}s to compare against yet)`;
   // The hour in progress is a real count of a few minutes, so both lines are
   // marked there rather than left to read as a crash. Named in words too: the
-  // mark is a convention, and this is where a reader learns it.
-  const partialNote = Number.isInteger(d.partial_from)
-    ? " · open end = the hour in progress"
+  // mark is a convention, and this is where a reader learns it. The shared
+  // wording, and taken from whether a mark will actually land rather than from
+  // the index — the server line here is dashed like every other current-period
+  // line, and only the moderators' already-dashed extra series is ring-only.
+  const partialNote = marksLiveEdge(d.server_current, d.partial_from)
+    ? ` · ${PROVISIONAL_CAPTION}`
     : "";
   captionEl.textContent = `Messages — ${windowLabel} (${d.tz_label})${partialNote}`;
 

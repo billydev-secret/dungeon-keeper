@@ -109,6 +109,42 @@ def test_activity_overlay_shape(
     )
 
 
+@pytest.mark.parametrize(
+    "resolution,marked",
+    [
+        # `_hour_buckets` snaps to calendar-hour boundaries, so the rightmost
+        # bar is however many minutes old the hour is — the same partial bucket
+        # the overlay views mark, drawn as a bar.
+        ("hour", True),
+        # The rest are rolling windows ending at *now*, so their last bucket is
+        # complete by construction...
+        ("day", False),
+        ("week", False),
+        ("month", False),
+        # ...and a histogram has no latest bucket at all: hour-of-day is a
+        # shape, not a timeline, so "the hour in progress" names nothing in it.
+        ("hour_of_day", False),
+        ("day_of_week", False),
+    ],
+)
+def test_only_the_hourly_timeline_has_a_bucket_still_filling(
+    open_client, resolution, marked
+):
+    invalidate_report_cache()
+    resp = open_client.get(
+        f"/api/reports/activity?resolution={resolution}&mode=messages"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    if marked:
+        assert data["partial_from"] == len(data["labels"]) - 1
+    else:
+        assert data["partial_from"] is None
+    # Nothing on a timeline is smoothed, so the two indices never diverge here.
+    assert data["partial_from_smooth"] == data["partial_from"]
+
+
 def _seed_overlay_history(db_path, guild_id, weeks, period="week"):
     """One message and one XP event per week, `weeks` weeks back.
 

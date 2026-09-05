@@ -407,6 +407,31 @@ applies it from `data.partial_from`; matplotlib's side is `_plot_live_edge` in
 is *already* dashed (an extra series) takes the ring only — a second dash pattern
 beside the first says nothing decodable.
 
+**A bar takes the same idea in its own shape: an outline of itself.** There is no
+"end of the line" to leave open, so the still-filling bucket keeps its colour as a
+2px border and takes the surface as its fill (`liveEdgeBarProps`), which reads as
+"not filled in yet" rather than as a short bar. Shading or fading it would not:
+a tint is just a slightly different bar at phone width and under CVD. On a stacked
+column every segment is outlined in its own source colour — that column trades the
+2px surface separator for a full outline, so the palette's required secondary
+encoding is kept, not dropped.
+
+**Which buckets are actually partial is a property of the bucketing, not of the
+chart type.** On the Activity panel it is the two overlay views and `hour`, whose
+`_hour_buckets` snaps to calendar-hour boundaries; `day`/`week`/`month` are rolling
+windows that end at *now* and so close their last bucket by construction, and the
+two histograms have no latest bucket at all — hour-of-day is a shape, not a
+timeline. Ask the bucketing before adding the mark.
+
+**The words come from whether a mark was drawn, never from the index.** An index
+can point past the end of the plotted data — the clock rolls between the query and
+the render — and a caption derived from the index alone then explains a mark that
+is not on the picture. `_plot_live_edge` returns whether it marked; `marksLiveEdge`
+is the same question for Chart.js, and both the dataset props and the caption go
+through it. The sentences themselves are `PROVISIONAL_CAPTION` /
+`PROVISIONAL_BAR_CAPTION` in charts.js and `PROVISIONAL_NOTE` in
+`activity_graphs.py` — a panel never hand-rolls its own wording.
+
 **Canvas draws the plot; HTML draws everything you'd want to select, resize,
 or have read aloud.** Chart.js's own title and legend are canvas text: they
 cannot use the page's type, cannot be selected, and do not exist for a screen

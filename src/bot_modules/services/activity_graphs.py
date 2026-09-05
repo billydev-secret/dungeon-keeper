@@ -2199,7 +2199,7 @@ def render_overlay_panel(
         # line simply stops at the hour in progress instead of diving to the
         # floor across hours nobody has lived yet. The hour in progress is the
         # one that *is* drawn while incomplete, so it is dashed to an open end.
-        _plot_live_edge(
+        live = _plot_live_edge(
             ax,
             x,
             chart.current,
@@ -2210,7 +2210,24 @@ def render_overlay_panel(
             label=chart.current_label,
         )
 
-        ax.set_title(chart.title, color=_TEXT, fontsize=11, pad=8, loc="left")
+        # The mark never travels without its sentence. This renderer has no
+        # note slot of its own the way the mod stats panel does, so the note
+        # rides under the title on the row that actually carries a mark —
+        # per-row, because these charts do not share a current period.
+        ax.set_title(
+            chart.title, color=_TEXT, fontsize=11, pad=14 if live else 8, loc="left"
+        )
+        if live:
+            ax.text(
+                0.0,
+                1.02,
+                PROVISIONAL_NOTE,
+                transform=ax.transAxes,
+                color=_TEXT,
+                fontsize=8,
+                alpha=0.7,
+                va="bottom",
+            )
         ax.set_ylabel(y_label, color=_TEXT, fontsize=9)
         ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
         ax.tick_params(length=0)
