@@ -2,6 +2,8 @@ import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import {
   makeBarChart, makeOverlayChart, renderChartLegend, renderChartTable,
+  liveEdgeBarProps, liveEdgeProps, marksLiveEdge,
+  PROVISIONAL_CAPTION, PROVISIONAL_BAR_CAPTION,
   CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, CHART_SURFACE, ROLE_COLORS,
   SERIES_OVERFLOW,
 } from "../charts.js";
@@ -377,17 +379,35 @@ export function mount(container, initialParams) {
             counts: s.counts.slice(lo, hi + 1),
           })),
         };
-        const title = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
         const hasSeries = sliced.series.length > 0;
         const hasMembers = sliced.show_members && sliced.member_counts.length > 0;
 
+        // Only the hourly view has a bucket still filling (the others end at
+        // *now* rather than on a clock boundary), and the slider can scroll it
+        // off the right-hand edge — so the index is translated into the window
+        // actually on screen, and is null when that window stops short of it.
+        const fullPartial = data.partial_from;
+        const partialFrom =
+          Number.isInteger(fullPartial) && fullPartial >= lo && fullPartial <= hi
+            ? fullPartial - lo
+            : null;
+        const marked = marksLiveEdge(sliced.counts, partialFrom);
+
         // The caption lives in HTML so it wears the page's type rather than
         // whatever the canvas was handed, and can be selected and read aloud.
-        captionEl.textContent = title;
+        // The note is taken from whether a mark will land, never from the index
+        // alone — a caption explaining a mark that is not on the picture is the
+        // failure the shared predicate exists to prevent.
+        captionEl.textContent =
+          `${data.y_label} — ${data.window_label} (${data.tz_label})`
+          + (marked ? ` · ${PROVISIONAL_BAR_CAPTION}` : "");
 
         chart = hasSeries
-          ? _makeActivityChart(canvas, { ...sliced, hide_x_labels: hasMembers })
-          : makeBarChart(canvas, { labels: sliced.labels, data: sliced.counts, title: "", yLabel: data.y_label });
+          ? _makeActivityChart(canvas, { ...sliced, hide_x_labels: hasMembers, partialFrom })
+          : makeBarChart(canvas, {
+              labels: sliced.labels, data: sliced.counts, title: "",
+              yLabel: data.y_label, partialFrom,
+            });
 
         // A legend only earns its place with two or more series; with one, the
         // caption already names it.
@@ -399,7 +419,11 @@ export function mount(container, initialParams) {
         membersWrap.hidden = !hasMembers;
         if (hasMembers) {
           const mCanvas = container.querySelector("[data-members-chart]");
-          membersChart = _makeMembersChart(mCanvas, sliced.labels, sliced.member_counts);
+          // Same live edge: the members line's last point counts the same
+          // part-hour the bars do.
+          membersChart = _makeMembersChart(
+            mCanvas, sliced.labels, sliced.member_counts, partialFrom
+          );
         }
 
         // Tooltips enhance; they must never be the only way to read a value —
@@ -461,8 +485,6 @@ export function mount(container, initialParams) {
     // to the hours actually lived through.
     const typicalToDate = hasBand ? sum(data.band_mid.slice(0, lived)) : 0;
 
-    captionEl.textContent = `${data.y_label} — ${data.window_label} (${data.tz_label})`;
-
     // A week is 168 hourly points on an axis that can label one tick a day, and
     // a single week is one realisation of it — drawn raw it reads as hash. The
     // server hands down a centred rolling mean of the current line and the
@@ -476,9 +498,23 @@ export function mount(container, initialParams) {
     // the numbers stay raw — the totals beside the legend and every cell of the
     // table are built from `data.counts`, so the exact hour is one click away.
     const smoothWindow = (data.counts_smooth || []).length ? data.smooth_window || 1 : 1;
-    const plotted = smoothWindow > 1 ? data.counts_smooth : data.counts;
+    const smoothed = smoothWindow > 1;
+    const plotted = smoothed ? data.counts_smooth : data.counts;
 
-    chart = makeOverlayChart(canvas, { ...data, counts: plotted }, {
+    // The hour in progress is drawn from the minutes lived so far, so the line
+    // is marked there rather than diving to the floor and reading as a crash.
+    // Which index that starts at depends on the line being plotted: a centred
+    // mean has already pulled the point before the live edge toward it.
+    // Said in words as well as in the mark, because a dash pattern is a
+    // convention and the caption is where a reader learns it.
+    const partialFrom = smoothed ? data.partial_from_smooth : data.partial_from;
+    const partialNote = marksLiveEdge(plotted, partialFrom)
+      ? ` · ${PROVISIONAL_CAPTION}`
+      : "";
+    captionEl.textContent =
+      `${data.y_label} — ${data.window_label} (${data.tz_label})${partialNote}`;
+
+    chart = makeOverlayChart(canvas, { ...data, counts: plotted, partial_from: partialFrom }, {
       subject, typical, isWeek, currentTotal, typicalToDate,
       currentNote: smoothWindow > 1 ? `${smoothWindow}-hour average` : "",
     });
@@ -534,14 +570,16 @@ export function mount(container, initialParams) {
 function _makeActivityChart(canvas, data) {
   const ctx = canvas.getContext("2d");
   const hasSeries = Array.isArray(data.series) && data.series.length > 0;
+  const partialFrom = data.partialFrom ?? null;
 
   const datasets = [];
   if (hasSeries) {
     for (const s of data.series) {
+      const sourceColor = SOURCE_COLORS[s.source] || FALLBACK_SOURCE_COLOR;
       datasets.push({
         label: SOURCE_LABELS[s.source] || s.source,
         data: s.counts,
-        backgroundColor: SOURCE_COLORS[s.source] || FALLBACK_SOURCE_COLOR,
+        backgroundColor: sourceColor,
         borderRadius: 2,
         // A 2px gap in the surface colour between stacked segments. The
         // palette's worst all-pairs CVD separation sits in the 6-8 band, which
@@ -553,6 +591,13 @@ function _makeActivityChart(canvas, data) {
         order: 2,
         yAxisID: "y",
         stack: "xp",
+        // The still-filling column is drawn as an outline of itself, each
+        // segment bordered in its own source colour. It trades the surface gap
+        // above for a full outline, which separates the segments at least as
+        // well — the CVD encoding is kept, not dropped.
+        ...liveEdgeBarProps(partialFrom, sourceColor, {
+          restingBorder: CHART_SURFACE, restingWidth: { top: 2 },
+        }),
       });
     }
   } else {
@@ -563,6 +608,7 @@ function _makeActivityChart(canvas, data) {
       borderRadius: 3,
       order: 2,
       yAxisID: "y",
+      ...liveEdgeBarProps(partialFrom, CHART_BAR),
     });
   }
   const scales = {
@@ -621,7 +667,7 @@ function _makeActivityChart(canvas, data) {
  * a 12px hit radius so the hover target clears ~24px. They were 2px before,
  * which is a 4px dot you have to land on dead centre.
  */
-function _makeMembersChart(canvas, labels, counts) {
+function _makeMembersChart(canvas, labels, counts, partialFrom = null) {
   return new Chart(canvas.getContext("2d"), {
     type: "line",
     data: {
@@ -636,6 +682,9 @@ function _makeMembersChart(canvas, labels, counts) {
         pointHoverRadius: 6,
         pointHitRadius: 12,
         tension: 0.3,
+        // A line, so it takes the line's mark rather than the bars' outline —
+        // it is the same part-hour underneath.
+        ...liveEdgeProps(counts, partialFrom, CHART_ACCENT),
       }],
     },
     options: {

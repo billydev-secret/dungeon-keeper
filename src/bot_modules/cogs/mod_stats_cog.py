@@ -190,6 +190,7 @@ class ModStatsCog(commands.Cog):
             ),
             PresenceSeries(
                 values=list(data.presence.by_hour),
+                partial_from=data.presence.partial_index,
                 empty_note="No moderator role configured.",
             ),
             [
@@ -315,6 +316,14 @@ def _chart(
         # but read it when it is there so this panel and the dashboard chart
         # can never draw the same series two different ways.
         current=list(result.current_smooth or result.current),
+        # Read off whichever series was copied in above: a centred mean makes
+        # the point *before* the live edge provisional too, and taking the raw
+        # index for a smoothed line would leave that sag looking settled.
+        partial_from=(
+            result.partial_from_smooth
+            if result.current_smooth
+            else result.partial_from
+        ),
         band_low=list(result.band_low),
         band_mid=list(result.band_mid),
         band_high=list(result.band_high),

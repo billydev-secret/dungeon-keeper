@@ -445,6 +445,9 @@ def compute_mod_coverage(
         "band_label": f"Typical {weekday}",
         "periods_sampled": server.periods_sampled,
         "server_current": server.current,
+        # Both lines here are the same day sliced two ways, so one live edge
+        # covers them: the hour in progress is drawn but incomplete.
+        "partial_from": server.partial_from,
         "band_low": server.band_low,
         "band_mid": server.band_mid,
         "band_high": server.band_high,

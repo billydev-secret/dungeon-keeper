@@ -608,6 +608,13 @@ class ActivityData(TypedDict):
     counts_smooth: Sequence[float | None]
     #: Width of that mean in hours; 1 when the line is drawn raw.
     smooth_window: int
+    #: Overlay views only; ``None`` elsewhere. The first index of `counts` /
+    #: `counts_smooth` that is provisional - the hour being lived through, and
+    #: for the smoothed line the neighbour its centred window already pulled
+    #: toward that hour. The panel marks from there rather than drawing a
+    #: fraction of an hour as though it were a whole one.
+    partial_from: int | None
+    partial_from_smooth: int | None
     member_counts: list[int]
     show_members: bool
     y_label: str
@@ -734,6 +741,14 @@ def get_activity_data(
     if mode == "xp" and resolution in ("hour_of_day", "day_of_week"):
         window_label = xp_histogram_window_label(window_label)
 
+    # `hour` is the one timeline resolution whose last bucket is still filling:
+    # `_hour_buckets` snaps to calendar-hour boundaries, so the rightmost bar is
+    # however many minutes old the hour is. The others are rolling windows that
+    # end at *now* (`_day_buckets` and friends say so), and the two histograms
+    # have no "latest" bucket at all - hour-of-day is a shape, not a timeline.
+    # Nothing here is smoothed, so the two indices coincide.
+    partial_from = len(labels) - 1 if resolution == "hour" and labels else None
+
     result: ActivityData = {
         "resolution": resolution,
         "window_label": window_label,
@@ -742,6 +757,8 @@ def get_activity_data(
         "counts": counts,
         "counts_smooth": [],
         "smooth_window": 1,
+        "partial_from": partial_from,
+        "partial_from_smooth": partial_from,
         "member_counts": member_counts,
         "show_members": show_members,
         "y_label": y_label,
@@ -826,6 +843,12 @@ def _get_overlay_data(
         "counts": result_ov.current,
         "counts_smooth": result_ov.current_smooth,
         "smooth_window": result_ov.smooth_window,
+        # First provisional index for each of the two lines above. The panel
+        # picks the one matching whichever it plots: a centred mean makes the
+        # point *before* the live edge provisional too, so the raw index would
+        # leave that sag looking like a settled measurement.
+        "partial_from": result_ov.partial_from,
+        "partial_from_smooth": result_ov.partial_from_smooth,
         "member_counts": [],
         "show_members": False,
         "y_label": "XP Earned" if mode == "xp" else "Messages",

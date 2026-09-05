@@ -857,6 +857,41 @@ def smooth_series(values: Sequence[float | None], window: int) -> list[float | N
         out.append(round(sum(near) / len(near), 1))
     return out
 
+
+def split_provisional(
+    values: Sequence[float | None], partial_from: int | None
+) -> tuple[list[float | None], list[float | None]]:
+    """Split a current-period series into its settled part and its live tail.
+
+    The last bucket of a day in progress holds a real count of a fraction of an
+    hour. Drawn like every other point it reads as a crash — at 15:05 a busy
+    hour and a dead one are the same five minutes of data — so it is drawn
+    apart from the settled line instead of being blanked, which would throw the
+    "something is happening now" signal away to fix the misreading.
+
+    Both halves come back the **full length** of *values*, ``None`` outside
+    their own span, so a caller plots them against one unsliced x-axis. The
+    tail keeps the last settled point as its first element: without that join
+    the dotted segment is a dot floating past the end of the solid line rather
+    than a continuation of it.
+
+    ``partial_from`` of ``None`` means nothing is provisional — a period that
+    has already ended — and the whole series comes back settled. A negative
+    index says the same thing rather than "all of it": ``liveEdgeProps`` in
+    charts.js reads one that way, and the two renderers are meant to draw the
+    same picture from the same inputs.
+    """
+    settled = list(values)
+    if partial_from is None or partial_from < 0:
+        return settled, [None] * len(settled)
+    provisional: list[float | None] = [None] * len(settled)
+    for i in range(max(0, partial_from - 1), len(settled)):
+        provisional[i] = settled[i]
+    for i in range(partial_from, len(settled)):
+        settled[i] = None
+    return settled, provisional
+
+
 # Full weekday names, Sunday-first to match _DOW_LABELS. Spelled out rather
 # than taken from strftime("%A"), which follows the process locale.
 _DOW_FULL = [
@@ -974,10 +1009,38 @@ class OverlayResult:
     current_smooth: list[float | None] = field(default_factory=list)
     #: Width of that mean in hours; 1 when the line is drawn raw.
     smooth_window: int = 1
+    #: Index of the bucket **being lived through** — a real count, but of a
+    #: fraction of an hour. Everything past it is ``None`` and goes undrawn;
+    #: this one is drawn, and without saying so it reads as a collapse, because
+    #: five minutes of a busy hour looks exactly like a dead one. ``None`` when
+    #: no bucket is in progress.
+    partial_index: int | None = None
 
     @property
     def has_band(self) -> bool:
         return len(self.band_mid) > 0
+
+    @property
+    def partial_from(self) -> int | None:
+        """First index of ``current`` that is provisional, drawn raw.
+
+        The same thing as :attr:`partial_index` for an unsmoothed line.
+        """
+        return self.partial_index
+
+    @property
+    def partial_from_smooth(self) -> int | None:
+        """First provisional index of ``current_smooth``.
+
+        Earlier than :attr:`partial_index`, because the mean is **centred**: at
+        window 3 the point before the live edge averages the partial hour in
+        and sags with it. Marking only the live edge would leave that sag
+        looking like a settled measurement, so the provisional span reaches
+        back the half-window the contamination does.
+        """
+        if self.partial_index is None:
+            return None
+        return max(0, self.partial_index - self.smooth_window // 2)
 
 
 def query_activity_overlay(
@@ -1107,6 +1170,11 @@ def query_activity_overlay(
         round(grid[periods][h], 1) if h <= now_hour else None
         for h in range(n_buckets)
     ]
+    # The hour we are *inside* is the one bucket that is both drawn and
+    # incomplete, so it is the one the reader can misread. Named here rather
+    # than recomputed by each drawing surface: the panel, the dashboard chart
+    # and the tests all have to agree which point is provisional.
+    partial_index = now_hour if 0 <= now_hour < n_buckets else None
 
     # A period with no rows at all predates the archive; counting it as a row
     # of zeros would drag the band toward the floor for a reason that is an
@@ -1135,6 +1203,7 @@ def query_activity_overlay(
             smooth_series(current, smooth_window) if smooth_window > 1 else []
         ),
         smooth_window=smooth_window,
+        partial_index=partial_index,
         band_low=band_low,
         band_mid=band_mid,
         band_high=band_high,
@@ -1999,6 +2068,77 @@ class OverlayChart:
     band_label: str = "Typical day"
     #: Said in place of the band when there is not enough history for one.
     empty_note: str = ""
+    #: First index of ``current`` that is provisional — the hour being lived
+    #: through, and for a smoothed line the points its centred window has
+    #: already pulled toward that hour. ``None`` draws the line solid
+    #: throughout. Take it from ``OverlayResult.partial_from`` or
+    #: ``.partial_from_smooth``, matching whichever series was copied in.
+    partial_from: int | None = None
+
+
+#: The live edge's line style. Dashes short enough to read as one line rather
+#: than a row of ticks at the width Discord gives an embed image.
+_PROVISIONAL_DASH = (0, (2, 2))
+
+
+def _plot_live_edge(
+    ax,
+    x: Sequence[int],
+    values: Sequence[float | None],
+    partial_from: int | None,
+    *,
+    color: str,
+    label: str | None = None,
+    **line_kw,
+) -> bool:
+    """Plot *values*, drawing the period's live edge as provisional.
+
+    Two encodings, not one: the tail is dashed **and** its final point is a
+    hollow ring. A dashed segment only means anything to a reader who was told
+    what it means, where an unfilled point at the end of a line reads as "not
+    closed yet" without a caption — and the caption is there anyway for the
+    reader who wants it.
+
+    Only the settled line is labelled, so a series contributes one legend entry
+    however many pieces it is drawn in.
+
+    Returns whether the mark was actually drawn, so a caller can caption it
+    only when it is on the picture. Nothing is drawn when the provisional span
+    holds no plotted point — a ``partial_from`` past the end of the data, which
+    the clock can produce by rolling between the query and the render. The ring
+    is only ever placed **at or after** ``partial_from``: the join point one
+    step back belongs to the settled line and marking it would call a finished
+    hour live.
+    """
+    settled, provisional = split_provisional(values, partial_from)
+    ax.plot(x[: len(settled)], settled, color=color, label=label, **line_kw)
+    # `split_provisional` has already blanked the tail for a None or negative
+    # index, so this only has to skip the join point the split kept.
+    start = 0 if partial_from is None else max(0, partial_from)
+    live = [i for i, v in enumerate(provisional) if v is not None and i >= start]
+    if not live:
+        return False
+    tail_kw = dict(line_kw)
+    tail_kw["linestyle"] = _PROVISIONAL_DASH
+    ax.plot(x[: len(provisional)], provisional, color=color, **tail_kw)
+    last = live[-1]
+    ax.plot(
+        [x[last]],
+        [provisional[last]],
+        marker="o",
+        markersize=6,
+        markerfacecolor=_BG,
+        markeredgecolor=color,
+        markeredgewidth=1.6,
+        linestyle="none",
+        zorder=int(line_kw.get("zorder", 3)) + 2,
+    )
+    return True
+
+
+#: Said under the title when either line runs to a live edge. One sentence for
+#: both of them: the mark means the same thing on each.
+PROVISIONAL_NOTE = "Dashed, open end = the hour still in progress."
 
 
 @_serialized_render
@@ -2057,17 +2197,37 @@ def render_overlay_panel(
 
         # Matplotlib leaves None unplotted the same way Chart.js does, so the
         # line simply stops at the hour in progress instead of diving to the
-        # floor across hours nobody has lived yet.
-        ax.plot(
-            x[: len(chart.current)],
+        # floor across hours nobody has lived yet. The hour in progress is the
+        # one that *is* drawn while incomplete, so it is dashed to an open end.
+        live = _plot_live_edge(
+            ax,
+            x,
             chart.current,
+            chart.partial_from,
             color=_OVERLAY_CURRENT,
             linewidth=2.2,
             zorder=3,
             label=chart.current_label,
         )
 
-        ax.set_title(chart.title, color=_TEXT, fontsize=11, pad=8, loc="left")
+        # The mark never travels without its sentence. This renderer has no
+        # note slot of its own the way the mod stats panel does, so the note
+        # rides under the title on the row that actually carries a mark —
+        # per-row, because these charts do not share a current period.
+        ax.set_title(
+            chart.title, color=_TEXT, fontsize=11, pad=14 if live else 8, loc="left"
+        )
+        if live:
+            ax.text(
+                0.0,
+                1.02,
+                PROVISIONAL_NOTE,
+                transform=ax.transAxes,
+                color=_TEXT,
+                fontsize=8,
+                alpha=0.7,
+                va="bottom",
+            )
         ax.set_ylabel(y_label, color=_TEXT, fontsize=9)
         ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
         ax.tick_params(length=0)
@@ -2144,6 +2304,11 @@ class PresenceSeries:
     values: list[int | None]
     #: Said in place of the line when the guild has no moderator role set.
     empty_note: str = ""
+    #: First provisional index, as ``OverlayChart.partial_from``. The presence
+    #: line runs to the same live edge the overlay does and has the same
+    #: problem there — one mod who has not spoken in the four minutes so far is
+    #: drawn as nobody watching — so it wears the same mark.
+    partial_from: int | None = None
 
     @property
     def has_data(self) -> bool:
@@ -2281,9 +2446,11 @@ def render_mod_stats_panel(
             zorder=2,
             label=f"{overlay.band_label} (median)",
         )
-    ax.plot(
-        x[: len(overlay.current)],
+    live = _plot_live_edge(
+        ax,
+        x,
         overlay.current,
+        overlay.partial_from,
         color=_OVERLAY_CURRENT,
         linewidth=2.2,
         zorder=3,
@@ -2310,9 +2477,11 @@ def render_mod_stats_panel(
         band_ceiling = max(overlay.band_high, default=0.0)
         ceiling = max(ceiling, band_ceiling)
         factor = (ceiling * 0.7 / peak) if peak and ceiling else 1.0
-        ax.plot(
+        presence_live = _plot_live_edge(
+            ax,
             list(range(len(presence.values))),
             [None if v is None else v * factor for v in presence.values],
+            presence.partial_from,
             color=_PRESENCE,
             linewidth=1.8,
             linestyle="-",
@@ -2321,6 +2490,7 @@ def render_mod_stats_panel(
             zorder=4,
             label=f"Mods around (0-{peak}, rescaled)",
         )
+        live = live or presence_live
     elif presence is not None and presence.empty_note:
         ax.text(
             0.01,
@@ -2333,7 +2503,13 @@ def render_mod_stats_panel(
             alpha=0.75,
         )
 
-    _title(ax, overlay.title)
+    # The note, not a fifth legend entry: this legend is already four entries
+    # in two columns below a 6-inch figure, and a third row of it costs more of
+    # the phone's screen than the sentence does. Said only when a mark was
+    # actually drawn — `live` is what the plotting reported, not a second guess
+    # at it, so the caption can never explain something that is not on the
+    # picture.
+    _title(ax, overlay.title, PROVISIONAL_NOTE if live else "")
     ax.set_ylabel("Messages", color=_TEXT, fontsize=10)
     ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True, nbins=5))
     ax.set_ylim(bottom=0)

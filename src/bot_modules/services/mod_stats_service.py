@@ -92,6 +92,10 @@ class ModPresence:
     #: False when the guild has no moderator role configured, which is a
     #: different thing from a day on which no moderator showed up.
     configured: bool
+    #: Index of the hour in progress — drawn, but counting only the minutes so
+    #: far, so the chart marks it provisional rather than letting a quiet four
+    #: minutes read as an unwatched hour. ``None`` when nothing is drawn.
+    partial_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -290,7 +294,11 @@ def query_mod_presence_by_hour(
     """
     if not mod_ids:
         return ModPresence(
-            by_hour=[None] * 24, distinct_today=0, peak=0, configured=False
+            by_hour=[None] * 24,
+            distinct_today=0,
+            peak=0,
+            configured=False,
+            partial_index=None,
         )
 
     now = datetime.now(timezone.utc)
@@ -330,6 +338,7 @@ def query_mod_presence_by_hour(
         distinct_today=len(everyone),
         peak=max((len(v) for v in per_hour.values()), default=0),
         configured=True,
+        partial_index=hour_index if 0 <= hour_index <= 23 else None,
     )
 
 
