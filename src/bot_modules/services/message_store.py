@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import time
 from collections.abc import Sequence
 
 from bot_modules.services import ping_tracker_service
@@ -717,6 +718,47 @@ def purge_guild_message_content(conn: sqlite3.Connection, guild_id: int) -> int:
         "UPDATE messages SET content = NULL "
         "WHERE guild_id = ? AND content IS NOT NULL",
         (guild_id,),
+    )
+    return max(cur.rowcount, 0)
+
+
+def redact_message_content_older_than(
+    conn: sqlite3.Connection,
+    guild_id: int,
+    *,
+    older_than_days: int,
+    now: float | None = None,
+) -> int:
+    """Age-bounded sibling of :func:`purge_guild_message_content`.
+
+    Same erasure, same three tables, applied only to messages older than
+    *older_than_days* instead of to the whole guild. The row, its sentiment
+    score, its @-mention edges and every derived table survive — see the
+    sibling's docstring for why that split is load-bearing.
+
+    This is the 12-month arm of the 2026-09-05 retention decision. It is
+    written as its own function rather than a parameter on the sibling because
+    the two have genuinely different contracts: the sibling is a one-shot
+    consequence of an admin switching storage off and is expected to clear
+    everything, while this runs daily, is expected to clear nothing most days,
+    and must never touch a message inside the window.
+
+    Returns the number of message rows whose content was cleared.
+    """
+    cutoff = (time.time() if now is None else now) - older_than_days * 86400
+    id_subq = "SELECT message_id FROM messages WHERE guild_id = ? AND ts < ?"
+    conn.execute(
+        f"DELETE FROM message_attachments WHERE message_id IN ({id_subq})",
+        (guild_id, cutoff),
+    )
+    conn.execute(
+        f"DELETE FROM message_embeds WHERE message_id IN ({id_subq})",
+        (guild_id, cutoff),
+    )
+    cur = conn.execute(
+        "UPDATE messages SET content = NULL "
+        "WHERE guild_id = ? AND ts < ? AND content IS NOT NULL",
+        (guild_id, cutoff),
     )
     return max(cur.rowcount, 0)
 

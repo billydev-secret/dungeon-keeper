@@ -223,6 +223,7 @@ def main() -> None:
         "bot_modules.rules_watch.monitor",
         "bot_modules.cogs.wellness_cog",
         "bot_modules.cogs.xp_cog",
+        "bot_modules.cogs.retention_cog",
         "bot_modules.cogs.confessions_cog",
         "bot_modules.cogs.dm_perms_cog",
         "bot_modules.cogs.no_contact_cog",

@@ -1247,6 +1247,8 @@ def _global_section(conn, guild_id: int) -> dict:
 
 
 def _privacy_section(conn, guild_id: int) -> dict:
+    from bot_modules.services import retention_service
+
     return {
             # "none" (default) keeps only derivations (XP/sentiment/
             # interactions); "all" archives raw message content.
@@ -1255,6 +1257,21 @@ def _privacy_section(conn, guild_id: int) -> dict:
                 "message_storage_level",
                 STORAGE_LEVEL_NONE,
                 guild_id=guild_id,
+            ),
+            # Presented positively though it is stored as
+            # ``data_retention_disabled``. The stored key is negative so that
+            # an absent row means retention *applies* — a new guild is covered
+            # from its first day rather than from the day someone ticks a box.
+            # The inversion is confined to this boundary; nothing downstream
+            # sees both spellings.
+            "data_retention_enabled": (
+                "1" if retention_service.retention_enabled(conn, guild_id) else "0"
+            ),
+            "message_content_retention_days": str(
+                retention_service.MESSAGE_CONTENT_RETENTION_DAYS
+            ),
+            "behavioural_retention_days": str(
+                retention_service.BEHAVIOURAL_RETENTION_DAYS
             ),
         }
 
@@ -1640,6 +1657,7 @@ async def update_support_access(
 
 class PrivacyConfigUpdate(BaseModel):
     message_storage_level: str | None = None
+    data_retention_enabled: str | None = None
 
 
 @router.put("/config/privacy")
@@ -1654,8 +1672,27 @@ async def update_privacy(
     message content (text/attachments/embeds) while leaving every derivation
     (XP, sentiment scores, interactions, member activity) intact.
     """
+    from bot_modules.services import retention_service
+
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+
+    if body.data_retention_enabled is not None:
+        # Inverted on the way in — see ``_privacy_section``. Written whichever
+        # way it goes, so switching back on leaves an explicit "0" rather than
+        # relying on the row's absence and looking like it was never set.
+        enabled = body.data_retention_enabled.strip() == "1"
+
+        def _set_retention():
+            with ctx.open_db() as conn:
+                set_config_value(
+                    conn,
+                    retention_service.RETENTION_CONFIG_KEY,
+                    "0" if enabled else "1",
+                    guild_id,
+                )
+
+        await run_query(_set_retention)
 
     level = body.message_storage_level
     if level is None:

@@ -40,6 +40,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from bot_modules.services.privacy_service import (  # noqa: E402
+    LIST_VALUED_MEMBER_COLUMNS,
     SUBJECT_ID_COLUMNS,
 )
 
@@ -81,11 +82,18 @@ _NOT_MEMBER_COLUMNS = frozenset(
     }
 )
 
-#: Columns holding a *list* of member ids (CSV or JSON). They are a documented
-#: blind spot in ``privacy_service.LIST_VALUED_MEMBER_COLUMNS`` — an equality
-#: match cannot find a subject inside one — so the sweep reports them under
-#: their own heading rather than as newly-discovered gaps.
-_LIST_VALUED = frozenset({"participant_user_ids", "allowed_replier_ids"})
+#: Columns holding a *list* of member ids (CSV or JSON) — a documented blind
+#: spot, since an equality match cannot find a subject inside one. Reported
+#: under their own heading rather than as newly-discovered gaps.
+#:
+#: Derived from ``privacy_service.LIST_VALUED_MEMBER_COLUMNS`` rather than
+#: restated. It was restated until 2026-09-05, and the copy had gone stale:
+#: it named two of the nine, so the sweep filed the other seven — including
+#: ``risky_pending_questions.questioners_asked``, listed in the real tuple
+#: since ``ae7766b9`` — under "invisible to the access export". A sweep whose
+#: whole job is finding what a curated list missed must not keep a curated
+#: list of its own.
+_LIST_VALUED = frozenset(col for _table, col in LIST_VALUED_MEMBER_COLUMNS)
 
 #: A Discord snowflake is a 64-bit id whose timestamp epoch starts in 2015, so
 #: every real id comfortably exceeds this. Used to reject counters and prices

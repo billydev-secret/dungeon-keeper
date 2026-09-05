@@ -12,6 +12,7 @@ import {
   mountRoleMultiPicker,
   mountAsync,
 } from "../config-helpers.js";
+import { esc } from "../api.js";
 import { confirmDialog } from "../ui.js";
 import { mountRoleDialStates } from "../role-dial-state.js";
 
@@ -22,6 +23,10 @@ export function mount(container) {
     const [config, channels, categories, roles] = await Promise.all([loadConfig(), loadChannels(), loadCategories(), loadRoles()]);
     const m = config.moderation;
     let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
+    const priv = config.privacy || {};
+    let currentRetention = priv.data_retention_enabled === "0" ? "0" : "1";
+    const msgDays = priv.message_content_retention_days || "365";
+    const behDays = priv.behavioural_retention_days || "180";
 
     container.innerHTML = `
       <div class="panel">
@@ -95,6 +100,14 @@ export function mount(container) {
               <label>Transcript Channel</label>
               <span data-picker="transcript_channel_id"></span>
               <div class="field-hint">Where jail and ticket transcripts are posted. Falls back to the log channel when unset.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-label">Data Retention</div>
+            <div class="field">
+              <label><input type="checkbox" name="data_retention_enabled" id="mod-retention"${currentRetention === "1" ? " checked" : ""} /> Apply retention periods</label>
+              <div class="field-hint">Message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats, so nothing on the reports changes. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. Turning this off keeps everything for good; the member-facing privacy notice says which applies here.</div>
             </div>
           </div>
 
@@ -185,6 +198,11 @@ export function mount(container) {
         // Storage level uses a dedicated endpoint (switching to "none" purges
         // existing content). Only call it when the value actually changed so a
         // routine moderation save doesn't re-trigger the purge.
+        const newRetention = form.querySelector("#mod-retention").checked ? "1" : "0";
+        if (newRetention !== currentRetention) {
+          await apiPut("/api/config/privacy", { data_retention_enabled: newRetention });
+          currentRetention = newRetention;
+        }
         const newStorage = fd.get("message_storage_level");
         let note = "";
         if (newStorage !== currentStorage) {
