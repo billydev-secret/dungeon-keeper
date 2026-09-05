@@ -83,6 +83,7 @@ export const HELP_GROUPS = [
     { page: "help-tickets",     anchor: "tickets",     label: "Tickets, Policies & Warnings" },
     { page: "help-policies",    anchor: "policies",    label: "Policy Voting" },
     { page: "help-analytics",   anchor: "analytics",   label: "Analytics & Watch List" },
+    { page: "help-word-cloud", anchor: "word-cloud", label: "Word Cloud" },
     { page: "help-threads-metrics", anchor: "threads-in-metrics", label: "Threads and Channel Metrics" },
     { page: "help-bots-metrics", anchor: "bots-in-metrics", label: "Bots and Metrics" },
     { page: "help-usage-telemetry", anchor: "usage-telemetry", label: "Command & Panel Usage" },

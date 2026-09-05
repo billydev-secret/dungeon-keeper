@@ -213,6 +213,7 @@ def main() -> None:
         "bot_modules.cogs.member_info_cog",
         "bot_modules.cogs.todo_cog",
         "bot_modules.cogs.mod_stats_cog",
+        "bot_modules.cogs.word_cloud_cog",
         "bot_modules.cogs.qa_cog",
         "bot_modules.cogs.role_menus_cog",
         "bot_modules.cogs.ai_mod_cog",

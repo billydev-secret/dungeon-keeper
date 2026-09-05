@@ -195,6 +195,7 @@ const SECTIONS = [
         { id: "config-needle",     label: "Auto-Thread",       module: "./panels/config-needle.js", adminOnly: true, keywords: "needle thread replies" },
         { id: "config-auto-react", label: "Auto-React",        module: "./panels/config-auto-react.js", adminOnly: true, keywords: "auto react reactions emoji tips tipping" },
         { id: "config-starboard",  label: "Starboard",         module: "./panels/config-starboard.js", adminOnly: true },
+        { id: "word-cloud",        label: "Word Cloud",        module: "./panels/config-word-cloud.js", adminOnly: true, keywords: "wordcloud words common frequent topics chat analysis picture cloud" },
         { id: "chat-revive",       label: "Chat Revive",       module: "./panels/chat-revive.js", keywords: "dead chat prompts", help: "help-chat-revive" },
         { id: "music-playlist",    label: "Music Playlist",    module: "./panels/music-playlist.js", adminOnly: true, help: "help-music-playlist", keywords: "spotify rolling playlist songs tracks watched channel youtube links review unmatched window" },
         { id: "feature-rotation", label: "Feature Rotation", module: "./panels/feature-rotation.js", adminOnly: true, keywords: "rotating channels daily featured room hide reveal spotlight", help: "help-feature-rotation" },
