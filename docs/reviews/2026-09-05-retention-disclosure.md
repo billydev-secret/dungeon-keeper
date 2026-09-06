@@ -331,8 +331,41 @@ and a new guild is covered from its first day.
   row, the backup paragraph.
 - `docs/proposals/privacy-tools-retention-wording.md` — F1, proposed only.
 
+### Correction — the premise was wrong, and the sweeps ship off
+
+The ship review of 2026-09-05 disproved this review's central measurement.
+
+It said: *no report reads further back than 90 days*
+(`contributors_service.WINDOW_DAYS`; `attention_report` 30). That is the longest
+**aggregate** consumer. The Connection Graph's replay,
+`reports_data.get_interaction_series`, reads `user_interactions_log` over
+**30 weeks / 210 days** by default, and `connection-graph.js` hard-codes
+`weeks: 30`. At 180 days the first sweep would have permanently blanked the
+replay's earliest weeks — a mod scrubbing back would see an empty graph that
+never refilled.
+
+Consequences, both decided by the owner:
+
+- **The sweeps now ship disabled**, reversing this review's own
+  ships-enabled argument. The reasoning still holds in general — a rule nobody
+  switches on is not a rule — but it is worth less than not deleting on a
+  number that has been shown wrong. `BEHAVIOURAL_RETENTION_DAYS` is marked
+  provisional in the code and the register, and the period is open.
+- **`member_events` left the sweep entirely.** `rules_watch.compute_tenure_days`
+  is `MIN(ts) FROM member_events` with *no window* — it wants a member's
+  first-ever join — and `scorer.py` up-weights `tenure_days < 7`. Any period
+  there scores a three-year member who rejoined as a newcomer. 1,497 rows;
+  keeping it costs nothing. Now registered as permanent with that ground.
+
+The lesson is the same one F9 taught in the other direction: I verified the
+three consumers I thought of and reported the result as though I had verified
+all of them. "No report reads past 90 days" was a claim about every reader in
+the codebase, and I had checked three.
+
 ### Still open
 
+- **The behavioural period needs re-deciding** against 210 days, then the dial
+  can be switched on. Until then nothing sweeps.
 - **`xp_events` is the owner's toggle**, on Moderation &amp; Privacy → XP
   settings. 651k rows go on the first pass. Not switched on by this session.
 - **20 rows remain `undecided`** — the honest backlog, down from 44.

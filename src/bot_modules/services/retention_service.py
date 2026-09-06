@@ -3,23 +3,27 @@
 Built by the 2026-09-05 retention & disclosure review. That review's finding
 was not that anything overruns a stated period — every bounded claim in
 ``docs/data_register.md`` is enforced and honoured — but that 44 of the
-register's 79 rows said "indefinite", and almost none of those recorded a
+register's 78 rows said "indefinite", and almost none of those recorded a
 decision. They recorded a default nobody had revisited.
 
-Two periods were chosen by the owner against a measured fact: the longest
-*aggregate* consumer reads 90 days back (``contributors_service``'s
-``WINDOW_DAYS``; ``attention_report`` uses 30).
+**This ships disabled.** ``retention_enabled`` is false until a guild turns it
+on, and no guild has. That is not the original intent — the first draft shipped
+it enabled, on the argument that a rule nobody switches on is not a rule — but
+the period below rests on a premise that turned out to be wrong, and a sweep
+that deletes on a wrong number is worse than one that waits:
 
-.. warning::
+    The first draft said "no report reads further back than 90 days"
+    (``contributors_service.WINDOW_DAYS``; ``attention_report`` uses 30).
+    That is the longest *aggregate* consumer, not the longest consumer. The
+    Connection Graph's replay (``reports_data.get_interaction_series``) reads
+    ``user_interactions_log`` over **30 weeks / 210 days** by default, and
+    ``connection-graph.js`` hard-codes ``weeks: 30``. At 180 days the first
+    pass would permanently blank the replay's earliest weeks.
 
-   That is not the longest consumer. The Connection Graph's replay
-   (``reports_data.get_interaction_series``) reads ``user_interactions_log``
-   and ``member_events`` over **30 weeks / 210 days** by default — the panel
-   hard-codes ``weeks: 30`` — and the route accepts up to **60 weeks / 420
-   days**. ``BEHAVIOURAL_RETENTION_DAYS`` below is *shorter* than that, so the
-   first sweep permanently blanks the replay's earliest weeks. Flagged by the
-   code review of 2026-09-05; the number is the owner's to re-decide (raise
-   the period, or narrow the replay) before this runs in prod.
+``BEHAVIOURAL_RETENTION_DAYS`` is therefore **provisional**. It is the owner's
+to re-decide — raise the period past 210, or narrow the replay — and the dial
+stays off until that happens. Do not enable it in prod on the strength of the
+number as it stands.
 
 * **Message content — 365 days.** The row survives; only the text goes. That
   split is deliberate and matches the archive's own design: CLAUDE.md keeps
@@ -29,22 +33,21 @@ Two periods were chosen by the owner against a measured fact: the longest
   oldest activity history of seven guilds that never stored a byte of text, to
   solve a problem only the eighth guild has. See
   ``message_store.redact_message_content_older_than``.
+  This period is *not* in doubt: nothing reads message text on a window at all.
 
-* **Behavioural stores — 180 days.** ``reaction_log``,
-  ``user_interactions_log``, ``voice_follow_log``, ``member_events`` and
-  ``ping_events``: who reacted to, replied to, followed and pinged whom. This
-  is the profiling-flavoured half of the archive and the half with no rollup to
-  fall back on, so a deletion here is a real loss and 180 days is double the
-  longest consumer rather than merely equal to it.
+* **Behavioural stores — 180 days, provisional.** ``reaction_log``,
+  ``user_interactions_log``, ``voice_follow_log`` and ``ping_events``: who
+  reacted to, replied to, followed and pinged whom. The profiling-flavoured
+  half of the archive, and the half with no rollup to fall back on, so a
+  deletion here is a real loss.
 
-Unlike ``xp_rollup_service``'s dial this ships **enabled**, with a per-guild
-switch to turn it off. The reason is empirical: on the day it was written the
-first pass redacted 0 message rows (the oldest text was 211 days old) and
-deleted rows from exactly one behavioural table. A rule that costs nothing on
-the day it lands and then simply holds the line is worth more than one that
-ships dark — ``xp_retention_enabled`` shipped dark on 2026-08-26 and was still
-off 210 days of events later, which is how a retention policy quietly becomes
-no policy at all.
+``member_events`` is deliberately **not** in that list. Tenure is computed as
+``MIN(ts) FROM member_events`` with no window at all
+(``rules_watch/service.py:compute_tenure_days``) — it wants a member's
+first-ever join. Any period on that table shortens tenure for anyone who
+joined before it, and ``rules_watch/scorer.py`` up-weights ``tenure_days < 7``,
+so a three-year member who rejoined would be scored as a newcomer. The table is
+1,497 rows. It stays.
 """
 
 from __future__ import annotations
@@ -67,11 +70,12 @@ MESSAGE_CONTENT_RETENTION_DAYS = 365
 #: number does **not** currently leave every surface full headroom.
 BEHAVIOURAL_RETENTION_DAYS = 180
 
-#: Per-guild off switch. Absent means **on** — the inverse of
-#: ``xp_retention_enabled``, and the inversion is the point: a missing key here
-#: means the policy applies, so a new guild is covered from its first day
-#: rather than from the day someone remembers to tick a box.
-RETENTION_CONFIG_KEY = "data_retention_disabled"
+#: Per-guild switch. Absent means **off**, matching ``xp_retention_enabled``:
+#: an admin turns retention on deliberately, per guild, after deciding the
+#: period is right for that guild. An earlier draft inverted this so that
+#: absence meant *on*; that only made sense while the periods were settled,
+#: and one of them is not.
+RETENTION_CONFIG_KEY = "data_retention_enabled"
 
 #: ``(table, timestamp column)``. Every one of these carries ``guild_id``, so
 #: the sweep is per-guild and a guild that opts out is genuinely untouched.
@@ -83,7 +87,6 @@ BEHAVIOURAL_TABLES: tuple[tuple[str, str], ...] = (
     ("reaction_log", "ts"),
     ("user_interactions_log", "ts"),
     ("voice_follow_log", "ts"),
-    ("member_events", "ts"),
     ("ping_events", "ts"),
 )
 
@@ -96,20 +99,17 @@ DELETE_CHUNK = 20_000
 
 
 def retention_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
-    """True unless this guild has explicitly switched retention off.
+    """True only where a guild has explicitly switched retention on.
 
-    Note the default: an absent row means enabled. ``xp_retention_enabled``
-    reads the other way round because turning *it* on deletes 651k rows at
-    once; this sweep's first pass is near-empty, so the safe default and the
-    privacy-preserving default are the same one for once.
+    Absent means off. Nothing is deleted anywhere until an admin ticks the box,
+    which is the correct posture while ``BEHAVIOURAL_RETENTION_DAYS`` is still
+    provisional — see the module docstring.
     """
     row = conn.execute(
         "SELECT value FROM config WHERE key = ? AND guild_id = ?",
         (RETENTION_CONFIG_KEY, guild_id),
     ).fetchone()
-    if not row:
-        return True
-    return str(row[0]).strip() not in ("1", "true", "True", "on", "yes")
+    return bool(row) and str(row[0]).strip() in ("1", "true", "True", "on", "yes")
 
 
 def behavioural_cutoff(*, older_than_days: int, now: float | None = None) -> float:

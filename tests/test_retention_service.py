@@ -28,7 +28,14 @@ GUILD = 1
 OTHER_GUILD = 2
 
 
-def _conn() -> sqlite3.Connection:
+def _conn(*, enabled: bool = True) -> sqlite3.Connection:
+    """A schema plus, by default, retention switched ON for ``GUILD``.
+
+    The dial ships off, so a sweep test that forgot to enable it would pass
+    vacuously — "nothing was deleted" is trivially true when nothing runs.
+    Enabling here by default makes the vacuous case impossible to write by
+    accident; the two tests that are *about* the default pass ``enabled=False``.
+    """
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     init_message_tables(conn)
@@ -52,6 +59,8 @@ def _conn() -> sqlite3.Connection:
             f"guild_id INTEGER NOT NULL, user_id INTEGER, "
             f"{ts_col} REAL NOT NULL)"
         )
+    if enabled:
+        set_config_value(conn, retention_service.RETENTION_CONFIG_KEY, "1", GUILD)
     return conn
 
 
@@ -114,29 +123,38 @@ def _content(conn, message_id: int):
 # ── the switch ────────────────────────────────────────────────────────
 
 
-def test_absent_config_row_means_retention_applies():
-    """The inverted default is the whole point — assert it directly."""
-    conn = _conn()
-    assert retention_service.retention_enabled(conn, GUILD) is True
+def test_absent_config_row_means_retention_is_off():
+    """Ships dark: nothing sweeps until a guild opts in. Assert it directly."""
+    conn = _conn(enabled=False)
+    assert retention_service.retention_enabled(conn, GUILD) is False
 
 
 @pytest.mark.parametrize("stored,expected", [
-    ("1", False), ("true", False), ("on", False), ("yes", False),
-    ("0", True), ("", True), ("no", True),
+    ("1", True), ("true", True), ("on", True), ("yes", True),
+    ("0", False), ("", False), ("no", False),
 ])
-def test_switch_reads_truthy_values_as_disabled(stored, expected):
-    conn = _conn()
+def test_switch_reads_truthy_values_as_enabled(stored, expected):
+    conn = _conn(enabled=False)
     set_config_value(
         conn, retention_service.RETENTION_CONFIG_KEY, stored, GUILD
     )
     assert retention_service.retention_enabled(conn, GUILD) is expected
 
 
+def test_member_events_is_not_swept():
+    """Tenure reads MIN(ts) FROM member_events with no window at all.
+
+    ``rules_watch.compute_tenure_days`` wants a member's first-ever join, and
+    ``scorer`` up-weights ``tenure_days < 7`` — so sweeping this table would
+    score a long-standing member who rejoined as a newcomer. It must stay out
+    of the list however the periods are re-decided.
+    """
+    swept = {table for table, _ in retention_service.BEHAVIOURAL_TABLES}
+    assert "member_events" not in swept
+
+
 def test_disabled_guild_keeps_everything():
-    conn = _conn()
-    set_config_value(
-        conn, retention_service.RETENTION_CONFIG_KEY, "1", GUILD
-    )
+    conn = _conn(enabled=False)
     _msg(conn, message_id=1, age_days=900)
     for table, ts_col in retention_service.BEHAVIOURAL_TABLES:
         _behav(conn, table, ts_col, age_days=900)
@@ -157,7 +175,7 @@ def test_disabled_guild_keeps_everything():
 def test_one_guild_opting_out_does_not_shield_another():
     conn = _conn()
     set_config_value(
-        conn, retention_service.RETENTION_CONFIG_KEY, "1", OTHER_GUILD
+        conn, retention_service.RETENTION_CONFIG_KEY, "0", OTHER_GUILD
     )
     _msg(conn, message_id=1, age_days=900, guild_id=GUILD)
     _msg(conn, message_id=2, age_days=900, guild_id=OTHER_GUILD)

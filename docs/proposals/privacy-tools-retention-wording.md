@@ -93,3 +93,21 @@ old enough to have rotted:
 `1523516810685845636` (the rules/FAQ channel). `safety-tools` most naturally
 goes to the same two, so a member scrolling either channel meets both halves —
 but that is a placement decision, not a wording one.
+
+
+## Status after the ship review (2026-09-05)
+
+**The sweeps ship OFF.** The behavioural period rested on a premise the review
+disproved — the Connection Graph replay reads `user_interactions_log` over 210
+days, not the 90 the first draft claimed — so 180 would blank its earliest
+weeks. The number is the owner's to re-decide, and the dial stays off until
+then.
+
+Both lines in the body are therefore written as *"once the server switches that
+on"*. **Do not post this doc while the dial is off and the sentence reads as an
+unconditional promise** — as written it is accurate either way, but re-read it
+after the period is settled, because the honest wording changes once it is.
+
+`member_events` was removed from the sweep entirely: tenure is
+`MIN(ts) FROM member_events` with no window, so any period there mis-scores a
+long-standing member as a newcomer. Joins and leaves are now disclosed as kept.

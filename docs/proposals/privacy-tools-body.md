@@ -29,8 +29,8 @@ Most of it, honestly: for as long as the server runs. Some of it goes on a clock
 
 **Cleared automatically:**
 
-- **The text of what you post** — after **12 months**. The message itself stays (who posted it, where, and when); the words go, and so do any attachments.
-- **Who you interacted with** — reactions, replies, who followed whom into a voice channel, role pings, joins and leaves: **180 days**.
+- **The text of what you post** — after **12 months**, once the server switches that on. The message itself stays (who posted it, where, and when); the words go, and so do any attachments.
+- **Who you interacted with** — reactions, replies, who followed whom into a voice channel, role pings: **180 days**, once the server switches that on. Joins and leaves are kept for good; they are how the bot knows how long you have been here.
 - **The link between you and something you posted anonymously** — a confession, an AMA question, a Would-You-Rather vote, a compliment pairing: the admin's log keeps that link for **90 days**, then it is gone. The separate record that routes replies back to your confession goes sooner, after **7 days**.
 - **A confession waiting to be approved** — deleted the moment it is approved or rejected, or after **7 days** if neither happens. It is the only place the bot holds a confession's text next to your name.
 - **A question you asked in Risky Rolls** — **7 days**.

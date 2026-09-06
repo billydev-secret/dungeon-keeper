@@ -24,7 +24,7 @@ export function mount(container) {
     const m = config.moderation;
     let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
     const priv = config.privacy || {};
-    let currentRetention = priv.data_retention_enabled === "0" ? "0" : "1";
+    let currentRetention = priv.data_retention_enabled === "1" ? "1" : "0";
     const msgDays = priv.message_content_retention_days || "365";
     const behDays = priv.behavioural_retention_days || "180";
 
@@ -107,7 +107,7 @@ export function mount(container) {
             <div class="section-label">Data Retention</div>
             <div class="field">
               <label><input type="checkbox" name="data_retention_enabled" id="mod-retention"${currentRetention === "1" ? " checked" : ""} /> Apply retention periods</label>
-              <div class="field-hint">Message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats, so nothing on the reports changes. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. Turning this off keeps everything for good &mdash; the member-facing privacy notice points members back to this page to find out which applies.</div>
+              <div class="field-hint">Off by default, and off everywhere right now. With it on: message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. <strong>Leave this off for now:</strong> the ${esc(behDays)}-day figure is still being reviewed, because the Connection Graph’s replay reads further back than that and would lose its earliest weeks. Whichever way this is set, the member-facing privacy notice describes it.</div>
             </div>
           </div>
 
