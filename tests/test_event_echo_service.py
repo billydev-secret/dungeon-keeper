@@ -1248,6 +1248,21 @@ class TestGateCrossingWarning:
         assert "risky-rolls" in caplog.text
         assert "the-meadow" in caplog.text
 
+    def test_the_warning_does_not_claim_a_name_crosses_for_every_source(self, guild, caplog):
+        """It fires for any crossing source and is deduped per guild.
+
+        Guess Who names nobody by design, so a warning that flatly says a
+        member's name will be posted is false for it — and being per-guild,
+        that wrong line can be the only warning a server ever gets.
+        """
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, self._ch(True), self._ch(False))
+        text = caplog.text
+        assert "game names and jump links" in text
+        # The name is attributed to Risky Rolls specifically, not to echoes at large.
+        head = text.split("Risky Rolls")[0]
+        assert "name of whoever" not in head
+
     def test_silent_when_the_destination_is_gated_too(self, guild, caplog):
         with caplog.at_level("WARNING"):
             svc.warn_gate_crossing(guild, self._ch(True), self._ch(True))

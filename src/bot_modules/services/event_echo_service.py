@@ -360,10 +360,15 @@ def warn_gate_crossing(guild: discord.Guild, origin, destination) -> None:
         return
     _gate_warned.add(guild.id)
     log.warning(
+        # Worded for every source, not just the one that prompted it: this
+        # fires for any crossing (party games, Gamebot, bounties, Guess Who),
+        # is deduped per *guild*, and so is often the only warning a server
+        # ever sees. Claiming a member is named would be false for Guess Who,
+        # whose whole guarantee is that it names nobody.
         "event echo: #%s is age-gated but the echo channel #%s is not — "
-        "game names, jump links and the name of whoever opened a Risky Rolls "
-        "round will be posted where everyone can see them "
-        "(Config → Event Echo)",
+        "game names and jump links will be posted where everyone can see "
+        "them, and a Risky Rolls note also carries the name of whoever "
+        "opened the round (Config → Event Echo)",
         getattr(origin, "name", "?"),
         getattr(destination, "name", "?"),
     )
