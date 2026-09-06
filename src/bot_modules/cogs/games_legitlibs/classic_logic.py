@@ -28,6 +28,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .data import HEAT_LABELS
+
 
 # ── Tier cap clamp (shared by both modes) ────────────────────────────
 
@@ -41,6 +43,23 @@ def clamp_tier(requested: int, channel_max: int) -> tuple[int, bool]:
     if requested > channel_max:
         return channel_max, True
     return requested, False
+
+
+def tier_clamp_note(requested: int, channel_max: int) -> str | None:
+    """The ephemeral note a host gets when their tier was capped, or None.
+
+    The spec promised it; the modes only logged the clamp, so a host asking
+    for tier 4 in a capped channel got a tier-2 story with no explanation
+    (trivia-tail-93). Sent by the slash entry before the lobby posts.
+    """
+    effective, clamped = clamp_tier(requested, channel_max)
+    if not clamped:
+        return None
+    return (
+        f"This channel is capped at **{HEAT_LABELS[effective]}** — you asked for "
+        f"{HEAT_LABELS[requested]}, so this round plays at the cap. An admin can "
+        "raise it from Games Config → Allowed Channels on the dashboard."
+    )
 
 
 # ── Initial payload ──────────────────────────────────────────────────

@@ -157,3 +157,168 @@ async def test_sweep_old_buffer_rows_deletes_only_old_rows(gdb):
     rows = await gdb.fetchall("SELECT message_id FROM games_external_messages")
     assert removed == 1
     assert [r["message_id"] for r in rows] == [2]
+
+
+# ── a long game's window pages back to its lobby (photo-external-110) ────────
+
+
+def _lobby(joined):
+    return [{"title": "host is starting a Cards Against Humanity game!",
+             "fields": [{"name": "Players (2/12)", "value": ", ".join(f"<@{u}>" for u in joined)}]}]
+
+
+def _standings(scores, title="Round winner"):
+    return [{"title": title, "fields": [{"name": "Standings",
+             "value": "\n".join(f"<@{u}>: **{n}**" for u, n in scores.items())}]}]
+
+
+def _chatter(i):
+    return [{"title": "Play your card", "description": f"round {i}"}]
+
+
+async def _bank_long_game(gdb, *, length: int, prior_terminal: bool = False):
+    """A game of ``length`` banked messages: lobby first, a *Final scores*
+    last, chatter between. Timestamps are one second apart from a fixed base."""
+    from datetime import datetime, timedelta, timezone
+
+    base = datetime(2026, 8, 30, 20, 0, 0, tzinfo=timezone.utc)
+
+    async def bank(mid, offset, embeds):
+        import json
+        await gdb.execute(
+            "INSERT INTO games_external_messages "
+            "(message_id, guild_id, channel_id, author_id, created_at, embeds_json) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, GUILD, CHAN_A, GAMEBOT, (base + timedelta(seconds=offset)).isoformat(),
+             json.dumps(embeds)),
+        )
+
+    if prior_terminal:
+        await bank(1, -5, _standings({7: 5}, title="Final scores"))
+    await bank(100, 0, _lobby([11, 22]))
+    for i in range(1, length - 1):
+        await bank(100 + i, i, _chatter(i))
+    await bank(100 + length - 1, length - 1, _standings({11: 5, 22: 3}, title="Final scores"))
+    return 100 + length - 1, (base + timedelta(seconds=length - 1)).isoformat()
+
+
+@pytest.mark.asyncio
+async def test_a_400_message_game_keeps_its_lobby(gdb):
+    # 300 rows was the whole lookback: a game longer than that lost its lobby,
+    # and with it the host bounty and the sub-game identification.
+    over_id, over_at = await _bank_long_game(gdb, length=400)
+    window = await logic.game_window_rows(gdb, GUILD, CHAN_A, GAMEBOT, over_id, over_at)
+    assert len(window) == 400
+    assert window[0]["message_id"] == 100  # the lobby
+    assert window[-1]["message_id"] == over_id
+
+
+@pytest.mark.asyncio
+async def test_window_paging_stops_at_the_previous_terminal(gdb):
+    over_id, over_at = await _bank_long_game(gdb, length=350, prior_terminal=True)
+    window = await logic.game_window_rows(gdb, GUILD, CHAN_A, GAMEBOT, over_id, over_at)
+    assert window[0]["message_id"] == 100
+    assert 1 not in {r["message_id"] for r in window}
+
+
+@pytest.mark.asyncio
+async def test_window_paging_is_capped(gdb):
+    # A channel with no lobby and no terminal anywhere behind the finish must
+    # not read the whole buffer: the cap bounds the work, and the window is
+    # whatever those rows hold.
+    over_id, over_at = await _bank_long_game(gdb, length=120)
+    window = await logic.game_window_rows(
+        gdb, GUILD, CHAN_A, GAMEBOT, over_id, over_at, page=25, max_rows=60,
+    )
+    assert 25 < len(window) <= 60
+    assert window[-1]["message_id"] == over_id
+
+
+# ── health signal: last payout + unpaid finishes (photo-external-100) ────────
+
+
+@pytest.mark.asyncio
+async def test_last_payout_is_scoped_to_the_watch_kind_and_channel(gdb):
+    import json
+
+    async def bank(mid, chan):
+        await gdb.execute(
+            "INSERT INTO games_external_messages (message_id, guild_id, channel_id, "
+            "author_id, created_at, embeds_json) VALUES (?, ?, ?, ?, '2026-08-30T20:00:00', ?)",
+            (mid, GUILD, chan, GAMEBOT, json.dumps([])),
+        )
+
+    await bank(1, CHAN_A)
+    await bank(2, CHAN_B)
+    await gdb.execute(
+        "INSERT INTO games_external_payouts (message_id, guild_id, kind, paid_at) VALUES "
+        "(1, ?, 'gamebot_cah', '2026-08-30 20:01:00'), "
+        "(2, ?, 'gamebot_anagrams', '2026-08-31 20:01:00'), "
+        "(3, ?, 'catbot', '2026-09-01 20:01:00')",
+        (GUILD, GUILD, GUILD),
+    )
+    assert await logic.last_payout_at(gdb, GUILD, CHAN_A, "gamebot") == "2026-08-30 20:01:00"
+    assert await logic.last_payout_at(gdb, GUILD, CHAN_B, "gamebot") == "2026-08-31 20:01:00"
+    # A claim whose message has left the buffer (or was never a message id —
+    # Co-ordle keys on the round) counts for every channel of that kind.
+    assert await logic.last_payout_at(gdb, GUILD, CHAN_A, "catbot") == "2026-09-01 20:01:00"
+    assert await logic.last_payout_at(gdb, GUILD, CHAN_A, "wordle") is None
+
+
+@pytest.mark.asyncio
+async def test_unpaid_finishes_counts_payable_windows_with_no_claim(gdb):
+    import json
+
+    async def bank(mid, ts, embeds, chan=CHAN_A):
+        await gdb.execute(
+            "INSERT INTO games_external_messages (message_id, guild_id, channel_id, "
+            "author_id, created_at, embeds_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (mid, GUILD, chan, GAMEBOT, ts, json.dumps(embeds)),
+        )
+
+    now = "2026-09-01T12:00:00+00:00"
+    # game 1: paid
+    await bank(10, "2026-08-30T20:00:00+00:00", _lobby([11, 22]))
+    await bank(11, "2026-08-30T20:10:00+00:00", _standings({11: 5, 22: 1}, title="Final scores"))
+    # game 2: a parser miss — no claim
+    await bank(20, "2026-08-31T20:00:00+00:00", _lobby([11, 22]))
+    await bank(21, "2026-08-31T20:10:00+00:00", _standings({11: 5, 22: 2}, title="Final scores"))
+    # game 3: unparsed (Chess) — not counted
+    await bank(30, "2026-08-31T21:00:00+00:00",
+               [{"title": "host is starting a Chess game!"}])
+    await bank(31, "2026-08-31T21:10:00+00:00", [{"title": "Game over!", "description": "gg"}])
+    # game 4: older than the window — not counted
+    await bank(40, "2026-07-01T20:00:00+00:00", _lobby([11, 22]))
+    await bank(41, "2026-07-01T20:10:00+00:00", _standings({11: 5}, title="Final scores"))
+    await gdb.execute(
+        "INSERT INTO games_external_payouts (message_id, guild_id, kind) VALUES (11, ?, 'gamebot_cah')",
+        (GUILD,),
+    )
+    unpaid = await logic.unpaid_finishes(gdb, GUILD, CHAN_A, GAMEBOT, "gamebot", now_iso=now)
+    assert unpaid == [21]
+
+
+@pytest.mark.asyncio
+async def test_unpaid_finishes_for_the_one_message_kinds(gdb):
+    async def bank(mid, ts, content, kind_bot):
+        await gdb.execute(
+            "INSERT INTO games_external_messages (message_id, guild_id, channel_id, "
+            "author_id, created_at, content, embeds_json) VALUES (?, ?, ?, ?, ?, ?, '[]')",
+            (mid, GUILD, CHAN_A, kind_bot, ts, content),
+        )
+
+    now = "2026-09-01T12:00:00+00:00"
+    await bank(1, "2026-08-31T10:00:00+00:00", "alice cought <:wildcat:1> Wild cat!", CATBOT)
+    await bank(2, "2026-08-31T11:00:00+00:00", "A cat has appeared!", CATBOT)  # a spawn
+    await bank(3, "2026-08-31T12:00:00+00:00", "bob cought <:finecat:1> Fine cat!", CATBOT)
+    await gdb.execute(
+        "INSERT INTO games_external_payouts (message_id, guild_id, kind) VALUES (1, ?, 'catbot')",
+        (GUILD,),
+    )
+    assert await logic.unpaid_finishes(gdb, GUILD, CHAN_A, CATBOT, "catbot", now_iso=now) == [3]
+    wordle_bot = 5
+    await bank(7, "2026-08-31T13:00:00+00:00",
+               "**Your group is on a 9 day streak!** Here are yesterday's results:\n👑 3/6: <@11>",
+               wordle_bot)
+    await bank(8, "2026-08-31T14:00:00+00:00", "<@11> is playing", wordle_bot)
+    assert await logic.unpaid_finishes(gdb, GUILD, CHAN_A, wordle_bot, "wordle", now_iso=now) == [7]

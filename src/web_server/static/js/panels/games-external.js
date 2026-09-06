@@ -183,6 +183,7 @@ export function mount(container) {
                 : `<span class="badge">Paused</span>`} ·
               <strong>${w.banked}</strong> message${w.banked === 1 ? "" : "s"} banked
             </div>
+            <div class="field-hint">${renderHealth(w)}</div>
           </div>
           <div class="panel-row__actions">
             <button class="btn btn-secondary" data-sample
@@ -198,6 +199,23 @@ export function mount(container) {
 
     render();
   }, { errorMsg: "Couldn’t load the external game tracking settings." });
+}
+
+// The banked count climbs whether or not a coin is paid — two parser breaks
+// were only noticed in Discord. "Last payout" and "unpaid finishes" say
+// whether the watch is still crediting anyone; a finish the parser would pay
+// that carries no payout is the sign the bot changed its wording.
+function renderHealth(w) {
+  const last = w.last_payout_at
+    ? `Last payout: ${esc(String(w.last_payout_at).slice(0, 16).replace("T", " "))}`
+    : "Last payout: never";
+  const n = Number(w.unpaid_finishes || 0);
+  const days = Number(w.unpaid_days || 30);
+  const unpaid = n > 0
+    ? `<span class="badge badge-warning">⚠️ ${n} unpaid finish${n === 1 ? "" : "es"}, ${days}d</span>
+       <span class="dim">— the bot may have changed its wording; check a Sample</span>`
+    : `<span class="badge badge-dim">No unpaid finishes, ${days}d</span>`;
+  return `${last} · ${unpaid}`;
 }
 
 function renderSample(messages) {

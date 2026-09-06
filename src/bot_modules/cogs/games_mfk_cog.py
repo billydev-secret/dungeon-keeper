@@ -10,7 +10,7 @@ import discord
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
@@ -21,8 +21,6 @@ from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     get_game_payload,
@@ -32,6 +30,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games_mfk.embeds import (
     build_assignments_embed,
     build_lobby_embed,
@@ -197,7 +196,7 @@ class MFKCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="mfk", description="Start a Marry, Fornicate, Kiss game!")
+    @app_commands.command(name="mfk", description=play_description("mfk"))
     @app_commands.describe(
         options='Custom categories (comma-separated, exactly 3). e.g. "Cruise, Wedding, Vacation"',
         start_in="Show a lobby countdown — game starts in this many minutes (host still closes the pool)",
@@ -209,17 +208,11 @@ class MFKCog(commands.Cog):
         start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info("%s used /games play mfk in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "mfk", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Marry, Fornicate, Kiss is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await refuse_launch(self.db, interaction, "mfk")
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         # Parse custom labels

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import MethodType, SimpleNamespace
+from unittest.mock import AsyncMock
 
 import discord
 import pytest
@@ -63,11 +64,15 @@ def _card() -> discord.Embed:
 
 
 async def _broadcast(
-    cog, channel, payout: int, threshold: int = 500, stake: int = 10
+    cog, channel, payout: int, threshold: int = 500, stake: int = 10,
+    min_mult: int = 3, embed: discord.Embed | None = None,
 ):
     await CasinoCog._send_big_win(
-        cog, channel, _card(), guild_id=GUILD_ID, payout=payout,
-        threshold=threshold, stake=stake, game_label="Slots",
+        cog, channel, embed or _card(), guild_id=GUILD_ID, payout=payout,
+        settings=svc.CasinoSettings(
+            broadcast_min_payout=threshold, broadcast_min_mult=min_mult
+        ),
+        stake=stake, game_label="Slots",
     )
 
 
@@ -108,6 +113,88 @@ async def test_a_push_posts_nothing_and_banks_nothing(cog):
     alone, and used to headline itself as "🔥 Huge Win"."""
     channel = _Channel()
     await _broadcast(cog, channel, 2000, stake=2000)
+    assert channel.sends == []
+    assert _banked(cog) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("min_mult", "posts"),
+    [
+        pytest.param(3, False, id="default-3x-keeps-a-2x-win-private"),
+        pytest.param(2, True, id="a-guild-dialled-to-2x-posts-it"),
+    ],
+)
+async def test_the_minimum_multiple_dial_is_read_from_the_guilds_settings(
+    cog, min_mult, posts
+):
+    """D6: the broadcast needs a real multiple, and the multiple is the
+    guild's dial (Economy → Casino → Broadcast minimum multiple), read
+    through the same settings loader every table already uses. The same
+    2,000-on-1,000 blackjack win stays private under the default and posts
+    — and is banked — where an admin turned the dial down."""
+    with open_db(cog.db_path) as conn:
+        svc.save_casino_settings(
+            conn, GUILD_ID,
+            {"broadcast_min_payout": 500, "broadcast_min_mult": min_mult},
+        )
+        settings = svc.load_casino_settings(conn, GUILD_ID)
+    channel = _Channel()
+    await CasinoCog._send_big_win(
+        cog, channel, _card(), guild_id=GUILD_ID, payout=2000,
+        settings=settings, stake=1000, game_label="Blackjack",
+    )
+    assert bool(channel.sends) is posts
+    assert (_banked(cog) == [2000]) is posts
+
+
+@pytest.mark.asyncio
+async def test_a_doubled_push_from_the_button_path_posts_nothing_and_banks_nothing(
+    cog, monkeypatch
+):
+    """casino-131: commit 81507b34 fixed "a push is not a big win" for the
+    auto-stand path, but the player-pressed path reused ``base_stake`` —
+    right for the Play Again button, wrong for the broadcast. A doubled push
+    returns 2× base, so the gate saw payout > stake and announced 💰/🔥 for
+    a hand that won nothing, then banked it into the Legendary population.
+    Two live instances on 2026-09-01."""
+    with open_db(cog.db_path) as conn:
+        # max_bet high enough that a 2,000 stake is not a "big bet" show —
+        # the show path sleeps 1.4s for the hole-card flip.
+        svc.save_casino_settings(
+            conn, GUILD_ID, {"broadcast_min_payout": 500, "max_bet": 10_000}
+        )
+    step = svc.BlackjackStep(
+        player=["9♠", "2♦", "K♥"], dealer=["K♣", "J♦", "A♠"],
+        stake=2000, doubled=True, outcome="push", payout=2000,
+    )
+    monkeypatch.setattr(
+        svc, "resolve_blackjack_action", lambda conn, gid, hid, uid, act: step
+    )
+    cog._accent = AsyncMock(return_value=None)
+    cog._names = AsyncMock(return_value=lambda uid: "Nelli")
+    cog._bj_followups = {}
+    after = AsyncMock()
+    cog._after_instant = after
+    interaction = SimpleNamespace(
+        guild=SimpleNamespace(id=GUILD_ID), user=SimpleNamespace(id=31),
+        response=SimpleNamespace(edit_message=AsyncMock()),
+    )
+
+    assert await CasinoCog._blackjack_step(cog, interaction, 7, "double")
+
+    kwargs = after.await_args.kwargs
+    # The broadcast is judged on the TOTAL stake, both halves of the double…
+    assert kwargs["stake"] == 2000
+    # …while Play Again keeps offering the base stake the player chose.
+    view = interaction.response.edit_message.await_args.kwargs["view"]
+    assert view.children[0].custom_id == "casino_again:blackjack:x:1000"
+    # And judged so, the push stays off the channel and out of the history.
+    channel = _Channel()
+    await _broadcast(
+        cog, channel, kwargs["payout"], stake=kwargs["stake"],
+        embed=kwargs["embed"],
+    )
     assert channel.sends == []
     assert _banked(cog) == []
 

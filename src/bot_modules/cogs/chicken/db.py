@@ -5,6 +5,11 @@ import json
 import time
 from typing import TYPE_CHECKING
 
+from bot_modules.duels.db import (
+    LOBBY_IDLE_SECONDS,
+    NAMING_WINDOW_SECONDS,
+    active_idle_seconds,
+)
 from bot_modules.games.utils import game_store
 from .game import ChickenGame, game_from_row
 
@@ -53,7 +58,10 @@ async def fetch_lobby_games(db: GamesDb) -> list[ChickenGame]:
 
 
 async def fetch_resolved_games(db: GamesDb) -> list[ChickenGame]:
-    rows = await db.fetchall("SELECT * FROM chicken_games WHERE state IN ('RESOLVED', 'NICKED')")
+    rows = await db.fetchall(
+        "SELECT * FROM chicken_games "
+        "WHERE state IN ('RESOLVED', 'RESOLVED_NO_NICK', 'NICKED', 'NO_NICK_SET')"
+    )
     return [game_from_row(r) for r in rows]
 
 
@@ -66,7 +74,11 @@ async def fetch_sweepable_games(db: GamesDb, now: float) -> list[ChickenGame]:
        OR (state = 'ACTIVE'   AND last_action_at <= ?)
        OR (state = 'RESOLVED' AND resolved_at   <= ?)
         """,
-        (now - 90, now - 600, now - 300),
+        (
+            now - LOBBY_IDLE_SECONDS,
+            now - active_idle_seconds("chicken"),
+            now - NAMING_WINDOW_SECONDS,
+        ),
     )
     return [game_from_row(r) for r in rows]
 
@@ -75,7 +87,11 @@ async def get_config(db: GamesDb, guild_id: int) -> dict:
     row = await db.fetchone("SELECT * FROM chicken_config WHERE guild_id = ?", (guild_id,))
     defaults: dict = {
         "guild_id": guild_id,
-        "climb_duration": 25.0,
+        # The crash point is rolled per game in [min_climb, max_climb] and
+        # hidden (migration 208 replaced the fixed, public climb_duration).
+        # The meter is drawn over max_climb, so it can blow at 40%.
+        "min_climb": 10.0,
+        "max_climb": 25.0,
         "min_players": 2,
         "max_players": 8,
         # No `lobby_timeout`: the stale-lobby sweep in fetch_sweepable_games

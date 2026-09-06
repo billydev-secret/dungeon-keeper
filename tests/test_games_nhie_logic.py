@@ -18,12 +18,14 @@ from bot_modules.games_nhie.embeds import (
 )
 from bot_modules.games_nhie.logic import (
     DEFAULT_LIVES,
+    MAX_QUEUED_STATEMENTS,
     apply_round_lives,
     apply_vote,
     bump_guilt_scores,
     encode_round_state,
     find_winner,
     payload_to_round_state,
+    queue_statement,
 )
 from bot_modules.core.branding import SECTION_SPACER
 
@@ -41,6 +43,29 @@ def _unspaced(value: str | None) -> str:
 
 
 # ── apply_vote ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "queued, text, expected_result, expected_len",
+    [
+        pytest.param([], "  gone skydiving ", 1, 1, id="appends-stripped"),
+        pytest.param(["a"] * 14, "one more", 15, 15, id="fills-to-cap"),
+        pytest.param(["a"] * 15, "too many", None, 15, id="refused-at-cap"),
+        pytest.param([], "   ", None, 0, id="blank-ignored"),
+    ],
+)
+def test_queue_statement_caps_the_pose_queue(queued, text, expected_result, expected_len):
+    """vote-games-62: the NHIE pose queue was the one uncapped queue of the
+    three round games; it now holds 15 like WYR's and MLT's."""
+    assert queue_statement(queued, text) == expected_result
+    assert len(queued) == expected_len
+
+
+def test_queue_statement_cap_matches_the_sibling_games():
+    import bot_modules.cogs.games_mlt_cog as mlt_cog
+    import bot_modules.cogs.games_wyr_cog as wyr_cog
+
+    assert MAX_QUEUED_STATEMENTS == mlt_cog._MAX_QUEUED_PROMPTS == wyr_cog._MAX_QUEUED_QUESTIONS
 
 
 def test_apply_vote_adds_new_guilty_voter():
@@ -226,6 +251,23 @@ def test_find_winner_picks_last_alive_without_elim_set():
     status, uid = find_winner({1: 0, 2: 2}, set())
     assert status == "winner"
     assert uid == 2
+
+
+# vote-games-51: a round in which exactly one member voted used to crown that
+# member "last one standing" and pay them. A winner needs a game: at least two
+# players ever registered (``lives`` never drops a row, so it is the max
+# roster) and at least one elimination.
+@pytest.mark.parametrize(
+    ("lives", "eliminated"),
+    [
+        pytest.param({1: 3}, set(), id="one-voter"),
+        pytest.param({1: 0}, {1}, id="one-voter-eliminated-themselves"),
+        pytest.param({1: 3, 2: 2}, set(), id="two-voters-no-elimination"),
+        pytest.param({1: 2}, set(), id="one-voter-after-a-guilty-round"),
+    ],
+)
+def test_find_winner_continues_until_two_players_and_an_elimination(lives, eliminated):
+    assert find_winner(lives, eliminated) == ("continue", None)
 
 
 def test_find_winner_all_eliminated():
@@ -527,7 +569,11 @@ from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
 import bot_modules.cogs.games_nhie_cog as nhie_cog  # noqa: E402
-from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.games.utils.game_manager import (  # noqa: E402
+    create_game,
+    get_active_game_by_id,
+    get_game_payload,
+)
 from bot_modules.services.games_db import GamesDb  # noqa: E402
 from tests.fakes import FakeGuild  # noqa: E402
 
@@ -573,3 +619,100 @@ async def test_advance_winner_pays_survivors_and_eliminated(monkeypatch, sync_db
     # Eliminated guiltiest (1) is included alongside survivor (2).
     assert sorted(call.kwargs["player_ids"]) == [1, 2]
     assert call.kwargs["bot"] is bot
+
+
+def _channel(guild=None):
+    return SimpleNamespace(
+        id=100, name="games", guild=guild,
+        send=AsyncMock(return_value=SimpleNamespace(id=555, edit=AsyncMock())),
+    )
+
+
+async def test_run_round_empty_bank_opens_a_waiting_round(monkeypatch, sync_db_path):
+    """vote-games-50: NHIE used to end with a bare end_game (nobody paid, no
+    recap) when the bank ran dry; now the round waits for a posed statement."""
+    monkeypatch.setattr(nhie_cog, "get_nhie_statement", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "nhie", payload={"rounds": {}, "lives": {}, "eliminated": [], "max_lives": 3})
+    cog = nhie_cog.NHIECog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    await cog._run_round(None, gid, 1, "Host", 1, channel, None)
+
+    view = bot.active_views[gid]
+    assert view.waiting is True
+    assert view.vote_guilty.disabled and view.next_btn.disabled and not view.end_game_btn.disabled
+    assert await get_active_game_by_id(bot.games_db, gid) is not None
+    await view.begin_round("gone skydiving", SimpleNamespace(id=555, edit=AsyncMock()))
+    assert view.waiting is False and not view.vote_guilty.disabled
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["stmt"] == "gone skydiving"
+
+
+async def test_votes_are_persisted_on_every_press(sync_db_path):
+    """vote-games-58: guilty/innocent reach the payload on the press, not on Next."""
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(
+        bot.games_db, 100, 1, "nhie",
+        payload={"rounds": {"1": {"guilty": [], "innocent": [], "stmt": "x"}}, "lives": {}, "eliminated": [], "max_lives": 3},
+    )
+    cog = nhie_cog.NHIECog(bot)  # type: ignore[arg-type]
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=_channel(), guild=None,
+        statement="x", lives={}, eliminated=set(), max_lives=3,
+    )
+    interaction = SimpleNamespace(
+        user=SimpleNamespace(id=7, display_name="U7", roles=[]), guild=None, guild_id=None,
+        channel=SimpleNamespace(id=100, name="games", guild=None),
+        message=SimpleNamespace(id=555, edit=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+    )
+    await view.vote_guilty.callback(interaction)  # type: ignore[arg-type]
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["guilty"] == [7]
+
+
+async def test_end_game_posts_the_guilt_board_and_pays_everyone_who_played(monkeypatch, sync_db_path):
+    """vote-games-52 / discovery-3: NHIE's only ending was elimination. The
+    host's End Game (and the round cap, and /games end) post the guilt board
+    and pay the whole room — lives tracker plus every voter, so a lives:0
+    game pays too."""
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(nhie_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "rounds": {"1": {"guilty": [1], "innocent": [2], "stmt": "x"}, "2": {"guilty": [], "innocent": [], "stmt": "y"}},
+        "lives": {"1": 2, "2": 3}, "eliminated": [], "guilt_scores": {"1": 1}, "max_lives": 3,
+    }
+    gid = await create_game(bot.games_db, 100, 1, "nhie", payload=payload)
+    cog = nhie_cog.NHIECog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=2, channel=channel, guild=None,
+        statement="y", lives={1: 2, 2: 3}, eliminated=set(), max_lives=3,
+    )
+    bot.active_views[gid] = view
+    view.guilty, view.innocent = [2], [9]  # 9 votes for the first time this round
+    message = SimpleNamespace(id=555, edit=AsyncMock())
+
+    assert view.finish_callback is not None
+    await view.finish_callback(message, "ended")
+
+    recap = channel.send.await_args.kwargs["embed"]
+    assert "Game Over" in recap.title
+    assert "guilt board" in (recap.description or "")
+    assert "2 guilty votes" not in recap.fields[0].value  # 1 has one, 2 now has one
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [1, 2, 9]
+    assert call.kwargs["bot"] is bot
+    assert call.kwargs["reason"] == "ended"
+    # The last round was resolved before the archive: guilt bumped, a heart lost.
+    assert call.kwargs["payload"]["guilt_scores"] == {"1": 1, "2": 1}
+    assert call.kwargs["payload"]["lives"]["2"] == 2
+    assert gid not in bot.active_views
+
+
+def test_build_recap_embed_ended_variants():
+    assert "guilt board" in (build_recap_embed(None, {}, ended=True).description or "")
+    assert "last round" in (build_recap_embed(None, {}, ended=True, reason="round_cap").description or "")
+    assert "eliminated" in (build_recap_embed(None, {}).description or "")

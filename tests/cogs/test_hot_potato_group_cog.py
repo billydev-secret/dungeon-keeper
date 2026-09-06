@@ -81,6 +81,17 @@ async def _active_game(db: GamesDb, alive: list[int], **extra):
 
 # ── load smoke ─────────────────────────────────────────────────────────────────
 
+def test_display_name_is_distinct_from_the_duel():
+    """duels-party-120: both cogs said "Hot Potato", so a refusal, a lobby
+    ping or an audit-log reason could not say which game it meant."""
+    from bot_modules.cogs.hot_potato.cog import HotPotatoDuel
+    from bot_modules.games.constants import GAME_NAMES
+
+    assert HotPotatoGroupGameCog.GAME_DISPLAY_NAME == "Hot Potato (Group)"
+    assert HotPotatoGroupGameCog.GAME_DISPLAY_NAME != HotPotatoDuel.GAME_DISPLAY_NAME
+    assert GAME_NAMES["hot_potato_group"] == HotPotatoGroupGameCog.GAME_DISPLAY_NAME
+
+
 def test_cog_instantiates_and_exposes_group(db):
     cog = HotPotatoGroupGameCog(FakeBot(db))  # type: ignore[arg-type]
     cmds = {c.name for c in cog.get_app_commands()}

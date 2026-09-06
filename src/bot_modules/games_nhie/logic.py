@@ -32,6 +32,28 @@ from typing import Any, Literal
 
 DEFAULT_LIVES = 3
 
+# The player-posed statement queue holds this many at a time — the same cap
+# WYR and MLT put on their Pose queues; NHIE's was unbounded until
+# 2026-09-04 (vote-games-62, common-lib-round-2 item 3).
+MAX_QUEUED_STATEMENTS = 15
+
+
+def queue_statement(
+    queued: list[str], text: str, cap: int = MAX_QUEUED_STATEMENTS,
+) -> int | None:
+    """Append a posed statement; return the new queue length, or ``None``
+    when the queue is full (nothing is appended) or ``text`` is blank.
+
+    Mutates ``queued`` in place. Whitespace is stripped first.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if len(queued) >= cap:
+        return None
+    queued.append(cleaned)
+    return len(queued)
+
 VoteKind = Literal["guilty", "innocent"]
 WinnerStatus = Literal["winner", "all_eliminated", "continue"]
 
@@ -130,8 +152,13 @@ def find_winner(
     """Return a tagged game-state after a round resolves.
 
     * ``("continue", None)`` when more than one player is still alive,
-      or when ``lives`` is empty (no one's been tracked yet — the cog
-      treats this as "keep playing").
+      or when the game hasn't happened yet — fewer than two players have
+      ever registered, or nobody has been knocked out (a 0-hp row counts
+      whether or not ``eliminated`` names it). ``lives`` never
+      drops a row (an eliminated player stays at 0), so its size is the
+      max roster the game has ever had. Until 2026-09-04 a round in which
+      exactly one member voted crowned that member "last one standing" and
+      paid them (vote-games-51).
     * ``("winner", uid)`` when exactly one player remains alive.
     * ``("all_eliminated", None)`` when no one is alive (the rare
       simultaneous-knockout case).
@@ -139,9 +166,10 @@ def find_winner(
     A player is alive when their ``lives`` entry is positive AND they
     are not in ``eliminated``.
     """
-    if not lives:
-        return ("continue", None)
     alive = [uid for uid, hp in lives.items() if hp > 0 and uid not in eliminated]
+    knocked_out = len(alive) < len(lives)
+    if len(lives) < 2 or not knocked_out:
+        return ("continue", None)
     if len(alive) > 1:
         return ("continue", None)
     if len(alive) == 1:

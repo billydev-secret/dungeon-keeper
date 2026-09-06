@@ -15,7 +15,16 @@ import pytest
 
 import bot_modules.cogs.games_ama_cog as ama_mod
 from bot_modules.core import branding
-from bot_modules.cogs.games_ama_cog import AMACog, AskQuestionModal, AskTargetSelect
+from bot_modules.cogs.games_ama_cog import (
+    STALE_HOT_SEAT_TEXT,
+    STALE_PANEL_TEXT,
+    SUBMITTED_FOR_REVIEW_TEXT,
+    AMACog,
+    AskQuestionModal,
+    AskTargetSelect,
+    ScreenedQuestionView,
+)
+from bot_modules.services import no_contact_service
 from bot_modules.services.games_db import GamesDb
 
 
@@ -142,8 +151,9 @@ async def test_panel_flow_volunteer_ask_and_post(sync_db_path, stub_branding):
 
     host = FakeMember(1, "Host")
     panelist = FakeMember(2, "Panelist")
+    other = FakeMember(4, "Other")
     asker = FakeMember(3, "Asker")
-    guild = FakeGuild([host, panelist, asker])
+    guild = FakeGuild([host, panelist, other, asker])
     channel = FakeChannel(guild)
 
     game_id = await cog.launch(
@@ -153,10 +163,10 @@ async def test_panel_flow_volunteer_ask_and_post(sync_db_path, stub_branding):
     assert game_id is not None
     view = bot.active_views[game_id]
 
-    # 1. Panelist volunteers -> joins the panel roster.
-    vol_inter = FakeInteraction(panelist, channel, guild, bot)
-    await view._handle_volunteer(vol_inter)
-    assert view.panel == [panelist.id]
+    # 1. Two panelists volunteer -> both join the panel roster.
+    await view._handle_volunteer(FakeInteraction(panelist, channel, guild, bot))
+    await view._handle_volunteer(FakeInteraction(other, channel, guild, bot))
+    assert view.panel == [panelist.id, other.id]
 
     # 2. Asker opens the ask flow -> gets a dropdown of panelists.
     ask_inter = FakeInteraction(asker, channel, guild, bot)
@@ -164,7 +174,7 @@ async def test_panel_flow_volunteer_ask_and_post(sync_db_path, stub_branding):
     assert ask_inter.response.messages, "ask flow posted nothing"
     ask_view = ask_inter.response.messages[-1][1]["view"]
     select = next(c for c in ask_view.children if isinstance(c, AskTargetSelect))
-    assert [o.value for o in select.options] == [str(panelist.id)]
+    assert [o.value for o in select.options] == [str(panelist.id), str(other.id)]
 
     # 3. Asker picks the panelist from the dropdown -> a question modal opens.
     select._values = [str(panelist.id)]  # discord fills this from the submitted interaction
@@ -342,3 +352,161 @@ async def test_reply_dm_links_the_answered_card(sync_db_path, stub_branding, mon
     assert inter.message.jump_url in description
     assert channel.mention in description
 
+
+
+# ── small panels: no click tax (social-prompt-34) ──────────────────────
+
+
+async def _panel_game(sync_db_path, members):
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db)
+    cog = AMACog(bot)  # type: ignore[arg-type]
+    guild = FakeGuild(members)
+    channel = FakeChannel(guild)
+    game_id = await cog.launch(
+        channel=channel, host_id=members[0].id, host_name=members[0].display_name,
+        guild_id=99, options={"mode": "unfiltered", "format": "panel"},
+    )
+    assert game_id is not None
+    return bot, guild, channel, bot.active_views[game_id]
+
+
+async def test_one_other_panelist_opens_the_modal_directly(sync_db_path, stub_branding):
+    """A dropdown listing exactly one name is three interactions for nothing."""
+    host, panelist, asker = FakeMember(1, "Host"), FakeMember(2, "P"), FakeMember(3, "A")
+    bot, guild, channel, view = await _panel_game(sync_db_path, [host, panelist, asker])
+    await view._handle_volunteer(FakeInteraction(panelist, channel, guild, bot))
+
+    inter = FakeInteraction(asker, channel, guild, bot)
+    await view._begin_ask(inter)
+
+    assert not inter.response.messages, "no dropdown for a single candidate"
+    (modal,) = inter.response.modals
+    assert isinstance(modal, AskQuestionModal) and modal.target_id == panelist.id
+
+
+async def test_the_picker_never_offers_the_presser_themselves(sync_db_path, stub_branding):
+    """Two panelists, one of them asking: the only candidate is the *other*
+    one, so the modal opens straight at them; alone on the panel, there is
+    nobody to ask."""
+    host, a, b = FakeMember(1, "Host"), FakeMember(2, "A"), FakeMember(3, "B")
+    bot, guild, channel, view = await _panel_game(sync_db_path, [host, a, b])
+    await view._handle_volunteer(FakeInteraction(a, channel, guild, bot))
+
+    alone = FakeInteraction(a, channel, guild, bot)
+    await view._begin_ask(alone)
+    assert not alone.response.modals
+    assert "only one on the panel" in alone.response.messages[-1][0]
+
+    await view._handle_volunteer(FakeInteraction(b, channel, guild, bot))
+    inter = FakeInteraction(a, channel, guild, bot)
+    await view._begin_ask(inter)
+    (modal,) = inter.response.modals
+    assert modal.target_id == b.id
+
+
+# ── no-contact gate (social-prompt-47) ────────────────────────────────
+# The cog conftest stubs the gate to "not blocked"; these patch it back on so
+# each branch of the byte-identical impersonation is actually asserted.
+
+
+def _blocked(monkeypatch, *, partner_ids=()):
+    monkeypatch.setattr(no_contact_service, "check_and_record", MagicMock(return_value=True))
+    monkeypatch.setattr(
+        no_contact_service, "no_contact_partners", MagicMock(return_value=set(partner_ids))
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "game_format", "expected"),
+    [
+        pytest.param("screened", "panel", SUBMITTED_FOR_REVIEW_TEXT, id="screened-fakes-success"),
+        pytest.param("unfiltered", "panel", STALE_PANEL_TEXT, id="unfiltered-panel-stale-target"),
+        pytest.param("unfiltered", "hot_seat", STALE_HOT_SEAT_TEXT, id="unfiltered-hot-seat-stale-target"),
+    ],
+)
+async def test_blocked_pair_gets_the_ordinary_reply_and_posts_nothing(
+    sync_db_path, stub_branding, monkeypatch, mode, game_format, expected,
+):
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db)
+    cog = AMACog(bot)  # type: ignore[arg-type]
+    host, target, asker = FakeMember(1, "Host"), FakeMember(2, "T"), FakeMember(3, "A")
+    guild = FakeGuild([host, target, asker])
+    channel = FakeChannel(guild)
+    game_id = await cog.launch(
+        channel=channel, host_id=host.id, host_name=host.display_name,
+        guild_id=99, options={"mode": mode, "format": game_format},
+    )
+    view = bot.active_views[game_id]
+    if game_format == "panel":
+        view.panel = [target.id]
+    else:
+        view.hot_seat_id = target.id
+    sent_before = len(channel.sends)
+    dm = MagicMock()
+    monkeypatch.setattr(ama_mod, "send_branded_dm", dm)
+    _blocked(monkeypatch)
+
+    modal = AskQuestionModal(game_id, db, channel, mode, host.id, target.id, view)
+    modal.question._value = "blocked question"
+    inter = FakeInteraction(asker, channel, guild, bot)
+    await modal.on_submit(inter)
+
+    assert inter.response.messages[-1][0] == expected
+    assert inter.response.messages[-1][1] == {"ephemeral": True}
+    assert len(channel.sends) == sent_before, "nothing may reach the channel"
+    dm.assert_not_called()
+    payload = await ama_mod.get_game_payload(db, game_id)
+    assert payload["questions"] == [], "a refused question is never stored"
+
+
+async def test_approval_time_block_drops_the_question_and_tells_the_host_it_posted(
+    sync_db_path, stub_branding, monkeypatch,
+):
+    db = GamesDb(sync_db_path)
+    bot = FakeBot(db)
+    cog = AMACog(bot)  # type: ignore[arg-type]
+    host, target, asker = FakeMember(1, "Host"), FakeMember(2, "T"), FakeMember(3, "A")
+    guild = FakeGuild([host, target, asker])
+    channel = FakeChannel(guild)
+    game_id = await cog.launch(
+        channel=channel, host_id=host.id, host_name=host.display_name,
+        guild_id=99, options={"mode": "screened", "format": "hot_seat"},
+    )
+    view = bot.active_views[game_id]
+    view.hot_seat_id = target.id
+    _blocked(monkeypatch)
+    sent_before = len(channel.sends)
+
+    approve_view = ScreenedQuestionView(game_id, "q?", 0, db, channel, target.id, asker.id, view)
+    inter = FakeInteraction(host, channel, guild, bot)
+    await approve_view.approve.callback(inter)  # type: ignore[arg-type]
+
+    assert inter.response.edits[-1]["content"] == "✅ Question approved."
+    assert len(channel.sends) == sent_before
+
+
+async def test_the_picker_drops_no_contact_partners(sync_db_path, stub_branding, monkeypatch):
+    host, a, b, asker = FakeMember(1, "Host"), FakeMember(2, "A"), FakeMember(3, "B"), FakeMember(4, "Q")
+    bot, guild, channel, view = await _panel_game(sync_db_path, [host, a, b, asker])
+    view.panel = [a.id, b.id]
+    monkeypatch.setattr(
+        no_contact_service, "no_contact_partners", MagicMock(return_value={a.id})
+    )
+
+    inter = FakeInteraction(asker, channel, guild, bot)
+    await view._begin_ask(inter)
+
+    # Only B is left, so the modal opens straight at B — A is never listed.
+    (modal,) = inter.response.modals
+    assert modal.target_id == b.id
+
+    # Both partners blocked: the refusal that makes no checkable claim.
+    monkeypatch.setattr(
+        no_contact_service, "no_contact_partners", MagicMock(return_value={a.id, b.id})
+    )
+    inter = FakeInteraction(asker, channel, guild, bot)
+    await view._begin_ask(inter)
+    assert not inter.response.modals
+    assert inter.response.messages[-1][0] == "❌ You can't ask a question in this round."

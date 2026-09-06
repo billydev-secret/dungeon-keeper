@@ -1,6 +1,6 @@
 # Whisper — Feature Spec
 
-An anonymous-message-with-guessing game. Members opt in to a per-guild role, then send anonymous DMs to other opted-in members. The recipient sees the message immediately and gets a configurable number of guesses (**three** by default) to identify the sender. A public feed channel hosts a persistent launcher (Send / My Inbox / My Sent) and announces whispers without spoiling content. Whispers can be replied to once, shared to the feed, deleted by the recipient, or — once correctly guessed — exposed.
+An anonymous-message-with-guessing game. Members opt in to a per-guild role, then send anonymous DMs to other opted-in members. The recipient sees the message immediately and gets a configurable number of guesses (**three** by default) to identify the sender. A public feed channel hosts a persistent launcher (Send / My Inbox / My Sent) and announces whispers without spoiling content. Whispers can be replied to once, shared to the feed, or deleted by the recipient. The sender can optionally be told how the guessing goes (a per-guild dial, off by default).
 
 ## Commands
 
@@ -22,7 +22,7 @@ There is no one-shot `/whisper <target> <message>` — send is always picker + c
 ## Behavior
 
 ### Persistent launcher
-A single launcher message sits at the bottom of the feed channel. Any non-bot message in that channel bumps it: the previous launcher is deleted and a fresh one is posted. Concurrent bumps coalesce so a busy channel produces at most one delete-and-repost cycle at a time. Launcher buttons keep working across bot restarts.
+A single launcher message (a short embed in the server's accent) sits at the bottom of the feed channel. It runs on the shared sticky-panel machinery (`core.sticky.StickyPanel`, migrated 2026-09 from a hand-rolled copy — see `docs/plans/sticky-panel-extraction.md`): a member message in that channel re-sticks it about **6 seconds** after the channel falls quiet, so a burst of chat costs one repost rather than one per message; the new launcher is posted *before* the old one is deleted, so a failed send never leaves the channel with no launcher; and the bot's own feed posts (send, share, solve) re-stick it explicitly. The `on_message` listener rejects every guild without a Whisper channel by set lookup, not a DB read. On boot the launcher is re-posted only where it is buried — one already at the bottom stays put. Its channel is stored beside its message id (`whisper_launcher_channel_id`) so an admin repointing the feed channel still gets the old launcher deleted from where it actually is; a launcher posted before that key existed (message id, no channel) is pinned to the feed channel at boot, since that is where it was posted — the placer would otherwise look for it in the *new* channel after a repoint and leave the old one live. A dashboard save (`PUT /config/whisper`) and an Apply click on the AI advisor's proposal (`/ask`, which writes the same `whisper_channel_id`) both dispatch `whisper_config_change` to the cog, which republishes that guild set and re-sticks the launcher — so a feed channel set or moved after boot gets its launcher without a restart. Launcher buttons keep working across bot restarts.
 
 ### Sending a whisper
 The send picker lists every opted-in member except the invoker, sorted by display name, paginated 25 at a time, with a filter modal for searching by name. Selecting a member opens a compose modal accepting up to **1000 characters**.
@@ -61,21 +61,30 @@ No ping is lost by this: embed mentions never notified anyone in the first
 place, and the feed posts already send with `AllowedMentions.none()`.
 
 ### Guessing
-The target gets `whisper_guesses_per_whisper` guesses (default **3**, dashboard dial, clamped 1-10). The allowance is stamped on the whisper row at send time, so moving the dial only affects whispers sent afterwards — nobody loses a guess they were already promised. *Amended 2026-08-29*: the count came from the `whispers.guesses_left` schema default with no control anywhere, unlike the sibling Guess Who game's tunable cap. The guess picker lists every opted-in member except the target, same paginated + filterable shape as the send picker. Guess consumption is atomic — two clicks racing on the same whisper can both pass pre-checks but only one will succeed; the other sees "This whisper was solved by another tab."
+The target gets `whisper_guesses_per_whisper` guesses (default **3**, dashboard dial, clamped 1-10). The allowance is stamped on the whisper row at send time, so moving the dial only affects whispers sent afterwards — nobody loses a guess they were already promised. *Amended 2026-08-29*: the count came from the `whispers.guesses_left` schema default with no control anywhere, unlike the sibling Guess Who game's tunable cap. From a DM, the guess picker lists every opted-in member except the target, same paginated + filterable shape as the send picker. From a server surface (the feed's Guess button, the inbox) it is Discord's native member picker, which offers **every** member of the server — so a pick that isn't in the opt-in pool (or is a bot) is refused with "❌ They aren't in the Whisper pool — that one's free." **without consuming a guess**; the two entry points play by one rule (`guess_candidate_rejection`). Guess consumption is atomic — two clicks racing on the same whisper can both pass pre-checks but only one will succeed; the other sees "This whisper was solved by another tab."
 
-- **Correct**: the target sees "You solved it!"; a feed message announces "✅ {target} solved the whisper!" with an **Expose** button.
+- **Correct**: the target sees "You solved it!"; a feed message announces "✅ {target} solved the whisper!".
 - **Wrong, with guesses left**: "Wrong! N guesses left."
 - **Wrong, last guess**: the DM's Guess button is removed; the whisper remains active for Share / Reply / Delete.
 
-### Sharing, replying, deleting, exposing
+#### Sender feedback (dial, default off)
+When the guild's **Tell the sender how the guessing goes** dial (`whisper_sender_feedback`) is on, each guess also DMs the sender one branded line: "Whisper #N — they guessed {name}. Wrong, 2 left." / "… Wrong — they're out of guesses. You're safe." / "Whisper #N — they guessed you. They got you." This is the sender's half of the game — watching the target guess wrong, being caught, or getting away with it — which they previously had no signal of at all. Rules:
+
+- It ships **off** so whispers already in flight don't start DMing their senders until an admin opts the server in; once on it applies to every whisper, including existing ones.
+- The sender must still hold the Whisper role: `/whisper optout` leaves the game and its DMs with it. (`/whisper forget-me` deletes the rows, so there is nothing left to be guessed on.)
+- If the sender holds a **no-contact pair** with the guessed member, the name degrades to "someone" — the line reads like any other wrong guess, so the sender can't tell.
+- The DM goes out after the target's own response, best-effort; a closed DM is logged and ignored.
+
+### Sharing, replying, deleting
 - **Share** (target only, before solved): the no-content feed post is replaced with one showing the full content (codefence escapes neutralised so user content can't break formatting). The DM keeps the Guess + Reply buttons if still applicable. The ephemeral confirmation ("Shared to the whisper feed.") is a jump link to the new feed post when the post succeeds.
 - **Reply** (sender or target, **one reply per whisper**): a modal collects up to 1000 characters; the other party is DM'd. The reply DM carries a Report button, and is branded with the origin server (accent + footer attribution) — the reply is anonymous as to its *author*, not its origin, and the recipient sent the original whisper so the server name tells them nothing new. If the recipient's DMs are closed the reply is rolled back and the writer sees "Couldn't deliver — they have DMs disabled."
 - **Delete** (target only): soft-delete — the whisper disappears from the target's inbox but remains in the sender's sent list. Idempotent.
-- **Expose** (target only, after correct guess): edits the target's DM to append `💥 Sender: @<sender>`.
+
+There is no Expose step any more. The button had been dead code since 1396fb5e (never attached to a view; the audit's Exposed column froze at 31 pre-2026-05-27 rows) and was deleted in the 2026-09 games review along with `validate_hide` / the `hidden` state, which migration 025 had already folded into soft-delete. The `whispers.exposed` column is retained but nothing reads or writes it. The sender-feedback DM above is the reveal's replacement.
 
 ### Inboxes
 - **My Inbox** shows received whispers in pending or shared state (soft-deleted ones are hidden). Per-row actions: Guess (if eligible) + Share (if pending) + Reply + Report + Delete.
-- **My Sent** shows your active sent whispers (excludes exposed, out-of-guesses, and 30-day age-locked rows). Per-row actions: Reply + Delete.
+- **My Sent** shows your active sent whispers (excludes out-of-guesses and 30-day age-locked rows). Per-row actions: Reply + Delete.
 
 ### Lifetime and locking
 Whispers age-lock after **30 days** — no new guesses, no new replies. The row remains in the DB; only the inbox surfaces filter it out.
@@ -84,7 +93,7 @@ Whispers age-lock after **30 days** — no new guesses, no new replies. The row 
 Recipients can report a whisper; reply recipients can report a reply. The reason field is free-form and optional (defaults to "(no reason provided)"). One report per reporter per item — second-clicks see "You've already reported this whisper." Reports always persist regardless of whether a mod-log channel is configured; the dashboard's audit log is the canonical view.
 
 ### Mod audit
-The dashboard's audit log lists every whisper with its state, report count, sender, and target. Filters by state and reported-only. If a mod-log channel is set, every reply, report, and reply-report also fans out there as an embed (sending a whisper and solving it do not); failures to post are logged and don't block the user action.
+The dashboard's audit log lists every whisper with its state, report count, sender, and target. Filters by state — exactly the two states a whisper can be in, **In inbox** (`pending`) and **Shared to feed** (`shared`); a test enumerates the panel's options against `WhisperState` — and reported-only. Sender identity is always visible here, whether or not a mod-log channel is set; the mod-log channel is a mirror, not the only record. If a mod-log channel is set, every reply, report, and reply-report also fans out there as an embed (sending a whisper and solving it do not); failures to post are logged and don't block the user action.
 
 ### Opt-out and forget-me
 `/whisper optout` removes the role only — sent and received whispers stay intact. `/whisper forget-me` is a destructive nuke that requires a two-step confirm and deletes, **for the guild it is run in**, every whisper you sent or received (their guesses, replies, and reports cascade with them) plus any reply you wrote or received. Reports you filed on other people's whispers, and guess rows recording that someone guessed *you* on a third party's whisper, are rows about their whispers and survive. Stranded replies whose parent whisper is already gone are swept regardless of guild — with no parent left, they can't be attributed to one.
@@ -93,7 +102,7 @@ The dashboard's audit log lists every whisper with its state, report count, send
 
 - The bot needs **Send Messages** + **Embed Links** in the feed channel, **Manage Messages** to bump the launcher, **Manage Roles** for opt-in / opt-out (with the bot's role above the Whisper role), and the ability to DM each target (Discord-side; not bot-grantable — closed DMs roll back the send).
 - Slash commands have no Discord-side permission gate; they reject DMs and check role membership in-app.
-- The Guess, Share, Delete, Expose, and Report buttons are **target-only**. Reply is sender-or-target. Report Reply is reply-recipient-only.
+- The Guess, Share, Delete, and Report buttons are **target-only**. Reply is sender-or-target. Report Reply is reply-recipient-only.
 - Dashboard config and the audit log both require **admin** — the mod-log channel doxxes an anonymous sender, so this route was tightened off the games-editor (game-host) gate other game configs use; see the security fix that split it from `/config/guess`.
 
 ## User-visible errors
@@ -110,6 +119,8 @@ The dashboard's audit log lists every whisper with its state, report count, send
 | Recipient has DMs closed | "I couldn't deliver — they have DMs disabled." |
 | Sender/target pair is on the no-contact list | "Whisper delivered." — looks identical to a real send; nothing is actually sent |
 | Guess race lost | "This whisper was solved by another tab." |
+| Guild-side pick outside the opt-in pool | "They aren't in the Whisper pool — that one's free." — no guess consumed |
+| Guild-side pick is a bot | "That's a bot — pick a real member." — no guess consumed |
 | Wrong guess, with remaining | "Wrong! N guesses left." |
 | Duplicate report | "You've already reported this whisper." |
 | Duplicate reply report | "You've already reported this reply." |
@@ -131,11 +142,12 @@ Per-guild keys an admin sets via the dashboard:
 
 - **Whisper opt-in role** — the role gating both send and receive. Required.
 - **Feed channel** — where the launcher and announcements live. Required.
-- **Mod-log channel** — optional; when set, replies and reports also fan out here as embeds (sending a whisper does not). Reports persist to the audit log regardless.
+- **Mod-log channel** — optional; when set, replies and reports also fan out here as embeds (sending a whisper does not). Reports persist to the audit log regardless, and sender identity is always visible on the audit page — the panel hint says so, because an earlier hint claimed "(disabled)" meant nobody could find out who sent a whisper, which was wrong in the dangerous direction.
 - **Guesses per whisper** (`whisper_guesses_per_whisper`, default 3, 1-10) — the recipient's allowance, stamped on each whisper when it is sent.
+- **Tell the sender how the guessing goes** (`whisper_sender_feedback`, default off) — the sender-feedback DM above.
 - **Rate limits** — `whisper_cooldown_seconds` (default 30) and `whisper_hourly_cap_per_target` (default 5).
 
-The launcher's current message id is bot-managed and not user-editable.
+The "(none)" role option turns sending off — the panel hint says so; it used to promise the opposite. The launcher's current message id and channel (`whisper_launcher_message_id`, `whisper_launcher_channel_id`) are bot-managed and not user-editable.
 
 ## Stored data
 
@@ -143,4 +155,4 @@ Per guild: every whisper (sender, target, content, state, guess count, timestamp
 
 Soft-delete preserves the row so the sender's history stays intact while the target's inbox hides it. `/whisper forget-me` is the only path that actually removes rows; it cascades through every whisper / reply / guess / report involving the user.
 
-In-memory only and reset on restart: per-sender cooldown timestamps, per-target rolling counts, per-guild launcher locks. A restart resets these — by design, since a sender who restarts the bot gets at most one freebie.
+In-memory only and reset on restart: per-sender cooldown timestamps, per-target rolling counts, and the launcher's sticky-panel state (per-guild lock, id cache, debounce). A restart resets these — by design, since a sender who restarts the bot gets at most one freebie.

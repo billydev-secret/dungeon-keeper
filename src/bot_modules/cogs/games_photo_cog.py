@@ -11,10 +11,15 @@ from discord.ext import commands
 from bot_modules.games.utils.game_manager import (
     create_game,
     get_game_options,
-    update_session,
     end_game,
 )
 from bot_modules.games.utils.question_source import get_photo_prompt, channel_allows_nsfw
+from bot_modules.games_photo.logic import (
+    backfill_card_counts,
+    previous_day_recap,
+    recap_line,
+)
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services.quote_renderer import render_quote_card, THEMES
 
 log = logging.getLogger(__name__)
@@ -79,6 +84,20 @@ class PhotoCog(commands.Cog):
         custom = (options.get("prompt") or "").strip()
         tags = list(options.get("tags") or [])
 
+        # Yesterday's card can be counted now that its day is over — how many
+        # members answered it and with how many photos (photo-external-102).
+        # Never allowed to stop today's card posting.
+        try:
+            bot_user = getattr(self.bot, "user", None)
+            await backfill_card_counts(
+                self.db,
+                channel_id=channel.id,
+                guild_id=guild_id,
+                exclude_author_ids=[bot_user.id] if bot_user is not None else [],
+            )
+        except Exception:
+            log.exception("photo launch: counting the previous card failed in channel %s", channel.id)
+
         text = custom or await get_photo_prompt(
             self.db, tags=tags or None, allow_nsfw=channel_allows_nsfw(channel)
         )
@@ -130,8 +149,22 @@ class PhotoCog(commands.Cog):
             log.warning("photo launch lacked send perms in channel %s", channel.id)
             return None
 
+        # One line under the card recapping the previous day — the ending the
+        # stream never had (photo-external-105). Plain text, no ping, the
+        # poster named through name_fn rather than a mention. Never allowed
+        # to stop a card that has already posted.
+        try:
+            await self._post_recap(channel, guild_id=guild_id)
+        except Exception:
+            log.exception("photo launch: recap failed in channel %s", channel.id)
+
         # Record the play to history for stats (fire-and-forget: there's no
         # interactive game state to keep alive — people just post in the channel).
+        # The row is archived immediately with the prompt and tags it showed and
+        # the guild it belongs to; its counts are filled in by the next launch,
+        # once the day it opened is over. It opens no game-night session (a bot
+        # post is not a game night — NO_ROSTER_TYPES).
+        payload = {"prompt": text, "tags": tags}
         game_id = await create_game(
             self.db,
             channel.id,
@@ -139,16 +172,36 @@ class PhotoCog(commands.Cog):
             "photo",
             message_id=msg.id,
             state="open",
-            payload={
-                "prompt": text,
-                "tags": tags,
-            },
+            payload=payload,
+            guild_id=guild_id,
         )
         log.info("Game %s (photo) posted by host %s in #%s", game_id, host_id, getattr(channel, "name", channel.id))
 
-        await update_session(self.db, channel.id, game_id, [host_id])
-        await end_game(self.db, game_id)
+        await end_game(self.db, game_id, payload=payload, bot=self.bot)
         return game_id
+
+
+    async def _post_recap(self, channel, *, guild_id: int) -> None:
+        bot_user = getattr(self.bot, "user", None)
+        recap = await previous_day_recap(
+            self.db,
+            channel_id=channel.id,
+            exclude_author_ids=[bot_user.id] if bot_user is not None else [],
+        )
+        if recap is None:
+            return
+        guild = getattr(channel, "guild", None)
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=guild_id,
+            user_ids=[recap.most_loved[1]] if recap.most_loved else [],
+        )
+        await channel.send(
+            recap_line(recap, guild_id=guild_id, channel_id=channel.id, name_fn=name_fn),
+            allowed_mentions=discord.AllowedMentions.none(),
+            suppress_embeds=True,
+        )
 
 
 async def setup(bot: "Bot"):

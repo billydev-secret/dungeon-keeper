@@ -19,6 +19,8 @@ from bot_modules.games_wyr.embeds import build_closed_embed, build_wyr_embed
 from bot_modules.games_wyr.logic import (
     next_button_label,
     parse_question_input,
+    record_show_vote,
+    shown_on_side,
     toggle_vote,
 )
 from bot_modules.core.branding import SECTION_SPACER
@@ -142,6 +144,32 @@ def test_toggle_vote_raises_on_invalid_choice():
 # ── next_button_label ────────────────────────────────────────────────
 
 
+# ── record_show_vote / shown_on_side ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "votes_a, votes_b, shown, uid, expected, shown_after",
+    [
+        pytest.param([1], [], [], 1, "shown", [1], id="voter-a-shows"),
+        pytest.param([], [2], [], 2, "shown", [2], id="voter-b-shows"),
+        pytest.param([1], [], [], 9, "not_voted", [], id="no-vote-nothing-to-show"),
+        pytest.param([1], [], [1], 1, "already", [1], id="re-press-is-idempotent"),
+    ],
+)
+def test_record_show_vote(votes_a, votes_b, shown, uid, expected, shown_after):
+    """vote-games-61: showing is the voter's own act, and needs a vote."""
+    assert record_show_vote(votes_a, votes_b, shown, uid) == expected
+    assert shown == shown_after
+
+
+def test_shown_on_side_follows_the_voter_across_a_switch():
+    votes_a, votes_b, shown = [1, 2], [3], []
+    record_show_vote(votes_a, votes_b, shown, 1)
+    assert shown_on_side(votes_a, shown) == [1] and shown_on_side(votes_b, shown) == []
+    toggle_vote(votes_a, votes_b, 1, "b")
+    assert shown_on_side(votes_a, shown) == [] and shown_on_side(votes_b, shown) == [1]
+
+
 def test_next_button_label_zero():
     assert next_button_label(0) == "⏭️ Next (0 queued)"
 
@@ -212,7 +240,7 @@ def _named(uid: int) -> str:
 
 
 def test_build_wyr_embed_revealed_lists_voter_names():
-    """Reveal Voters names each voter through ``name_fn`` — a ``<@id>`` in
+    """A fully revealed round names each voter through ``name_fn`` — a ``<@id>`` in
     an embed shows as a bare number to anyone whose client hasn't cached
     that member, so the reveal must carry resolved names."""
     embed = build_wyr_embed(
@@ -223,6 +251,31 @@ def test_build_wyr_embed_revealed_lists_voter_names():
     assert "Member2" in votes_field
     assert "Member3" in votes_field
     assert "<@" not in votes_field
+
+
+def test_build_wyr_embed_names_only_the_shown_voters():
+    """A shown voter is named on their side; the rest stay a count."""
+    embed = build_wyr_embed(
+        "Alice", "fly", "swim", [1, 2], [3], True, 1, name_fn=_named, shown=[1],
+    )
+    votes = _unspaced(embed.fields[-1].value)
+    assert "Member1 +1 anonymous" in votes
+    assert "Member2" not in votes and "Member3" not in votes
+
+
+def test_build_wyr_embed_shown_side_with_nobody_hidden_has_no_count():
+    embed = build_wyr_embed(
+        "Alice", "fly", "swim", [1], [2], True, 1, name_fn=_named, shown=[1, 2],
+    )
+    votes = _unspaced(embed.fields[-1].value)
+    assert "Member1" in votes and "Member2" in votes and "anonymous" not in votes
+
+
+def test_build_closed_embed_keeps_the_shown_names():
+    embed = build_closed_embed(
+        "Alice", "fly", "swim", [1], [], True, 1, name_fn=_named, shown=[1],
+    )
+    assert "Member1" in _unspaced(embed.fields[-1].value)
 
 
 def test_build_wyr_embed_hides_voters_until_revealed():
@@ -277,9 +330,11 @@ def test_every_wyr_render_site_passes_a_resolver():
 
 
 def test_build_wyr_embed_anonymous_badge_in_footer():
+    """The badge names the way out of anonymity, not just the default
+    (vote-games-61)."""
     embed = build_wyr_embed("Alice", "fly", "swim", [], [], True, 1)
     assert embed.footer.text is not None
-    assert "Anonymous" in embed.footer.text
+    assert "Anonymous" in embed.footer.text and "Show My Vote" in embed.footer.text
 
 
 def test_build_wyr_embed_no_anonymous_badge_when_off():
@@ -340,7 +395,13 @@ from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
 import bot_modules.cogs.games_wyr_cog as wyr_cog  # noqa: E402
-from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.games.utils.game_manager import (  # noqa: E402
+    create_game,
+    end_game,
+    get_active_game_by_id,
+    get_game_payload,
+)
+from bot_modules.games.utils.round_pacing import ADVANCE_DENIED, RoundPacing  # noqa: E402
 from bot_modules.services.games_db import GamesDb  # noqa: E402
 
 
@@ -354,23 +415,284 @@ class _SpyBot:
         return None
 
 
-async def test_run_round_empty_bank_pays_all_voters(monkeypatch, sync_db_path):
-    """When the question bank runs dry, the game ends paying everyone who voted
-    for either option across all completed rounds."""
-    spy = AsyncMock()
-    monkeypatch.setattr(wyr_cog, "end_game", spy)
+def _channel(guild=None):
+    return SimpleNamespace(
+        id=100, name="games", guild=guild,
+        send=AsyncMock(return_value=SimpleNamespace(id=555, edit=AsyncMock())),
+    )
+
+
+def _message():
+    return SimpleNamespace(id=555, edit=AsyncMock())
+
+
+def _interaction(uid: int, *, message=None):
+    return SimpleNamespace(
+        user=SimpleNamespace(id=uid, display_name=f"U{uid}", roles=[]),
+        guild=None, guild_id=None,
+        channel=SimpleNamespace(id=100, name="games", guild=None),
+        message=message or _message(),
+        response=SimpleNamespace(send_message=AsyncMock(), defer=AsyncMock()),
+    )
+
+
+async def test_run_round_empty_bank_opens_a_waiting_round(monkeypatch, sync_db_path):
+    """vote-games-50: the bank had nothing, so the round waits for a posed
+    question with only Pose / End / Help live — the game does not end."""
     monkeypatch.setattr(wyr_cog, "get_wyr_question", AsyncMock(return_value=None))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(bot.games_db, 100, 1, "wyr", payload={"rounds": {}})
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    await cog._run_round(None, gid, 1, "Host", 1, channel)
+
+    view = bot.active_views[gid]
+    assert view.waiting is True
+    assert view.vote_a.disabled and view.vote_b.disabled and view.next_btn.disabled
+    assert not view.pose_question.disabled and not view.end_game_btn.disabled
+    assert await get_active_game_by_id(bot.games_db, gid) is not None
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["q"] == ""
+    embed = channel.send.await_args.kwargs["embed"]
+    assert "Pose Question" in (embed.description or "")
+
+    # A posed question opens the round in place.
+    await view.begin_round("fly", "swim", _message())
+    assert view.waiting is False and not view.vote_a.disabled and not view.next_btn.disabled
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["q"] == "fly OR swim"
+    assert payload["rounds"]["1"]["opened_at"]
+
+
+async def test_votes_are_persisted_on_every_press(sync_db_path):
+    """vote-games-58: a restart mid-round used to rebuild an empty tally under
+    a full bar, because votes reached the payload only on Next."""
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(
+        bot.games_db, 100, 1, "wyr", payload={"rounds": {"1": {"a": [], "b": [], "q": "x OR y"}}},
+    )
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=_channel(),
+        option_a="x", option_b="y",
+    )
+    await view.vote_a.callback(_interaction(7))  # type: ignore[arg-type]
+    await view.vote_b.callback(_interaction(8))  # type: ignore[arg-type]
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"] == {"a": [7], "b": [8], "shown": [], "q": "x OR y"}
+
+
+async def test_show_my_vote_is_the_voters_own_and_survives_a_restart(sync_db_path):
+    """vote-games-61: any voter can name themselves — no host gate — and
+    the choice rides with the votes, so a rebuilt view still shows it."""
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(
+        bot.games_db, 100, 1, "wyr", payload={"rounds": {"1": {"a": [], "b": [], "q": "x OR y"}}},
+    )
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=_channel(),
+        option_a="x", option_b="y",
+    )
+    # No vote yet: refused, nothing shown.
+    stranger = _interaction(9)
+    await view.show_my_vote.callback(stranger)  # type: ignore[arg-type]
+    assert "Vote" in stranger.response.send_message.await_args.args[0]
+    assert view.shown == []
+
+    await view.vote_a.callback(_interaction(7))  # type: ignore[arg-type]
+    shower = _interaction(7)
+    shower.response.edit_message = AsyncMock()
+    await view.show_my_vote.callback(shower)  # type: ignore[arg-type]
+    assert shower.response.edit_message.await_args is not None
+    embed = shower.response.edit_message.await_args.kwargs["embed"]
+    assert "User 7" in embed.fields[-1].value or "7" in embed.fields[-1].value
+    payload = await get_game_payload(bot.games_db, gid)
+    assert payload["rounds"]["1"]["shown"] == [7]
+
+    row = await get_active_game_by_id(bot.games_db, gid)
+    assert row is not None
+    rebuilt_bot = _SpyBot(sync_db_path)
+    rebuilt_bot.add_view = lambda *a, **k: None  # type: ignore[attr-defined]
+    rebuilt = wyr_cog.WYRCog(rebuilt_bot)  # type: ignore[arg-type]
+    assert await rebuilt.recover_game(row, payload, _channel(), _message())
+    assert rebuilt_bot.active_views[gid].shown == [7]
+
+
+async def test_end_game_posts_the_recap_and_pays_every_voter(monkeypatch, sync_db_path):
+    """vote-games-52: the host's 🏁 End Game ends through the paying path with
+    the recap (most divisive question + total votes)."""
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(wyr_cog, "end_game", spy)
     bot = _SpyBot(sync_db_path)
     payload = {"rounds": {
         "1": {"a": [1, 2], "b": [3], "q": "A OR B"},
-        "2": {"a": [4], "b": [1], "q": "C OR D"},
+        "2": {"a": [], "b": [], "q": "C OR D"},
     }}
     gid = await create_game(bot.games_db, 100, 1, "wyr", payload=payload)
-    bot.active_views[gid] = object()
     cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
-    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
-    await cog._run_round(None, gid, 1, "Host", 3, channel)
+    channel = _channel()
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=2, channel=channel,
+        option_a="C", option_b="D",
+    )
+    bot.active_views[gid] = view
+    view.votes_a, view.votes_b = [4], [1]
+    message = _message()
+
+    assert view.finish_callback is not None
+    await view.finish_callback(message, "ended")
+
+    assert view._closed is True
+    message.edit.assert_awaited()  # the board is greyed out
+    recap = channel.send.await_args.kwargs["embed"]
+    assert "Game Over" in recap.title
+    fields = {f.name: f.value for f in recap.fields}
+    assert fields["Total Votes"].startswith("5")
+    assert "C OR D" in fields["Most Divisive"]  # 1–1 beats 2–1
     call = spy.await_args
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 3, 4]
     assert call.kwargs["bot"] is bot
+    assert call.kwargs["reason"] == "ended"
+    assert call.kwargs["round_count"] == 2
+    assert gid not in bot.active_views
+
+
+async def test_expired_at_next_ends_with_the_recap_and_pays(monkeypatch, sync_db_path):
+    """vote-games-59: pressing Next on a >24h game used to archive a bare,
+    guild-0 row and pay nobody."""
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(wyr_cog, "end_game", spy)
+    monkeypatch.setattr(wyr_cog, "is_game_expired", AsyncMock(return_value=True))
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(
+        bot.games_db, 100, 1, "wyr", payload={"rounds": {"1": {"a": [], "b": [], "q": "x OR y"}}},
+    )
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=1, channel=channel,
+        option_a="x", option_b="y",
+    )
+    bot.active_views[gid] = view
+    view.votes_a = [5, 6]
+
+    await view.advance_callback(_message())
+
+    call = spy.await_args
+    assert call is not None and spy.await_count == 1
+    assert call.kwargs["player_ids"] == [5, 6]
+    assert call.kwargs["bot"] is bot
+    assert call.kwargs["reason"] == "expired"
+    # The last round's votes were written before the archive.
+    assert call.kwargs["payload"]["rounds"]["1"]["a"] == [5, 6]
+    assert channel.send.await_count == 1  # the recap, and no new round
+
+
+async def test_round_cap_ends_with_the_recap(monkeypatch, sync_db_path):
+    """discovery-3: the configured last round posts the recap instead of
+    opening another round."""
+    spy = AsyncMock(return_value=None)
+    monkeypatch.setattr(wyr_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    gid = await create_game(
+        bot.games_db, 100, 1, "wyr",
+        payload={"rounds": {"1": {"a": [], "b": [], "q": "a OR b"}, "2": {"a": [], "b": [], "q": "c OR d"}}, "max_rounds": 2},
+    )
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    channel = _channel()
+    view = cog._build_round_view(
+        game_id=gid, host_id=1, host_name="Host", round_num=2, channel=channel,
+        option_a="c", option_b="d", pacing=RoundPacing(max_rounds=2),
+    )
+    bot.active_views[gid] = view
+    view.votes_a = [9]
+
+    await view.advance_callback(_message())
+
+    call = spy.await_args
+    assert call is not None and call.kwargs["reason"] == "round_cap"
+    recap = channel.send.await_args.kwargs["embed"]
+    assert "last round" in (recap.description or "")
+
+
+async def test_launch_stores_pacing_and_the_scheduled_flag(monkeypatch, sync_db_path):
+    """The slash/schedule option wins over the dashboard default; a launch with
+    no host at the keyboard is marked scheduled (platform-23)."""
+    monkeypatch.setattr(wyr_cog, "get_wyr_question", AsyncMock(return_value=("x", "y")))
+    bot = _SpyBot(sync_db_path)
+    await bot.games_db.execute(
+        "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES (?, ?, 1, ?)",
+        (9001, "wyr", '{"round_seconds": 45, "max_rounds": 4}'),
+    )
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+
+    gid = await cog.launch(channel=_channel(), host_id=5, host_name="H", guild_id=9001, options={})
+    assert gid is not None
+    payload = await get_game_payload(bot.games_db, gid)
+    assert (payload["round_seconds"], payload["max_rounds"], payload["scheduled"]) == (45, 4, False)
+    bot.active_views[gid].pacing.cancel_timer()
+    await end_game(bot.games_db, gid)
+
+    gid = await cog.launch(
+        channel=_channel(), host_id=0, host_name="Today's feature", guild_id=9001,
+        options={"round_seconds": 0, "max_rounds": 0, "scheduled": True},
+    )
+    assert gid is not None
+    payload = await get_game_payload(bot.games_db, gid)
+    assert (payload["round_seconds"], payload["max_rounds"], payload["scheduled"]) == (0, 0, True)
+    assert bot.active_views[gid].pacing.timer_task is None  # host-paced: no timer
+
+
+async def test_scheduled_round_lets_a_voter_press_next_after_the_window(sync_db_path):
+    """platform-23: a scheduled game whose creator isn't there cannot stall."""
+    bot = _SpyBot(sync_db_path)
+    advance = AsyncMock()
+    view = wyr_cog.WYRRoundView(
+        "g", 1, "x", "y", 1, True, bot.games_db, bot, "Host", advance,
+        pacing=RoundPacing(round_seconds=0, scheduled=True, opened_at=1.0),
+    )
+    view.votes_a = [7]
+    # A non-voter is told to vote first.
+    interaction = _interaction(8)
+    await view.next_btn.callback(interaction)  # type: ignore[arg-type]
+    assert "Vote first" in interaction.response.send_message.await_args.args[0]
+    advance.assert_not_awaited()
+    # A voter, once the window has elapsed, advances the round.
+    interaction = _interaction(7)
+    await view.next_btn.callback(interaction)  # type: ignore[arg-type]
+    interaction.response.defer.assert_awaited_once()
+    advance.assert_awaited_once()
+
+    # A hosted game keeps Next to the host / mods / Game Host role.
+    hosted = wyr_cog.WYRRoundView(
+        "g", 1, "x", "y", 1, True, bot.games_db, bot, "Host", AsyncMock(),
+        pacing=RoundPacing(round_seconds=0, scheduled=False, opened_at=1.0),
+    )
+    hosted.votes_a = [7]
+    interaction = _interaction(7)
+    await hosted.next_btn.callback(interaction)  # type: ignore[arg-type]
+    assert interaction.response.send_message.await_args.args[0] == ADVANCE_DENIED
+
+
+async def test_slash_entry_refuses_a_busy_channel_through_the_shared_guard(sync_db_path):
+    """platform-18: the slash entry runs the one launch guard (busy channel,
+    empty bank, ...) instead of its own two checks."""
+    bot = _SpyBot(sync_db_path)
+    cog = wyr_cog.WYRCog(bot)  # type: ignore[arg-type]
+    launch = AsyncMock(return_value="new")
+    cog.launch = launch  # type: ignore[method-assign]
+    await bot.games_db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)", (100, 9001),
+    )
+    await create_game(bot.games_db, 100, 5, "nhie", state="playing", payload={}, guild_id=9001)
+    interaction = _interaction(1)
+    interaction.guild_id = 9001
+    interaction.channel_id = 100
+
+    await wyr_cog.WYRCog.wyr.callback(cog, interaction)  # type: ignore[attr-defined]
+
+    launch.assert_not_awaited()
+    text = interaction.response.send_message.await_args.args[0]
+    assert "already a game running" in text and "Never Have I Ever" in text

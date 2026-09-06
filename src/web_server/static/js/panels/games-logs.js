@@ -3,13 +3,13 @@ import { renderLoading, renderEmpty, renderError } from "../states.js";
 
 // All user-supplied content rendered via innerHTML uses esc() for XSS safety.
 
-const GAME_TYPES = ["wyr", "nhie", "mlt", "rushmore", "price", "clapback", "ama", "photo"];
-const GAME_ICONS = { wyr: "🤔", nhie: "⛔", mlt: "👑", rushmore: "🗿", price: "💰", clapback: "⚔️", ama: "🎙️", photo: "📸" };
-const GAME_NAMES = {
-  wyr: "Would You Rather", nhie: "Never Have I Ever", mlt: "Most Likely To",
-  rushmore: "Mt. Rushmore Draft", price: "Name Your Price", clapback: "Clapback", ama: "Anonymous AMA",
-  photo: "Photo Challenge",
-};
+// Game names and icons come from the API (/api/games/stats → games), not a
+// local copy: the panel used to carry eight entries and drew Truth or Dare —
+// the second-most-played game — nowhere in its chart (platform-26).
+let GAMES = {};
+
+function gameName(gt) { return (GAMES[gt] && GAMES[gt].name) || gt; }
+function gameIcon(gt) { return (GAMES[gt] && GAMES[gt].icon) || ""; }
 
 // History timestamps are ISO strings recorded in UTC, and some are naive (no
 // offset) — Date() would read those as local time, so pin them to UTC before
@@ -22,15 +22,14 @@ function fmtGameTs(iso) {
 }
 
 function gameLabel(gt) {
-  return `${GAME_ICONS[gt] || ""} ${esc(GAME_NAMES[gt] || gt)}`;
+  return `${esc(gameIcon(gt))} ${esc(gameName(gt))}`;
 }
 
 export function mount(container) {
   let currentPage = 1;
   let currentGameType = "";
   let currentPerPage = 50;
-
-  const gtOptions = GAME_TYPES.map((g) => `<option value="${g}">${GAME_ICONS[g] || ""} ${GAME_NAMES[g] || g}</option>`).join("");
+  let currentDays = null;   // null = all time
 
   container.innerHTML = `
     <div class="panel">
@@ -40,7 +39,16 @@ export function mount(container) {
       </header>
 
       <section>
-        <div class="section-label">Stats</div>
+        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+          <div class="section-label" style="margin:0;">Stats</div>
+          <div style="display:flex;gap:4px;margin-left:auto;" role="group" aria-label="Time window">
+            <button class="btn btn-sm btn-primary" data-window="all">All time</button>
+            <button class="btn btn-sm" data-window="30">Last 30 days</button>
+          </div>
+        </div>
+        <div class="field-hint" style="margin:2px 0 8px;">Unique Players counts members who took part
+          (voted, joined, answered). Photo Challenge posters are counted on each card's own history row,
+          not here — a card records no member ids.</div>
         <div class="card-grid" data-region="stats">
           ${renderLoading("Loading stats…")}
         </div>
@@ -66,7 +74,6 @@ export function mount(container) {
             <label>Game Type
               <select data-ctrl="filter-gt">
                 <option value="">All</option>
-                ${gtOptions}
               </select>
             </label>
           </div>
@@ -90,9 +97,20 @@ export function mount(container) {
   function ctrl(name) { return container.querySelector(`[data-ctrl="${name}"]`); }
   function region(name) { return container.querySelector(`[data-region="${name}"]`); }
 
+  function renderFilterOptions(types) {
+    const sel = ctrl("filter-gt");
+    const keep = sel.value;
+    sel.innerHTML = `<option value="">All</option>` + types
+      .map((g) => `<option value="${esc(g)}">${esc(gameIcon(g))} ${esc(gameName(g))}</option>`)
+      .join("");
+    sel.value = types.includes(keep) ? keep : "";
+  }
+
   async function loadStats() {
     try {
-      const data = await api("/api/games/stats");
+      const data = await api("/api/games/stats", currentDays ? { days: currentDays } : undefined);
+      GAMES = data.games || {};
+      renderFilterOptions(data.history_types || Object.keys(data.games_by_type || {}));
 
       const statsEl = region("stats");
       const cards = [
@@ -109,7 +127,16 @@ export function mount(container) {
 
       const gbt = data.games_by_type || {};
       const byTypeEl = region("by-type");
-      const totals = GAME_TYPES.map((gt) => ({ gt, cnt: gbt[gt] || 0 }));
+      // Every type the history holds, most played first — not a fixed list.
+      const totals = Object.keys(gbt)
+        .map((gt) => ({ gt, cnt: gbt[gt] || 0 }))
+        .sort((a, b) => b.cnt - a.cnt || gameName(a.gt).localeCompare(gameName(b.gt)));
+      if (!totals.length) {
+        byTypeEl.innerHTML = renderEmpty(currentDays
+          ? "Nothing played in this window. Switch to All time, or come back after a game night."
+          : "No games played yet. Sessions appear here once someone starts a game in Discord.");
+        return;
+      }
       const maxVal = Math.max(...totals.map((x) => x.cnt), 1);
       const gtRows = totals.map(({ gt, cnt }) => {
         const pct = Math.round((cnt / maxVal) * 100);
@@ -142,8 +169,8 @@ export function mount(container) {
         return;
       }
       el.innerHTML = data.rows.map((r) => {
-        const icon = esc(GAME_ICONS[r.game_type] || "");
-        const name = esc(GAME_NAMES[r.game_type] || r.game_type);
+        const icon = esc(gameIcon(r.game_type));
+        const name = esc(gameName(r.game_type));
         const ended = fmtGameTs(r.ended_at);
         return `<div style="display:flex;justify-content:space-between;align-items:baseline;padding:7px 0;border-bottom:1px solid var(--rule-soft);">
           <div>
@@ -180,8 +207,8 @@ export function mount(container) {
       return;
     }
     const rows = data.rows.map((r) => {
-      const icon = esc(GAME_ICONS[r.game_type] || "");
-      const name = esc(GAME_NAMES[r.game_type] || r.game_type);
+      const icon = esc(gameIcon(r.game_type));
+      const name = esc(gameName(r.game_type));
       const started = r.started_at ? fmtGameTs(r.started_at) : "";
       const ended = fmtGameTs(r.ended_at);
       return `<tr>
@@ -221,9 +248,18 @@ export function mount(container) {
     loadTable();
   });
 
-  loadStats();
-  loadRecent();
-  loadTable();
+  container.querySelectorAll("[data-window]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      currentDays = btn.dataset.window === "all" ? null : parseInt(btn.dataset.window, 10);
+      container.querySelectorAll("[data-window]").forEach((b) => b.classList.toggle("btn-primary", b === btn));
+      region("stats").innerHTML = renderLoading("Loading stats…");
+      region("by-type").innerHTML = renderLoading("Loading…");
+      loadStats();
+    });
+  });
+
+  // Stats first: it also brings the game names the two lists below label with.
+  loadStats().then(() => { loadRecent(); loadTable(); });
 
   return { unmount() {} };
 }

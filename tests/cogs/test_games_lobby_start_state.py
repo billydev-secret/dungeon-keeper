@@ -72,16 +72,23 @@ async def test_clapback_start_retires_the_joining_state(sync_db_path):
         payload={"config": config, "players": players, "host_id": HOST},
     )
 
-    class _Cog:
-        _game_cancelled = set()
+    # The real cog, because Start now hands the lobby to its _begin_game /
+    # _play pair (shared with the countdown auto-start); only the game loop
+    # and the no-contact read are stubbed.
+    from types import SimpleNamespace
 
-        async def _run_game(self, *a, **k):
-            return None
+    bot = SimpleNamespace(games_db=db, active_views={}, ctx=SimpleNamespace(db_path=sync_db_path))
+    cog = cog_mod.ClapbackCog(bot)  # type: ignore[arg-type]
 
-        async def _forbidden_pairs(self, guild, user_ids):
-            return set()
+    async def _no_run(*a, **k):
+        return None
 
-    view = cog_mod.ClapbackJoinView(gid, HOST, db, None, _Cog(), config)
+    async def _no_pairs(guild, user_ids):
+        return set()
+
+    cog._run_game = _no_run  # type: ignore[method-assign]
+    cog._forbidden_pairs = _no_pairs  # type: ignore[method-assign]
+    view = cog_mod.ClapbackJoinView(gid, HOST, db, bot, cog, config)
     await view.start_game.callback(_Interaction())
 
     assert await _state(db, gid) != "joining"
@@ -124,3 +131,29 @@ async def test_story_start_retires_the_joining_state(sync_db_path):
     await view.start_story.callback(_Interaction())
 
     assert await _state(db, gid) != "joining"
+
+
+async def test_ttl_start_guessing_records_the_guessing_state(sync_db_path):
+    """Two Truths never wrote a phase, so boot recovery could not tell a lobby
+    from a game in progress (vote-games-56); Start Guessing now says so."""
+    import bot_modules.cogs.games_ttl_cog as cog_mod
+
+    db = GamesDb(sync_db_path)
+    # Three submissions: Start Guessing's floor rose to 3 (vote-games-57).
+    subs = {"111": {"statements": ["a", "b", "c"], "lie": 2},
+            "222": {"statements": ["d", "e", "f"], "lie": 0},
+            "333": {"statements": ["g", "h", "i"], "lie": 1}}
+    gid = await create_game(
+        db, CHAN, HOST, "ttl", state="joining",
+        payload={"submissions": subs, "submission_count": 3, "submitter_names": {},
+                 "scores": {}, "prompt": None},
+    )
+
+    class _Cog:
+        async def _run_guessing(self, **k):
+            return None
+
+    view = cog_mod.TTLSubmitView(gid, HOST, db, None, _Cog())
+    await view.start_guessing.callback(_Interaction())  # type: ignore[arg-type]
+
+    assert await _state(db, gid) == "guessing"

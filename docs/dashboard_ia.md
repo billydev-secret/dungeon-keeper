@@ -141,7 +141,9 @@ splits healed the worst of it (`voice-activity`, `xp-leaderboard`,
   (Anonymous AMA, LegitLibs, Risky Rolls, Pressure Cooker, Quickdraw, Hot
   Potato, Hot Potato (Group), Chicken, Musical Chairs, Photo Challenge — which
   had been a top-level section with a single item under the same gate — plus
-  Survivor and Meadow Mahjong, added after the IA1 write-up). AMA moved here
+  Survivor and Meadow Mahjong, added after the IA1 write-up, and Hot Takes and
+  Fantasies & Dealbreakers, added 2026-09-04 with one pacing dial each under
+  the bare ids `hottakes` / `fantasies`). AMA moved here
   from Question Banks once its bank came off: every AMA question is typed by
   a member mid-game, so there was never a bank to fill; its route id stays
   `games-ama`, only the grouping moved.

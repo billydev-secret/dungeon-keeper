@@ -179,7 +179,16 @@ live doesn't re-post. `Intents.default()` already carries
 
 Two windows, both of which must pass — for **start** sources:
 
-- **Per type** — 60 minutes. The same kind of game at most hourly.
+- **Per type** — 60 minutes. The same kind of game at most hourly — with
+  one exception (discovery-10, 2026-09-04): when the game that last echoed
+  under this type has **already ended** (it is in `games_game_history` and
+  no longer in `games_active_games`) **in the same channel**, a new game of
+  that type there is a fresh invitation, not the same lobby announced twice,
+  and the per-type window is lifted for it (`decide(previous_ended=True)`;
+  `event_echo_service.previous_game_ended_here` resolves the flag, for the
+  party-game source only, since its refs are game ids). The second and third
+  Clapback round of an evening used to be suppressed after the first had
+  finished. The global floor below is never lifted.
 - **Global floor** — 10 minutes. Nothing at all within 10 minutes of the last
   echo, whatever it was.
 

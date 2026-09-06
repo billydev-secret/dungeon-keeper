@@ -24,6 +24,7 @@ const STATUS_LABEL = {
   skipped_disabled: "🚫 Skipped — Photo Challenge is off",
   skipped_giveup: "⌛ Gave up — channel stayed busy",
   skipped_hidden: "🙈 Skipped — the room was hidden that day",
+  skipped_late: "⏰ Skipped — bot was offline at post time",
   error: "⚠️ Failed", launching: "▶️ Posting now",
 };
 
@@ -68,10 +69,10 @@ export function mount(container) {
             <label>Ping Role
               <select class="w-full" data-ctrl="role"></select>
             </label>
-            <div class="field-hint">Mentioned every time a card posts. Leave on (none) to post without a ping.</div>
+            <div class="field-hint">Mentioned every time a card posts — this is the card's only ping. Leave on (none) to post without one.</div>
           </div>
         </div>
-        <div class="field-hint" style="margin-bottom:8px;">Posting a photo here pays out on its own — add an active <strong>photo_post</strong> quest under Economy → Quests to set the reward.</div>
+        <div class="field-hint" style="margin-bottom:8px;">Posting a photo here pays the <strong>Photo Challenge post</strong> rate from Economy → Income Sources on its own, once a day. A <strong>photo_post</strong> quest under Economy → Quests is optional and stacks a bonus on top.</div>
         <div class="field m-0">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;">
             <input type="checkbox" data-ctrl="enabled" style="width:18px;height:18px;cursor:pointer;" />

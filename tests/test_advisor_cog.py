@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
+import pytest
 
 from bot_modules.cogs import advisor_cog
 from bot_modules.cogs.advisor_cog import _proposal_fields
@@ -341,3 +342,40 @@ async def test_post_button_rechecks_the_mod_power_at_click_time():
     channel.send.assert_not_called()
     assert "no longer" in interaction.response.edit_message.await_args.kwargs["content"]
     assert all(c.disabled for c in view.children)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "dispatched"),
+    [
+        pytest.param("whisper", True, id="applied-change-wakes-the-feature-cog"),
+        pytest.param(None, False, id="grant-role-write-has-no-listener"),
+        pytest.param(ValueError("gone"), False, id="refused-change-dispatches-nothing"),
+    ],
+)
+async def test_apply_click_dispatches_the_feature_config_change(
+    monkeypatch, outcome, dispatched
+):
+    """The dashboard's PUT dispatches ``<feature>_config_change`` so cogs that
+    cache config at boot (the whisper launcher's known-guild set) pick a new
+    channel up without a restart. An advisor Apply is the same write through
+    a different door, so it has to send the same signal."""
+    mod = advisor_cog
+    applied = MagicMock(
+        side_effect=outcome if isinstance(outcome, Exception) else None,
+        return_value=outcome,
+    )
+    monkeypatch.setattr(mod, "apply_config_change", applied)
+    monkeypatch.setattr(mod, "can_see_config", lambda m: True)
+    monkeypatch.setattr(mod, "is_server_admin", lambda m: True)
+    bot = MagicMock()
+    guild = MagicMock(spec=discord.Guild, id=123)
+    prop = ConfigProposal("whisper_channel_id", "456", "Whisper channel → #w")
+    view = mod._ApplyConfigView(bot, ":memory:", guild, [prop])
+
+    await view.children[0].callback(_interaction(_member(administrator=True)))
+
+    applied.assert_called_once()
+    if dispatched:
+        bot.dispatch.assert_called_once_with("whisper_config_change", 123)
+    else:
+        bot.dispatch.assert_not_called()

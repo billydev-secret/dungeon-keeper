@@ -242,6 +242,45 @@ def refresh_due(last_paint: float, now: float, every: float = REFRESH_EVERY) -> 
     return (now - last_paint) >= every
 
 
+# The last stretch of open betting the panel calls out (casino-136): a
+# one-sided market gets one more chance to find its other side before it
+# voids at close.
+CLOSE_REMINDER_LEAD = 3600.0
+
+
+def unbacked_side(split: PoolSplit) -> str | None:
+    """The side nobody has staked on while the other has — the side whose
+    emptiness will void the market at close. None when both are backed, and
+    None when neither is: an empty market is not one-sided, just quiet."""
+    if split.over and not split.under:
+        return UNDER
+    if split.under and not split.over:
+        return OVER
+    return None
+
+
+def closing_soon(
+    closes_at: float, now: float, lead: float = CLOSE_REMINDER_LEAD
+) -> bool:
+    """True inside the last ``lead`` seconds of open betting."""
+    return 0.0 < closes_at - now <= lead
+
+
+def reminder_due(
+    last_paint: float, closes_at: float, now: float,
+    lead: float = CLOSE_REMINDER_LEAD,
+) -> bool:
+    """True on the first tick inside the closing window whose last repaint
+    predates it — the reminder edit an hour before close.
+
+    ``refresh_due`` alone can land the hourly repaint anywhere in the hour,
+    so a panel painted 70 minutes out would not carry the last-hour note
+    until ten minutes out. Any repaint inside the window (a stake's, or this
+    one's) stamps the same clock and satisfies it, so it fires once.
+    """
+    return closing_soon(closes_at, now, lead) and last_paint < closes_at - lead
+
+
 def probability_series(
     bets: list[dict], opened_at: float, closes_at: float
 ) -> list[tuple[float, float]]:

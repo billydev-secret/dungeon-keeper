@@ -40,6 +40,82 @@ from typing import Any
 MIN_PRICE: int = 0
 MAX_PRICE: int = 999_999_999
 
+# The lobby floor: a round with one price has nothing to compare, so Start
+# waits for two. Mirrored in ``LOBBY_MIN_PLAYERS['price']`` for the idle
+# sweep (tested in tests/test_games_price_logic.py).
+MIN_PLAYERS: int = 2
+
+# The vote floor. With two submitters the self-vote refusal forces a 1-1
+# cross-vote, so ``tally_winners`` crowned both players in both categories
+# every round — a guaranteed double tie, not a result (trivia-tail-87). A
+# two-price round is revealed and moves on.
+MIN_VOTERS: int = 3
+
+# Where scenarios come from when nobody chose: the bank if it has anything to
+# serve, else the host writes them (trivia-tail-85 — 44 bank scenarios sat
+# unused behind a default of 'host').
+SOURCE_HOST = "host"
+SOURCE_PLAYERS = "players"
+SOURCE_BANK = "bank"
+SOURCES: tuple[str, ...] = (SOURCE_HOST, SOURCE_PLAYERS, SOURCE_BANK)
+# Retired with the Prompts & AI studios; a schedule or payload persisted
+# under either still runs, on the bank.
+_RETIRED_SOURCES: frozenset[str] = frozenset({"ai", "both"})
+
+
+def resolve_source(requested: Any, bank_has_rows: bool) -> str:
+    """The scenario source a launch runs on.
+
+    An explicit, still-valid choice wins. Absent, blank or retired reads as
+    "no choice": the bank when it holds anything, otherwise the host.
+    """
+    if isinstance(requested, str):
+        choice = requested.strip().lower()
+        if choice in SOURCES:
+            return choice
+        if choice and choice not in _RETIRED_SOURCES:
+            return SOURCE_HOST if not bank_has_rows else SOURCE_BANK
+    return SOURCE_BANK if bank_has_rows else SOURCE_HOST
+
+
+def vote_possible(submitter_count: int) -> bool:
+    """May this round go to a vote? Fewer than :data:`MIN_VOTERS` is reveal-only."""
+    return submitter_count >= MIN_VOTERS
+
+
+def toggle_player(payload: dict[str, Any], user_id: int) -> str:
+    """Join or leave the lobby roster in place; returns ``"joined"`` / ``"left"``."""
+    players: list[int] = payload.setdefault("players", [])
+    if user_id in players:
+        players.remove(user_id)
+        return "left"
+    players.append(user_id)
+    return "joined"
+
+
+def lobby_players(payload: dict[str, Any]) -> list[int]:
+    """The joined roster as ints — ids round-trip through JSON as ints, but a
+    hand-edited or legacy payload may hold strings."""
+    out: list[int] = []
+    for raw in payload.get("players") or []:
+        try:
+            uid = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if uid not in out:
+            out.append(uid)
+    return out
+
+
+def roster_all_in(expected_ids: set[int], submitted_ids: set[int]) -> bool:
+    """May the round close early? Only once every *joined* player has named
+    a price. Submission is open to the whole channel, so the rule is on ids,
+    never a headcount — a spectator's price used to fill a joined player's
+    seat and close a three-seat round with the third player locked out. An
+    empty roster runs the full timer."""
+    return bool(expected_ids) and expected_ids <= submitted_ids
+
+
 # Suffix multipliers recognized by :func:`parse_price`. Order matters
 # only when one suffix is a prefix of another (none currently are), but
 # we keep "million"/"billion" before "m"/"b" so a literal "billion"

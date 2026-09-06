@@ -338,7 +338,7 @@ def _build_help_pages(
                     ("/games pressure challenge @user", "Pressure Cooker — 1v1 pump-the-gauge duel."),
                     ("/games quickdraw challenge @user", "Quickdraw — 1v1 fastest-finger duel."),
                     ("/games hotpotato challenge @user", "Hot Potato — 1v1 pass-the-bomb."),
-                    ("/games hotpotatogroup start", "Hot Potato — group lobby version."),
+                    ("/games hotpotatogroup start", "Hot Potato (Group) — the lobby version for 2+ players."),
                     ("/games chicken start", "Chicken — duel or group; bail before the crash."),
                     ("/games musicalchairs start", "Musical Chairs — 3+ players, one fewer seat each round."),
                 ]

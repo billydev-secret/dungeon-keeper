@@ -8,13 +8,9 @@ from bot_modules.services.whisper_service import (
     ERROR_ALREADY_DECIDED,
     ERROR_ALREADY_DELETED,
     ERROR_DELETE_NOT_TARGET,
-    ERROR_EXPOSE_NEEDS_SOLVE,
-    ERROR_EXPOSE_NOT_TARGET,
     ERROR_GUESS_NOT_TARGET,
     TransitionValidationError,
     validate_delete,
-    validate_expose,
-    validate_hide,
     validate_share,
 )
 
@@ -47,40 +43,10 @@ def test_validate_share_already_shared_raises():
     assert exc.value.message == ERROR_ALREADY_DECIDED
 
 
-def test_validate_share_hidden_raises():
-    with pytest.raises(TransitionValidationError):
-        validate_share(_w(state="hidden"), invoker_id=TARGET)
-
-
 def test_validate_share_non_target_raises():
     with pytest.raises(TransitionValidationError) as exc:
         validate_share(_w(state="pending"), invoker_id=9999)
     assert exc.value.message == ERROR_GUESS_NOT_TARGET
-
-
-def test_validate_hide_pending_ok():
-    validate_hide(_w(state="pending"), invoker_id=TARGET)
-
-
-def test_validate_hide_non_pending_raises():
-    with pytest.raises(TransitionValidationError):
-        validate_hide(_w(state="shared"), invoker_id=TARGET)
-
-
-def test_validate_expose_requires_solved():
-    with pytest.raises(TransitionValidationError) as exc:
-        validate_expose(_w(solved=False), invoker_id=TARGET)
-    assert exc.value.message == ERROR_EXPOSE_NEEDS_SOLVE
-
-
-def test_validate_expose_solved_target_ok():
-    validate_expose(_w(solved=True), invoker_id=TARGET)
-
-
-def test_validate_expose_non_target_raises():
-    with pytest.raises(TransitionValidationError) as exc:
-        validate_expose(_w(solved=True), invoker_id=9999)
-    assert exc.value.message == ERROR_EXPOSE_NOT_TARGET
 
 
 def test_validate_delete_target_ok():

@@ -8,5 +8,11 @@ export function mount(container) {
   mountGamePanel(container, {
     gameType: "ama", gameName: "Anonymous AMA", gameIcon: "🎙️", hasBank: false,
     intro: "Questions come from the room: members ask the guest anonymously while the AMA is running, so there's nothing to curate here in advance.",
+    optSchema: [
+      { key: "hot_seat_ping_role_id", label: "Hot-Seat Ping Role", type: "role",
+        hint: "Mentioned in the channel each time someone new takes the hot seat. If your server already had a role called AMA, it starts out pointing there — set it to (none) and it stays there. Leave it at (none) and only members who tapped Notify Me are pinged." },
+      { key: "questions_per_turn", label: "Questions per Turn", type: "number", default: 4, min: 1, max: 20,
+        hint: "How many questions the hot seat answers (or passes) before the seat rotates. A two- or three-person AMA usually wants more than the default." },
+    ],
   });
 }

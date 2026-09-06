@@ -15,14 +15,33 @@ of free-form text entries, then per-entry binary voting (✅ Same vs
   in the payload. Mirrors the modal's ``_add_entry`` closure.
 * :func:`tally_entry_votes` and :func:`build_result_entry` — collapse
   the two vote lists into the per-entry result dict the recap consumes.
+* :func:`roster_from_results` — the room the host's End Game pays: entry
+  authors plus every voter, the same two fields the 24h sweep reads.
 * :func:`compute_recap_summary` — picks the headline entries (most
   shared, most polarizing, biggest outlier) for the final recap, plus
   the de-duplicated voter set.
+* :func:`active_voters` / :func:`everyone_has_voted` — the vote-complete
+  auto-advance (2026-09-04, anon-tail-71): an entry's vote closes on the
+  **Seconds per Entry** timer (:data:`DEFAULT_ENTRY_SECONDS`; 0 = host-paced,
+  the timer itself is ``games/utils/round_pacing.RoundPacing``) or as soon
+  as everyone the round is waiting on has voted.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from bot_modules.games.utils.round_pacing import (  # noqa: F401  (re-exported)
+    active_voters,
+    everyone_has_voted,
+)
+
+# Seconds an entry stays open for votes when the dashboard dial is unset;
+# 0 on the dial means host-paced (Next only), as for WYR/NHIE/MLT.
+DEFAULT_ENTRY_SECONDS = 45
+
+# The one ephemeral line for a self-vote — shared with Hot Takes.
+SELF_VOTE_REFUSAL = "❌ You can't vote on your own entry!"
 
 # The two categories. One submit button carries each, so these are the
 # only values ``add_entry`` ever stores — no parsing stands between a
@@ -188,3 +207,34 @@ def get_round_entries(
     return (
         payload.get("rounds", {}).get(str(round_num), {}).get("entries", [])
     )
+
+
+def roster_from_results(results: list[dict[str, Any]]) -> list[int]:
+    """Everyone the game pays when the host ends it: entry authors plus
+    everyone who voted either way on an entry, de-duplicated and sorted.
+
+    The author of the most-shared entry may never have voted, so a voters-only
+    roster would drop their participation credit. This is the completion
+    site's roster; ``game_roster._fantasies`` (the sweep's and ``/games end``'s
+    view of the same payload) reads the same two fields, so every end path
+    pays the same room.
+    """
+    roster: set[int] = set()
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        if r.get("author") is not None:
+            roster.add(int(r["author"]))
+        roster.update(int(v) for v in r.get("voters") or [])
+    return sorted(roster)
+
+
+def round_in_progress(active_submit: Any, active_vote: Any, *, running: bool = False) -> bool:
+    """True while a round is running — the Start Round guard.
+
+    A live submit or vote view means a phase is open; ``running`` covers the
+    gaps between phases, when neither view is set but the round loop is still
+    awaiting. A second press used to start a concurrent round and overwrite
+    the main view's live submit view.
+    """
+    return running or active_submit is not None or active_vote is not None

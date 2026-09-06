@@ -1,19 +1,23 @@
-import os
 import logging
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 
-from bot_modules.games.utils.game_manager import channel_name, check_allowed_channel, check_game_enabled, get_active_game, finish_launch_response, end_game
+from bot_modules.core.utils import disable_all_items
+from bot_modules.games.constants import play_description
+from bot_modules.games.utils.game_manager import (
+    channel_name, finish_launch_response, end_game, sign_off_game_chore,
+)
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.command_groups import play
-from .data import seed_templates_from_file
+from .classic_logic import clamp_tier, tier_clamp_note
+from .data import SEED_PATH, get_channel_max_tier, seed_templates_from_file
 from .modes.quiplash import run_quiplash
 from .modes.classic import run_classic
+from .views import RecapView
 
 log = logging.getLogger(__name__)
-
-_SEED_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "templates_seed.json")
 
 class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     def __init__(self, bot):
@@ -25,11 +29,11 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         return self.bot.games_db
 
     async def cog_load(self):
-        await seed_templates_from_file(self.db, _SEED_PATH, author_id=0)
+        await seed_templates_from_file(self.db, SEED_PATH, author_id=0)
         log.info("LegitLibsCog loaded.")
 
     # ── /games play legitlibs ─────────────────────────────────────────────────────────────
-    @app_commands.command(name="legitlibs", description="Start a LegitLibs round!")
+    @app_commands.command(name="legitlibs", description=play_description("legitlibs"))
     @app_commands.describe(
         mode="Game mode: classic (default) or quiplash",
         tier="Heat tier 1–4 (1=Flirty, 2=Spicy, 3=Filthy, 4=Unhinged). Default: 2",
@@ -56,33 +60,26 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
     ):
         log.info("%s used /games play legitlibs in #%s", interaction.user.display_name, channel_name(interaction.channel))
 
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running here — any game, not only another
+        # LegitLibs round, which is all the private guard this replaced saw.
+        refusal = await refuse_launch(self.db, interaction, "legitlibs")
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
-        if not await check_game_enabled(self.db, "legitlibs", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "LegitLibs is currently disabled on this server.", ephemeral=True
-            )
-            return
-
-        existing = await get_active_game(self.db, interaction.channel_id)
-        if existing and existing["game_type"] == "legitlibs":
-            await interaction.response.send_message(
-                "A LegitLibs round is already in progress here. Cancel it first.", ephemeral=True
-            )
-            return
+        # The channel's tier cap, worked out here so the host hears about a
+        # clamp — the modes clamp again for the headless doors but only log.
+        max_tier = await get_channel_max_tier(self.db, interaction.channel_id or 0)
+        note = tier_clamp_note(tier, max_tier)
+        tier, _ = clamp_tier(tier, max_tier)
 
         await interaction.response.defer()
+        if note:
+            try:
+                await interaction.followup.send(note, ephemeral=True)
+            except discord.HTTPException:
+                pass
 
         game_id = await self.launch(
             channel=interaction.channel,
@@ -111,6 +108,56 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         # hotseat not implemented
         log.info("legitlibs launch: mode %r not available", mode)
         return None
+
+    async def offer_another(self, message: discord.Message, host_id: int, options: dict) -> None:
+        """Put **Another One** under a finished round's last message.
+
+        Called by both modes once ``end_game`` has run, so the button's launch
+        guard sees a free channel. *options* is the round's mode, tier and
+        tag — the next template is the pool's pick, never the same id.
+        """
+        async def _again(interaction: discord.Interaction, view: RecapView) -> None:
+            await self.another_one(interaction, view, options)
+
+        try:
+            await message.edit(view=RecapView(host_id, _again))
+        except discord.HTTPException:
+            pass
+
+    async def another_one(self, interaction: discord.Interaction, view: RecapView, options: dict) -> None:
+        """The recap button: same tier, mode and tag, next template from the pool."""
+        refusal = await refuse_launch(self.db, interaction, "legitlibs")
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
+            return
+        view.stop()
+        disable_all_items(view)
+        assert interaction.message is not None  # component interactions carry their message
+        try:
+            await interaction.message.edit(view=view)
+        except discord.HTTPException:
+            pass
+        await interaction.response.defer()
+        game_id = await self.launch(
+            channel=interaction.channel,
+            host_id=interaction.user.id,
+            host_name=interaction.user.display_name,
+            guild_id=interaction.guild_id or 0,
+            options=dict(options),
+        )
+        if not game_id:
+            try:
+                await interaction.followup.send(
+                    "Couldn't start another one — no published templates left for that "
+                    "tier/tag, or I'm missing permission to post here.",
+                    ephemeral=True,
+                )
+            except discord.HTTPException:
+                pass
+            return
+        # A relaunch skips finish_launch_response, so the chore sign-off
+        # rides here — only on a launch that produced a game.
+        await sign_off_game_chore(self.bot, interaction.guild_id, interaction.user.id)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Recover a LegitLibs round after a bot restart.

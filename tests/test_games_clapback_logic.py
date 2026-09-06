@@ -34,9 +34,15 @@ from bot_modules.games_clapback.logic import (
     AI_USER_PROMPT,
     MAX_PLAYERS,
     MIN_PLAYERS,
+    THREE_PLAYER_NOTE,
+    accept_answer,
     admit_pending_players,
     admit_player_now,
+    all_eligible_voted,
+    board_scores,
     calculate_bye_award,
+    submit_window_may_close,
+    withdraw_player,
     calculate_matchup_score,
     drain_pending_players,
     clamp_config_values,
@@ -605,6 +611,17 @@ def test_shuffled_replay_config_deterministic_with_pinned_rng():
 
 
 # ── build_lobby_embed ───────────────────────────────────────────────
+
+
+def test_build_lobby_embed_countdown_promises_an_auto_start():
+    # The countdown is not advertising: the sweep starts the game itself
+    # (clapback-8), and the field says so — and names the floor it waits on.
+    cfg = {"rounds": 5, "timer": 60, "vote_timer": 30}
+    embed = build_lobby_embed("Alice", cfg, [], _name_resolver, start_at=1_700_000_000)
+    field = next(f for f in embed.fields if f.name == "⏰ Starting")
+    value = str(field.value)
+    assert "<t:1700000000:R>" in value
+    assert "on its own" in value and "3 have joined" in value
 
 
 def test_build_lobby_embed_empty_players_shows_nobody():
@@ -1693,6 +1710,49 @@ def test_admit_player_now_recognises_a_second_press_while_queued():
     assert payload["pending_players"] == [3]
 
 
+def test_admit_player_now_recognises_a_second_press_after_a_parity_queue():
+    """Four players and no bye: a fifth would need one, so the first press
+    queues them for parity. A second press must say they are already queued,
+    not report a fresh "in from the next round" success."""
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4]}
+    assert admit_player_now(payload, 5, 10) == "queued-parity"
+
+    assert admit_player_now(payload, 5, 10) == "already-queued"
+
+    assert payload["pending_players"] == [5]
+    assert payload["players"] == [1, 2, 3, 4]
+
+
+def test_admit_player_now_clears_a_rejoiner_from_the_withdrawn_list():
+    """Leave, then Join again while answers are open: they are back on the
+    roster and their score must rank again, not sit struck through below the
+    board as "left mid-game" while they play."""
+    payload = {
+        "phase": "submitting", "players": [1, 2, 3, 4],
+        "scores": {"1": 90, "2": 40, "3": 10, "4": 5},
+    }
+    assert withdraw_player(payload, 1) is True
+
+    assert admit_player_now(payload, 1, 10) == "joined"
+
+    assert payload["left"] == []
+    standing, withdrawn = board_scores(payload)
+    assert standing[0] == ("1", 90)
+    assert withdrawn == []
+
+
+def test_admit_pending_players_clears_a_rejoiner_from_the_withdrawn_list():
+    """Same as above at the round boundary: a leaver who queued back in comes
+    off ``left`` when they are seated."""
+    left = ["1", "9"]
+
+    roster, admitted, _ = admit_pending_players([2, 3], [1], 10, left=left)
+
+    assert roster == [2, 3, 1]
+    assert admitted == [1]
+    assert left == ["9"]
+
+
 # ── every render site in the cog passes a resolver ───────────────────────────
 
 
@@ -1728,3 +1788,245 @@ def test_every_clapback_render_site_passes_a_resolver():
         and not any(kw.arg == "name_resolver" for kw in node.keywords)
     ]
     assert not missed, "render sites with no name_resolver: " + ", ".join(missed)
+
+
+# ── clapback-1 / D1: a matchup closes once every eligible player has voted ──
+#
+# Reverses the June decision (ab27201b) that ran every vote to the timer once
+# spectators could vote: they do so in 2–12% of matchups, so the electorate is
+# the roster unless a spectator vote actually arrives.
+
+
+def _roster(n):
+    return [str(i) for i in range(1, n + 1)]
+
+
+@pytest.mark.parametrize(
+    "players, pair, byes, voters, expected",
+    [
+        # 3 players, round-robin: the one player not in the pair decides it.
+        pytest.param(_roster(3), ("1", "2"), [], ["3"], True, id="3-third-voted"),
+        pytest.param(_roster(3), ("1", "2"), [], [], False, id="3-nobody-yet"),
+        # Nobody left to wait for (the third player withdrew, or a no-contact
+        # bye benched them): nothing to close on, so the full timer runs.
+        pytest.param(_roster(2), ("1", "2"), [], [], False, id="nobody-eligible"),
+        pytest.param(_roster(3), ("1", "2"), ["3"], [], False, id="nobody-eligible-bye"),
+        # 5 players with a pre-picked bye: two are waited for, the bye is not.
+        pytest.param(_roster(5), ("1", "2"), ["5"], ["3", "4"], True, id="5-bye-silent"),
+        pytest.param(_roster(5), ("1", "2"), ["5"], ["3", "4", "5"], True, id="5-bye-voted"),
+        pytest.param(_roster(5), ("1", "2"), ["5"], ["3"], False, id="5-one-short"),
+        # 9 players, one bye: six eligible.
+        pytest.param(_roster(9), ("1", "2"), ["9"], _roster(8)[2:], True, id="9-all-six"),
+        pytest.param(_roster(9), ("1", "2"), ["9"], _roster(7)[2:], False, id="9-five-of-six"),
+        # A spectator's vote reopens the electorate: full timer.
+        pytest.param(_roster(5), ("1", "2"), ["5"], ["3", "4", "77"], False, id="spectator-voted"),
+        # A contestant's own vote can't happen, but it would not count as eligible.
+        pytest.param(_roster(3), ("1", "2"), [], ["1"], False, id="contestant-only"),
+        # Ids compare as strings whatever type the caller holds.
+        pytest.param([1, 2, 3], (1, 2), [], {"3": 1}, True, id="int-ids"),
+    ],
+)
+def test_all_eligible_voted(players, pair, byes, voters, expected):
+    votes = voters if isinstance(voters, dict) else {v: "1" for v in voters}
+    assert all_eligible_voted(votes, players, pair, byes) is expected
+
+
+# ── clapback-2: the submit window closes on a full house or one short ────────
+
+
+@pytest.mark.parametrize(
+    "count, expected, idle, may_close",
+    [
+        pytest.param(4, 4, 0, True, id="full-house"),
+        pytest.param(3, 4, 19, False, id="one-short-still-fresh"),
+        pytest.param(3, 4, 20, True, id="one-short-idle"),
+        pytest.param(2, 4, 60, False, id="two-short-never"),
+        pytest.param(1, 2, 60, False, id="below-min-answers"),
+        pytest.param(2, 3, 20, True, id="two-of-three-idle"),
+        pytest.param(5, 4, 0, True, id="over-a-full-house"),
+    ],
+)
+def test_submit_window_may_close(count, expected, idle, may_close):
+    assert submit_window_may_close(count, expected, idle) is may_close
+
+
+# ── clapback-4: a modal sent after its window belongs to no round ────────────
+
+
+@pytest.mark.parametrize(
+    "payload, round_num, accepted",
+    [
+        pytest.param({"phase": "submitting", "current_round": 2}, 2, True, id="open"),
+        pytest.param({"phase": "voting", "current_round": 2}, 2, False, id="closed"),
+        pytest.param({"phase": "submitting", "current_round": 3}, 2, False, id="next-round"),
+        pytest.param({"phase": "submitting", "current_round": "2"}, 2, True, id="string-round"),
+        pytest.param({}, 1, False, id="no-phase"),
+    ],
+)
+def test_accept_answer(payload, round_num, accepted):
+    assert accept_answer(payload, round_num) is accepted
+
+
+# ── clapback-5: Join now keeps the writer count even ─────────────────────────
+
+
+def test_admit_player_now_queues_a_joiner_who_would_leave_an_odd_field():
+    """Four writers and no bye: a fifth would bench someone after they wrote."""
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4], "round_bye": None}
+
+    assert admit_player_now(payload, 5, 10) == "queued-parity"
+
+    assert payload["players"] == [1, 2, 3, 4]
+    assert payload["pending_players"] == [5]
+    assert "5" not in payload.get("scores", {})
+
+
+def test_admit_player_now_unbenches_the_bye_to_keep_the_field_even():
+    """Five on the roster with 5 pre-benched: the joiner and the bye both play."""
+    payload = {
+        "phase": "submitting", "players": [1, 2, 3, 4, 5], "round_bye": "5",
+        "scores": {str(p): 0 for p in range(1, 6)},
+    }
+
+    assert admit_player_now(payload, 6, 10) == "joined-unbenched"
+
+    assert payload["round_bye"] is None
+    assert payload["players"] == [1, 2, 3, 4, 5, 6]
+    assert payload["scores"]["6"] == 0
+    assert payload["clapbacks_checkpoint"]["6"] == 0
+    assert "pending_players" not in payload
+
+
+def test_admit_player_now_three_to_four_is_a_plain_join():
+    payload = {"phase": "submitting", "players": [1, 2, 3], "round_bye": None}
+
+    assert admit_player_now(payload, 4, 10) == "joined"
+
+    assert payload["players"] == [1, 2, 3, 4]
+
+
+def test_admit_player_now_keeps_an_isolated_bye_benched():
+    """The bye is on the no-contact list with everyone: un-benching them would
+    only see the gate bench them again after they wrote, so the joiner waits."""
+    forbidden = {(5, p) for p in (1, 2, 3, 4, 6)}
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4, 5], "round_bye": "5"}
+
+    assert admit_player_now(payload, 6, 10, forbidden_pairs=forbidden) == "queued-parity"
+
+    assert payload["round_bye"] == "5"
+    assert payload["players"] == [1, 2, 3, 4, 5]
+    assert payload["pending_players"] == [6]
+
+
+def test_admit_player_now_seats_a_joiner_who_evens_out_an_isolated_bye():
+    """Six on the roster, 6 benched by the gate, five writers: a sixth writer
+    makes the field even and the bye stays where the gate put them."""
+    forbidden = {(6, p) for p in (1, 2, 3, 4, 5, 7)}
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4, 5, 6], "round_bye": "6"}
+
+    assert admit_player_now(payload, 7, 10, forbidden_pairs=forbidden) == "joined"
+
+    assert payload["round_bye"] == "6"
+    assert payload["players"] == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_admit_player_now_unbenched_bye_must_still_be_pairable():
+    """5 is benched and blocked from 1 and 2 only: the roster of six still
+    pairs safely (5 can face 3, 4 or the joiner), so the un-bench goes ahead."""
+    forbidden = {(5, 1), (5, 2)}
+    payload = {"phase": "submitting", "players": [1, 2, 3, 4, 5], "round_bye": "5"}
+
+    assert admit_player_now(payload, 6, 10, forbidden_pairs=forbidden) == "joined-unbenched"
+
+    assert payload["round_bye"] is None
+
+
+# ── clapback-17: a leaver's score is withdrawn from the board ────────────────
+
+
+def test_withdraw_player_marks_the_score_and_drops_the_roster():
+    payload = {"players": [1, 2, 3], "scores": {"1": 90, "2": 40, "3": 10}}
+
+    assert withdraw_player(payload, 1) is True
+
+    assert payload["players"] == [2, 3]
+    assert payload["left"] == ["1"]
+    assert payload["scores"]["1"] == 90  # kept, marked — not erased
+
+
+def test_withdraw_player_ignores_someone_not_playing():
+    payload = {"players": [2, 3], "scores": {"2": 40}}
+
+    assert withdraw_player(payload, 9) is False
+
+    assert payload["players"] == [2, 3]
+    assert "left" not in payload
+
+
+def test_withdraw_player_pulls_a_queued_latecomer_out_of_the_queue():
+    """A latecomer still waiting for the round boundary who leaves is taken
+    out of the queue rather than told they aren't in the game and seated next
+    round anyway. They have no score, so nothing goes on ``left``."""
+    payload = {"players": [2, 3], "pending_players": [9], "scores": {"2": 40}}
+
+    assert withdraw_player(payload, 9) is True
+
+    assert payload["players"] == [2, 3]
+    assert payload["pending_players"] == []
+    assert "left" not in payload
+
+
+def test_board_scores_splits_standing_from_withdrawn():
+    payload = {"scores": {"1": 90, "2": 40, "3": 60}, "left": ["1"]}
+
+    standing, withdrawn = board_scores(payload)
+
+    assert standing == [("3", 60), ("2", 40)]
+    assert withdrawn == [("1", 90)]
+
+
+def test_build_recap_embed_crowns_the_highest_remaining_player():
+    """The leader left in round 4: the recap crowns whoever is still in and
+    says the leaver's score is withdrawn, rather than naming a winner nobody
+    is paid for."""
+    payload = {
+        "players": [2, 3], "left": ["1"],
+        "scores": {"1": 300, "2": 200, "3": 100}, "clapbacks": {},
+        "round_history": [],
+    }
+    embed = build_recap_embed(payload, {"anonymous": False}, _name_resolver)
+
+    assert embed.fields[0].name == "🏆 Winner: User2"
+    assert "**200** pts" in _unspaced(embed.fields[0].value)
+    board = _unspaced(embed.fields[1].value)
+    assert board.startswith("🥇 **User2** — 200 pts\n🥈 **User3** — 100 pts")
+    assert "User1" in board and "withdrawn" in board
+    assert "🥇 **User1**" not in board
+
+
+def test_build_scoreboard_embed_marks_a_leaver_below_the_standings():
+    payload = {"scores": {"1": 300, "2": 200, "3": 100}, "left": ["1"]}
+    embed = build_scoreboard_embed(payload, 2, 5, None, name_resolver=_name_resolver)
+
+    board = _unspaced(embed.fields[0].value)
+    lines = board.split("\n")
+    assert lines[0] == "🥇 **User2** — **200** pts"
+    assert lines[1] == "🥈 **User3** — **100** pts"
+    assert "User1" in lines[2] and "left" in lines[2]
+
+
+# ── clapback-7: the lobby is honest about a three-player game ────────────────
+
+
+@pytest.mark.parametrize(
+    "players, shown",
+    [
+        pytest.param([1, 2, 3], True, id="three"),
+        pytest.param([1, 2, 3, 4], False, id="four"),
+        pytest.param([1, 2], False, id="two"),
+    ],
+)
+def test_build_lobby_embed_notes_the_three_player_floor(players, shown):
+    embed = build_lobby_embed("Host", {"rounds": 3}, players, _name_resolver)
+    text = " ".join(_unspaced(f.value) for f in embed.fields)
+    assert (THREE_PLAYER_NOTE in text) is shown

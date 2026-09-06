@@ -1,6 +1,9 @@
 import asyncio
+import functools
 import logging
-from typing import TYPE_CHECKING
+import time
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot  # noqa: F401
@@ -11,19 +14,19 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
     EVENT_TAKE_SUBMITTED,
 )
 from bot_modules.games.utils.game_manager import (
+    ConfirmCloseView,
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
+    update_game_state,
     get_game_payload,
     modify_payload,
     end_game,
@@ -31,20 +34,31 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
+from bot_modules.games.utils.round_pacing import (
+    MAX_ROUND_SECONDS,
+    RoundPacing,
+    launch_pacing,
+)
 from bot_modules.games_hottakes.embeds import (
     build_lobby_embed,
     build_recap_embed,
     build_vote_embed,
 )
 from bot_modules.games_hottakes.logic import (
+    DEFAULT_TAKE_SECONDS,
+    SELF_VOTE_REFUSAL,
     VOTE_LABELS,
     VOTE_VALUES,
+    active_voters,
     add_take,
     build_voting_start_message,
+    everyone_has_voted,
     shuffle_takes,
     tally_votes,
+    voting_refusal,
 )
 
 log = logging.getLogger(__name__)
@@ -133,12 +147,19 @@ class HotTakesSubmitView(discord.ui.View):
             return
         payload = await get_game_payload(self.db, self.game_id)
         takes = payload.get("takes", [])
-        if not takes:
-            await interaction.response.send_message("❌ No hot takes submitted yet!", ephemeral=True)
+        # Two takes minimum (anon-tail-72): with one, everyone knows whose it is.
+        refusal = voting_refusal(takes)
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         payload["takes"] = shuffle_takes(takes)
         await update_game_payload(self.db, self.game_id, payload)
+        # The phase is what a restart branches on: 'joining' re-registers this
+        # lobby's buttons, anything else resumes the vote. Until 2026-09-04
+        # nothing wrote it, so recovery guessed from the take count and
+        # force-started voting on any lobby that held a take (anon-tail-66).
+        await update_game_state(self.db, self.game_id, "playing")
 
         self.stop()
         disable_all_items(self)
@@ -177,6 +198,40 @@ class HotTakesSubmitView(discord.ui.View):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         await interaction.response.send_message(HOW_TO_PLAY["hottakes"], ephemeral=True)
 
+    @discord.ui.button(label="Cancel Game", style=discord.ButtonStyle.secondary, custom_id="ht_cancel")
+    async def cancel_game(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Scrap the lobby before voting starts — host or mod, behind the
+        usual confirm popup. Before this the only ways out of a lobby that
+        never got going were ``/games end`` or the 24h sweep, and a lobby
+        left over a restart sat with dead buttons (anon-tail-66).
+        """
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        if not is_host_or_mod(interaction, self.host_id):
+            await interaction.response.send_message("❌ Only the host or a mod can cancel the game.", ephemeral=True)
+            return
+        anchor = self._message or interaction.message
+
+        async def _confirmed(_confirm: discord.Interaction) -> None:
+            await self._cancel(anchor)
+
+        await interaction.response.send_message(
+            "⚠️ Are you sure you want to end this game?", view=ConfirmCloseView(_confirmed), ephemeral=True,
+        )
+
+    async def _cancel(self, anchor: discord.Message | None) -> None:
+        """Disable the lobby and archive the row as ``cancelled``. A lobby has
+        no roster yet (nobody has voted), so a bare ``end_game`` pays nobody
+        and records the takes that were collected."""
+        self.stop()
+        disable_all_items(self)
+        if anchor is not None:
+            try:
+                await anchor.edit(content="🛑 Hot Takes was cancelled before voting started.", view=self)
+            except discord.HTTPException:
+                pass
+        await end_game(self.db, self.game_id, reason="cancelled")
+        self.bot.active_views.pop(self.game_id, None)
+
 
 class HotTakeVoteView(discord.ui.View):
     def __init__(
@@ -189,8 +244,11 @@ class HotTakeVoteView(discord.ui.View):
         db,
         bot,
         host_name: str,
-        advance_callback,
+        advance_callback: Callable[[discord.Message], Awaitable[None]],
         accent: "discord.Color | None" = None,
+        take_author_id: int | None = None,
+        pacing: RoundPacing | None = None,
+        expected_voters: "set[int] | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -203,10 +261,19 @@ class HotTakeVoteView(discord.ui.View):
         self.host_name = host_name
         self.advance_callback = advance_callback
         self.accent = accent
+        # The take's author may not rate their own take (anon-tail-74): in a
+        # two-voter room one 🔥 self-vote decided the winner bonus.
+        self.take_author_id = take_author_id
+        # Per-take pacing (anon-tail-71): the timer that closes the vote, the
+        # event Next/force-end set, and the room the take is waiting on — the
+        # vote closes itself the moment every one of them has voted.
+        self.pacing = pacing or RoundPacing()
+        self.expected_voters: set[int] = set(expected_voters or ())
         self.votes: dict[int, int] = {}  # user_id -> 0-4 index
         self._updater = LiveBarUpdater()
         self._closed = False
-        self._advanced_event: asyncio.Event | None = None
+        # force_end_active_game pokes this alias to wake the vote loop.
+        self._advanced_event = self.pacing.advanced
 
     def _build_embed(self, closed: bool = False) -> discord.Embed:
         return build_vote_embed(
@@ -216,6 +283,7 @@ class HotTakeVoteView(discord.ui.View):
             votes_by_user=self.votes,
             closed=closed,
             color=self.accent,
+            advance_at=self.pacing.advance_at(),
         )
 
     @discord.ui.button(label="🧊", style=discord.ButtonStyle.secondary, custom_id="ht_v0", row=0)
@@ -243,13 +311,23 @@ class HotTakeVoteView(discord.ui.View):
         if self._closed:
             await interaction.response.send_message("This vote is closed.", ephemeral=True)
             return
+        if self.take_author_id is not None and interaction.user.id == self.take_author_id:
+            await interaction.response.send_message(SELF_VOTE_REFUSAL, ephemeral=True)
+            return
         prev = self.votes.get(interaction.user.id)
         self.votes[interaction.user.id] = idx
         label = VOTE_LABELS[idx]
         changed = prev is not None and prev != idx
         msg = f"✅ Voted **{label}**{' (changed)' if changed else ''}"
         await interaction.response.send_message(msg, ephemeral=True, delete_after=3)
-        await self._updater.schedule_update(interaction.message, self._build_embed)
+        message = interaction.message
+        assert message is not None  # component interactions always carry their message
+        # Everyone the take was waiting on has spoken: close it now rather
+        # than sit out the rest of the timer.
+        if everyone_has_voted(self.expected_voters, self.votes):
+            await self.advance_callback(message)
+            return
+        await self._updater.schedule_update(message, self._build_embed)
 
     @discord.ui.button(label="📝 Submit Take", style=discord.ButtonStyle.secondary, custom_id="ht_v_submit", row=1)
     async def submit_take(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -262,11 +340,14 @@ class HotTakeVoteView(discord.ui.View):
 
     @discord.ui.button(label="⏭️ Next Take", style=discord.ButtonStyle.secondary, custom_id="ht_next", row=1)
     async def next_take(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Skip ahead — the timer (or a complete vote) closes the take on
+        its own; Next is the host's early close, never the only way on."""
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host or a mod can advance.", ephemeral=True)
             return
         await interaction.response.defer()
+        assert interaction.message is not None  # component interactions always carry their message
         await self.advance_callback(interaction.message)
 
     async def _post_recap(self, channel, payload: dict):
@@ -289,20 +370,21 @@ class HotTakesCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="hottakes", description="Start a Hot Takes / Unpopular Opinions game!")
-    async def hottakes(self, interaction: discord.Interaction):
+    @app_commands.command(name="hottakes", description=play_description("hottakes"))
+    @app_commands.describe(
+        start_in="Show a lobby countdown — voting starts in this many minutes (host still clicks Start Voting)",
+        take_seconds="Seconds each take stays open for votes (0 = you press Next; default from the dashboard)",
+    )
+    async def hottakes(
+        self,
+        interaction: discord.Interaction,
+        start_in: app_commands.Range[int, 1, 60] | None = None,
+        take_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
+    ):
         log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "hottakes", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Hot Takes is currently disabled on this server.",
-                ephemeral=True,
-            )
+        refusal = await refuse_launch(self.db, interaction, "hottakes")
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -311,7 +393,7 @@ class HotTakesCog(commands.Cog):
             host_id=interaction.user.id,
             host_name=interaction.user.display_name,
             guild_id=interaction.guild_id or 0,
-            options={},
+            options={"start_in": start_in, "round_seconds": take_seconds},
         )
         await finish_launch_response(interaction, game_id)
 
@@ -324,18 +406,36 @@ class HotTakesCog(commands.Cog):
         guild_id: int,
         options: dict,
     ) -> str | None:
-        """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
+        """Interaction-free launch (slash command + scheduler). Returns game_id, or None.
+
+        The per-take timer is the launch's ``round_seconds`` (a slash
+        ``take_seconds`` or schedule option, even 0), else the dashboard's
+        **Seconds per Take** dial, else :data:`DEFAULT_TAKE_SECONDS`; ``0`` is
+        host-paced. Hot Takes is a lobby game (``LOBBY_GAME_TYPES``): a
+        ``start_in`` stamps ``start_epoch`` for the countdown and the host
+        nudge, and the idle-lobby dials and Game Night ping apply.
+        """
+        pacing = await launch_pacing(
+            self.db, "hottakes", guild_id, options,
+            default_round_seconds=DEFAULT_TAKE_SECONDS,
+        )
+        start_epoch = pacing.start_epoch
+        payload: dict = pacing.stamp({
+            "takes": [], "results": [], "participants": [],
+            "round_seconds": pacing.round_seconds,
+        })
         game_id = await create_game(
             self.db,
             channel.id,
             host_id,
             "hottakes",
             state="joining",
-            payload={"takes": [], "results": []},
+            payload=payload,
+            guild_id=guild_id,
         )
 
         accent = await safe_resolve_accent(self.bot, getattr(channel, "guild", None), log_label="hottakes")
-        embed = build_lobby_embed(host_name, color=accent)
+        embed = build_lobby_embed(host_name, color=accent, start_at=start_epoch)
 
         log.info("Game %s (hottakes) created by %s in #%s", game_id, host_name, getattr(channel, "name", channel.id))
         view = HotTakesSubmitView(game_id, host_id, self.db, self.bot, self)
@@ -364,12 +464,12 @@ class HotTakesCog(commands.Cog):
     ):
         # On resume after a restart, seed from persisted results so already-voted
         # takes are skipped; the take whose round was interrupted is re-voted.
+        results: list[dict] = []
         if resume:
             payload = await get_game_payload(self.db, game_id)
             results = list(payload.get("results", []))
             processed = len(results)
         else:
-            results = []
             processed = 0
 
         # Resolve the guild accent once for the whole game — never per vote /
@@ -391,10 +491,21 @@ class HotTakesCog(commands.Cog):
             take_text = take_data["text"]
             take_num = processed
             total_takes = len(all_takes)
+            take_author = take_data.get("user_id")
 
-            advanced = asyncio.Event()
+            # Per-take pacing: the dial's timer, and the room the take waits
+            # on — every submitter plus everyone who has voted so far, minus
+            # the author, who cannot rate their own take.
+            take_seconds = int(payload.get("round_seconds", 0) or 0)
+            pacing = RoundPacing(round_seconds=take_seconds, opened_at=time.time())
+            expected = active_voters(all_takes, results, exclude=take_author)
 
-            async def advance(message: discord.Message, _take=take_text, _num=take_num, _taker_id=take_data["user_id"]) -> None:
+            async def advance(
+                message: discord.Message,
+                _take: str = take_text,
+                _num: int = take_num,
+                _taker_id: Any = take_author,
+            ) -> None:
                 assert view is not None
                 if view._closed:
                     return
@@ -424,7 +535,7 @@ class HotTakesCog(commands.Cog):
                     await message.edit(embed=final_embed, view=view)
                 except discord.HTTPException:
                     pass
-                advanced.set()
+                view.pacing.advanced.set()
 
             view = HotTakeVoteView(
                 game_id=game_id,
@@ -437,15 +548,21 @@ class HotTakesCog(commands.Cog):
                 host_name=host_name,
                 advance_callback=advance,
                 accent=accent,
+                take_author_id=int(take_author) if take_author is not None else None,
+                pacing=pacing,
+                expected_voters=expected,
             )
-            view._advanced_event = advanced
             self.bot.active_views[game_id] = view
 
             embed = view._build_embed()
             msg = await channel.send(embed=embed, view=view)
             await update_game_message(self.db, game_id, msg.id)
+            # The timer closes the take unless Next, a complete vote, or a
+            # force-end gets there first (round_pacing's wait_for pattern).
+            closer: Callable[[], Awaitable[None]] = functools.partial(advance, msg)
+            pacing.start_timer(closer)
 
-            await advanced.wait()
+            await pacing.advanced.wait()
             # If the game was closed mid-round, stop the loop
             if view._closed and game_id not in self.bot.active_views:
                 break
@@ -478,18 +595,40 @@ class HotTakesCog(commands.Cog):
             del self.bot.active_views[game_id]
 
     async def recover_game(self, row, payload, channel, message) -> bool:
-        """Re-drive the voting loop after a restart.
+        """Bring a game back after a restart, by phase.
 
-        Completed takes live in payload["results"]; the take being voted on at
-        crash time can't be reconstructed (live votes aren't persisted), so we
-        retire the stale message and re-vote that take. The re-driven loop seeds
-        results from the payload and continues with the remaining takes.
+        A lobby (row state ``joining``, no results yet) gets its submit view
+        re-registered on the anchor message, the way WYR and Story do — the
+        host still presses Start Voting. Until 2026-09-04 the phase was never
+        recorded and recovery keyed on the take count alone: an empty lobby
+        was skipped (dead buttons until the sweep) and a lobby holding any
+        take was re-driven straight into voting (platform-29, anon-tail-66).
+        A row with results but still marked ``joining`` predates the phase
+        write and is treated as voting underway — results are only written
+        during a vote.
+
+        Voting underway re-drives the loop: completed takes live in
+        payload["results"]; the take being voted on at crash time can't be
+        reconstructed (live votes aren't persisted), so we retire the stale
+        message and re-vote that take. The re-driven loop seeds results from
+        the payload and continues with the remaining takes.
         """
-        takes = payload.get("takes", [])
-        if not takes or len(payload.get("results", [])) >= len(takes):
-            return False  # nothing left to resume; cleanup loop will archive it
         game_id = row["game_id"]
         host_id = int(row["host_id"])
+        takes = payload.get("takes", [])
+        results = payload.get("results", [])
+        if row["state"] == "joining" and not results:
+            view = HotTakesSubmitView(game_id, host_id, self.db, self.bot, self)
+            view._message = message
+            self.bot.active_views[game_id] = view
+            self.bot.add_view(view, message_id=message.id)
+            log.info(
+                "Recovered hottakes game %s (lobby, %d takes) in #%s",
+                game_id, len(takes), getattr(channel, "name", channel.id),
+            )
+            return True
+        if not takes or len(results) >= len(takes):
+            return False  # nothing left to resume; cleanup loop will archive it
         guild = getattr(channel, "guild", None)
         host_name = resolve_name(guild, host_id) if guild else "Host"
         await start_redrive(

@@ -136,6 +136,25 @@ def configure(db_path, channel_id="55501"):
         set_config_value(conn, svc.CONFIG_CHANNEL_KEY, channel_id, GUILD_ID)
 
 
+def _archive(db_path, game_id, *, channel_id):
+    """The game ended: it is in the history archive and not in the live table."""
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_game_history (game_id, game_type, channel_id, host_id, started_at)"
+            " VALUES (?, 'mfk', ?, 1, datetime('now'))",
+            (game_id, channel_id),
+        )
+
+
+def _live(db_path, game_id, *, channel_id):
+    with open_db(db_path) as conn:
+        conn.execute(
+            "INSERT INTO games_active_games (game_id, channel_id, game_type, host_id, message_id)"
+            " VALUES (?, ?, 'mfk', 1, 5)",
+            (game_id, channel_id),
+        )
+
+
 async def echo(bot, guild, *, ref="r1", key="mfk", now=NOW):
     return await svc.echo_event(
         bot, guild=guild, source=SOURCE_PARTY_GAME, echo_key=key, ref=ref,
@@ -191,6 +210,37 @@ class TestEchoEvent:
         # Past the global floor, still inside mfk's hour.
         assert await echo(bot, guild, ref="b", key="mfk", now=NOW + 1200) is False
         assert await echo(bot, guild, ref="c", key="mfk", now=NOW + 3700) is True
+
+    async def test_a_finished_game_of_the_same_type_lifts_its_hour(self, bot, guild, sync_db_path):
+        """discovery-10: back-to-back rounds of one game in one channel.
+
+        The echoed game has left games_active_games (it is in the history
+        archive), so the room is genuinely open again and the second round is
+        news, not a repeat. The ten-minute floor still applies.
+        """
+        configure(sync_db_path)
+        assert await echo(bot, guild, ref="a", key="mfk") is True
+        _archive(sync_db_path, "a", channel_id=777)
+        assert await echo(bot, guild, ref="b", key="mfk", now=NOW + 1200) is True
+        assert bot.sent_channel.send.await_count == 2
+
+    async def test_a_still_open_game_of_the_same_type_keeps_its_hour(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        _live(sync_db_path, "a", channel_id=777)
+        assert await echo(bot, guild, ref="a", key="mfk") is True
+        assert await echo(bot, guild, ref="b", key="mfk", now=NOW + 1200) is False
+
+    async def test_a_finished_game_in_another_room_does_not_lift_it(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        assert await echo(bot, guild, ref="a", key="mfk") is True
+        _archive(sync_db_path, "a", channel_id=999)
+        assert await echo(bot, guild, ref="b", key="mfk", now=NOW + 1200) is False
+
+    async def test_the_floor_holds_even_after_the_previous_game_ended(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        assert await echo(bot, guild, ref="a", key="mfk") is True
+        _archive(sync_db_path, "a", channel_id=777)
+        assert await echo(bot, guild, ref="b", key="mfk", now=NOW + 60) is False
 
     async def test_a_suppressed_game_stays_suppressed(self, bot, guild, sync_db_path):
         """Skip means skip — not 'announce it later when it's stale'.

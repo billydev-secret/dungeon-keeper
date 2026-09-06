@@ -63,8 +63,17 @@ def _mfk(p: dict) -> tuple[list[int], int]:
 
 
 def _story(p: dict) -> tuple[list[int], int]:
-    """games_story_cog:490 — the writer list."""
-    return _ints(p.get("players")), 0
+    """games_story_cog._reveal_story — ``roster_for_payout``: the writer list
+    minus anyone in ``left`` who never authored a sentence. The turn loop
+    persists each Leave press as ``payload["left"]`` so this path pays the
+    same room the reveal does; before that a never-wrote leaver was paid by
+    the sweep and ``/games end`` (S3).
+    """
+    from bot_modules.games_story.logic import roster_for_payout  # noqa: PLC0415
+
+    return roster_for_payout(
+        _ints(p.get("players")), p.get("sentences") or [], _ints(p.get("left")),
+    ), 0
 
 
 def _legitlibs(p: dict) -> tuple[list[int], int]:
@@ -78,15 +87,20 @@ def _rushmore(p: dict) -> tuple[list[int], int]:
 
 
 def _ttl(p: dict) -> tuple[list[int], int]:
-    """games_ttl_cog:596 — subjects whose rounds were revealed.
+    """games_ttl_cog — every revealed subject plus every voter seen.
 
-    Mirrors ``played_ids_from_payload``: the explicit ``played`` list, falling
-    back to ``scores`` keys for payloads written before that list existed.
+    Mirrors ``games_ttl.logic.roster_ids``: the explicit ``played`` list
+    (falling back to ``scores`` keys for payloads written before that list
+    existed) is the round count; the ``scores`` keys — one entry per voter
+    since 2026-09-04, right or wrong (vote-games-57) — widen it to the paid
+    roster, so a member who only ever guessed is paid on the sweep and
+    ``/games end`` too.
     """
     played = p.get("played")
+    scores = list(p.get("scores") or {})
     if played is None:
-        played = list(p.get("scores") or {})
-    return _ints(played), len(_ints(played))
+        played = scores
+    return _ints(list(played) + scores), len(_ints(played))
 
 
 def _nhie(p: dict) -> tuple[list[int], int]:
@@ -146,8 +160,10 @@ def _fantasies(p: dict) -> tuple[list[int], int]:
             continue
         if r.get("author") is not None:
             roster.append(r["author"])
-        roster.extend(r.get("same_votes") or [])
-        roster.extend(r.get("nope_votes") or [])
+        # ``voters`` is the one list ``games_fantasies.logic.build_result_entry``
+        # stores (same + nope, already concatenated); the per-side lists never
+        # reach the payload.
+        roster.extend(r.get("voters") or [])
     return _ints(roster), len(results)
 
 
@@ -191,6 +207,30 @@ def _price(p: dict) -> tuple[list[int], int]:
     return _ints(roster), len(rounds)
 
 
+def _ffa(p: dict) -> tuple[list[int], int]:
+    """games_ffa_cog — everyone who replied anonymously to any prompt.
+
+    Each posted prompt's ``prompts`` entry records its ``repliers`` (since
+    2026-09-04, anon-tail-70); before that FFA tracked reply counts only and
+    sat in ``NO_ROSTER_TYPES``, so neither the host's close nor the sweep
+    could pay a soul. A banner card has no ``prompts`` and yields nobody.
+    """
+    prompts = p.get("prompts") or []
+    roster: list[Any] = []
+    for entry in prompts:
+        if isinstance(entry, dict):
+            roster.extend(entry.get("repliers") or [])
+    return _ints(roster), len(prompts)
+
+
+def _recorded_players(p: dict) -> tuple[list[int], int]:
+    """The self-stored games — Risky Rolls and the duel / group family — write
+    their own history row (``game_history.history_insert``) with the full
+    roster under ``players`` and one round; there is no active row to pay
+    from, so this extractor only ever feeds the unique-players count."""
+    return _ints(p.get("players")), 1
+
+
 _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
     "traditional": _traditional,
     "clapback": _clapback,
@@ -207,12 +247,33 @@ _EXTRACTORS: dict[str, Callable[[dict], tuple[list[int], int]]] = {
     "wyr": _wyr,
     "mlt": _mlt,
     "price": _price,
+    "ffa": _ffa,
+    "risky_roll": _recorded_players,
+    "pressure": _recorded_players,
+    "quickdraw": _recorded_players,
+    "hot_potato": _recorded_players,
+    "hot_potato_group": _recorded_players,
+    "chicken": _recorded_players,
+    "musical_chairs": _recorded_players,
+    # Settled hands are self-recorded by mahjong_service with the human
+    # seats under ``players`` (mahjong-153); the row feeds Play Statistics.
+    "mahjong": _recorded_players,
 }
 
 # Types with no joined roster, listed so their absence above reads as a decision
-# rather than an oversight: ffa posts a prompt card (banner mode ends at launch),
-# photo is post-based and paid by the economy's own photo_post trigger.
-NO_ROSTER_TYPES = frozenset({"ffa", "photo"})
+# rather than an oversight: photo is post-based and paid by the economy's own
+# photo_post trigger. ffa left this set on 2026-09-04 (anon-tail-70): its
+# embed mode now records who replied, so a game the host closes — or the
+# sweep archives — pays its repliers; the banner card, with no prompts entry,
+# simply yields an empty roster.
+NO_ROSTER_TYPES = frozenset({"photo"})
+
+# Types whose roster is paid but must never be *named*: FFA replies are
+# anonymous, and the game-night session (``games_session_tracker``) renders
+# its players by name in ``/recap``. ``end_game`` and ``touch_session`` merge
+# the game into the session without its roster for these, so the launch-time
+# host entry is all the recap ever lists (F2).
+ANON_ROSTER_TYPES = frozenset({"ffa"})
 
 
 def roster_from_payload(game_type: str, payload: dict | None) -> tuple[list[int], int]:

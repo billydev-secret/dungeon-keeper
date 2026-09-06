@@ -34,7 +34,10 @@ KEPT = [
     ("quickdraw_config", "draw_window"),
     ("hp_group_config", "min_fuse"),
     ("hp_group_config", "max_players"),
-    ("chicken_config", "climb_duration"),
+    # climb_duration survived 194 but was replaced by min_climb/max_climb in
+    # 208 (the crash point became a hidden range), so a still-live column
+    # stands in for it here.
+    ("chicken_config", "min_players"),
     ("mc_config", "scramble_window"),
     ("confession_config", "max_chars"),
 ]

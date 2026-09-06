@@ -192,6 +192,15 @@ from bot_modules.services.voice_transcription_service import (
     set_config as _vt_set_config,
 )
 from bot_modules.services.ollama_client import is_available as _ollama_is_available
+# The two Risky Rolls payoff dials (docs/risky_roll_spec.md, "Chasing the
+# payoff"): keys and bound come from the module that reads them, so the
+# route cannot drift from the chaser.
+from bot_modules.services.risky_roll.logic import (
+    PAYOFF_CHASE_HOURS_KEY as _RISKY_CHASE_KEY,
+    PAYOFF_FALLBACK_HOURS_KEY as _RISKY_FALLBACK_KEY,
+    PAYOFF_HOURS_MAX as _RISKY_HOURS_MAX,
+    normalize_payoff_hours as _risky_hours,
+)
 
 WORD_CLOUD_PRESET_KEYS = {p.key for p in WORD_CLOUD_PRESETS}
 WORD_CLOUD_DEFAULT_PRESET = WORD_CLOUD_PRESETS[0].key
@@ -560,6 +569,7 @@ def _whisper_section(conn, guild_id: int) -> dict:
         "cooldown_seconds": wc.cooldown_seconds,
         "hourly_cap_per_target": wc.hourly_cap_per_target,
         "guesses_per_whisper": wc.guesses_per_whisper,
+        "sender_feedback": wc.sender_feedback,
     }
 
 
@@ -568,10 +578,15 @@ def _risky_section(conn, guild_id: int) -> dict:
     min_secs = get_config_value(conn, _RISKY_MIN_GAME_KEY, "0", guild_id=guild_id)
     # Default "10" mirrors risky_roll.store.MAX_GAMES_PER_CHANNEL.
     max_games = get_config_value(conn, _RISKY_MAX_GAMES_KEY, "10", guild_id=guild_id)
+    # Both payoff dials ship at 0 (off); a guild that never set them chases nothing.
+    chase = get_config_value(conn, _RISKY_CHASE_KEY, "0", guild_id=guild_id)
+    fallback = get_config_value(conn, _RISKY_FALLBACK_KEY, "0", guild_id=guild_id)
     return {
         "ping_role_id": ping_role,
         "min_game_seconds": int(min_secs),
         "max_games_per_channel": int(max_games),
+        "chase_hours": _risky_hours(chase),
+        "fallback_hours": _risky_hours(fallback),
     }
 
 
@@ -589,6 +604,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "min_bet": s.min_bet,
         "max_bet": s.max_bet,
         "daily_wager_cap": s.daily_wager_cap,
+        "daily_comp": s.daily_comp,
         "coinflip_enabled": s.coinflip_enabled,
         "slots_enabled": s.slots_enabled,
         "blackjack_enabled": s.blackjack_enabled,
@@ -617,6 +633,7 @@ def _casino_section(conn, guild_id: int) -> dict:
         "jackpot_cut_pct": s.jackpot_cut_pct,
         "jackpot_seed": s.jackpot_seed,
         "broadcast_min_payout": s.broadcast_min_payout,
+        "broadcast_min_mult": s.broadcast_min_mult,
         "broadcast_ping_enabled": s.broadcast_ping_enabled,
     }
 
@@ -712,7 +729,10 @@ def _inactive_section(conn, guild_id: int, guild) -> dict:
 # them — every panel below surfaces them, closing that gap.
 
 _DUEL_SHARED_DEFAULTS: dict = {
-    "cooldown_hours": 48,
+    # 0 = play again straight away. Enforced on all six games since 2026-09-04
+    # (nickname games only); 48 was what the group games imposed and what the
+    # duels ignored. Kept in step with duels/db.py _CONFIG_DEFAULTS.
+    "cooldown_hours": 0,
     "sentence_hours": 24,
     "channel_allowlist": "[]",
     # Extra banned words on top of the bot's built-in nickname denylist. The
@@ -740,8 +760,14 @@ _DUEL_GAMES: dict = {
     },
     "hot_potato": {
         "table": "hot_potato_config",
-        "defaults": {"min_timer": 10.0, "max_timer": 45.0},
-        "fields": {"min_timer": (5.0, None), "max_timer": (10.0, None)},
+        # min_hold: the group cog's anti-ping-pong wait, adopted by the duel
+        # (migration 208) so a pass is a decision rather than a click race.
+        "defaults": {"min_timer": 10.0, "max_timer": 45.0, "min_hold": 2.0},
+        "fields": {
+            "min_timer": (5.0, None),
+            "max_timer": (10.0, None),
+            "min_hold": (0.0, None),
+        },
     },
     "hot_potato_group": {
         "table": "hp_group_config",
@@ -759,9 +785,13 @@ _DUEL_GAMES: dict = {
     },
     "chicken": {
         "table": "chicken_config",
-        "defaults": {"climb_duration": 25.0, "min_players": 2, "max_players": 8},
+        # The crash point is rolled per game in [min_climb, max_climb] and
+        # hidden; the meter is drawn over max_climb. Replaced the fixed,
+        # public climb_duration in migration 208.
+        "defaults": {"min_climb": 10.0, "max_climb": 25.0, "min_players": 2, "max_players": 8},
         "fields": {
-            "climb_duration": (5.0, None),
+            "min_climb": (5.0, None),
+            "max_climb": (5.0, None),
             "min_players": (2, None),
             "max_players": (2, None),
         },
@@ -860,6 +890,83 @@ def _duel_game_updates(body, game_key: str) -> dict:
     return out
 
 
+# Dial pairs that only mean anything in one order. Each entry is
+# (low field, high field, strict?, message), and the labels are the panel's own
+# so the refusal names what the admin is looking at. The panels check these in
+# the browser too, but a direct PUT — or a tab left open while another admin
+# saved — went straight past that and stored a game nobody can play, so the
+# rules live here as well and the browser is only the fast feedback.
+_PLAYER_COUNT_RULE = (
+    "min_players", "max_players", False,
+    "Fewest Players to Start ({low}) cannot be more than Most Players Per "
+    "Lobby ({high}) — a lobby that full would never be allowed to start.",
+)
+
+_DUEL_DIAL_RULES: dict[str, list[tuple]] = {
+    # A holder who may not pass until after the shortest fuse has burned is
+    # never allowed to pass at all: the bomb is a coin toss on whoever caught it.
+    "hot_potato": [
+        (
+            "min_hold", "min_timer", True,
+            "Shortest Hold ({low}s) has to be shorter than Shortest Fuse "
+            "({high}s), or nobody is ever allowed to pass the potato.",
+        ),
+    ],
+    "hot_potato_group": [
+        (
+            "min_hold", "min_fuse", True,
+            "Must Hold For ({low}s) has to be shorter than Shortest Fuse "
+            "({high}s), or nobody is ever allowed to pass the bomb.",
+        ),
+        _PLAYER_COUNT_RULE,
+    ],
+    "chicken": [
+        # New on 2026-09: migration 208 split the single climb duration into a
+        # range, so an inverted pair is a state this branch made reachable.
+        (
+            "min_climb", "max_climb", False,
+            "Earliest Crash ({low}s) cannot be later than Latest Crash "
+            "({high}s) — there would be no moment left for the plane to fall.",
+        ),
+        _PLAYER_COUNT_RULE,
+    ],
+    "musical_chairs": [_PLAYER_COUNT_RULE],
+}
+
+# The fuse ranges: same shape, same reason. The browser has always checked
+# these; the route checks them too so a direct PUT, or a tab left open while
+# another admin saved, cannot store the pair the panel refuses.
+_DUEL_DIAL_RULES["hot_potato"].append(
+    (
+        "min_timer", "max_timer", False,
+        "Shortest Fuse ({low}s) cannot be longer than Longest Fuse ({high}s).",
+    )
+)
+_DUEL_DIAL_RULES["hot_potato_group"].append(
+    (
+        "min_fuse", "max_fuse", False,
+        "Shortest Fuse ({low}s) cannot be longer than Longest Fuse ({high}s).",
+    )
+)
+
+
+def _duel_dial_conflict(game_key: str, values: dict) -> str | None:
+    """The first broken ordering rule for this game, as a message, or None."""
+    for low_field, high_field, strict, message in _DUEL_DIAL_RULES.get(game_key, []):
+        low, high = values.get(low_field), values.get(high_field)
+        if low is None or high is None:
+            continue
+        if low > high or (strict and low == high):
+            return message.format(low=_dial_num(low), high=_dial_num(high))
+    return None
+
+
+def _dial_num(value) -> str:
+    """Render a dial for a message: 2 rather than 2.0, 2.5 kept as 2.5."""
+    number = float(value)
+    return str(int(number)) if number.is_integer() else str(number)
+
+
 async def _save_duel_game(request, game_key: str, body) -> dict:
     """Shared body of the six /config/games-* handlers."""
     ctx = get_ctx(request)
@@ -869,6 +976,18 @@ async def _save_duel_game(request, game_key: str, body) -> dict:
         shared = _duel_shared_updates(body)
         game = _duel_game_updates(body, game_key)
         with ctx.open_db() as conn:
+            if game:
+                # Judge the *effective* dials — stored values overlaid with this
+                # save — because every field is independently optional, so half
+                # a pair can arrive on its own.
+                spec = _DUEL_GAMES[game_key]
+                effective = _duel_game_table_row(
+                    conn, guild_id, spec["table"], spec["defaults"]
+                )
+                effective.update(game)
+                conflict = _duel_dial_conflict(game_key, effective)
+                if conflict:
+                    raise HTTPException(422, conflict)
             _duel_game_upsert(conn, guild_id, game_key, shared, game)
         return {"ok": True}
 
@@ -880,9 +999,12 @@ def _duel_game_upsert(
 ) -> None:
     spec = _DUEL_GAMES[game_key]
     if shared_updates:
+        # The column's own DEFAULT is still the historical 48; seed a fresh
+        # row with the code default so a partial save can't inherit it.
         conn.execute(
-            "INSERT OR IGNORE INTO duel_config (guild_id, game_type) VALUES (?, ?)",
-            (guild_id, game_key),
+            "INSERT OR IGNORE INTO duel_config (guild_id, game_type, cooldown_hours)"
+            " VALUES (?, ?, ?)",
+            (guild_id, game_key, _DUEL_SHARED_DEFAULTS["cooldown_hours"]),
         )
         set_clause = ", ".join(f"{k} = ?" for k in shared_updates)
         conn.execute(
@@ -2614,6 +2736,7 @@ class QuickdrawConfigUpdate(DuelSharedConfigUpdate):
 class HotPotatoConfigUpdate(DuelSharedConfigUpdate):
     min_timer: float | None = None
     max_timer: float | None = None
+    min_hold: float | None = None
 
 
 class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
@@ -2625,7 +2748,8 @@ class HotPotatoGroupConfigUpdate(DuelSharedConfigUpdate):
 
 
 class ChickenConfigUpdate(DuelSharedConfigUpdate):
-    climb_duration: float | None = None
+    min_climb: float | None = None
+    max_climb: float | None = None
     min_players: int | None = None
     max_players: int | None = None
 
@@ -4275,6 +4399,10 @@ class RiskyConfigUpdate(BaseModel):
     ping_role_id: str | None = None
     min_game_seconds: int | None = None
     max_games_per_channel: int | None = None
+    # Hours; 0 = off. Read fresh by the chaser each tick, so no in-memory
+    # cache to update below.
+    chase_hours: int | None = None
+    fallback_hours: int | None = None
 
 
 @router.put("/config/risky")
@@ -4290,6 +4418,9 @@ async def update_risky(
         raise HTTPException(400, "min_game_seconds cannot be negative")
     if body.max_games_per_channel is not None and body.max_games_per_channel < 1:
         raise HTTPException(400, "max_games_per_channel must be at least 1")
+    for name, hours in (("chase_hours", body.chase_hours), ("fallback_hours", body.fallback_hours)):
+        if hours is not None and not (0 <= hours <= _RISKY_HOURS_MAX):
+            raise HTTPException(400, f"{name} must be between 0 and {_RISKY_HOURS_MAX}")
 
     new_ping_role: int | None = None
     clear_ping_role = False
@@ -4319,6 +4450,13 @@ async def update_risky(
             if body.max_games_per_channel is not None:
                 set_config_value(conn, _RISKY_MAX_GAMES_KEY, str(body.max_games_per_channel), guild_id)
                 new_max_games = body.max_games_per_channel
+            for key, hours in ((_RISKY_CHASE_KEY, body.chase_hours), (_RISKY_FALLBACK_KEY, body.fallback_hours)):
+                if hours is None:
+                    continue
+                if hours == 0:
+                    delete_config_value(conn, key, guild_id)
+                else:
+                    set_config_value(conn, key, str(hours), guild_id)
         return {"ok": True}
 
     result = await run_query(_q)
@@ -4349,6 +4487,9 @@ class CasinoConfigUpdate(BaseModel):
     min_bet: int | None = Field(default=None, ge=1, le=1_000_000)
     max_bet: int | None = Field(default=None, ge=0, le=10_000_000)  # 0 = no max
     daily_wager_cap: int | None = Field(default=None, ge=0, le=10_000_000)
+    # The daily comp: a house-funded slots spin of this many coins, once a
+    # day per member, from the hub. 0 = off, which is how every guild ships.
+    daily_comp: int | None = Field(default=None, ge=0, le=100_000)
     coinflip_enabled: bool | None = None
     slots_enabled: bool | None = None
     blackjack_enabled: bool | None = None
@@ -4387,6 +4528,10 @@ class CasinoConfigUpdate(BaseModel):
     jackpot_cut_pct: int | None = Field(default=None, ge=0, le=100)
     jackpot_seed: int | None = Field(default=None, ge=0, le=1_000_000)
     broadcast_min_payout: int | None = Field(default=None, ge=0, le=10_000_000)
+    # The bar's other half: a card also needs payout >= this × stake. 1 is
+    # the floor (amount only) — 0 would read as "off" and there is already
+    # an off switch, the bar itself.
+    broadcast_min_mult: int | None = Field(default=None, ge=1, le=1_000)
     # Mutes the @here on the loudest broadcast tier. Nothing else pings,
     # so this is the whole ping surface.
     broadcast_ping_enabled: bool | None = None
@@ -4663,6 +4808,10 @@ class WhisperConfigUpdate(BaseModel):
     cooldown_seconds: int | None = None
     hourly_cap_per_target: int | None = None
     guesses_per_whisper: int | None = None
+    # DM the sender after each guess on their whisper. Ships off (2026-09
+    # review, rotation-rooms-159) so whispers already in flight don't start
+    # DMing their senders until an admin opts the server in.
+    sender_feedback: bool | None = None
 
 
 @router.put("/config/whisper")
@@ -4700,9 +4849,20 @@ async def update_whisper_config(
                     conn, guild_id, "whisper_guesses_per_whisper",
                     str(min(10, max(1, body.guesses_per_whisper))),
                 )
+            if body.sender_feedback is not None:
+                set_whisper_config_value(
+                    conn, guild_id, "whisper_sender_feedback",
+                    "1" if body.sender_feedback else "0",
+                )
         return {"ok": True}
 
-    return await run_query(_q)
+    result = await run_query(_q)
+    # Let the cog republish its launcher-guild set and post (or move) the
+    # launcher without a restart — its on_message fast path only knows the
+    # guilds it read at boot.
+    if ctx.bot:
+        ctx.bot.dispatch("whisper_config_change", guild_id)
+    return result
 
 
 # ── Bot identity (per-guild) ─────────────────────────────────────────

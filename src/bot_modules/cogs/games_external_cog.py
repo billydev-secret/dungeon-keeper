@@ -1,6 +1,6 @@
 """Collect results from an external game bot (e.g. "Gamebot" — Cards Against
-Humanity, Connect 4) so we can build our own leaderboards/streaks over games
-we don't run.
+Humanity, Connect 4, Anagrams, Survey Says, Wisecracks) so we can build our
+own leaderboards/streaks over games we don't run.
 
 Design (per review): a format-agnostic collector. An on_message listener scoped
 to one configured channel + bot user banks every watched message RAW into
@@ -11,7 +11,6 @@ table, so re-parsing on a format change never loses history.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import TYPE_CHECKING
 
@@ -157,20 +156,40 @@ class GamesExternalCog(commands.Cog):
         """The banked messages making up the game this terminal message ends.
 
         Scoped to the terminal's own channel, so games running concurrently in
-        different channels never see each other's messages.
+        different channels never see each other's messages; pages back past
+        the first slice until the lobby (or the previous finish) is in view.
         """
         guild = message.guild
         assert guild is not None
-        rows = await logic.recent_channel_messages(
+        return await logic.game_window_rows(
             self.db, guild.id, message.channel.id, message.author.id,
-            message.created_at.isoformat(),
+            message.id, message.created_at.isoformat(),
         )
-        parsed = [{"embeds": json.loads(r["embeds_json"] or "[]")} for r in rows]
-        idx = next(
-            (i for i, r in enumerate(rows) if int(r["message_id"]) == message.id),
-            len(parsed) - 1,
+
+    async def _settle(
+        self, message_id: int, kind: str, credited: object, *, deliberate_zero: bool = False
+    ) -> None:
+        """Close out one claimed payout: keep the claim when anything was
+        credited (or nothing was owed), release it when the payout no-op'd.
+
+        The claim is taken before crediting, so a transient no-op — the guild
+        not in the cache yet, the economy briefly off, a cap at 0 while an
+        admin tunes it — used to burn the game's once-ever claim and leave its
+        players silently unpaid forever (photo-external-109). The
+        mention-awards path already releases on a miss; this is the same
+        pattern for every game path. ``deliberate_zero`` is the one case a 0
+        is the right answer (a scoreboard where nobody scored): the claim
+        stays so the game is never reconsidered.
+        """
+        if credited or deliberate_zero:
+            await logic.mark_parsed(self.db, message_id, "ok")
+            return
+        await logic.release_payout(self.db, message_id, kind)
+        await logic.mark_parsed(self.db, message_id, "error")
+        log.warning(
+            "%s payout for message %s did not credit — claim released for retry",
+            kind, message_id,
         )
-        return parser.current_game_window(parsed, idx)
 
     @staticmethod
     def _lobby_host(guild: discord.Guild, window) -> int | None:
@@ -231,12 +250,14 @@ class GamesExternalCog(commands.Cog):
                 parser.GAME_CAH: self._pay_cah_game,
                 parser.GAME_CONNECT4: self._pay_connect4_game,
                 parser.GAME_ANAGRAMS: self._pay_anagrams_game,
+                parser.GAME_SURVEY_SAYS: self._pay_named_scores_game,
+                parser.GAME_WISECRACKS: self._pay_named_scores_game,
             }[game]
-            await payer(message, window, self._lobby_host(guild, window))
+            await payer(message, window, self._lobby_host(guild, window), game)
         except Exception:
             log.exception("Gamebot payout failed for message %s", message.id)
 
-    async def _pay_cah_game(self, message, window, host_id=None) -> None:
+    async def _pay_cah_game(self, message, window, host_id=None, game=None) -> None:
         """Pay a finished Gamebot CAH game proportional to each player's score.
 
         The top scorer (the winner) earns the configured cap and everyone else
@@ -258,17 +279,19 @@ class GamesExternalCog(commands.Cog):
             return
         if not await logic.claim_payout(self.db, message.id, guild.id, "gamebot_cah"):
             return
-        await pay_cah_game_by_score(
+        credited = await pay_cah_game_by_score(
             self.bot, guild.id, scores, winners, occurrence=str(message.id),
             host_id=host_id,
         )
-        await logic.mark_parsed(self.db, message.id, "ok")
+        await self._settle(
+            message.id, "gamebot_cah", credited, deliberate_zero=max(scores.values()) <= 0
+        )
         log.info(
             "CAH payout: guild %s game %s — %d players, winner(s) %s",
             guild.id, message.id, len(scores), winners,
         )
 
-    async def _pay_connect4_game(self, message, window, host_id=None) -> None:
+    async def _pay_connect4_game(self, message, window, host_id=None, game=None) -> None:
         """Pay participation + a win bonus for a finished Gamebot Connect 4 game.
 
         Connect 4 has no per-round score to scale by (like CAH does) — it's a
@@ -285,25 +308,26 @@ class GamesExternalCog(commands.Cog):
             self.db, message.id, guild.id, "gamebot_connect4"
         ):
             return
-        await pay_game_rewards(
+        credited = await pay_game_rewards(
             self.bot, guild.id, sorted(roster),
             [winner] if winner is not None else [], "connect4",
             occurrence=str(message.id), host_id=host_id,
         )
-        await logic.mark_parsed(self.db, message.id, "ok")
+        await self._settle(message.id, "gamebot_connect4", credited)
         log.info(
             "Connect 4 payout: guild %s game %s — %d players, winner %s",
             guild.id, message.id, len(roster), winner,
         )
 
-    async def _pay_anagrams_game(self, message, window, host_id=None) -> None:
+    async def _pay_anagrams_game(self, message, window, host_id=None, game=None) -> None:
         """Pay a finished Gamebot Anagrams game proportional to points scored.
 
-        Anagrams' *Scoreboard* names players by **username**, not mention, so
-        they're resolved to members by name the way Cat Bot catches are; a
-        player who has since left or renamed is logged and skipped rather than
-        guessed at. The winner comes from *Game over!* as a mention and is
-        folded in at 0 if the scoreboard somehow missed them.
+        Anagrams' *Scoreboard* names players by **username** (display name
+        since Gamebot's 2026-08-15 rewrite), not mention, so they're resolved
+        to members by name the way Cat Bot catches are; a player who has since
+        left or renamed is logged and skipped rather than guessed at. The
+        winner comes from *Game over!* as a mention and is folded in at 0 if
+        the scoreboard somehow missed them.
         """
         guild = message.guild
         assert guild is not None
@@ -320,14 +344,58 @@ class GamesExternalCog(commands.Cog):
             self.db, message.id, guild.id, "gamebot_anagrams"
         ):
             return
-        await pay_cah_game_by_score(
+        credited = await pay_cah_game_by_score(
             self.bot, guild.id, scores, winner,
             occurrence=str(message.id), game_key="anagrams", host_id=host_id,
         )
-        await logic.mark_parsed(self.db, message.id, "ok")
+        await self._settle(
+            message.id, "gamebot_anagrams", credited,
+            deliberate_zero=max(scores.values()) <= 0,
+        )
         log.info(
             "Anagrams payout: guild %s game %s — %d players, winner %s%s",
             guild.id, message.id, len(scores), winner,
+            f", unresolved {unresolved}" if unresolved else "",
+        )
+
+    async def _pay_named_scores_game(self, message, window, host_id=None, game=None) -> None:
+        """Pay a finished Survey Says or Wisecracks game by its *Final scores*.
+
+        Both name players by **display name** in the description (no
+        mentions), resolved by name like Anagrams. Survey Says declares its
+        winner (``<@id> reached 5 points!``); Wisecracks declares nobody, so
+        the winner is whoever tops the resolved scores — every tied leader,
+        as with a dropped CAH game. Paid through the shared score faucet
+        under its own ``game_key`` and ledger kind (photo-external-101).
+        """
+        guild = message.guild
+        assert guild is not None
+        assert game in parser.NAMED_SCORE_GAMES
+        named_scores, declared = parser.extract_named_scores_game(window)
+        scores, unresolved = resolve_named_scores(guild, named_scores)
+        if declared is not None:
+            member = guild.get_member(declared)
+            if member is not None and not member.bot:
+                scores.setdefault(declared, 0)
+        if not scores:
+            await logic.mark_parsed(self.db, message.id, "skip")
+            return
+        top = max(scores.values())
+        if declared is not None:
+            winners: list[int] = [declared]
+        else:
+            winners = sorted(uid for uid, n in scores.items() if n == top) if top > 0 else []
+        kind = f"gamebot_{game}"
+        if not await logic.claim_payout(self.db, message.id, guild.id, kind):
+            return
+        credited = await pay_cah_game_by_score(
+            self.bot, guild.id, scores, winners,
+            occurrence=str(message.id), game_key=game, host_id=host_id,
+        )
+        await self._settle(message.id, kind, credited, deliberate_zero=top <= 0)
+        log.info(
+            "%s payout: guild %s game %s — %d players, winner(s) %s%s",
+            parser.GAME_LABELS.get(game, game), guild.id, message.id, len(scores), winners,
             f", unresolved {unresolved}" if unresolved else "",
         )
 
@@ -370,12 +438,19 @@ class GamesExternalCog(commands.Cog):
                 coins=catch.coins, rarity=catch.rarity, doubled=catch.doubled,
                 occurrence=str(message.id),
             )
-            await logic.mark_parsed(self.db, message.id, "ok")
+            # None means no payout was attempted (release the claim); 0 means
+            # the daily cap clipped it — handled, and it stays claimed so a
+            # replay can't pay a catch the cap deliberately zeroed.
+            await self._settle(
+                message.id, "catbot", credited, deliberate_zero=credited == 0
+            )
+            if credited is None:
+                return
             # The credited amount, not catch.coins — the daily cap can clip a
             # catch to nothing, and this log is the only per-catch trace
             # outside the ledger.
             log.info(
-                "Cat catch payout: guild %s %s caught a %s cat (%d coins%s)",
+                "Cat catch payout: guild %s %s caught a %s cat (%s coins%s)",
                 guild.id, member.id, catch.rarity, credited,
                 ", doubled" if catch.doubled else "",
             )
@@ -420,11 +495,14 @@ class GamesExternalCog(commands.Cog):
                 return
             if not await logic.claim_payout(self.db, message.id, guild.id, "wordle"):
                 return
-            await pay_cah_game_by_score(
+            credited = await pay_cah_game_by_score(
                 self.bot, guild.id, scores, sorted(winners),
                 occurrence=str(message.id), game_key="wordle",
             )
-            await logic.mark_parsed(self.db, message.id, "ok")
+            # Everyone on X/6 is a real (all-zero) digest, not a miss.
+            await self._settle(
+                message.id, "wordle", credited, deliberate_zero=max(scores.values()) <= 0
+            )
             log.info(
                 "Wordle payout: guild %s digest %s — %d players, %d winner(s)%s",
                 guild.id, message.id, len(scores), len(winners),
@@ -467,11 +545,19 @@ class GamesExternalCog(commands.Cog):
             # Keyed on the round, not this message — see the docstring.
             if not await logic.claim_payout(self.db, round_key, guild.id, "coordle"):
                 return
-            await pay_cah_game_by_score(
+            credited = await pay_cah_game_by_score(
                 self.bot, guild.id, scores, winner,
                 occurrence=str(round_key), game_key="coordle",
             )
-            await logic.mark_parsed(self.db, message.id, "ok")
+            if credited or max(scores.values()) <= 0:
+                await logic.mark_parsed(self.db, message.id, "ok")
+            else:
+                # Claimed on the round key, not this message — release that.
+                await logic.release_payout(self.db, round_key, "coordle")
+                await logic.mark_parsed(self.db, message.id, "error")
+                log.warning(
+                    "Co-ordle payout for round %s did not credit — claim released", round_key
+                )
             log.info(
                 "Co-ordle payout: guild %s round %s (%s) — %d players, winner %s",
                 guild.id, round_key, state, len(scores), winner,

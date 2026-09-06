@@ -85,6 +85,10 @@ class _AmountBetModal(discord.ui.Modal):
             max_length=10,
         )
         self.add_item(self.amount)
+        #: The step this box was opened over (Custom…), if any. The step
+        #: stays live under the modal — the member may cancel it — so it is
+        #: the submit that hands off, and the submit has to know the step.
+        self.step: StepView | None = None
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         cog = await _dispatch_or_apologize(interaction)
@@ -94,6 +98,8 @@ class _AmountBetModal(discord.ui.Modal):
         if amount is None:
             await safe_ephemeral(interaction, "❌ Bets are whole positive numbers.")
             return
+        if self.step is not None:
+            interaction.extras[STEP_EXTRA] = self.step
         await self._place(cog, interaction, amount)
 
     async def _place(
@@ -240,6 +246,90 @@ class DiceBetModal(_AmountBetModal):
         )
 
 
+# ── bet steps with a shelf life ────────────────────────────────────────
+
+STEP_EXPIRED_MSG = "This step expired — press the table button on the panel again."
+#: ``Interaction.extras`` key under which a press notes the step it came
+#: from, so whatever the press replaces the step's message with can stop it.
+STEP_EXTRA = "casino_step"
+
+
+class StepView(discord.ui.View):
+    """A private bet step that knows how to expire out loud.
+
+    A step (the amount ladder, the coinflip side picker, the roulette
+    number picker) lives in an ephemeral message with a timer. Past it,
+    Discord answers every press with "This interaction failed" — no hint
+    that the fix is to press the table button on the hub again. So a step
+    is **bound** to the interaction that showed it, and on timeout it
+    disables its own buttons and rewrites the message to say what to do.
+
+    The interaction token is the only handle on an ephemeral message once
+    the response is sent, and it lives ~15 minutes — every step's timeout
+    is comfortably inside that. A failed edit (the member dismissed the
+    message) is the ordinary end of an abandoned step, not an error.
+
+    The clock has to stop when the step does. discord.py keeps a replaced
+    view's timeout running — an edit with a new view cancels nothing — so
+    a coinflip picker whose message had become the result card would wake
+    120s later and write the expiry copy over the card and its Play Again
+    button. Every press on a step notes the step on the interaction
+    (``interaction_check``), and the cog **consumes** it (``consume_step``)
+    once that press has replaced the message; an expiry that still arrives
+    after that is a no-op.
+    """
+
+    def __init__(self, *, timeout: float) -> None:
+        super().__init__(timeout=timeout)
+        self._bound: discord.Interaction | None = None
+        self._consumed = False
+
+    def bind(self, interaction: discord.Interaction) -> None:
+        """Remember the interaction whose response this step is."""
+        self._bound = interaction
+
+    async def interaction_check(self, interaction: discord.Interaction, /) -> bool:
+        interaction.extras[STEP_EXTRA] = self
+        return True
+
+    def consume(self) -> None:
+        """The message now shows something else — stop the clock for good.
+
+        ``is_finished()`` can't be the guard: discord.py marks the view
+        finished *before* it schedules ``on_timeout``, so a genuine expiry
+        would read as consumed too.
+        """
+        self._consumed = True
+        self.stop()
+
+    async def expire(self) -> None:
+        if self._consumed:
+            return
+        for item in self.children:
+            if isinstance(item, (discord.ui.Button, discord.ui.Select)):
+                item.disabled = True
+        if self._bound is None:
+            return
+        try:
+            await self._bound.edit_original_response(
+                content=STEP_EXPIRED_MSG, embed=None, view=self
+            )
+        except discord.HTTPException:
+            pass
+
+    async def on_timeout(self) -> None:
+        await self.expire()
+
+
+def consume_step(interaction: discord.Interaction) -> None:
+    """Stop the step a press came from, once the press has replaced its
+    message. A press from anywhere else (the hub, a board) noted no step
+    and this is a no-op."""
+    step = interaction.extras.pop(STEP_EXTRA, None)
+    if isinstance(step, StepView):
+        step.consume()
+
+
 # ── the amount ladder (one tap for the usual stake) ────────────────────
 
 
@@ -269,7 +359,10 @@ class _CustomAmountButton(discord.ui.Button):
         self._make_modal = make_modal
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await interaction.response.send_modal(self._make_modal())
+        modal = self._make_modal()
+        if isinstance(self.view, StepView):
+            modal.step = self.view
+        await interaction.response.send_modal(modal)
 
 
 class _BackButton(discord.ui.Button):
@@ -291,7 +384,7 @@ class _BackButton(discord.ui.Button):
         await self._on_cancel(interaction)
 
 
-class AmountPickerView(discord.ui.View):
+class AmountPickerView(StepView):
     """The stake, as buttons.
 
     Every wager used to cost a modal round-trip to type a number, on tables
@@ -302,7 +395,8 @@ class AmountPickerView(discord.ui.View):
     ``on_cancel`` / ``on_expiry`` exist for the private-round tables, where
     this step replaces the round's own board and something has to put the
     board back — on the player's press, and on the view timing out under
-    them.
+    them. A hub game's ladder has no board to restore, so its timeout says
+    the step expired instead (``StepView``).
     """
 
     def __init__(
@@ -324,8 +418,12 @@ class AmountPickerView(discord.ui.View):
             self.add_item(_BackButton(on_cancel))
 
     async def on_timeout(self) -> None:
+        # The board repaint replaces this message; writing "expired" over it
+        # first would race the repaint, so the restorer keeps precedence.
         if self._on_expiry is not None:
             await self._on_expiry()
+        else:
+            await self.expire()
 
 
 _WHEEL_EMOJI = {"red": "🔴", "black": "⚫", "green": "🟢"}
@@ -357,7 +455,7 @@ class _RouletteNumberSelect(discord.ui.Select):
             )
 
 
-class RouletteNumberView(discord.ui.View):
+class RouletteNumberView(StepView):
     """The straight-up picker: two selects, then the amount ladder."""
 
     def __init__(
@@ -377,13 +475,15 @@ class RouletteNumberView(discord.ui.View):
     async def on_timeout(self) -> None:
         if self._on_expiry is not None:
             await self._on_expiry()
+        else:
+            await self.expire()
 
 
 # ── the hub panel ──────────────────────────────────────────────────────
 
 
-class CoinflipSideView(discord.ui.View):
-    """Ephemeral heads-or-tails picker; each side opens the amount modal."""
+class CoinflipSideView(StepView):
+    """Ephemeral heads-or-tails picker; each side opens the amount ladder."""
 
     def __init__(self) -> None:
         super().__init__(timeout=120)
@@ -418,9 +518,11 @@ class CasinoHubView(discord.ui.View):
     async def coinflip(
         self, interaction: discord.Interaction, _: discord.ui.Button
     ) -> None:
+        view = CoinflipSideView()
         await interaction.response.send_message(
-            "Heads or tails?", view=CoinflipSideView(), ephemeral=True
+            "Heads or tails?", view=view, ephemeral=True
         )
+        view.bind(interaction)
 
     @discord.ui.button(
         label="Slots", emoji="🎰",
@@ -522,6 +624,17 @@ class CasinoHubView(discord.ui.View):
             await cog.open_mines(interaction)
 
     @discord.ui.button(
+        label="Daily Comp", emoji="🎁",
+        style=discord.ButtonStyle.secondary, custom_id="casino:comp", row=3,
+    )
+    async def daily_comp(
+        self, interaction: discord.Interaction, _: discord.ui.Button
+    ) -> None:
+        cog = await _dispatch_or_apologize(interaction)
+        if cog is not None:
+            await cog.claim_daily_comp(interaction)
+
+    @discord.ui.button(
         label="My Stats", emoji="📊",
         style=discord.ButtonStyle.secondary, custom_id="casino:stats", row=3,
     )
@@ -582,13 +695,20 @@ def build_hub_view(settings: svc.CasinoSettings) -> CasinoHubView:
     exactly Discord's five, with nothing to spare. An eleventh table still
     packs into four rows; a thirteenth would not fit, and the hub would
     need a different shape rather than another button.
+
+    The 🎁 Daily Comp button is a utility button that only exists while the
+    comp is on (``comp_on``): a guild with the dial at 0 — every guild, by
+    default — never sees it.
     """
     view = CasinoHubView()
     games, utility = [], []
     for item in list(view.children):
         custom_id = getattr(item, "custom_id", "") or ""
         game = custom_id.removeprefix("casino:")
-        if game not in svc.GAMES:
+        if game == "comp":
+            if svc.comp_on(settings):
+                utility.append(item)
+        elif game not in svc.GAMES:
             utility.append(item)
         elif svc.game_enabled(settings, game):
             games.append(item)

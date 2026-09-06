@@ -131,18 +131,19 @@ async def test_view_registered_on_cog_load():
     bot.ctx.db_path = ":memory:"
     bot.add_view = MagicMock()
     bot.add_dynamic_items = MagicMock()
+    bot.guilds = []
     cog = WhisperCog(bot)
-    await cog.cog_load()
+    with patch("bot_modules.cogs.whisper_cog._do_launcher_guilds", return_value=set()):
+        await cog.cog_load()
     bot.add_view.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_dynamic_buttons_registered_on_cog_load():
-    """Per-whisper Guess/Share/Delete/Expose buttons must register as dynamic items so they survive bot restart."""
+    """Per-whisper Guess/Share/Delete buttons must register as dynamic items so they survive bot restart."""
     from bot_modules.cogs.whisper_cog import (
         WhisperCog,
         WhisperDeleteButton,
-        WhisperExposeButton,
         WhisperGuessButton,
         WhisperShareButton,
     )
@@ -150,11 +151,15 @@ async def test_dynamic_buttons_registered_on_cog_load():
     bot.ctx.db_path = ":memory:"
     bot.add_view = MagicMock()
     bot.add_dynamic_items = MagicMock()
+    bot.guilds = []
     cog = WhisperCog(bot)
-    await cog.cog_load()
+    with patch("bot_modules.cogs.whisper_cog._do_launcher_guilds", return_value=set()):
+        await cog.cog_load()
     bot.add_dynamic_items.assert_called_once()
     args = bot.add_dynamic_items.call_args.args
     assert WhisperGuessButton in args
     assert WhisperShareButton in args
     assert WhisperDeleteButton in args
-    assert WhisperExposeButton in args
+    # Expose was dead code (never attached to a view since 1396fb5e) and is
+    # gone; its custom_id must not be re-registered.
+    assert not any("Expose" in getattr(a, "__name__", "") for a in args)

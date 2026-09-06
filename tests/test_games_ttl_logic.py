@@ -21,8 +21,11 @@ from bot_modules.games_ttl.embeds import (
     build_reveal_embed,
 )
 from bot_modules.games_ttl.logic import (
+    MIN_PLAYERS,
+    roster_ids,
     add_submission,
     compute_recap_winners,
+    is_lobby_row,
     mark_played,
     parse_lie_index,
     played_ids_from_payload,
@@ -224,6 +227,52 @@ def test_update_scores_does_not_touch_other_subjects():
     assert scores["99"] == {"fooled": 5, "correct_guesses": 7, "total_guessers": 12}
 
 
+def test_update_scores_records_a_fooled_voter_too():
+    """vote-games-57: a voter who guessed wrong every round used to leave
+    no trace in ``scores`` at all, so the roster built from it never paid
+    them. They get a zero entry now; the subject's own numbers are as before."""
+    scores: dict = {}
+    update_scores(scores, 42, correct_voters=[1], fooled_voters=[3], total_voters=2)
+    assert scores["3"] == {"fooled": 0, "correct_guesses": 0, "total_guessers": 0}
+    assert scores["1"]["correct_guesses"] == 1
+    assert scores["42"] == {"fooled": 1, "correct_guesses": 0, "total_guessers": 2}
+
+
+@pytest.mark.parametrize(
+    "played, scores, expected",
+    [
+        # Subjects first, then every voter, no duplicates, ints out.
+        pytest.param(
+            {"1"}, {"1": {}, "2": {}, "3": {}}, [1, 2, 3], id="subject-plus-two-guessers",
+        ),
+        # A subject nobody voted on is still paid.
+        pytest.param({"7"}, {}, [7], id="unvoted-subject"),
+        # Junk keys are dropped, not raised.
+        pytest.param(["4"], {"x": {}, "5": {}}, [4, 5], id="junk-dropped"),
+        pytest.param(set(), {}, [], id="empty"),
+    ],
+)
+def test_roster_ids_is_every_subject_plus_every_voter(played, scores, expected):
+    assert roster_ids(played, scores) == expected
+
+
+def test_roster_ids_mirrors_game_roster_extractor():
+    """The sweep and /games end rebuild the roster from the stored payload;
+    the two must never drift apart."""
+    from bot_modules.games.utils.game_roster import roster_from_payload
+
+    played = ["1", "2"]
+    scores = {"1": {}, "2": {}, "3": {}, "4": {}}
+    assert roster_from_payload("ttl", {"played": played, "scores": scores}) == (
+        roster_ids(played, scores), len(played),
+    )
+
+
+def test_min_players_is_three():
+    """At two, every round is one person's guess (vote-games-57)."""
+    assert MIN_PLAYERS == 3
+
+
 # ── compute_recap_winners ────────────────────────────────────────────
 
 
@@ -303,6 +352,18 @@ def test_compute_recap_winners_all_subjects_zero_fooled_makes_everyone_most_hone
     assert set(stats["most_honest"]) == {"1", "2"}
     # Tied -> best liar is also everyone, since min == max
     assert set(stats["best_liar"]) == {"1", "2"}
+
+
+def test_compute_recap_winners_nobody_is_best_guesser_at_zero_correct():
+    """With every voter now in ``scores`` a 0-correct "winner" would be the
+    whole room, so the award is simply not given."""
+    scores = {
+        "1": {"fooled": 2, "correct_guesses": 0, "total_guessers": 2},
+        "2": {"fooled": 0, "correct_guesses": 0, "total_guessers": 0},
+    }
+    stats = compute_recap_winners(scores, played_ids={"1"})
+    assert stats["best_guesser"] == []
+    assert stats["max_correct"] == 0
 
 
 def test_compute_recap_winners_accepts_played_ids_as_list():
@@ -702,3 +763,21 @@ async def test_recap_resolvers_name_the_embed_and_ping_only_in_content(sync_db_p
     # honest fallback inside the embed; they are still never pinged.
     assert "<@9>" in by_name["🎯 Best Guesser"]
     assert mentions == {"<@1>", "<@2>"}
+
+
+# ── Boot recovery: lobby or guessing underway? ───────────────────────────────
+#
+# Rows created before 'guessing' was written on Start Guessing are still
+# 'joining' mid-game; a scored round is the tell that guessing is underway.
+@pytest.mark.parametrize(
+    ("state", "payload", "expected"),
+    [
+        pytest.param("joining", {"submissions": {}, "scores": {}}, True, id="fresh-lobby"),
+        pytest.param("joining", {"submissions": {"1": {}}, "scores": {}}, True, id="lobby-with-submissions"),
+        pytest.param("joining", {"scores": {"1": {"fooled": 2}}}, False, id="legacy-row-mid-guessing"),
+        pytest.param("joining", {"scores": {}, "played": ["1"]}, False, id="legacy-row-played-list"),
+        pytest.param("guessing", {"scores": {}}, False, id="guessing-state"),
+    ],
+)
+def test_is_lobby_row_treats_a_scored_joining_row_as_guessing(state, payload, expected):
+    assert is_lobby_row(state, payload) is expected

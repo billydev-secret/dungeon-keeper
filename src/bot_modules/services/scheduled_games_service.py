@@ -43,14 +43,23 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.services import ping_tracker_service
 from bot_modules.services.game_start_ping_service import (
+    SCHEDULED_AUTO_START_MINUTES,
+    auto_starter_for,
+    claim_game_night_ping,
     mark_start_ping_sent,
+    resolve_start_epoch,
     send_start_ping,
 )
 
 log = logging.getLogger(__name__)
 
-# How long after a one-time schedule's slot we keep retrying past a busy channel
-# before giving up.
+# How long after a schedule's slot we keep retrying past a busy channel before
+# giving up on that slot. A one-time row is marked missed; a recurring row
+# rolls to its next slot. Before 2026-09-04 only one-time rows retried — a
+# recurring row rolled the moment the channel was busy, so a member-opened
+# round overlapping the slot by a minute cost the whole day (platform-24:
+# prod's daily Risky Rolls was skipped on 09-02 for a round that closed 21
+# minutes later).
 GIVEUP_GRACE_SECONDS = 2 * 3600
 
 VALID_RECURRENCE = ("once", "daily", "weekly")
@@ -351,7 +360,17 @@ async def _process_due(bot, games_db, row, now: float) -> None:
                 (now, sched_id),
             )
         else:
-            await _advance_or_finish(games_db, row, now, "skipped_late", offset, recur_days)
+            # A recurring row that spent this slot retrying past a busy
+            # channel rolls as 'skipped_active', so the panel blames the room
+            # and not an outage. Only a retry recorded *within* this slot
+            # counts — yesterday's status must not relabel today's downtime.
+            retried_this_slot = (
+                row["last_status"] == "skipped_active"
+                and row["last_run_at"] is not None
+                and row["last_run_at"] >= row["next_run_at"]
+            )
+            status = "skipped_active" if retried_this_slot else "skipped_late"
+            await _advance_or_finish(games_db, row, now, status, offset, recur_days)
         return
 
     # 1. Resolve the target channel.
@@ -400,15 +419,15 @@ async def _process_due(bot, games_db, row, now: float) -> None:
             except Exception:
                 log.exception("Scheduled game %s: busy-check for %s raised", sched_id, game_type)
     if busy:
-        if row["recurrence"] == "once":
-            # Stay due — the 60s poll is the retry until giveup_at, at which point
-            # the lateness guard above marks it missed.
-            await games_db.execute(
-                "UPDATE games_scheduled SET last_status='skipped_active' WHERE id=?",
-                (sched_id,),
-            )
-            return
-        await _advance_or_finish(games_db, row, now, "skipped_active", offset, recur_days)
+        # Stay due — the 60s poll is the retry. A one-time row retries until
+        # giveup_at, a recurring one until the slot is GIVEUP_GRACE_SECONDS
+        # old; the lateness guard above is what gives up either way. The
+        # retry is recorded as a run (last_run_at) so that guard can tell a
+        # slot spent waiting on the room from one the bot slept through.
+        await games_db.execute(
+            "UPDATE games_scheduled SET last_status='skipped_active', last_run_at=? WHERE id=?",
+            (now, sched_id),
+        )
         return
 
     launcher = bot.game_launchers.get(game_type) if hasattr(bot, "game_launchers") else None
@@ -428,6 +447,18 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     except Exception:
         options = {}
 
+    # ``scheduled`` tells the launcher nobody is at the keyboard: the round
+    # games unlock Next for any voter after the round timer so an absent
+    # schedule creator cannot stall the board on round 1 (platform-23).
+    options = {**options, "scheduled": True}
+
+    # A lobby game that can start itself (clapback-8) is given a countdown
+    # when the schedule names none, so a scheduled row actually produces a
+    # played game rather than a lobby waiting on a press nobody will make.
+    auto_starts = game_type in LOBBY_GAME_TYPES and auto_starter_for(bot, game_type) is not None
+    if auto_starts and resolve_start_epoch(options) is None:
+        options["start_in"] = SCHEDULED_AUTO_START_MINUTES
+
     try:
         gid = await launcher(
             channel=channel,
@@ -446,8 +477,12 @@ async def _process_due(bot, games_db, row, now: float) -> None:
     # Launchers return None on failure (e.g. missing send perms, caught internally),
     # so a falsy result is a real failure — don't mislabel it as launched.
     if gid:
+        # last_launched_at is the one column that says when this schedule last
+        # produced a game — last_status alone read 'skipped' for days with
+        # nothing to show how long that had been going on (platform-24).
         await games_db.execute(
-            "UPDATE games_scheduled SET last_status='launched' WHERE id=?", (sched_id,)
+            "UPDATE games_scheduled SET last_status='launched', last_launched_at=? WHERE id=?",
+            (now, sched_id),
         )
         log.info("Scheduled game %s launched: %s in channel %s", sched_id, game_type, channel_id)
 
@@ -456,7 +491,14 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # a launch that then failed had already pinged a role about a game
         # nobody would find (todo #97). Every DB-backed launcher writes
         # message_id before returning, so the row is readable by now.
-        if row["announce"]:
+        # The schedule's own announcement stands in for the platform's Game
+        # Night ping, and claims it before the send so the start-ping sweep
+        # can't slip a second line in between. The claim can be *lost*: the
+        # sweep runs on its own 15s clock and may have pinged this lobby in
+        # the moments between the board appearing and this line — in which
+        # case the room has already been called and the schedule stays quiet
+        # rather than pinging twice for one game opening.
+        if row["announce"] and await claim_game_night_ping(games_db, gid, no_row_wins=True):
             board = await get_active_game_by_id(games_db, gid)
             message_id = board["message_id"] if board else None
             role_id = row["announce_role_id"]
@@ -510,8 +552,10 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # A lobby game posts its lobby and waits for a human to press start —
         # nobody would otherwise know that's pending. Nudge the person who
         # scheduled it, right after the lobby so the nudge sits next to the
-        # button. Lobby-less games self-run, so they get nothing.
-        if game_type in LOBBY_GAME_TYPES:
+        # button. Lobby-less games self-run, so they get nothing — and so does
+        # a lobby game that starts itself at its countdown: the sweep nudges
+        # only if the roster is short when the moment comes.
+        if game_type in LOBBY_GAME_TYPES and not auto_starts:
             # Record it against the launched game before sending: a schedule
             # whose stored options carry `start_in` also stamps a start_epoch,
             # which the poll loop would otherwise nudge for a second time.

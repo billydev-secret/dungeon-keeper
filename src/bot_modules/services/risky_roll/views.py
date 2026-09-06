@@ -6,23 +6,37 @@ import time
 import discord
 
 from bot_modules.duels.filters import contains_disallowed_content
+from bot_modules.games.utils.question_source import channel_allows_nsfw, get_ffa_prompt
 from . import state as app_state
 from .formatters import (
     build_embed,
+    build_fallback_question_content,
     build_how_to_play_content,
+    build_pending_chase_content,
     build_pending_prompt_content,
     build_pending_question_summary,
+    build_posted_chase_content,
     build_question_reply_content,
     format_user_mentions,
     get_text_channel,
     resolve_embed_accent,
 )
 from .logic import (
+    PAYOFF_TICK_SECONDS,
+    PayoffAction,
+    PayoffDials,
     build_main_prompt_state,
     build_one_rule_prompt_state,
     choose_roll,
     effective_min_game_seconds,
+    fallback_abandoned,
+    fallback_blocked,
     has_blocked_edge,
+    posted_chase_blocked,
+    pending_payoff_action,
+    record_fallback_failure,
+    posted_chase_due,
+    unasked_questioners,
 )
 from .models import (
     PendingQuestionState,
@@ -61,6 +75,20 @@ async def _blocked_pairs_in(state: RiskyRollState, *extra_user_ids: int) -> set[
         state.guild_id,
         user_ids,
     )
+
+
+async def _record_history(state: RiskyRollState) -> None:
+    """Put the resolved round on the games record before its rows go.
+
+    Best-effort: a history failure is logged and never holds up the close —
+    the winner's prompt is what the room is waiting on.
+    """
+    if app_state.store is None:
+        return
+    try:
+        await app_state.store.record_round_history(state)
+    except Exception:
+        log.exception("Risky Rolls: failed to record round %s to history.", state.game_id)
 
 
 async def schedule_auto_close(client: discord.Client, game_id: str, delay: float) -> None:
@@ -119,6 +147,7 @@ async def auto_close_round(client: discord.Client, game_id: str) -> None:
                 log.exception("Auto-close: failed to edit round message in #%s.", getattr(channel, "name", channel_id))
 
         app_state.active_games.pop(game_id, None)
+        await _record_history(state)
         if app_state.store is not None:
             await app_state.store.delete_round(game_id)
 
@@ -237,6 +266,7 @@ async def _send_question_prompts_channel(
     state: RiskyRollState,
     resolution,
 ) -> None:
+    ensure_payoff_chaser(client)
     main_prompt = build_main_prompt_state(game_id, state, resolution.result_type)
     if main_prompt is None:
         log.warning("Auto-close: no prompt state built for game %s.", game_id)
@@ -268,6 +298,7 @@ async def _send_question_prompts_followup(
     state: RiskyRollState,
     resolution,
 ) -> None:
+    ensure_payoff_chaser(interaction.client)
     main_prompt = build_main_prompt_state(game_id, state, resolution.result_type)
     if main_prompt is None:
         log.warning("Close: no prompt state built for game %s.", game_id)
@@ -286,6 +317,356 @@ async def _send_question_prompts_followup(
         return
 
     await _try_send_one_rule_prompt(send_via_followup, game_id, state)
+
+
+async def _create_room_thread(
+    channel, state: PendingQuestionState, question_text: str
+) -> discord.Thread | None:
+    """The public thread a 69 room question is asked in.
+
+    Hung off the prompt message when there is one, else a fresh thread in the
+    channel; ``None`` (and a log line) when the channel is not a text channel
+    or Discord refuses, in which case the caller posts in the channel itself.
+    """
+    thread_name = question_text[:97] + "…" if len(question_text) > 97 else question_text
+    try:
+        if isinstance(channel, discord.TextChannel) and state.prompt_message_id is not None:
+            partial_msg = channel.get_partial_message(state.prompt_message_id)
+            return await partial_msg.create_thread(name=thread_name, auto_archive_duration=1440)
+        if isinstance(channel, discord.TextChannel):
+            return await channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.public_thread,
+                auto_archive_duration=1440,
+            )
+    except (discord.Forbidden, discord.HTTPException):
+        log.exception("Failed to create thread for 69 question in game %s.", state.game_id)
+    return None
+
+
+async def _room_pings(state: PendingQuestionState, asker_id: int) -> set[int]:
+    """Who a room question @-pings: every participant but the asker's
+    no-contact partners (docs/no_contact_spec.md, Risky Rolls)."""
+    pinged = set(state.participant_user_ids)
+    if app_state.db_path is not None:
+        from bot_modules.services import no_contact_service
+
+        partners = await asyncio.to_thread(
+            no_contact_service.no_contact_partners,
+            app_state.db_path,
+            state.guild_id,
+            asker_id,
+        )
+        pinged -= partners
+    return pinged
+
+
+# ── Chasing the payoff ───────────────────────────────────────────────
+#
+# One background loop, started lazily from the game's own traffic (a roll, a
+# round closing) rather than from cog load, which this module does not own.
+# Each tick it reads the two dashboard dials fresh and looks at every pending
+# prompt and posted question in memory. The decisions are in logic.py
+# (`pending_payoff_action`, `posted_chase_due`); this is only the sending.
+
+_chaser_task: asyncio.Task | None = None
+
+
+def ensure_payoff_chaser(client: discord.Client) -> None:
+    """Start the chaser loop if it is not already running.
+
+    A no-op without a store (tests that drive the views bare), so nothing
+    here spawns a task under a test that never asked for one.
+    """
+    global _chaser_task
+    if app_state.store is None:
+        return
+    if _chaser_task is not None and not _chaser_task.done():
+        return
+    _chaser_task = asyncio.create_task(_payoff_chaser_loop(client), name="risky-payoff-chaser")
+
+
+def stop_payoff_chaser() -> None:
+    global _chaser_task
+    if _chaser_task is not None:
+        _chaser_task.cancel()
+        _chaser_task = None
+
+
+async def _payoff_chaser_loop(client: discord.Client) -> None:
+    while True:
+        await asyncio.sleep(PAYOFF_TICK_SECONDS)
+        try:
+            await run_payoff_pass(client)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Risky Rolls: payoff pass failed; will retry next tick.")
+
+
+async def _payoff_dials_for(guild_id: int | None) -> PayoffDials:
+    if guild_id is None or app_state.store is None:
+        return PayoffDials()
+    try:
+        return (await app_state.store.load_payoff_dials()).get(guild_id, PayoffDials())
+    except Exception:
+        log.exception("Risky Rolls: could not read the payoff dials for guild %s.", guild_id)
+        return PayoffDials()
+
+
+async def run_payoff_pass(client: discord.Client, now: float | None = None) -> int:
+    """One sweep of the pending prompts and posted questions. Returns how
+    many chases or fallbacks went out.
+
+    At most one action per channel per pass: with the dials just switched
+    on over a backlog of stale prompts, this drains them a message every
+    tick instead of dumping a week of questions into the room at once. In
+    steady state two prompts falling due inside one tick is rare, and a
+    five-minute delay on the second is invisible.
+    """
+    if app_state.store is None:
+        return 0
+    now = time.time() if now is None else now
+    dials_by_guild = await app_state.store.load_payoff_dials()
+    if not any(d.enabled for d in dials_by_guild.values()):
+        return 0
+
+    acted = 0
+    touched_channels: set[int] = set()
+
+    for pending in list(app_state.pending_questions.values()):
+        dials = dials_by_guild.get(pending.guild_id)
+        if dials is None or pending.channel_id in touched_channels:
+            continue
+        action = pending_payoff_action(pending, dials, now)
+        if action is None:
+            continue
+        async with app_state.get_game_lock(pending.game_id):
+            # Re-check under the lock: the winner may have asked meanwhile.
+            if app_state.pending_questions.get(pending.game_id) is not pending:
+                continue
+            if pending_payoff_action(pending, dials, now) != action:
+                continue
+            try:
+                if action is PayoffAction.FALLBACK:
+                    sent = await _post_fallback_question(client, pending, now)
+                    if not sent:
+                        await _record_fallback_failure(pending, now)
+                else:
+                    sent = await _chase_pending(client, pending, dials, now)
+            except Exception:
+                log.exception("Risky Rolls: %s failed for prompt %s.", action.value, pending.game_id)
+                if action is PayoffAction.FALLBACK:
+                    await _record_fallback_failure(pending, now)
+                continue
+        if sent:
+            acted += 1
+            touched_channels.add(pending.channel_id)
+
+    for posted in list(app_state.posted_questions.values()):
+        dials = dials_by_guild.get(posted.guild_id)
+        if dials is None or posted.channel_id in touched_channels:
+            continue
+        if not posted_chase_due(posted, dials, now):
+            continue
+        async with app_state.get_message_lock(posted.message_id):
+            if app_state.posted_questions.get(posted.message_id) is not posted:
+                continue
+            try:
+                sent = await _chase_posted(client, posted, now)
+            except Exception:
+                log.exception("Risky Rolls: chase failed for question %s.", posted.message_id)
+                continue
+        if sent:
+            acted += 1
+            touched_channels.add(posted.channel_id)
+
+    return acted
+
+
+async def _record_fallback_failure(pending: PendingQuestionState, now: float) -> None:
+    """Count one failed fallback and persist it, giving up after the last.
+
+    Every reason a fallback can fail is one the next tick cannot fix — an
+    empty bank, a channel the bot can no longer reach, a pairing the
+    no-contact list now forbids — so the attempt is stamped and the prompt
+    backs off (``logic.fallback_retry_delay``) instead of being picked up
+    again five minutes later for the week the row lives.
+    """
+    record_fallback_failure(pending, now)
+    if app_state.store is not None:
+        try:
+            await app_state.store.save_pending_question(pending)
+        except Exception:
+            # In-memory the count still stands, so the backoff holds until a
+            # restart; losing the row must not take the whole pass down.
+            log.exception("Risky Rolls: could not record a failed fallback for %s.", pending.game_id)
+    if fallback_abandoned(pending):
+        log.warning(
+            "Risky Rolls: giving up on a fallback question for prompt %s after %d attempts.",
+            pending.game_id, pending.fallback_attempts,
+        )
+
+
+async def _chase_pending(
+    client: discord.Client, pending: PendingQuestionState, dials: PayoffDials, now: float
+) -> bool:
+    channel = await get_text_channel(client, pending.channel_id)
+    if channel is None:
+        return False
+    await channel.send(
+        content=build_pending_chase_content(pending, dials),
+        allowed_mentions=discord.AllowedMentions(users=True),
+    )
+    pending.chased_at = now
+    if app_state.store is not None:
+        await app_state.store.save_pending_question(pending)
+    return True
+
+
+async def _chase_posted(client: discord.Client, posted: PostedQuestionState, now: float) -> bool:
+    """The one re-ping of the answerer(s) of a posted question.
+
+    Only the answerers ring: the asker's ``<@id>`` is in the content so it
+    renders as a name, not so they get pinged about their own question. A
+    pairing the no-contact list now forbids is skipped the same silent way
+    as the fallback — the row is still stamped as chased so the next tick
+    does not pick it again, which is indistinguishable from the dial being
+    off.
+    """
+    channel = await get_text_channel(client, posted.channel_id)
+    if channel is None:
+        return False
+    blocked_pairs = await _blocked_pairs_in_ids(
+        posted.guild_id, posted.allowed_replier_ids | {posted.asker_id}
+    )
+    sent = False
+    if not posted_chase_blocked(posted, blocked_pairs):
+        await channel.send(
+            content=build_posted_chase_content(posted),
+            allowed_mentions=discord.AllowedMentions(
+                users=[discord.Object(id=uid) for uid in sorted(posted.allowed_replier_ids)]
+            ),
+        )
+        sent = True
+    posted.chased_at = now
+    if app_state.store is not None:
+        await app_state.store.save_posted_question(posted)
+    return sent
+
+
+async def draw_fallback_question(games_db, allow_nsfw: bool) -> str | None:
+    """A Truth from the question bank, for a winner who never asked.
+
+    The Truth or Dare bank is the same source the rotation rooms' prompts
+    come from; a Truth is a question one person puts to another, which is
+    exactly the seat the winner left empty. ``allow_nsfw`` is the channel's
+    own age gate (`channel_allows_nsfw`), never a bot-side toggle.
+    """
+    picked = await get_ffa_prompt(games_db, kind="truth", allow_nsfw=allow_nsfw)
+    if picked is None:
+        return None
+    _label, text = picked
+    return text
+
+
+async def _post_fallback_question(
+    client: discord.Client, pending: PendingQuestionState, now: float
+) -> bool:
+    """Post a bank question as the winner's, so the loser still answers.
+
+    Returns False (and leaves the prompt alone for the next tick) when the
+    channel or the bank cannot be reached. A pairing the no-contact list now
+    forbids is skipped the same silent way — nothing posts, nothing says why.
+    """
+    games_db = getattr(client, "games_db", None)
+    if games_db is None:
+        log.warning("Risky Rolls: no games_db on the client; cannot draw a fallback question.")
+        return False
+    channel = await get_text_channel(client, pending.channel_id)
+    if channel is None:
+        return False
+
+    owed = unasked_questioners(pending)
+    if not owed:
+        return False
+    asker_id = owed[0]
+    targets = set(pending.participant_user_ids)
+
+    if pending.prompt_kind == PromptKind.ROOM:
+        pinged = await _room_pings(pending, asker_id)
+    else:
+        blocked_pairs = await _blocked_pairs_in_ids(pending.guild_id, targets | {asker_id})
+        if fallback_blocked(asker_id, targets, blocked_pairs):
+            return False
+        pinged = targets
+
+    question_text = await draw_fallback_question(games_db, channel_allows_nsfw(channel))
+    if question_text is None:
+        log.warning("Risky Rolls: the question bank had nothing to ask for prompt %s.", pending.game_id)
+        return False
+
+    content = build_fallback_question_content(pending, asker_id, question_text, pinged)
+    mentions = discord.AllowedMentions(users=True)
+
+    if pending.prompt_kind == PromptKind.ROOM:
+        thread = await _create_room_thread(channel, pending, question_text)
+        target: discord.abc.Messageable = thread if thread is not None else channel
+        await target.send(content=content, allowed_mentions=mentions)
+    else:
+        message = await channel.send(content=content, allowed_mentions=mentions, view=QuestionReplyView())
+        posted = PostedQuestionState(
+            message_id=message.id,
+            channel_id=pending.channel_id,
+            guild_id=pending.guild_id,
+            asker_id=asker_id,
+            allowed_replier_ids=targets,
+            question_text=question_text,
+            asker_rolled_100=pending.prompt_kind == PromptKind.DIRECT and len(targets) > 1,
+            target_rolled_1=pending.prompt_kind == PromptKind.TWO_QUESTIONERS,
+            from_bank=True,
+            created_at=now,
+        )
+        await _register_posted_question(posted)
+
+    pending.questioners_asked.add(asker_id)
+    if pending.questions_remaining > 0:
+        # A 1-rule prompt where neither questioner asked: the deck has spoken
+        # for the winner and the second questioner still owes theirs. Keep
+        # the prompt exactly as the modal does when the first of two asks by
+        # hand — re-saved (``created_at`` untouched) with its message updated
+        # — so the next tick speaks for them too, one message apart.
+        if app_state.store is not None:
+            await app_state.store.save_pending_question(pending)
+        if pending.prompt_message_id is not None:
+            try:
+                await channel.get_partial_message(pending.prompt_message_id).edit(
+                    content=build_pending_prompt_content(pending),
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+        return True
+
+    app_state.pending_questions.pop(pending.game_id, None)
+    if app_state.store is not None:
+        await app_state.store.delete_pending_question(pending.game_id)
+    await disable_pending_question_message(
+        client,
+        pending,
+        build_pending_question_summary(pending, question_text, asker_id, from_bank=True),
+    )
+    return True
+
+
+async def _blocked_pairs_in_ids(guild_id: int, user_ids: set[int]) -> set[tuple[int, int]]:
+    if app_state.db_path is None:
+        return set()
+    from bot_modules.services import no_contact_service
+
+    return await asyncio.to_thread(
+        no_contact_service.no_contact_pairs_among, app_state.db_path, guild_id, user_ids
+    )
 
 
 class BaseRiskyRollView(discord.ui.View):
@@ -329,6 +710,10 @@ class RiskyRollView(BaseRiskyRollView):
     )
     async def roll_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
+        # The chaser is started lazily from the game's own traffic rather than
+        # at cog load, so prompts restored across a restart are picked up by
+        # the first roll after it, not the next round close.
+        ensure_payoff_chaser(interaction.client)
         async with app_state.get_game_lock(self.game_id):
             state = app_state.active_games.get(self.game_id)
             if not state or not state.is_open:
@@ -395,8 +780,9 @@ class RiskyRollView(BaseRiskyRollView):
         emoji="❓",
     )
     async def how_to_play_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        dials = await _payoff_dials_for(interaction.guild_id)
         await interaction.response.send_message(
-            content=build_how_to_play_content(),
+            content=build_how_to_play_content(dials),
             ephemeral=True,
         )
 
@@ -453,6 +839,7 @@ class RiskyRollView(BaseRiskyRollView):
                 task.cancel()
 
             app_state.active_games.pop(self.game_id, None)
+            await _record_history(state)
             if app_state.store is not None:
                 await app_state.store.delete_round(self.game_id)
 
@@ -529,38 +916,14 @@ class SixtyNineQuestionModal(discord.ui.Modal, title="Ask A Question"):
             await interaction.response.defer(ephemeral=True)
 
             if state.prompt_kind == PromptKind.ROOM:
-                channel = interaction.channel
-                thread_name = question_text[:97] + "…" if len(question_text) > 97 else question_text
-                thread = None
-                try:
-                    if isinstance(channel, discord.TextChannel) and state.prompt_message_id is not None:
-                        partial_msg = channel.get_partial_message(state.prompt_message_id)
-                        thread = await partial_msg.create_thread(name=thread_name, auto_archive_duration=1440)
-                    elif isinstance(channel, discord.TextChannel):
-                        thread = await channel.create_thread(
-                            name=thread_name,
-                            type=discord.ChannelType.public_thread,
-                            auto_archive_duration=1440,
-                        )
-                except (discord.Forbidden, discord.HTTPException):
-                    log.exception("Failed to create thread for 69 question in game %s.", self.game_id)
+                thread = await _create_room_thread(interaction.channel, state, question_text)
 
                 # A room question is not directed contact, so it posts intact
                 # and the thread stays public — she can read it if she wants,
                 # exactly as she can read anything else he says in the channel.
                 # What she does not get is the bot @-pinging her with his words
                 # attached (docs/no_contact_spec.md, Risky Rolls).
-                from bot_modules.services import no_contact_service
-
-                pinged = set(state.participant_user_ids)
-                if app_state.db_path is not None:
-                    partners = await asyncio.to_thread(
-                        no_contact_service.no_contact_partners,
-                        app_state.db_path,
-                        state.guild_id,
-                        asker_id,
-                    )
-                    pinged -= partners
+                pinged = await _room_pings(state, asker_id)
                 all_mentions = format_user_mentions(pinged)
                 content = f"{all_mentions}\n<@{asker_id}> asks:\n{question_text}"
 

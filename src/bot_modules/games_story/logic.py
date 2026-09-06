@@ -26,6 +26,13 @@ High-leverage pieces:
 * :func:`should_end_after_skip` — predicate the run loop checks each
   time a player is skipped; once every writer in the rotation has
   skipped, the story ends.
+* :func:`note_turn_outcome` / :func:`should_drop_writer` /
+  :func:`rotation_after_turn` / :func:`writer_may_skip` /
+  :func:`roster_for_payout` — the 2026-09-04 pacing rules (anon-tail-73):
+  a turn is :data:`DEFAULT_TURN_SECONDS`, any writer may Skip a stalled
+  turn after :data:`WRITER_SKIP_AFTER_SECONDS`, a writer who misses
+  :data:`MAX_CONSECUTIVE_MISSES` turns in a row is dropped from the
+  rotation (announced), and Leave works mid-game.
 * :func:`assemble_story_text` — joins all sentence texts into the
   embed description string, escaping markdown and applying the 4090-char
   truncation budget (Discord embed description limit).
@@ -40,11 +47,24 @@ High-leverage pieces:
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 from typing import Any, Callable
 
 import discord
 
 DEFAULT_STARTER: str = "Once upon a time, in a place no one quite remembered…"
+
+# Seconds a writer has per turn. Was 300: one AFK writer in a four-writer
+# ten-sentence story cost two five-minute holes in a fifteen-minute game.
+DEFAULT_TURN_SECONDS: int = 120
+
+# Any joined writer (not only the host) may Skip a turn once it has been
+# open this long — halfway through the default turn.
+WRITER_SKIP_AFTER_SECONDS: int = 60
+
+# Missed turns in a row (timed out, dismissed the box, or skipped) before a
+# writer is dropped from the rotation.
+MAX_CONSECUTIVE_MISSES: int = 2
 
 # Discord embed description hard limit is 4096; cog historically uses 4090
 # with a 3-char ellipsis budget (truncates to 4087 + "…").
@@ -253,3 +273,96 @@ def chunk_attribution_lines(
     if current:
         chunks.append(current)
     return chunks
+
+
+def note_turn_outcome(misses: dict[int, int], player_id: int, *, missed: bool) -> int:
+    """Record whether ``player_id``'s turn produced a sentence.
+
+    ``misses`` counts each writer's *consecutive* missed turns; a written
+    sentence resets theirs to zero. Returns the writer's new streak.
+    """
+    if missed:
+        misses[player_id] = misses.get(player_id, 0) + 1
+    else:
+        misses[player_id] = 0
+    return misses[player_id]
+
+
+def should_drop_writer(misses: dict[int, int], player_id: int) -> bool:
+    """True once a writer has missed :data:`MAX_CONSECUTIVE_MISSES` in a row."""
+    return misses.get(player_id, 0) >= MAX_CONSECUTIVE_MISSES
+
+
+def rotation_after_turn(
+    turn_order: list[int], turn_index: int, remove: Iterable[int] = (),
+) -> tuple[list[int], int]:
+    """Advance one turn and drop ``remove`` from the rotation.
+
+    Returns ``(new_order, new_index)`` where ``new_order[new_index]`` is the
+    writer who would have been next had nobody left — or, if they left too,
+    the first writer after them who is still in. An emptied rotation returns
+    ``([], 0)``; the caller ends the story.
+    """
+    if not turn_order:
+        return [], 0
+    gone = {int(p) for p in remove}
+    n = len(turn_order)
+    next_pos = (turn_index + 1) % n
+    new_order = [p for p in turn_order if p not in gone]
+    if not new_order:
+        return [], 0
+    for step in range(n):
+        candidate = turn_order[(next_pos + step) % n]
+        if candidate in new_order:
+            return new_order, new_order.index(candidate)
+    return new_order, 0  # unreachable: new_order is non-empty
+
+
+def writer_may_skip(
+    presser_id: int,
+    *,
+    turn_order: list[int],
+    opened_at: float,
+    now: float,
+) -> bool:
+    """May a non-host writer skip the current turn?
+
+    Only a writer still in the rotation, and only once the turn has been
+    open for :data:`WRITER_SKIP_AFTER_SECONDS`. The host and mods are not
+    gated here — they may always skip.
+    """
+    if presser_id not in turn_order:
+        return False
+    return now - opened_at >= WRITER_SKIP_AFTER_SECONDS
+
+
+def writer_skip_unlock_at(opened_at: float) -> int:
+    """Epoch at which :func:`writer_may_skip` starts saying yes."""
+    return int(opened_at + WRITER_SKIP_AFTER_SECONDS)
+
+
+def format_drop_notice(player_name: str) -> str:
+    """The announcement when a writer is dropped for missing turns."""
+    safe = discord.utils.escape_mentions(player_name)
+    return (
+        f"📖 {safe} missed {MAX_CONSECUTIVE_MISSES} turns in a row and has been "
+        "dropped from the rotation."
+    )
+
+
+def format_leave_notice(player_name: str) -> str:
+    """The announcement when a writer leaves mid-story."""
+    safe = discord.utils.escape_mentions(player_name)
+    return f"📖 {safe} left the story — the rotation carries on without them."
+
+
+def roster_for_payout(
+    players: list[int], sentences: list[dict[str, Any]], left: Iterable[int],
+) -> list[int]:
+    """Who the reveal pays: everyone who joined, minus writers who **left**
+    without ever writing a sentence. A writer dropped for missing turns
+    stays — they sat through the game; leaving was not their choice.
+    """
+    wrote = {s.get("author_id") for s in sentences if s.get("author_id")}
+    gone = {int(p) for p in left}
+    return [p for p in players if p not in gone or p in wrote]

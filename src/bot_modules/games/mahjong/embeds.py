@@ -10,11 +10,22 @@ tables. Tiles render through tile_render only — racks can never blank.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
+from typing import NamedTuple
 
 import discord
 
+from bot_modules.games.mahjong.bot_logic import is_bot_id
 from bot_modules.games.mahjong.card_logic import Card
-from bot_modules.games.mahjong.game_logic import AssistReadout, GameState, Outcome, Phase
+from bot_modules.games.mahjong.game_logic import (
+    AUTO_PASS,
+    STRIKES_TO_FALLOW,
+    AssistReadout,
+    Event,
+    GameState,
+    Outcome,
+    Phase,
+)
 from bot_modules.games.mahjong.tiles import FULL_RANK, Tile, sort_rack
 from bot_modules.games.mahjong.tile_render import back_str, chip, rack_str, tile_str
 from bot_modules.core.branding import DEFAULT_ACCENT_COLOR
@@ -71,7 +82,12 @@ def _seat_line(
 def build_member_panel(
     card: Card | None, stakes: tuple[int, ...], balance: int,
     accent: discord.Color | None = None,
+    escrow_for: Callable[[int, int], int] | None = None,
 ) -> discord.Embed:
+    """The /mahjong panel. ``escrow_for(seat_count, stake)`` puts the hold
+    per table size on the panel itself (mahjong-150): it used to appear
+    three clicks in, on the stake picker, after a member had already
+    decided to open a table."""
     accent = accent or DEFAULT_ACCENT_COLOR
     e = discord.Embed(title="Meadow Mahjong", color=accent)
     if card is None:
@@ -83,7 +99,56 @@ def build_member_panel(
             f"Stakes: {', '.join(str(s) for s in stakes)} coins per point\n"
             f"Your balance: **{balance}** coins"
         )
+        if escrow_for is not None and stakes:
+            low = min(stakes)
+            e.add_field(
+                name="Escrow per Seat",
+                value=(
+                    f"At {low}/point: **{escrow_for(2, low)}** coins for a "
+                    f"Duel, **{escrow_for(4, low)}** for a Full Table — held "
+                    "when you sit, and everything you don't lose comes back "
+                    "at the settle. Higher stakes hold proportionally more; "
+                    "practice tables hold nothing."
+                ),
+                inline=False,
+            )
     return _footer(e, "American-style, card-driven")
+
+
+#: Why a table closed, in the words the final card shows (mahjong-151).
+#: Keyed by ``mahjong_tables.closed_reason``; anything unlisted falls back
+#: to the bare "Table closed".
+CLOSE_COPY = {
+    "dissolved": "the lobby never filled",
+    "expired": "nobody rematched in time",
+    "rematch_unfunded": "a seat couldn't cover the next hand's escrow",
+    "cancelled": "cancelled before the deal",
+    "closed": "closed from the settle screen",
+    "purged": "closed by the house",
+    "unloadable": "closed by the house",
+}
+
+
+def close_copy(reason: str | None) -> str:
+    why = CLOSE_COPY.get(str(reason or ""))
+    return f"Table closed — {why}." if why else "Table closed."
+
+
+def build_table_open_ping(
+    role_id: int, seat_count: int, stake: int, open_seats: int,
+    jump: str, *, quick: bool = False,
+) -> str:
+    """The one Game Night line a new real table posts (mahjong-149).
+    Content, never an embed — a role mention only notifies from message
+    content — and the cog allow-lists exactly this role."""
+    mode = MODE_NAMES.get(seat_count, str(seat_count))
+    if quick:
+        mode = f"Quick {mode}"
+    seats = f"{open_seats} seat{'s' if open_seats != 1 else ''} open"
+    return (
+        f"<@&{role_id}> 🀄 A **Meadow Mahjong** {mode} just opened at "
+        f"{stake}/point — {seats}. Jump in: {jump}"
+    )
 
 
 def build_table_panel(
@@ -95,6 +160,7 @@ def build_table_panel(
     deadline_at: float | None = None,
     *,
     practice: bool = False,
+    closed_reason: str | None = None,
 ) -> discord.Embed:
     accent = accent or DEFAULT_ACCENT_COLOR
     mode = MODE_NAMES.get(state.seat_count, str(state.seat_count))
@@ -199,8 +265,13 @@ def build_table_panel(
     if state.phase is Phase.CLAIM_WINDOW:
         assert state.live_discard is not None and state.live_discarder is not None
         responders = [s for s in state.live_seats() if s != state.live_discarder]
+        # Only a seat's own tap earns a tick. An auto-passed seat (no legal
+        # route to the tile) renders exactly like an undecided one: ticking
+        # it the instant the discard landed told the whole table which
+        # seats could call or Mahjong the tile (mahjong-145).
         ticks = " ".join(
-            "✅" if s in state.claims else "…" for s in responders
+            "✅" if state.claims.get(s, (AUTO_PASS,))[0] != AUTO_PASS else "…"
+            for s in responders
         )
         e.add_field(
             name="Claim Window",
@@ -248,7 +319,72 @@ def build_table_panel(
                     inline=False)
         return _footer(e, "Settled")
 
+    # CLOSED: the final card says why (mahjong-151) — it used to be
+    # whatever the last live render was, buttons stripped, so a settle card
+    # kept asking for a Rematch that could never come.
+    e.description = "\n".join(
+        f"**{names.get(s.member_id, s.member_id)}**" for s in state.seats
+    ) or None
+    e.add_field(name="Closed", value=close_copy(closed_reason), inline=False)
     return _footer(e, "Closed")
+
+
+def turn_key(state: GameState) -> tuple | None:
+    """Identity of the turn a human is being nudged for, or None outside
+    one. Two transitions inside the same turn (a joker redeem, an assist
+    refresh) share a key, so the ping is posted once per turn, not once per
+    render."""
+    if state.phase is not Phase.AWAIT_DISCARD:
+        return None
+    return (state.hand_no, state.turn, state.discard_count, state.turn_source)
+
+
+class Nudge(NamedTuple):
+    """One plain-content ping (mahjong-144). ``warning`` rows are the
+    second-strike line, which outlives the turn it was posted in."""
+
+    member_id: int
+    content: str
+    warning: bool = False
+
+
+def warning_live(state: GameState, member_id: int) -> bool:
+    """Is the second-strike warning still true for this member? It stands
+    while the seat is one missed turn from folding; a timely act resets the
+    strikes and the fold itself ends the question, so the cog deletes the
+    line the moment this goes False."""
+    for seat in state.seats:
+        if seat.member_id == member_id:
+            return not seat.fallow and seat.strikes == STRIKES_TO_FALLOW - 1
+    return False
+
+
+def nudge_lines(
+    state: GameState, events: list[Event], *, turn_changed: bool
+) -> list[Nudge]:
+    """The plain-content pings a transition owes (mahjong-144): the seat
+    whose turn just began, and any seat one missed turn from folding.
+    Content, never an embed — a mention only pings from message content —
+    and never a bot seat. The cog restricts ``allowed_mentions`` to the one
+    member; a draw line is deleted when the next turn begins and a warning
+    while ``warning_live`` holds, so the channel never accumulates them."""
+    out: list[Nudge] = []
+    for kind, data in events:
+        if kind != "strike" or data.get("strikes") != STRIKES_TO_FALLOW - 1:
+            continue
+        seat = state.seats[data["seat"]]
+        if seat.fallow or is_bot_id(seat.member_id):
+            continue
+        out.append(Nudge(
+            seat.member_id,
+            f"<@{seat.member_id}> — one more missed turn and your seat folds.",
+            warning=True,
+        ))
+    if turn_changed and state.phase is Phase.AWAIT_DISCARD:
+        member_id = state.seats[state.turn].member_id
+        if not is_bot_id(member_id):
+            out.append(Nudge(member_id, f"<@{member_id}> — your draw."))
+    return out
 
 
 def _assist_field(assist: AssistReadout) -> str:

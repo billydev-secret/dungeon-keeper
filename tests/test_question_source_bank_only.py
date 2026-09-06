@@ -30,6 +30,7 @@ from bot_modules.games.utils.question_source import (
     get_rushmore_topic,
     get_wyr_question,
     normalise_tags,
+    split_wyr_options,
 )
 
 
@@ -128,10 +129,45 @@ def test_wyr_empty_bank_returns_none():
     assert _run(get_wyr_question(_FakeDB([]))) is None
 
 
-def test_wyr_row_without_separator_is_a_miss():
-    """A malformed row can't be split into two options, so it serves nothing."""
+def test_wyr_row_without_separator_or_or_is_a_miss():
+    """A row that is neither ``a|b`` nor ``a or b`` can't be split, so it serves nothing."""
     db = _FakeDB([("wyr", [], "no separator here")])
     assert _run(get_wyr_question(db)) is None
+
+
+# vote-games-49: every prod WYR row was dashboard-typed prose ("Would you
+# rather X, or Y?") with no ``|``, so a bank-fed game ended in the same second.
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("Would you rather fly, or be invisible?", ("fly", "be invisible"), id="prose-comma-or"),
+        pytest.param("Would you rather fly or be invisible?", ("fly", "be invisible"), id="prose-or"),
+        pytest.param("would you rather: eat a bug or lick a frog", ("eat a bug", "lick a frog"), id="lowercase-colon"),
+        pytest.param("fight a horse-sized duck or fight 100 duck-sized horses?", ("fight a horse-sized duck", "fight 100 duck-sized horses"), id="no-prefix"),
+        pytest.param("have a dog or a cat, or a bird?", ("have a dog or a cat", "a bird"), id="last-comma-or-wins"),
+        pytest.param("Would you rather fly|be invisible", ("fly", "be invisible"), id="pipe-still-strips-prefix"),
+        pytest.param("  fly | be invisible  ", ("fly", "be invisible"), id="pipe-trims"),
+    ],
+)
+def test_wyr_prose_row_is_split_on_or(text, expected):
+    db = _FakeDB([("wyr", [], text)])
+    assert _run(get_wyr_question(db)) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("fly | be invisible", ("fly", "be invisible"), id="pipe"),
+        pytest.param("Would you rather fly, or be invisible?", ("fly", "be invisible"), id="prose"),
+        pytest.param("Would you rather?", None, id="prefix-only"),
+        pytest.param("fly |", None, id="empty-side"),
+        pytest.param("", None, id="empty"),
+        pytest.param("a | b | c", None, id="two-pipes-is-ambiguous"),
+    ],
+)
+def test_split_wyr_options_is_the_one_parser(text, expected):
+    """The dashboard validator and the bank draw share this split."""
+    assert split_wyr_options(text) == expected
 
 
 def test_module_has_no_ai_generation_surface():

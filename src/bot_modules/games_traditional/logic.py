@@ -76,33 +76,99 @@ def toggle_pref(
     return "added"
 
 
+# ── Passes ──────────────────────────────────────────────────────────
+# A pass is one sweep through every (player, category) pair. The game used to
+# be one-shot: once each pair had been asked, ``select_next_question_target``
+# returned None and the host was told everything had been asked with nothing
+# to do next (trivia-tail-89). Now the host's next Ask rolls the game into a
+# second pass and the pairs open up again. Pass 1 keys stay ``"<uid>:<cat>"``
+# so every payload written before passes existed still reads; pass ``n > 1``
+# keys carry the pass as a third segment, ``"<uid>:<cat>:<n>"``.
+
+FIRST_PASS = 1
+
+
+def current_pass(payload: dict[str, Any]) -> int:
+    """The pass the game is on — 1 for every payload that never rolled over."""
+    try:
+        return max(FIRST_PASS, int(payload.get("pass", FIRST_PASS)))
+    except (TypeError, ValueError):
+        return FIRST_PASS
+
+
+def asked_key(target_id: str, category: str, pass_no: int = FIRST_PASS) -> str:
+    """The ``asked`` key for a (player, category) pair on ``pass_no``."""
+    if pass_no <= FIRST_PASS:
+        return f"{target_id}:{category}"
+    return f"{target_id}:{category}:{pass_no}"
+
+
+def parse_asked_key(key: str) -> tuple[str, str, int]:
+    """Split an ``asked`` key back into ``(user_id, category, pass_no)``.
+
+    Categories never contain a colon, so the last segment is the pass number
+    when there are three segments and the category when there are two.
+    """
+    parts = key.split(":")
+    if len(parts) >= 3 and parts[-1].isdigit():
+        return ":".join(parts[:-2]), parts[-2], int(parts[-1])
+    user_id, _, cat = key.rpartition(":")
+    return user_id, cat, FIRST_PASS
+
+
 def record_asked(
-    payload: dict[str, Any], target_id: str, category: str, question: str
+    payload: dict[str, Any],
+    target_id: str,
+    category: str,
+    question: str,
+    pass_no: int | None = None,
 ) -> None:
     """Record that ``question`` was asked to ``target_id`` in ``category``.
 
-    Mutates ``payload`` in place. The key is ``"<target_id>:<category>"``
-    so each (player, category) pair is recorded at most once — matching
-    the cog's "no duplicate (user, category) questions" rule.
+    Mutates ``payload`` in place. The key is :func:`asked_key` for the
+    game's current pass (or ``pass_no`` when given), so each (player,
+    category) pair is recorded at most once *per pass* — matching the
+    cog's "no duplicate (user, category) questions" rule within a pass.
     """
     asked: dict[str, str] = payload.setdefault("asked", {})
-    asked[f"{target_id}:{category}"] = question
+    if pass_no is None:
+        pass_no = current_pass(payload)
+    asked[asked_key(target_id, category, pass_no)] = question
+
+
+def pass_complete(
+    prefs: dict[str, list[str]], asked: dict[str, str], pass_no: int = FIRST_PASS
+) -> bool:
+    """Has every declared (player, category) pair been asked on ``pass_no``?
+
+    False for an empty room — nothing to complete — so the "pass complete"
+    moment only ever fires after a real question closed the pass.
+    """
+    if not any(cats for cats in prefs.values()):
+        return False
+    return not available_targets(prefs, asked, pass_no)
+
+
+def start_next_pass(payload: dict[str, Any]) -> int:
+    """Roll the game onto its next pass; returns the new pass number."""
+    payload["pass"] = current_pass(payload) + 1
+    return payload["pass"]
 
 
 def available_targets(
-    prefs: dict[str, list[str]], asked: dict[str, str]
+    prefs: dict[str, list[str]], asked: dict[str, str], pass_no: int = FIRST_PASS
 ) -> list[tuple[str, str]]:
-    """Return ``(user_id, category)`` pairs that have not been asked yet.
+    """Return ``(user_id, category)`` pairs not yet asked on ``pass_no``.
 
     For each participant's declared preferences, filter out any
-    ``(user, category)`` combinations already recorded in ``asked``.
-    Returned in iteration order of ``prefs`` (stable for Python 3.7+).
+    ``(user, category)`` combinations already recorded in ``asked`` for
+    this pass. Returned in iteration order of ``prefs`` (stable for
+    Python 3.7+).
     """
     out: list[tuple[str, str]] = []
     for user_id, user_cats in prefs.items():
         for cat in user_cats:
-            key = f"{user_id}:{cat}"
-            if key not in asked:
+            if asked_key(user_id, cat, pass_no) not in asked:
                 out.append((user_id, cat))
     return out
 
@@ -115,7 +181,7 @@ def asked_counts_by_user(asked: dict[str, str]) -> dict[str, int]:
     """
     counts: dict[str, int] = {}
     for key in asked:
-        user_id, _ = key.rsplit(":", 1)
+        user_id, _, _ = parse_asked_key(key)
         counts[user_id] = counts.get(user_id, 0) + 1
     return counts
 
@@ -126,12 +192,13 @@ def select_next_question_target(
     rng: random.Random | None = None,
     *,
     excluded: Iterable[int | str] | None = None,
+    pass_no: int = FIRST_PASS,
 ) -> tuple[str, str] | None:
-    """Pick the next ``(user_id, category)`` to ask.
+    """Pick the next ``(user_id, category)`` to ask on ``pass_no``.
 
     Implements the cog's selection rule:
 
-    1. Build the list of available (player, category) pairs.
+    1. Build the list of available (player, category) pairs for the pass.
     2. Drop every player in ``excluded``.
     3. Look up each candidate's total asked-count.
     4. Keep only candidates whose player has the minimum asked-count.
@@ -145,12 +212,16 @@ def select_next_question_target(
     hands back ints, the payload keys are strs.
 
     Returns ``None`` when no eligible pair exists (either no prefs or
-    every combination has already been asked). ``rng`` is injected so
-    tests can pin the tiebreak; defaults to the module ``random``.
+    every combination has already been asked on this pass). The
+    least-asked weighting counts every pass, so a player who joined late
+    is still preferred on pass two. ``rng`` is injected so tests can pin
+    the tiebreak; defaults to the module ``random``.
     """
     dropped = {str(uid) for uid in (excluded or ())}
     available = [
-        (uid, cat) for uid, cat in available_targets(prefs, asked) if uid not in dropped
+        (uid, cat)
+        for uid, cat in available_targets(prefs, asked, pass_no)
+        if uid not in dropped
     ]
     if not available:
         return None
@@ -168,6 +239,7 @@ def select_bank_categories_for_all(
     prefs: dict[str, list[str]],
     asked: dict[str, str],
     rng: random.Random | None = None,
+    pass_no: int = FIRST_PASS,
 ) -> dict[str, str]:
     """Pick one opted-in category per participant for a bank round.
 
@@ -182,7 +254,7 @@ def select_bank_categories_for_all(
     chooser = rng if rng is not None else random
     out: dict[str, str] = {}
     for uid, cats in prefs.items():
-        open_cats = [cat for cat in cats if f"{uid}:{cat}" not in asked]
+        open_cats = [cat for cat in cats if asked_key(uid, cat, pass_no) not in asked]
         if open_cats:
             out[uid] = chooser.choice(open_cats)
     return out
@@ -198,23 +270,30 @@ def summarize_asked_by_category(asked: dict[str, str]) -> dict[str, int]:
     """
     by_cat: dict[str, int] = {cat: 0 for cat in CATEGORIES}
     for key in asked:
-        _, cat = key.rsplit(":", 1)
+        _, cat, _ = parse_asked_key(key)
         by_cat[cat] = by_cat.get(cat, 0) + 1
     return by_cat
 
 
-def question_pool_size(prefs: dict[str, list[str]], asked: dict[str, str]) -> int:
-    """Total number of distinct ``(player, category)`` questions in play.
+def question_pool_size(
+    prefs: dict[str, list[str]], asked: dict[str, str], pass_no: int = FIRST_PASS
+) -> int:
+    """Total number of distinct ``(player, category)`` questions on a pass.
 
     This is the denominator for the "X / Y asked" progress report: every
     preference combo currently declared, unioned with anything already
-    asked. The union keeps the total ``>= len(asked)`` even if a player
-    drops a preference after being asked that category, so the progress
-    never reads as more-asked-than-possible.
+    asked on ``pass_no``. The union keeps the total ``>= asked_on_pass``
+    even if a player drops a preference after being asked that category,
+    so the progress never reads as more-asked-than-possible.
     """
-    pool = {f"{uid}:{cat}" for uid, cats in prefs.items() for cat in cats}
-    pool |= set(asked.keys())
+    pool = {asked_key(uid, cat, pass_no) for uid, cats in prefs.items() for cat in cats}
+    pool |= {key for key in asked if parse_asked_key(key)[2] == pass_no}
     return len(pool)
+
+
+def asked_on_pass(asked: dict[str, str], pass_no: int = FIRST_PASS) -> int:
+    """How many questions were asked on ``pass_no`` (the progress numerator)."""
+    return sum(1 for key in asked if parse_asked_key(key)[2] == pass_no)
 
 
 # ── NSFW gating ─────────────────────────────────────────────────────
@@ -246,3 +325,62 @@ def filter_nsfw_prefs(
         uid: [c for c in cats if category_allowed(c, allow_nsfw)]
         for uid, cats in prefs.items()
     }
+
+
+# ── Idle close ──────────────────────────────────────────────────────
+# Truth or Dare is the one game whose lobby and play are the same phase — the
+# row sits in ``joining`` from open to end, so the lobby idle sweep can't tell
+# a room that never filled from one mid-game, and 18 of 19 prod games were
+# left to the 24-hour sweep (trivia-tail-84). The room ends itself instead:
+# after the dashboard's quiet window with nothing pressed, the host view
+# posts the recap and pays the room the same way End Game does. 0 turns it
+# off. The window is stored on the payload at launch and re-armed from
+# ``last_activity`` after a restart, so a restart neither resets nor loses it.
+
+IDLE_MINUTES_DEFAULT = 20
+IDLE_MINUTES_MAX = 24 * 60
+IDLE_MINUTES_KEY = "idle_minutes"
+LAST_ACTIVITY_KEY = "last_activity"
+
+
+def clamp_idle_minutes(raw: Any, default: int = IDLE_MINUTES_DEFAULT) -> int:
+    """The dial's stored value as whole minutes, ``0`` meaning off; junk
+    reads as the default, and anything over a day clamps to a day."""
+    try:
+        minutes = int(float(raw))
+    except (TypeError, ValueError):
+        return default
+    return max(0, min(minutes, IDLE_MINUTES_MAX))
+
+
+def touch_activity(payload: dict[str, Any], now: float) -> None:
+    """Stamp the moment something happened — a toggle, a question, a bank round."""
+    payload[LAST_ACTIVITY_KEY] = int(now)
+
+
+def idle_seconds_left(payload: dict[str, Any], now: float) -> float | None:
+    """Seconds until the room has been quiet for its idle window, or None when
+    the window is off (``idle_minutes`` 0 / absent) — never negative."""
+    minutes = clamp_idle_minutes(payload.get(IDLE_MINUTES_KEY), default=0)
+    if minutes <= 0:
+        return None
+    try:
+        last = float(payload.get(LAST_ACTIVITY_KEY) or now)
+    except (TypeError, ValueError):
+        last = now
+    return max(0.0, last + minutes * 60 - now)
+
+
+def idle_close_notice(minutes: int) -> str:
+    """The one line that says why the recap just appeared."""
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"⌛ Truth or Dare wrapped up on its own after {minutes} quiet {unit}."
+
+
+def pass_complete_notice(pass_no: int) -> str:
+    """The loud moment a pass closes: everyone's been asked, and what's next."""
+    return (
+        f"🎉 Pass {pass_no} complete — everyone has been asked in every category "
+        "they picked. The host can press **Ask Question** to go round again, or "
+        "**End Game** for the recap and payout."
+    )

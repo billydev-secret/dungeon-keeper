@@ -1,5 +1,7 @@
 """Scheduler loop (_process_due) branch behavior, over a real schema + GamesDb."""
 
+from unittest.mock import AsyncMock
+
 from bot_modules.games.utils.game_manager import create_game
 from bot_modules.services.games_db import GamesDb
 from bot_modules.services import scheduled_games_service as svc
@@ -116,7 +118,11 @@ async def test_photo_still_fires_after_leaving_schedulable(sync_db_path):
     assert after["next_run_at"] > NOW
 
 
-async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
+async def test_recurring_busy_channel_stays_due_and_retries(sync_db_path):
+    # platform-24: a recurring row used to roll to tomorrow the moment its
+    # channel was busy, so a member-opened round overlapping the slot by a
+    # minute cost the whole day. Now it stays due — the 60 s poll is the retry
+    # — until the lateness guard gives up on the slot.
     db = GamesDb(sync_db_path)
     launched = []
     bot = _make_bot(db, launched)
@@ -128,7 +134,96 @@ async def test_recurring_busy_channel_skips_and_advances(sync_db_path):
     assert launched == []  # not launched
     after = await _row(db, row["id"])
     assert after["last_status"] == "skipped_active"
+    assert after["status"] == "active"
+    assert after["next_run_at"] == NOW      # still due, not rolled
+    assert after["last_run_at"] == NOW      # the retry is recorded as a run
+
+
+async def test_recurring_busy_channel_launches_once_it_frees_up(sync_db_path):
+    # The retry is the point: the game the slot was for still happens.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    gid = await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(db, recurrence="daily")
+
+    await svc._process_due(bot, db, row, NOW)
+    assert launched == []
+    await db.execute("DELETE FROM games_active_games WHERE game_id = ?", (gid,))
+
+    await svc._process_due(bot, db, await _row(db, row["id"]), NOW + 1200)
+
+    assert len(launched) == 1
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "launched"
+    assert after["next_run_at"] > NOW + 1200
+
+
+async def test_recurring_busy_past_the_grace_rolls_with_skipped_active(sync_db_path):
+    # Still busy when the slot's grace runs out: roll to the next slot and say
+    # *why* — 'skipped_active', not the 'skipped_late' a bot outage would show.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(
+        db, recurrence="daily", last_status="skipped_active",
+        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100,
+        last_run_at=NOW - 60,  # a retry happened inside this slot
+    )
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched == []
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_active"
     assert after["next_run_at"] > NOW
+
+
+async def test_recurring_stale_slot_after_a_busy_yesterday_is_still_late(sync_db_path):
+    # Yesterday's 'skipped_active' must not relabel an outage: the retry has to
+    # have happened *within* this slot for the roll to blame the busy channel.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(
+        db, recurrence="daily", last_status="skipped_active",
+        next_run_at=NOW - svc.GIVEUP_GRACE_SECONDS - 100,
+        last_run_at=NOW - 86400,  # yesterday's retry
+    )
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_status"] == "skipped_late"
+
+
+async def test_a_launch_stamps_last_launched_at(sync_db_path):
+    # last_status alone could never say when a schedule last *actually* ran —
+    # prod's Risky Rolls row read 'skipped_active' for days with no history.
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    row = await _insert(db, recurrence="daily")
+    assert row["last_launched_at"] is None
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_launched_at"] == NOW
+
+
+async def test_a_busy_retry_leaves_last_launched_at_alone(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+    bot = _make_bot(db, launched)
+    await create_game(db, CHAN, 1, "wyr")
+    row = await _insert(db, recurrence="daily", last_launched_at=NOW - 86400)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    after = await _row(db, row["id"])
+    assert after["last_launched_at"] == NOW - 86400
 
 
 async def test_busy_check_skips_without_announcing(sync_db_path):
@@ -151,7 +246,7 @@ async def test_busy_check_skips_without_announcing(sync_db_path):
     assert bot._channels[CHAN].sends == []      # no "starting now!" ping
     after = await _row(db, row["id"])
     assert after["last_status"] == "skipped_active"
-    assert after["next_run_at"] > NOW           # advanced to next slot; round rides
+    assert after["next_run_at"] == NOW          # stays due; the round rides, we retry
 
 
 async def test_once_busy_before_giveup_stays_due(sync_db_path):
@@ -569,3 +664,99 @@ async def test_a_rotation_read_failure_lets_the_game_launch(sync_db_path):
     await svc._process_due(bot, db, row, NOW)
 
     assert len(launched) == 1
+
+
+# ── a scheduled lobby of a game that starts itself (clapback-8) ─────────────
+
+
+async def test_scheduled_auto_start_game_gets_a_countdown_and_no_nudge(sync_db_path):
+    # Nobody is at the keyboard: the countdown is what makes the game run,
+    # and the "hit Start" nudge would be a lie.
+    from bot_modules.games.utils.game_manager import create_game, get_game_payload
+    from bot_modules.services import game_start_ping_service as ping_svc
+
+    db = GamesDb(sync_db_path)
+    launched = []
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        launched.append(options)
+        gid = await create_game(
+            db, CHAN, host_id, "clapback", state="joining",
+            payload={"config": {"start_epoch": ping_svc.resolve_start_epoch(options, now=NOW)}},
+            message_id=555,
+        )
+        return gid
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"clapback": fake_launch})
+    bot.lobby_auto_starters = {"clapback": AsyncMock(return_value=True)}  # type: ignore[attr-defined]
+    row = await _insert(db, game_type="clapback", created_by=2001)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert launched[0]["start_in"] == ping_svc.SCHEDULED_AUTO_START_MINUTES
+    assert bot._channels[CHAN].sends == []
+    active = await db.fetchone("SELECT game_id FROM games_active_games")
+    assert active is not None
+    gid = active["game_id"]
+    payload = await get_game_payload(db, gid)
+    assert payload["config"]["start_epoch"] == NOW + ping_svc.SCHEDULED_AUTO_START_MINUTES * 60
+    assert "start_ping_sent" not in payload
+
+
+async def test_scheduled_auto_start_game_keeps_its_own_start_in(sync_db_path):
+    db = GamesDb(sync_db_path)
+    launched = []
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        launched.append(options)
+        return "gid"
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"clapback": fake_launch})
+    bot.lobby_auto_starters = {"clapback": AsyncMock(return_value=True)}  # type: ignore[attr-defined]
+    row = await _insert(db, game_type="clapback", options='{"start_in": 25}')
+    await svc._process_due(bot, db, row, NOW)
+    assert launched[0]["start_in"] == 25
+
+
+async def test_an_announcing_schedule_stands_in_for_the_game_night_ping(sync_db_path):
+    from bot_modules.games.utils.game_manager import create_game, get_game_payload
+
+    db = GamesDb(sync_db_path)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        return await create_game(db, CHAN, 2001, "story", state="joining", message_id=555)
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"story": fake_launch})
+    row = await _insert(db, game_type="story", announce=1, announce_role_id=555)
+    await svc._process_due(bot, db, row, NOW)
+
+    active = await db.fetchone("SELECT game_id FROM games_active_games")
+    assert active is not None
+    assert (await get_game_payload(db, active["game_id"]))["game_night_pinged"] is True
+    # One call to the room: the schedule's announcement (the other send is
+    # the host's own start nudge, which mentions nobody else).
+    assert [line for line in bot._channels[CHAN].sends if "<@&555>" in line]
+
+
+async def test_a_schedule_stays_quiet_when_the_sweep_pinged_the_lobby_first(sync_db_path):
+    """The two loops can be mid-flight together: the platform sweep pings the
+    lobby the moment its board exists, which can land before the schedule gets
+    to its own announcement. One game opening, one ping — the loser stands
+    down instead of calling the room a second time."""
+    from bot_modules.games.utils.game_manager import create_game
+    from bot_modules.services.game_start_ping_service import claim_game_night_ping
+
+    db = GamesDb(sync_db_path)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        gid = await create_game(db, CHAN, 2001, "story", state="joining", message_id=555)
+        # The sweep tick that ran while this launcher was posting the board.
+        await claim_game_night_ping(db, gid)
+        return gid
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"story": fake_launch})
+    row = await _insert(db, game_type="story", announce=1, announce_role_id=555)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert not [line for line in bot._channels[CHAN].sends if "<@&555>" in line]

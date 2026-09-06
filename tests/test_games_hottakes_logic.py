@@ -394,6 +394,7 @@ def test_tally_votes_single_vote_avg_equals_scale_value(idx, expected_avg):
 # ── economy roster enrichment (Stage 2 faucet) ──────────────────────
 
 import asyncio  # noqa: E402
+import json  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
@@ -474,3 +475,304 @@ def test_voting_start_message_carries_no_submitter(takes, count_phrase):
         assert str(take["user_id"]) not in msg
     assert count_phrase in msg
     assert "voting is starting" in msg
+
+
+# ── the lobby survives a restart: phase is recorded, Cancel exists ──
+
+from bot_modules.games.utils.game_manager import (  # noqa: E402
+    ConfirmCloseView,
+    get_active_game,
+)
+from bot_modules.games.utils.launch_guard import busy_message  # noqa: E402
+
+
+def _host_interaction(host_id: int, channel):
+    """A press by the host — is_host_or_mod passes on the id alone."""
+    return SimpleNamespace(
+        user=SimpleNamespace(id=host_id, display_name="Host"),
+        channel=channel,
+        channel_id=getattr(channel, "id", None),
+        guild=None,
+        guild_id=9001,
+        message=SimpleNamespace(id=555, edit=AsyncMock(), embeds=[]),
+        response=SimpleNamespace(
+            send_message=AsyncMock(), edit_message=AsyncMock(), defer=AsyncMock(),
+        ),
+        followup=SimpleNamespace(send=AsyncMock()),
+    )
+
+
+async def test_start_voting_records_the_playing_phase(monkeypatch, sync_db_path):
+    """The row's state is what recovery branches on: a lobby re-registers its
+    buttons, a game in voting is re-driven. Until 2026-09-04 the cog never
+    wrote the phase, so every restart was decided by the take count alone."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    monkeypatch.setattr(cog, "_run_voting", AsyncMock())
+    payload = {
+        "takes": [
+            {"text": "t1", "user_id": 9, "display_order": 0},
+            {"text": "t2", "user_id": 8, "display_order": 1},
+        ],
+        "results": [],
+    }
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", state="joining", payload=payload)
+    view = hottakes_cog.HotTakesSubmitView(gid, 1, bot.games_db, bot, cog)
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+
+    await view.start_voting.callback(_host_interaction(1, channel))  # type: ignore[arg-type]
+
+    row = await get_active_game(bot.games_db, 100)
+    assert row is not None and row["state"] == "playing"
+    assert cog._run_voting.await_count == 1  # type: ignore[attr-defined]
+
+
+async def test_cancel_button_ends_the_lobby_without_paying(sync_db_path):
+    """Host/mod Cancel on the lobby: confirm popup, then the row is archived
+    as 'cancelled' with nobody paid — a lobby that never voted has no roster."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    payload = {"takes": [{"text": "t1", "user_id": 9, "display_order": 0}], "results": []}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", state="joining", payload=payload)
+    view = hottakes_cog.HotTakesSubmitView(gid, 1, bot.games_db, bot, cog)
+    bot.active_views[gid] = view
+    anchor = SimpleNamespace(id=555, edit=AsyncMock(), embeds=[])
+    view._message = anchor  # type: ignore[assignment]
+    channel = SimpleNamespace(id=100, guild=None, send=AsyncMock())
+
+    # A non-host is refused.
+    stranger = _host_interaction(42, channel)
+    await view.cancel_game.callback(stranger)  # type: ignore[arg-type]
+    assert stranger.response.send_message.await_args.args[0].startswith("❌")
+    assert await get_active_game(bot.games_db, 100) is not None
+
+    press = _host_interaction(1, channel)
+    await view.cancel_game.callback(press)  # type: ignore[arg-type]
+    confirm = press.response.send_message.await_args.kwargs["view"]
+    assert isinstance(confirm, ConfirmCloseView)
+    assert press.response.send_message.await_args.kwargs["ephemeral"] is True
+
+    await confirm._callback(_host_interaction(1, channel))
+
+    assert await get_active_game(bot.games_db, 100) is None
+    assert gid not in bot.active_views
+    assert view.is_finished()
+    anchor.edit.assert_awaited()  # the lobby's buttons are disabled
+    archived = await bot.games_db.fetchone(
+        "SELECT player_count, payload FROM games_game_history WHERE game_id = ?", (gid,)
+    )
+    assert archived is not None
+    assert archived["player_count"] == 0
+    assert json.loads(archived["payload"])["reason"] == "cancelled"
+
+
+async def test_slash_entry_refuses_a_channel_with_a_running_game(monkeypatch, sync_db_path):
+    """/games play hottakes goes through the shared launch guard (platform-18):
+    a second host is refused with the running game named, and nothing launches."""
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    launch = AsyncMock()
+    monkeypatch.setattr(cog, "launch", launch)
+    await bot.games_db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)", (100, 9001),
+    )
+    await create_game(bot.games_db, 100, 7, "wyr", message_id=321, guild_id=9001)
+    interaction = _host_interaction(1, SimpleNamespace(id=100, guild=None, send=AsyncMock()))
+
+    await cog.hottakes.callback(cog, interaction)  # type: ignore[arg-type]
+
+    sent = interaction.response.send_message.await_args
+    assert sent.kwargs["ephemeral"] is True
+    assert sent.args[0] == busy_message(
+        "wyr", link="https://discord.com/channels/9001/100/321",
+    )
+    launch.assert_not_awaited()
+    interaction.response.defer.assert_not_awaited()
+
+
+# ── pacing, the two-take floor, self-votes, the lobby copy (anon-tail-71/72/74/75) ──
+
+from bot_modules.games.utils.round_pacing import TIMER_FIELD_NAME  # noqa: E402
+from bot_modules.games_hottakes.embeds import LOBBY_DESCRIPTION  # noqa: E402
+from bot_modules.games_hottakes.logic import (  # noqa: E402
+    DEFAULT_TAKE_SECONDS,
+    MIN_TAKES,
+    SELF_VOTE_REFUSAL,
+    active_voters,
+    everyone_has_voted,
+    voting_refusal,
+)
+
+
+@pytest.mark.parametrize(
+    ("count", "expect_refused", "fragment"),
+    [
+        pytest.param(0, True, "No hot takes", id="empty"),
+        pytest.param(1, True, "everyone would know whose it is", id="one-take-is-not-anonymous"),
+        pytest.param(2, False, "", id="two-takes-start"),
+    ],
+)
+def test_voting_refusal_needs_two_takes(count, expect_refused, fragment):
+    assert MIN_TAKES == 2
+    takes = [{"text": f"t{i}", "user_id": i} for i in range(count)]
+    refusal = voting_refusal(takes)
+    if expect_refused:
+        assert refusal is not None and refusal.startswith("❌") and fragment in refusal
+    else:
+        assert refusal is None
+
+
+def test_add_take_records_the_distinct_submitters_for_the_lobby_sweep():
+    payload: dict = {}
+    add_take(payload, 9, "a")
+    add_take(payload, 9, "b")
+    add_take(payload, 4, "c")
+    assert payload["participants"] == [9, 4]
+
+
+@pytest.mark.parametrize(
+    ("takes", "results", "exclude", "expected"),
+    [
+        pytest.param([{"user_id": 1}, {"user_id": 2}], [], 1, {2}, id="submitters-minus-the-author"),
+        pytest.param([{"user_id": 1}, {"user_id": 2}], [{"voters": [5, 6]}], 2, {1, 5, 6}, id="earlier-voters-join"),
+        pytest.param([{"user_id": 1}], [], 1, set(), id="a-lone-author-waits-on-nobody"),
+    ],
+)
+def test_active_voters(takes, results, exclude, expected):
+    assert active_voters(takes, results, exclude=exclude) == expected
+
+
+@pytest.mark.parametrize(
+    ("expected", "voted", "result"),
+    [
+        pytest.param({1, 2}, {1, 2, 7}, True, id="all-in"),
+        pytest.param({1, 2}, {1}, False, id="one-missing"),
+        pytest.param(set(), {1}, False, id="nobody-expected-never-advances"),
+    ],
+)
+def test_everyone_has_voted(expected, voted, result):
+    assert everyone_has_voted(expected, voted) is result
+
+
+def test_lobby_embed_carries_how_to_play_and_the_mod_visibility_line():
+    embed = build_lobby_embed("Alice")
+    assert embed.description == LOBBY_DESCRIPTION
+    assert "How to play" in embed.description
+    assert "mods can still see who sent it" in embed.description
+    assert all(f.name != "⏰ Starting" for f in embed.fields)
+
+
+def test_lobby_embed_renders_the_start_countdown_last():
+    embed = build_lobby_embed("Alice", start_at=1_700_000_000)
+    assert embed.fields[-1].name == "⏰ Starting"
+    assert embed.fields[-1].value == "<t:1700000000:R>"
+    assert embed.fields[1].name == "Submissions"  # the modal edits this one in place
+
+
+@pytest.mark.parametrize(
+    ("advance_at", "closed", "shown"),
+    [
+        pytest.param(1_700_000_000, False, True, id="timed-open"),
+        pytest.param(1_700_000_000, True, False, id="timed-closed"),
+        pytest.param(None, False, False, id="host-paced"),
+    ],
+)
+def test_vote_embed_shows_the_countdown_only_while_timed_and_open(advance_at, closed, shown):
+    embed = build_vote_embed("take", 1, 2, {}, closed=closed, advance_at=advance_at)
+    assert any(f.name == TIMER_FIELD_NAME for f in embed.fields) is shown
+
+
+def _voter(user_id: int):
+    return SimpleNamespace(
+        user=SimpleNamespace(id=user_id, display_name=f"U{user_id}"),
+        channel=None,
+        message=SimpleNamespace(id=1, edit=AsyncMock()),
+        response=SimpleNamespace(send_message=AsyncMock()),
+    )
+
+
+async def test_the_author_cannot_rate_their_own_take(sync_db_path):
+    bot = _SpyBot(sync_db_path)
+    advance = AsyncMock()
+    view = hottakes_cog.HotTakeVoteView(
+        "g", 1, "take", 1, 1, bot.games_db, bot, "Host", advance, take_author_id=9,
+    )
+    author = _voter(9)
+    await view.vote_4.callback(author)  # type: ignore[arg-type]
+    assert author.response.send_message.await_args.args[0] == SELF_VOTE_REFUSAL
+    assert view.votes == {}
+
+
+async def test_the_vote_closes_itself_once_everyone_expected_has_voted(sync_db_path):
+    bot = _SpyBot(sync_db_path)
+    advance = AsyncMock()
+    view = hottakes_cog.HotTakeVoteView(
+        "g", 1, "take", 1, 1, bot.games_db, bot, "Host", advance,
+        take_author_id=9, expected_voters={2, 3},
+    )
+    await view.vote_3.callback(_voter(2))  # type: ignore[arg-type]
+    advance.assert_not_awaited()
+    await view.vote_0.callback(_voter(3))  # type: ignore[arg-type]
+    assert advance.await_count == 1
+    assert view.votes == {2: 3, 3: 0}
+
+
+async def test_a_timed_take_closes_on_its_own_and_the_game_still_pays(monkeypatch, sync_db_path):
+    """No press at all: the per-take timer closes the vote, the loop moves on
+    and the ending pays the author — a host-paced game waited forever."""
+    spy = AsyncMock()
+    monkeypatch.setattr(hottakes_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {"takes": [{"text": "t1", "user_id": 9}], "results": [], "round_seconds": 1}
+    gid = await create_game(bot.games_db, 100, 1, "hottakes", payload=payload)
+    bot.active_views[gid] = object()
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    channel = SimpleNamespace(
+        id=100, guild=None,
+        send=AsyncMock(return_value=SimpleNamespace(id=999, edit=AsyncMock())),
+    )
+
+    await asyncio.wait_for(cog._run_voting(None, gid, 1, "Host", channel), timeout=8)
+
+    assert spy.await_count == 1
+    assert spy.await_args.kwargs["player_ids"] == [9]
+    assert spy.await_args.kwargs["round_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("options", "stored_dial", "expected"),
+    [
+        pytest.param({}, None, DEFAULT_TAKE_SECONDS, id="built-in-default"),
+        pytest.param({}, 20, 20, id="dashboard-dial"),
+        pytest.param({"round_seconds": 0}, 20, 0, id="slash-zero-beats-the-dial"),
+        pytest.param({"round_seconds": 90}, None, 90, id="slash-value"),
+    ],
+)
+async def test_launch_resolves_the_take_timer(sync_db_path, options, stored_dial, expected):
+    bot = _SpyBot(sync_db_path)
+    cog = hottakes_cog.HotTakesCog(bot)  # type: ignore[arg-type]
+    if stored_dial is not None:
+        await bot.games_db.execute(
+            "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES (?, ?, 1, ?)",
+            (9001, "hottakes", json.dumps({"round_seconds": stored_dial})),
+        )
+    channel = SimpleNamespace(
+        id=100, guild=None, name="games",
+        send=AsyncMock(return_value=SimpleNamespace(id=555)),
+    )
+    gid = await cog.launch(channel=channel, host_id=1, host_name="Host", guild_id=9001, options={**options, "start_in": 5})
+    assert gid is not None
+    row = await get_active_game(bot.games_db, 100)
+    assert row is not None and row["state"] == "joining"
+    payload = json.loads(row["payload"])
+    assert payload["round_seconds"] == expected
+    assert payload["participants"] == []
+    assert payload["start_epoch"] > 0
+
+
+def test_hot_takes_is_a_lobby_game():
+    from bot_modules.games.constants import LOBBY_GAME_TYPES, LOBBY_MIN_PLAYERS, LOBBY_START_BUTTON
+
+    assert "hottakes" in LOBBY_GAME_TYPES
+    assert LOBBY_START_BUTTON["hottakes"] == "Start Voting"
+    assert LOBBY_MIN_PLAYERS["hottakes"] == MIN_TAKES

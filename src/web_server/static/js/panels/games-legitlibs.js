@@ -141,14 +141,22 @@ export function mount(container) {
     syncPlayerRange(blanksSection.closest(".form"));
   }
 
-  // How many players a template fits is arithmetic on its blanks — each player
-  // is meant to fill 5 to 10 of them — and the server derives it on every save.
-  // The form used to offer it as two typed numbers that were then thrown away,
-  // so the card could advertise a range nobody had ever agreed to. Mirrors
-  // _players_from_blanks in routes/games.py.
+  // How many players a template fits in Classic is arithmetic on its blanks —
+  // each player is meant to fill 5 to 10 of them — and the server derives it
+  // when the blanks change. The form used to offer it as two typed numbers
+  // that were then thrown away, so the card could advertise a range nobody had
+  // ever agreed to. Mirrors _players_from_blanks in routes/games.py. Quiplash
+  // has everyone fill every blank, so it ignores this and takes a fixed range
+  // the server reports on each row (quiplashRange, below).
   function derivePlayerRange(blankCount) {
     if (!blankCount) return null;
     return [Math.ceil(blankCount / 10), Math.max(1, Math.floor(blankCount / 5))];
+  }
+
+  let quiplashRange = null;
+
+  function quiplashRangeText() {
+    return quiplashRange ? `${quiplashRange[0]}–${quiplashRange[1]} players` : "—";
   }
 
   function syncPlayerRange(formEl) {
@@ -156,7 +164,8 @@ export function mount(container) {
     const el = formEl.querySelector('[data-ctrl$="-player_range"]');
     if (!el) return;
     const range = derivePlayerRange((gatherBlanksFromTable(formEl) || []).length);
-    el.textContent = range ? `${range[0]}–${range[1]} players` : "—";
+    el.textContent = `Classic ${range ? `${range[0]}–${range[1]} players` : "—"}`
+      + ` · Quiplash ${quiplashRangeText()}`;
   }
 
   function addBlankRow(blanksSection, id, pos, domain, form) {
@@ -386,6 +395,11 @@ export function mount(container) {
       if (currentStatus) params.status = currentStatus;
       const data = await api("/api/games/legitlibs/templates", params);
       cachedTemplates = data.templates || [];
+      const first = cachedTemplates[0];
+      if (first?.quiplash_player_min) {
+        quiplashRange = [first.quiplash_player_min, first.quiplash_player_max];
+        container.querySelectorAll(".form").forEach((f) => syncPlayerRange(f));
+      }
       renderList(cachedTemplates, currentTagFilter);
     } catch (err) {
       listEl.innerHTML = renderError(`Couldn’t load LegitLibs templates — try again. (${err.message})`);
@@ -439,9 +453,12 @@ export function mount(container) {
       const publishBtn = t.status !== "published"
         ? `<button class="btn btn-sm btn-primary" data-action="publish-template" data-tid="${t.template_id}">Publish</button>`
         : `<button class="btn btn-sm" data-action="unpublish-template" data-tid="${t.template_id}">Unpublish</button>`;
-      const playerRange = t.player_min
-        ? `<span class="ll-stat">${t.player_min}${t.player_max ? "–" + t.player_max : "+"} players</span>`
+      const classicRange = t.player_min
+        ? `<span class="ll-stat">Classic ${t.player_min}${t.player_max ? "–" + t.player_max : "+"} players</span>`
         : "";
+      const playerRange = classicRange + (t.quiplash_player_min
+        ? `<span class="ll-stat">Quiplash ${t.quiplash_player_min}–${t.quiplash_player_max} players</span>`
+        : "");
       return `<div class="ll-card" data-tid="${t.template_id}">
         <div class="ll-accent" style="background:${tierColor};"></div>
         <div class="ll-body">
@@ -567,14 +584,6 @@ export function mount(container) {
     guardForm(editDiv);
   }
 
-  // The on/off switch lives in games_game_config alongside every other game's,
-  // so it rides the shared game-panel status section rather than growing a
-  // second storage shape here.
-  mountGamePanel(region("status"), {
-    gameType: "legitlibs", gameName: "LegitLibs", gameIcon: "📝",
-    hasBank: false, bare: true,
-  });
-
   // -- New form setup ---------------------------------------------------------
 
   const newFormEl = region("new-form");
@@ -651,7 +660,7 @@ function buildTemplateFormHtml(prefix, tierOptions, statusOptions) {
       <div class="field">
         <label>Players</label>
         <div data-ctrl="${prefix}-player_range" style="padding-top:6px;font-weight:600;">—</div>
-        <div class="field-hint">Worked out from the blanks below — each player fills 5 to 10 of them.</div>
+        <div class="field-hint">Classic is worked out from the blanks below — each player fills 5 to 10 of them. Quiplash has everyone fill every blank, so it takes the same range for any template.</div>
       </div>
     </div>
     <div class="field">

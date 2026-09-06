@@ -60,27 +60,40 @@ channel edit bucket). The channel itself carries only shared surfaces:
 
 - the **hub panel**, whose **📡 On the floor ticker** (`casino_ticker`
   table, `record_ticker`/`recent_ticker`, written inside `record_play`'s
-  settlement transaction for instant games only) lists the last few plays;
-  a debounced per-guild repaint (`_schedule_hub_repaint`, 8s) coalesces a
+  settlement transaction for every `TICKER_GAMES` game) lists the **latest
+  play of each of the last six distinct players** — a window function over
+  the log, one row per `user_id`, newest first (casino-135: the raw tail was
+  one grinder's last six spins, with everyone else pushed off within a
+  minute). `TICKER_KEEP` is 200 rows per guild for the same reason — the
+  log must outlast one member's burst. Each row leads with its table's
+  emoji, taken from the same `_GAME_LINES` table the Tables list renders
+  from, so a game can't join the ticker without its glyph (casino-140).
+  A debounced per-guild repaint (`_schedule_hub_repaint`, 8s) coalesces a
   burst of plays into one in-place panel edit — an edit never moves the
   panel. The panel also carries a **📊 Today at the tables** line naming the
-  day's biggest net winner and biggest net loser (`casino_daily_net` table,
-  `daily_standings`, folded into the same `record_play` transaction for
-  *every* game). Net = returned − wagered over the guild-local day (the same
-  YYYY-MM-DD boundary the wager cap uses); the winner shows only while up
-  (net > 0) and the loser only while down (net < 0), so an all-green day has
-  no loser line and one member can't hold both slots. Refunds/voids never
-  reach `record_play`, so a handed-back bet never sways the board. The line
-  refreshes on the instant-game repaint; a roulette/derby-only settle
-  updates the table but the panel catches up on the next repaint;
+  day's biggest net winner (`casino_daily_net` table, `daily_standings`,
+  folded into the same `record_play` transaction for *every* game). Net =
+  returned − wagered over the guild-local day (the same YYYY-MM-DD boundary
+  the wager cap uses); the winner shows only while up (net > 0).
+  `daily_standings` still computes the biggest net loser (net < 0) but the
+  hub **does not print it** (casino-137, D6): the panel is public, and
+  naming a member at −17,495 there is a pillory, not the harm-reduction
+  control the plans imagined — a member reads their own net on 📊 My Stats.
+  Refunds/voids never reach `record_play`, so a handed-back bet never sways
+  the board. The line refreshes on the instant-game repaint; a
+  roulette/derby-only settle updates the table but the panel catches up on
+  the next repaint;
 - **broadcast moments**: the jackpot celebration (always), and any win on
-  any table paying ≥ `broadcast_min_payout` (0 = off). The broadcast is a
+  any table paying ≥ `broadcast_min_payout` (0 = off) **and** ≥
+  `broadcast_min_mult` × its stake (default 3; 1 = amount only) — see "The
+  bar needs a multiple" below. The broadcast is a
   **separate embed** built from the player's result card, never the card
   itself — `build_big_win_broadcast` in `embeds.py`, routed through the cog's
   one `_send_big_win` seam (`_after_instant` for the instant games,
   `_broadcast_window_win` for the private-round family, `_auto_resolve_hand`
   for the idle sweep; skipped when the jackpot celebration already announced
-  the spin). It carries **no button** — see "Public recaps carry no buttons"
+  the spin). The seam takes the guild's whole `CasinoSettings`, not a
+  threshold int, so no call site can carry the bar without the multiple. It carries **no button** — see "Public recaps carry no buttons"
   below — and titles itself for the event rather than the game, on a ladder
   that escalates with how far the payout clears the bar
   (`casino_logic.big_win_tier`, tested in `tests/test_casino_logic.py`):
@@ -142,6 +155,35 @@ channel edit bucket). The channel itself carries only shared surfaces:
   broadcast advertises what the stats refuse to count. It is also what keeps
   the builder's accent-contract exemption honest — every card it copies is a
   winning one, so the color it inherits is always the semantic green.
+
+  **The bar needs a multiple** (decision D6, 2026-09-02, casino-130). The
+  ladder was sized on 08-15 against an average stake of 36; by September the
+  top players had moved to 1,000-coin stakes (495 of them in 30 days), so a
+  routine 2× blackjack win (2,000) cleared the 500 bar four times over and
+  headlined as 🔥 Huge Win, and a Mines cash-out at 1.06× on 1,000 (1,060)
+  was a 💰 Big Win — ~100 public cards a day. `big_win_tier` now takes the
+  guild's `min_mult` (the `broadcast_min_mult` dial, Economy → Casino,
+  default `casino_logic.BROADCAST_MIN_MULT_DEFAULT` = 3) and refuses
+  `payout < min_mult × stake`: a 1,000-coin even-money win no longer posts,
+  a 1,000 → 3,000 does, and a 6× slots hit on 500 still does. The multiple
+  gates the **whole card** — Legendary included: the percentile decides how
+  loud a qualifying card is, never whether it qualifies, so the Legendary
+  tier itself is unchanged. The dial's floor is 1 (amount only — what every
+  guild ran before it existed), not 0: the bar is already the off switch.
+  Pinned in `tests/test_casino_logic.py` (the finder's three cases) and
+  `tests/cogs/test_casino_big_win_broadcast.py` (the dial read from a
+  guild's stored settings changes the outcome).
+
+  **A doubled hand is judged on its total stake** (casino-131, 2026-09-02).
+  `81507b34` fixed the push rule for the auto-stand path, but the
+  player-pressed blackjack path reused `base_stake` — right for the Play
+  Again button, which re-offers the base the player chose — as the
+  broadcast stake. A doubled push returns 2× base, so the gate saw
+  `payout > stake` and announced (and banked) a hand that won nothing; two
+  live instances on 09-01. `_blackjack_step` passes `step.stake` (the
+  total) to `_after_instant` and keeps `base_stake` for the view; the
+  wiring test in `test_casino_big_win_broadcast.py` drives the button path
+  and asserts both.
 
   The percentile comes from `casino_service.win_percentile` over
   `casino_win_history` (migration 162): a rolling `WIN_HISTORY_KEEP`-row
@@ -259,6 +301,26 @@ All movement goes through `services/casino_service.py`:
   (gross turnover isn't "spending" on the biggest-spenders board).
 - Casino games deliberately do **not** call `pay_game_rewards` — gambling
   pays no participation/win faucet.
+- **The daily comp is not a wager** (`claim_daily_comp`, casino-134). With
+  `daily_comp` > 0 the hub carries a 🎁 Daily Comp button; a press books the
+  claim on `casino_daily` (`comp_claimed` 0 → 1 in one upsert, so a second
+  press on the same guild-local day — or two at once — flips nothing and
+  gets the reset time back, `<t:…:R>`) and then spins the slots at the dial's
+  amount with **no debit**: a win is a plain `casino_payout` (meta
+  `{"game": "slots", "reels": …, "comp": amount}`), a blank spin moves no
+  money and feeds nothing. Neither path touches the cap (the row's `wagered`
+  stays 0), `record_play`, `casino_weekly`, `casino_daily_net` or the ticker
+  — the stats, the week's highlights and the day's standings stay a record of
+  money members actually put down — and a triple-7️⃣ comp pays the flat 120×,
+  never the progressive pot, which real lost stakes built. It is never
+  broadcast. Guard order mirrors `take_stake` (economy → casino open → right
+  channel → slots open → dial), and a refused claim is not a claim. The result
+  renders privately (`build_comp_embed`: green on a win, accent on a blank —
+  nothing was lost) with no Play Again; 📊 My Stats shows whether today's is
+  still unclaimed, since the hub is one shared panel and cannot be
+  per-member. Rationale: the casino's volume is ~78% four players with weekly
+  actives flat since launch, and the comp is the one cheap return hook for
+  the rest; it ships dark so the amount is Billy's call.
 
 ## Settings (`casino_*` keys in the config KV table)
 
@@ -278,8 +340,10 @@ All movement goes through `services/casino_service.py`:
 | `pools_close_hour` | 18 | guild-local hour betting shuts on the day being measured (bounds 0–23). Settlement is at the day roll, not here |
 | `pools_takeout_pct` | 5 | % of the whole pool taken at settle and **burned** (bounds 0–50). Distinct from `jackpot_cut_pct`, which is skimmed per lost stake and fed to a pot that re-mints it |
 | `pools_metrics` | `""` | comma-separated `pools_metrics` keys the daily draw may pick from. Empty = the whole roster, which is also what an untouched guild runs |
-| `broadcast_min_payout` | 0 | instant-game wins paying at least this get a public broadcast; 0 = never (jackpot celebrations always post) |
+| `broadcast_min_payout` | 0 | wins on any table paying at least this get a public broadcast — if they also clear the multiple below; 0 = never (jackpot celebrations always post) |
+| `broadcast_min_mult` | 3 | a broadcast also needs `payout ≥ this × stake` (bounds 1–1000; 1 = amount only). D6, 2026-09-02: the bar alone let 1,000-coin even-money wins flood the channel |
 | `broadcast_ping_enabled` | on | whether a 💎 Legendary Win carries an `@here`. Off, that rung still broadcasts, just silently — no other rung ever pinged |
+| `daily_comp` | **0** | the **daily comp** (casino-134, 2026-09-04): a house-funded slots spin of this many coins, once per member per guild-local day, from a 🎁 **Daily Comp** button on the hub. **Ships off** — 0 hides the button and refuses the claim; bounds 0–100,000. The button (and the House Rules line) only appear while `comp_on`: dial > 0 **and** the slots open, since the comp is a spin on the slots. Enforced at the claim (`claim_daily_comp` re-reads the dial, so a stale panel's button hands out nothing) and pinned by `tests/web/test_game_dials_are_enforced.py` |
 | `panel_message_id` / `panel_channel_id` | 0 | bot bookkeeping, not dashboard-editable |
 
 Dashboard: **Economy → Casino** (`config-casino.js`, admin-only;
@@ -333,6 +397,15 @@ dispatch `casino_config_change`. There is no `/api/config/pools` route.
   immediately — the old 2s debounce coalesced bursts from *several* bettors,
   which a private round cannot have. The player presses **🎡 Spin**
   (`casino_go:roulette:{round_id}`) when ready; there is no betting deadline.
+  The board says so (casino-132): every private-round embed opens with
+  `_solo_board_lead` — "Your own wheel. Stack bets, then press 🎡 Spin. Left
+  alone it spins itself <t:R>." (race/Race, shoe/Deal, table/Roll, draw/Draw
+  for the other four) — titled "Your Wheel"/"Your Race"/…, never "Bets
+  Open!", and an empty board says "No bets yet." rather than "be first".
+  The old communal-countdown copy left a third of prod rounds to the
+  abandonment sweep; `round_idle_seconds` stays 600 because `closes_at` is
+  stamped at open and a bet never extends it, so a shorter TTL would refuse
+  late bets rather than merely resolve idle boards sooner.
   The settle takes the `status='open'` claim → exactly-once, the show plays
   into the same ephemeral message, and the result posts publicly only if it
   clears `broadcast_min_payout`.
@@ -542,7 +615,17 @@ authoring and no admin resolution.
   holds, so routing the takeout there would return it to the metric weeks
   later.
 - **A one-sided pool voids and refunds in full.** No counterparty means
-  nothing to pay winners out of. At 13–18 bettors a day these are routine.
+  nothing to pay winners out of. At 13–18 bettors a day these are routine —
+  a quarter of prod markets, most with 2–7 bettors all on one side — so the
+  panel says so before it happens (casino-136): the How It Settles field
+  always states the both-sides rule, a market with stakes on exactly one
+  side grows a **⚠️ One-Sided So Far** field naming the empty side
+  (`pools_logic.unbacked_side`), and the panel repaints itself once inside
+  the last hour of betting with a "⏰ Last hour" line
+  (`pools_logic.closing_soon` / `reminder_due`, checked on the 60s tick
+  next to the hourly refresh — any repaint inside the window satisfies it).
+  The house never seeds a side: a settled market must be members against
+  members.
 - **The day-roll sweep answers the idle case from two indexed lookups.** It
   runs on the cog's 60-second maintenance tick, and on all but one tick a
   day there is nothing to do; only a tick with real work computes the day
@@ -611,6 +694,34 @@ Stage 2.
   a third (`_auto_resolve_hand`, the blackjack/war idle sweep) was never in
   scope of it at all. Pinned by `tests/cogs/test_casino_big_win_broadcast.py`,
   which asserts the send reaches `channel.send` with no view.
+- **Bet steps expire out loud** (casino-141, 2026-09-02). The ladder, the
+  coinflip side picker and the roulette number picker are `StepView`s
+  (`views.py`): `_show_step` (and `_back_to`, and the hub's Coinflip button)
+  **binds** the view to the interaction that showed it, and on timeout the
+  view disables its items and edits the message through
+  `edit_original_response` to `STEP_EXPIRED_MSG` — "This step expired —
+  press the table button on the panel again." — instead of leaving buttons
+  that answer with Discord's generic "This interaction failed". The
+  interaction token is the only handle on an ephemeral message and lives
+  ~15 min; every step's timeout (120s / 600s) sits inside it. A step that
+  carries an `on_expiry` (the private-round tables, whose board repaint
+  replaces the message) keeps that behaviour and does not also write the
+  expiry copy — the two would race. A failed edit is swallowed: the member
+  dismissing the message is the ordinary end of an abandoned step.
+  **The clock stops when the step does** (games-deep-review K1,
+  2026-09-05): discord.py keeps a replaced view's timeout running — an
+  edit with a new view cancels nothing — so a coinflip picker whose message
+  had become the result card woke 120s later and wrote the expiry copy over
+  the card and its Play Again button (and the ladder's 600s clock over a
+  blackjack hand still in play). Every press on a step notes the step on
+  `interaction.extras` (`StepView.interaction_check`; the Custom… modal
+  carries it as `step` because its submit is a fresh interaction), and each
+  path that writes something else into that message — `_show_step`,
+  `_respond_private`, `_back_to`, the private-round Back and
+  `_finish_window_bet` — calls `consume_step`, which stops the view; an
+  expiry that still arrives after that is a no-op. A press that only opens
+  a modal or an apology consumes nothing: that step is still standing and
+  still expires out loud.
 - **The amount ladder** (2026-09-01, todo #96 / audit M2): choosing a stake
   is buttons, not typing. `logic.bet_amount_options` builds at most four
   rungs — **Last · Half · Double · Max** off the remembered last stake, or
@@ -626,7 +737,10 @@ Stage 2.
   only if that step still owns the board (`_window_steps`): discord.py starts
   a fresh timeout per view and cancels none of the ones it replaces, so an
   abandoned step would otherwise wake minutes later and repaint over whatever
-  the player is in the middle of. A **refused** bet repaints too, since the
+  the player is in the middle of (a step whose own press replaced it is also
+  stopped outright — see *The clock stops when the step does* above; the
+  claim still covers a board repainted by something other than a press, such
+  as the resolve sweep). A **refused** bet repaints too, since the
   step is standing where the board was and the old modal left it intact.
   Coinflip and Mines choose a side/risk first, so their ladder carries Back
   as well, re-rendering that picker. The number step spends rows 0 and 1 on
@@ -657,7 +771,7 @@ Stage 2.
   carries a jump link to the live round message. Blackjack hides Double
   Down when the clicker can't afford the second stake.
 
-## Storage (migrations 113 + 114 + 127 + 128)
+## Storage (migrations 113 + 114 + 127 + 128 + 206)
 
 `casino_daily`, `casino_blackjack_hands` (state_json = deck/player/dealer,
 `settled_at` guard, partial unique live index), `casino_roulette_rounds`
@@ -666,8 +780,12 @@ Stage 2.
 `casino_weekly` (bounded upserts, no per-play log); 127 adds
 `casino_race_rounds` + `casino_race_bets` (the roulette pair's shape, with
 `winner`/`runner` in place of `result`/bet type); 128 adds `casino_ticker`
-(the hub floor ticker's bounded per-play log — instant games only,
-trimmed to `TICKER_KEEP` rows per guild on insert).
+(the hub floor ticker's bounded per-play log — instant games only at the
+time, every `TICKER_GAMES` game since; trimmed to `TICKER_KEEP` rows per
+guild on insert, read back one row per player); 206 adds
+`casino_daily.comp_claimed` (the daily comp's once-a-day book — on the cap's
+own day-keyed row, so a comp row can exist with `wagered` 0 even in an
+uncapped guild).
 
 ## Files
 
@@ -703,9 +821,14 @@ feeding, the buzzer-beater claim, leaver refunds). Migration 158 has its
 own file proving the index swap in both directions with real INSERTs.
 The ticker rides `tests/test_casino_service.py` (rows land via every
 settle path including the five private-round games, refunds and pools
-stay off it, per-guild trim to `TICKER_KEEP`) and `tests/test_casino_embeds.py` (hub "On the
+stay off it, per-guild trim to `TICKER_KEEP`, one row per player and six
+players surviving a 100-spin grind) and `tests/test_casino_embeds.py` (hub "On the
 floor" section renders newest-first, omitted when empty, push/partial
-lines). Name resolution is a two-part contract in
+lines, every ticker game wearing its own emoji; the standings field crowns
+the winner and never prints the loser; the five private boards name their
+button and never say "be first"; the pools panel names an empty side and
+its last hour — the timing rules themselves are rows in
+`tests/test_pools_logic.py`). Name resolution is a two-part contract in
 `tests/test_casino_embeds.py`: a parametrized table renders every
 player-naming builder and fails on any surviving `<@id>` (a new builder adds
 one row), and an AST guard walks `cog.py`/`pools_panel.py` requiring every

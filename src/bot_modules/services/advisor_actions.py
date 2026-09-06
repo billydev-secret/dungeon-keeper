@@ -332,8 +332,14 @@ def _grant_field_value(conn, guild_id: int, grant_name: str, field: str) -> str:
 def apply_config_change(
     db_path, guild, proposal: ConfigProposal, *, is_admin: bool = False,
     actor_id: int = 0,
-) -> None:
+) -> str | None:
     """Write one confirmed proposal.
+
+    Returns the slug of the feature the key belongs to (``None`` for a
+    grant-role write, which has no feature cog), so the caller can dispatch
+    ``<slug>_config_change`` the way a dashboard save does — a cog that
+    caches its config at boot would otherwise not see the change until a
+    restart.
 
     Re-validates so a stale button can't apply a change that stopped making
     sense (channel deleted, key removed) — and so ``admin_only`` is enforced
@@ -382,3 +388,7 @@ def apply_config_change(
         f"{checked.grant_name}." if checked.grant_name else "",
         checked.key, checked.value,
     )
+    if checked.target == "grant_role":
+        return None
+    feature = feature_for_key(checked.key)
+    return feature.slug if feature is not None else None

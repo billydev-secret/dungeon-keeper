@@ -31,6 +31,8 @@ class MusicalChairsGame:
     result_message_id: int | None = None
     phase_started_at: float | None = None
     phase_duration: float | None = None
+    #: Consecutive rounds nobody sat in (reset by any round with a sitter).
+    reruns: int = 0
     last_action_at: float | None = None
     resolved_at: float | None = None
     created_at: float = field(default_factory=time.time)
@@ -62,6 +64,7 @@ def game_from_row(row) -> MusicalChairsGame:
         result_message_id=row["result_message_id"],
         phase_started_at=row["phase_started_at"],
         phase_duration=row["phase_duration"],
+        reruns=int(row_value(row, "reruns", 0) or 0),
         last_action_at=row["last_action_at"],
         resolved_at=row["resolved_at"],
         created_at=row["created_at"] or time.time(),
@@ -69,6 +72,25 @@ def game_from_row(row) -> MusicalChairsGame:
 
 
 # ── Pure helpers ───────────────────────────────────────────────────────────────
+
+#: A round nobody sat in re-runs this many times before the game is voided.
+MAX_NO_SITTER_RERUNS = 1
+
+
+def no_sitter_verdict(alive: list[int], survivors: list[int], reruns: int) -> str | None:
+    """What to do with a round that seated nobody.
+
+    ``None`` when someone sat (resolve as normal, or when there was nobody
+    to seat). Otherwise ``"rerun"`` — same players, fresh music — until the
+    round has already re-run ``MAX_NO_SITTER_RERUNS`` times in a row, when
+    it is ``"void"``: called off, every stake refunded. Resolving instead
+    used to make the later-listed player both winner and runner-up and pay
+    them the pot for a chair they never sat in (duels-party-114).
+    """
+    if not alive or survivors:
+        return None
+    return "void" if reruns >= MAX_NO_SITTER_RERUNS else "rerun"
+
 
 def chairs_for(n: int) -> int:
     """Number of chairs for n players: one fewer than the field (never negative)."""

@@ -125,10 +125,25 @@ async def _resolve_group_game(db, sync_db_path, stakes_text):
     return await hpgdb.get_game(db, gid), bot.channel.sent[-1]
 
 
+def _button_ids(sent: dict) -> set[str]:
+    """custom_ids on the result card's view. Every settled result carries a
+    view since Run It Back landed (duels-party-117); what these tests pin is
+    that a non-nickname game gets no Name the Loser button on it."""
+    view = sent.get("view")
+    if view is None:
+        return set()
+    return {str(getattr(item, "custom_id", "")) for item in view.children}
+
+
+def _has_rename_button(sent: dict) -> bool:
+    return any(cid.startswith("set_nick:") for cid in _button_ids(sent))
+
+
 async def test_wager_stakes_game_resolves_without_rename_button(db, sync_db_path):
     game, sent = await _resolve_group_game(db, sync_db_path, WAGER_STAKES_TEXT)
     assert game.state == "RESOLVED_NO_NICK"
-    assert "view" not in sent
+    assert not _has_rename_button(sent)
+    assert any(cid.startswith("rematch:") for cid in _button_ids(sent))
 
 
 async def test_nickname_game_still_gets_rename_button(db, sync_db_path):
@@ -161,13 +176,15 @@ async def _explode_duel(db, sync_db_path, stakes_text):
 async def test_explode_custom_stakes_resolves_without_rename_button(db, sync_db_path):
     game, sent = await _explode_duel(db, sync_db_path, "loser sings a song")
     assert game.state == "RESOLVED_NO_NICK"
-    assert "view" not in sent
+    assert not _has_rename_button(sent)
+    assert any(cid.startswith("rematch:") for cid in _button_ids(sent))
 
 
 async def test_explode_wager_stakes_resolves_without_rename_button(db, sync_db_path):
     game, sent = await _explode_duel(db, sync_db_path, WAGER_STAKES_TEXT)
     assert game.state == "RESOLVED_NO_NICK"
-    assert "view" not in sent
+    assert not _has_rename_button(sent)
+    assert any(cid.startswith("rematch:") for cid in _button_ids(sent))
 
 
 async def test_explode_nickname_mode_still_gets_rename_button(db, sync_db_path):
@@ -269,7 +286,8 @@ async def test_flagged_game_resolves_with_the_rename_button(db, sync_db_path):
 async def test_custom_stakes_without_the_flag_stays_announce_only(db, sync_db_path):
     game, sent = await _resolve_group_game(db, sync_db_path, "loser sings")
     assert game.state == "RESOLVED_NO_NICK"
-    assert "view" not in sent
+    assert not _has_rename_button(sent)
+    assert any(cid.startswith("rematch:") for cid in _button_ids(sent))
 
 
 # ── challenge cap is a dashboard dial (game night 2026-08-21) ────────────────
@@ -329,7 +347,8 @@ async def test_over_the_cap_is_refused_with_the_real_number(db, sync_db_path):
 
     assert await hpdb.get_game(db, 1) is None
     (text,) = interaction.response.send_message.await_args.args
-    assert "Maximum 1 per hour" in text
+    assert "the limit here is 1 an hour" in text
+    assert text.startswith("❌ ")
 
 
 # ── stale-accept copy says what happened (game night 2026-08-21) ────────────

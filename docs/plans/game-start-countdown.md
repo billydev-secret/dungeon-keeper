@@ -160,3 +160,10 @@ around a six-game list. Adding them is mechanical: a `LOBBY_GAME_TYPES` entry, a
 `LOBBY_START_BUTTON` label, `start_in` on the cog, `start_at` on the lobby
 embed, and — for TTL and Hot Takes, which never leave `state='joining'` — the
 same start-handler state transition clapback/mlt/story needed. Ben's call.
+
+**2026-09-04 (games deep review, anon-tail-72):** Hot Takes and Fantasies &
+Dealbreakers were added — `LOBBY_GAME_TYPES`, `LOBBY_START_BUTTON` (*Start
+Voting* / *Start Round*), `LOBBY_MIN_PLAYERS` (2 / 1), `start_in:` on both
+slash commands, `start_at` on both lobby embeds, and the `joining → playing`
+transition on Start Voting / the first Start Round. Two Truths & a Lie and
+LegitLibs remain the open items.

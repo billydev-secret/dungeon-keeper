@@ -4,10 +4,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-WhisperState = Literal["pending", "shared", "hidden"]
+# Two states, and the dashboard's audit filter enumerates exactly these
+# (tests/components/test_whisper_web_routes.py). "hidden" was a third once;
+# migration 025 folded it into the soft-delete flag and nothing writes it.
+WhisperState = Literal["pending", "shared"]
 STATE_PENDING: WhisperState = "pending"
 STATE_SHARED: WhisperState = "shared"
-STATE_HIDDEN: WhisperState = "hidden"
 
 
 @dataclass
@@ -17,6 +19,16 @@ class WhisperConfig:
     channel_id: int = 0
     log_channel_id: int = 0
     launcher_message_id: int = 0
+    # Where the launcher actually is. Stored beside the message id (as the
+    # Guess prompt does) so ``core.sticky`` deletes the old launcher through
+    # its real channel after an admin repoints ``channel_id``. Zero for a
+    # launcher posted before this key existed — the cog falls back to
+    # ``channel_id`` for those.
+    launcher_channel_id: int = 0
+    # DM the sender after each guess on their whisper (wrong / caught /
+    # target out of guesses). Ships OFF: whispers already in flight in prod
+    # must not start DMing their senders until an admin flips it.
+    sender_feedback: bool = False
     cooldown_seconds: int = 30
     hourly_cap_per_target: int = 5
     # How many guesses the recipient gets to unmask the sender. The schema
@@ -35,11 +47,16 @@ class Whisper:
     created_at: float
     state: WhisperState
     solved: bool
-    exposed: bool
     guesses_left: int
     channel_msg_id: int | None
     dm_msg_id: int | None
     deleted_at: float | None = None
+    # The ``whispers.exposed`` column survives (dropping it needs a table
+    # rebuild) but nothing writes or reads it any more: the Expose button was
+    # detached from every view in 1396fb5e and the 31 prod rows that carry it
+    # are all older than the 30-day age lock. Kept on the dataclass so the row
+    # mapper stays a plain column-for-column copy.
+    exposed: bool = False
 
 
 @dataclass

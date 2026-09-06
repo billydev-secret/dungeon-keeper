@@ -293,6 +293,14 @@ async def update_schedule(
                 "next_run_at": next_run_at,
                 "giveup_at": giveup_at,
                 "status": "active",
+                # The card's ping is the Setup panel's Ping Role, carried in
+                # the card's own message. A legacy row from the shared
+                # scheduler could still carry an announce role and ping a
+                # second time, invisibly (photo-external-103) — every save
+                # clears it so no photo row can announce again.
+                "announce": 0,
+                "announce_role_id": None,
+                "options": "{}",
             })
         return {"ok": True, "next_run_at": next_run_at}
 

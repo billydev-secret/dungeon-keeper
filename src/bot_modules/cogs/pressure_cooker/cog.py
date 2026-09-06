@@ -156,6 +156,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         imposed_nick: str | None = None,
         original_name: str | None = None,
         self_apply_nick: str | None = None,
+        sentence_hours: int | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -170,35 +171,29 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         embed.add_field(name="🏆 Winner", value=winner_name, inline=True)
         embed.add_field(name="💀 Loser", value=loser_name, inline=True)
 
-        stakes_text = game.stakes_text or "24-hour nickname surrender."
+        stakes_text = game.stakes_text or self.nick_forfeit_copy(sentence_hours)
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
 
         if self_apply_nick:
-            # Discord blocks the bot from renaming the guild owner, so the
-            # sentence is real but has to be applied by hand. Saying "is now
-            # known as" here would be a plain lie about what happened.
             embed.add_field(
                 name="🏷️ Nickname — Over To You",
-                value=(
-                    f"Discord won't let me rename the server owner, so "
-                    f"**{original_name or loser_name}** has to set "
-                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                value=self.nick_self_apply_copy(
+                    original_name or loser_name, self_apply_nick, sentence_hours
                 ),
                 inline=False,
             )
         elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=self.nick_applied_copy(
+                    original_name or loser_name, imposed_nick, sentence_hours
+                ),
                 inline=False,
             )
         elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
-                value=(
-                    f"**{winner_name}**, press **Name the loser** within 5 minutes. "
-                    f"The nickname lasts 24 hours."
-                ),
+                value=self.awaiting_nick_copy(winner_name, sentence_hours),
                 inline=False,
             )
 
@@ -250,7 +245,7 @@ class PressureCookerDuel(BaseDuel, name="PressureCookerCog"):
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — you both ante this; winner takes the pot",
-        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
+        nickname="Also stake nicknames? The winner renames the loser (default: only when nothing else is staked)",
     )
     async def pressure_challenge(
         self,

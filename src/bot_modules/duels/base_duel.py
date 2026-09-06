@@ -7,7 +7,7 @@ the abstract hooks — lives in `BaseGame`.
 
 Two stake modes are supported on the duel path:
   * **Nickname mode** (no custom stakes, no wager): the winner renames the
-    loser for 24h.
+    loser for the guild's ``sentence_hours``.
   * **Custom stakes** (free-text stakes given): the loser owes the agreed-upon
     stakes; the bot enforces nothing and never renames anyone. A coin wager
     with no stakes text lands here too — the pot *is* the stake (a wager label
@@ -16,11 +16,13 @@ Two stake modes are supported on the duel path:
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Awaitable, Callable
 
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.db_utils import sql_identifier
 from bot_modules.games.utils.game_manager import sign_off_game_chore
 from bot_modules.games.utils.timer import now_plus
 from bot_modules.services.embeds import COLOR_GOLD, COLOR_YELLOW
@@ -37,7 +39,7 @@ from .filters import (
     resolve_stakes_text,
     validate_stakes,
 )
-from .views import ChallengeView, ResultView
+from .views import CHALLENGE_TIMED_OUT_TEXT, ChallengeView
 
 
 class BaseDuel(BaseGame):
@@ -46,6 +48,36 @@ class BaseDuel(BaseGame):
     Subclasses must define GAME_KEY / GAME_DISPLAY_NAME and implement the abstract
     hooks declared on BaseGame.
     """
+
+    # ── Restart recovery ──────────────────────────────────────────────────────
+
+    async def _db_fetch_pending_games(self) -> list:
+        """Challenges still inside their response window, for cog_load.
+
+        Every duel keeps its rows in ``<GAME_KEY>_games``; ids are read here
+        and rehydrated through the cog's own ``_db_get_game`` so the row
+        shape stays the game's business.
+        """
+        table = sql_identifier(f"{self.GAME_KEY}_games")
+        rows = await self.db.fetchall(
+            f"SELECT id FROM {table} WHERE state = 'PENDING' AND created_at > ?",
+            (time.time() - CHALLENGE_RESPONSE_SECONDS,),
+        )
+        games = []
+        for row in rows:
+            game = await self._db_get_game(int(row["id"]))
+            if game is not None:
+                games.append(game)
+        return games
+
+    def _build_challenge_view(self, game: Any, *, deadline: float) -> discord.ui.View | None:
+        return ChallengeView(
+            game_id=game.id,
+            target_id=game.target_id,
+            on_accept=self._handle_accept,
+            on_decline=self._handle_decline,
+            deadline=deadline,
+        )
 
     # ── Shared challenge entrypoint ───────────────────────────────────────────
 
@@ -56,43 +88,38 @@ class BaseDuel(BaseGame):
         stakes_text: str | None,
         wager: int | None = None,
         nickname: bool | None = None,
-    ) -> None:
+        *,
+        stakes_prevalidated: bool = False,
+    ) -> int | None:
         """Run all pre-game checks and create a challenge embed. Called by subclass command.
+
+        Returns the new game's id, or None when the challenge was refused.
 
         ``wager`` makes it a coin duel: the amount is *declared* now but no
         money moves until the target accepts, so a decline or a timeout costs
         nothing. Both antes are taken at accept, and the winner takes the pot.
+        ``stakes_prevalidated`` is the Run It Back path handing back text that
+        already went through ``validate_stakes`` (and its markdown escape).
         """
         if not interaction.guild:
-            await interaction.response.send_message(
-                "This command only works in a server.", ephemeral=True
-            )
-            return
+            await self._refuse(interaction, "This command only works in a server.")
+            return None
 
         challenger = interaction.user  # type: ignore[assignment]
         guild: discord.Guild = interaction.guild
 
         if target.id == challenger.id:
-            await interaction.response.send_message(
-                "❌ You can't challenge yourself.", ephemeral=True
-            )
-            return
+            await self._refuse(interaction, "You can't challenge yourself.")
+            return None
         if target.bot:
-            await interaction.response.send_message(
-                "❌ You can't challenge a bot.", ephemeral=True
-            )
-            return
-
-        if await self._refuse_if_disabled(interaction, guild.id):
-            return
+            await self._refuse(interaction, "You can't challenge a bot.")
+            return None
 
         cfg = await duels_db.get_config(self.db, guild.id, self.GAME_KEY)
-        allowlist: list[int] = json.loads(cfg.get("channel_allowlist") or "[]")
-        if allowlist and interaction.channel_id not in allowlist:
-            await interaction.response.send_message(
-                f"{self.GAME_DISPLAY_NAME} isn't allowed in this channel.", ephemeral=True
-            )
-            return
+        refusal = await self._launch_refusal(guild.id, interaction.channel_id, cfg)
+        if refusal:
+            await self._refuse(interaction, refusal)
+            return None
 
         # No-contact gate (see BaseGame._blocked_pair). After the guild-wide
         # checks so the refusal is believable — "game in progress" where the
@@ -103,36 +130,32 @@ class BaseDuel(BaseGame):
         if await self._blocked_pair(
             guild.id, challenger.id, target.id, record_surface=SURFACE_DUEL_CHALLENGE
         ):
-            await interaction.response.send_message(
-                "You two already have a game in progress.", ephemeral=True
-            )
-            return
+            await self._refuse(interaction, self._IN_PROGRESS_COPY)
+            return None
 
         limit = self._challenge_limit(cfg)
         if self._check_rate_limit(challenger.id, limit):
-            await interaction.response.send_message(
-                f"You've issued too many challenges recently. "
-                f"Maximum {limit} per hour.",
-                ephemeral=True,
+            await self._refuse(
+                interaction,
+                f"You've issued too many challenges recently — the limit here is "
+                f"{limit} an hour. Try again a little later.",
             )
-            return
+            return None
 
         # Validate and normalise the stakes text *before* deciding whether this
         # is a nickname game. Whitespace-only stakes clean to None, and reading
         # the raw string would answer "something else is staked" for a game
         # that ends up staking nothing — skipping the preflights below and then
         # falling through to nickname mode at settlement anyway.
-        if stakes_text:
+        if stakes_text and not stakes_prevalidated:
             stakes_result = validate_stakes(
                 stakes_text,
                 max_length=cfg["max_stakes_length"],
                 denylist=json.loads(cfg.get("nick_denylist") or "[]"),
             )
             if not stakes_result.ok:
-                await interaction.response.send_message(
-                    f"Stakes rejected: {stakes_result.reason}", ephemeral=True
-                )
-                return
+                await self._refuse(interaction, f"Stakes rejected: {stakes_result.reason}")
+                return None
             stakes_text = stakes_result.value or None
 
         # Nickname-mode preflight only applies when the loser is actually going
@@ -143,23 +166,36 @@ class BaseDuel(BaseGame):
             # nickname:False with nothing else on the table would be a duel
             # with no stake at all, which every downstream reader would then
             # have to guess about. Say so instead.
-            await interaction.response.send_message(
+            await self._refuse(
+                interaction,
                 "Turning the nickname stake off means you need to stake "
                 "something else — add `wager:` or `stakes:`.",
-                ephemeral=True,
             )
-            return
+            return None
         nick_notice: str | None = None
         if nick_stake:
             perm_error = await self._check_bot_can_nick(guild)
             if perm_error:
-                await interaction.response.send_message(perm_error, ephemeral=True)
-                return
+                await self._refuse(interaction, perm_error)
+                return None
 
             nick_error = await self._check_no_active_nick(guild, [challenger, target])  # type: ignore[list-item]
             if nick_error:
-                await interaction.response.send_message(nick_error, ephemeral=True)
-                return
+                await self._refuse(interaction, nick_error)
+                return None
+
+            # The rematch cooldown (the panels' "Wait Before a Rematch"). It
+            # was offered on all three duel panels and read by nothing until
+            # 2026-09-04 (duels-party-116); like the group games' per-player
+            # cooldown it only guards the nickname stake — a wagered or
+            # custom-stakes rematch is always allowed.
+            cd = await duels_db.check_cooldown(
+                self.db, guild.id, self.GAME_KEY, challenger.id, target.id,
+                int(cfg["cooldown_hours"]),
+            )
+            if cd is not None:
+                await self._refuse(interaction, self._rematch_cooldown_copy(cd))
+                return None
 
             # A player outranking the bot doesn't block the challenge — warn,
             # then continue; the rename is skipped if that player loses.
@@ -168,17 +204,42 @@ class BaseDuel(BaseGame):
             )
 
         existing = await self._db_get_active_game_for_pair(guild.id, challenger.id, target.id)
+        superseded = None
+        if existing is not None and existing.state == "RESOLVED":
+            # The last game's winner never named the loser. The *winner*
+            # starting a new game between the pair ends that window rather
+            # than blocking for the rest of it — the naming window is long
+            # now (duels-party-118). The loser can't end it for them: a lost
+            # nickname duel followed by a quick Run It Back would otherwise
+            # wipe the rename the winner was about to apply.
+            if challenger.id != existing.winner_id:
+                await self._refuse(interaction, self._UNNAMED_YET_COPY)
+                return None
+            superseded, existing = existing, None
         if existing:
-            await interaction.response.send_message(
-                "You two already have a game in progress.", ephemeral=True
-            )
-            return
+            await self._refuse(interaction, self._IN_PROGRESS_COPY)
+            return None
 
         if wager is not None:
             err = await self._wager_precheck(guild.id, challenger.id, wager)
             if err:
-                await interaction.response.send_message(err, ephemeral=True)
-                return
+                await self._refuse(interaction, err)
+                return None
+
+        if superseded is not None:
+            # Past every refusal: the new game is going to be made, so the
+            # old window closes now rather than on a challenge that failed.
+            await self._conclude_unnamed(
+                superseded, duels_db.NICK_REASON_SUPERSEDED,
+                card=discord.Embed(
+                    title="🔁 Nickname Not Set",
+                    description=(
+                        "The winner started a new game against the loser before "
+                        "naming them. No rename applied."
+                    ),
+                    color=COLOR_YELLOW,
+                ),
+            )
 
         # Every live stake goes into the persisted text, so the "📋 Stakes"
         # field on every downstream embed lists all of them — the coins used to
@@ -190,8 +251,10 @@ class BaseDuel(BaseGame):
             each = _fmt_coins(settings, wager) if settings else f"**{wager:,}**"
             takes = _fmt_coins(settings, wager * 2) if settings else f"**{wager * 2:,}**"
             wager_line = f"💰 {each} each — winner takes {takes}."
+        sentence_hours = int(cfg["sentence_hours"])
         stakes_text = resolve_stakes_text(
-            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line
+            stakes_text, wager, nick_stake=nick_stake, wager_line=wager_line,
+            nick_line=self._nick_stakes_line(sentence_hours),
         )
 
         game_id = await self._db_create_game(
@@ -210,6 +273,7 @@ class BaseDuel(BaseGame):
         accent = await safe_resolve_accent(self.bot, guild, log_label="base duel")
         embed = self._build_challenge_embed(
             challenger, target, stakes_text, accent, wager=wager,  # type: ignore[arg-type]
+            sentence_hours=sentence_hours,
         )
         view = ChallengeView(
             game_id=game_id,
@@ -224,6 +288,33 @@ class BaseDuel(BaseGame):
         await self._db_set_state(game_id, "PENDING", message_id=msg.id)
         if nick_notice:
             await interaction.followup.send(nick_notice, ephemeral=True)
+        return game_id
+
+    #: The pair-already-playing refusal. Also what the no-contact gate says,
+    #: so the two can never drift apart (docs/no_contact_spec.md).
+    _IN_PROGRESS_COPY = "You two already have a game in progress."
+    #: The loser of an unnamed nickname game trying to start the next one.
+    _UNNAMED_YET_COPY = (
+        "The winner of your last game hasn't named you yet — a new game between "
+        "you two opens up once they have, or once their naming window closes."
+    )
+
+    def _rematch_cooldown_copy(self, remaining: float) -> str:
+        return (
+            f"You two played for your nicknames recently — the rematch cooldown "
+            f"here means you can stake them against each other again in "
+            f"**{self._remaining(remaining)}**. A wager or custom stakes "
+            f"(`nickname: False`) can run right now."
+        )
+
+    async def _record_rematch_cooldown(self, game: Any) -> None:
+        """A settled duel starts the pair's rematch clock (every stake mode:
+        the dial only *blocks* nickname games, but the clock runs from
+        whatever the pair last played)."""
+        await duels_db.set_cooldown(
+            self.db, game.guild_id, self.GAME_KEY,
+            int(game.challenger_id), int(game.target_id),
+        )
 
     def _build_challenge_embed(
         self,
@@ -233,6 +324,7 @@ class BaseDuel(BaseGame):
         color: "discord.Color | None" = None,
         *,
         wager: int | None = None,
+        sentence_hours: int | None = None,
     ) -> discord.Embed:
         """The pending-challenge card.
 
@@ -245,7 +337,7 @@ class BaseDuel(BaseGame):
         """
         if color is None:
             color = discord.Color(COLOR_GOLD)
-        stakes_text = stakes or "Loser surrenders their nickname for 24 hours."
+        stakes_text = stakes or self.nick_forfeit_copy(sentence_hours)
         if wager:
             stakes_text += (
                 "\n_Nothing is charged unless the challenge is accepted._"
@@ -280,11 +372,7 @@ class BaseDuel(BaseGame):
     #: a second too late with no idea whether they'd been beaten to it, blocked,
     #: or hit a bug ("LMAO that did not let me accept" — game night 2026-08-21).
     _STALE_CHALLENGE_REASONS = {
-        "EXPIRED_PENDING": (
-            "⏱️ That challenge timed out before you pressed — challenges expire "
-            f"{CHALLENGE_RESPONSE_SECONDS // 60} minutes after they're posted. "
-            "Ask them to send another one."
-        ),
+        "EXPIRED_PENDING": CHALLENGE_TIMED_OUT_TEXT,
         "DECLINED": "❌ That challenge was already declined.",
         "ACTIVE": "▶️ That challenge has already been accepted — the game is running.",
     }
@@ -451,33 +539,28 @@ class BaseDuel(BaseGame):
         # Two modes: nickname (no custom stakes → winner renames the loser) and
         # custom stakes (loser owes the agreed-upon stakes, no bot enforcement).
         nick_mode = game_is_nick_stake(game)
+        sentence_hours = await self._sentence_hours(game.guild_id) if nick_mode else None
 
-        result_embed = self.render_result_state(game, guild)  # type: ignore[arg-type]
+        result_embed = self.render_result_state(
+            game, guild, sentence_hours=sentence_hours,  # type: ignore[arg-type]
+        )
 
         winner_m = guild.get_member(winner_id) if guild else None
         loser_m = guild.get_member(loser_id) if guild else None
         ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
 
-        # winner/loser ride along with the terminal write: the economy hook
-        # re-reads the row, and not every cog persists them before this point.
-        if nick_mode:
-            result_view = ResultView(game.id, winner_id, loser_id, self._handle_set_nick)
-            result_msg = await send(
-                content=ping_content, embed=result_embed, view=result_view
-            )
-            self.bot.add_view(result_view, message_id=result_msg.id)
-            await self._db_set_state(
-                game.id, "RESOLVED",
-                result_message_id=result_msg.id,
-                winner_id=winner_id,
-                loser_id=loser_id,
-            )
-        else:
-            # Custom stakes: announce only — no rename button, no expiry sweep.
-            result_msg = await send(content=ping_content, embed=result_embed)
-            await self._db_set_state(
-                game.id, "RESOLVED_NO_NICK",
-                result_message_id=result_msg.id,
-                winner_id=winner_id,
-                loser_id=loser_id,
-            )
+        # Both modes carry a view now: Name the Loser only in nickname mode,
+        # Run It Back on every result. winner/loser ride along with the
+        # terminal write: the economy hook re-reads the row, and not every
+        # cog persists them before this point.
+        if getattr(game, "resolved_at", None) is None:
+            game.resolved_at = time.time()
+        result_view = self._result_view(game, winner_id=winner_id, loser_id=loser_id)
+        result_msg = await send(content=ping_content, embed=result_embed, view=result_view)
+        self.bot.add_view(result_view, message_id=result_msg.id)
+        await self._db_set_state(
+            game.id, "RESOLVED" if nick_mode else "RESOLVED_NO_NICK",
+            result_message_id=result_msg.id,
+            winner_id=winner_id,
+            loser_id=loser_id,
+        )

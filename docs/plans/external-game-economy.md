@@ -192,6 +192,50 @@ default is to credit everyone flat.
 Worth noting for whoever runs it: hosting is heavily concentrated — one member
 hosted 17 of the 23 games, so ~74% of the payout goes to them.
 
+**Stage 9 — the 2026-09-02 games deep review, package P9 (2026-09-04).
+SHIPPED.** Five findings on the tracking pipeline, all landed together:
+
+- **Anagrams was dead since Gamebot's 08-15 rewrite** (photo-external-99):
+  the *Scoreboard* moved its scores out of the field names into the
+  description (`**EP** — 1700 points`, display names) and the finish became
+  `<@id> wins!`. `scores_from_scoreboard` reads both shapes and `_WINNER`
+  accepts both phrasings; the regression test is the real 2026-08-22 18:51
+  window. The three unpaid games (08-17, 08-19, 08-22 18:51) are a **prod
+  step**: `scripts/replay_gamebot_games.py` — dry run, then `--apply`. The
+  08-22 18:40 solo run ("Nobody won this one.", no Scoreboard) is payable
+  under no parser.
+- **Survey Says and Wisecracks now pay** (photo-external-101): both are in
+  `_START_GAMES`; their *Final scores* lists `**Name**: N points` in the
+  description (`scores_from_final_scores` / `extract_named_scores_game`),
+  paid through `pay_cah_game_by_score(game_key="survey_says"|"wisecracks")`
+  under ledger kinds `gamebot_survey_says` / `gamebot_wisecracks`. Survey
+  Says declares its winner (`<@id> reached 5 points!`); Wisecracks doesn't,
+  so every tied leader of the resolved scores wins. Survey Says also posts
+  a `<@id> wins!` *Game over!* 0.7s after its *Final scores*; it bounds into
+  a lobby-less window of its own and `_infer_game` returns None for the new
+  phrasing (only the old `is the winner!` is assumed CAH), so it pays
+  nothing on top. A lobby-less named *Final scores* likewise infers None —
+  the two games can't be told apart without the lobby. **The replay script
+  has no branch for these two**: a Survey Says window would fall into its
+  Connect 4 `else` — add one before replaying anything but Anagrams.
+- **No-op payouts release their claim** (photo-external-109):
+  `pay_cah_game_by_score` returns the coins credited (`pay_game_rewards`
+  already did) and `pay_cat_catch` returns `None` when no payout was
+  attempted vs `0` when the daily cap clipped it; the cog's `_settle`
+  releases the claim on a no-op (the mention-awards pattern) and keeps it
+  for a deliberate zero (an all-zero scoreboard, an all-X/6 Wordle, a
+  cap-clipped catch). Released rows are stamped `parse_status='error'`.
+- **Long games keep their lobby** (photo-external-110):
+  `logic.game_window_rows` pages back 300 rows at a time while
+  `parser.find_window_start` reports the window unbounded, up to 1,500 rows.
+- **Health signal on the panel** (photo-external-100): each watch row shows
+  *last payout* (`logic.last_payout_at`, newest `paid_at` among the watch's
+  ledger kinds, narrowed to the channel where the buffer still holds the
+  message) and *unpaid finishes, 30d* (`logic.unpaid_finishes`: finishes
+  the parser would pay — `parser.payable_game` mirrors the cog's skips —
+  with no claim) with a warning badge. The next format change shows up
+  here rather than by someone noticing in Discord.
+
 ## Notes
 
 - This worktree is behind main (main has migrations 091–096); 097 is safe and

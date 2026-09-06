@@ -37,6 +37,11 @@ from bot_modules.games.constants import (
     PHASE_RECAP,
     PHASE_RESULTS,
 )
+from bot_modules.games.utils.round_pacing import (
+    TIMER_FIELD_NAME,
+    timer_field_value,
+    waiting_notice,
+)
 from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.name_resolver import NameFn, mention
 
@@ -85,6 +90,9 @@ def build_round_embed(
     vote_count: int,
     closed: bool = False,
     color: discord.Color | None = None,
+    *,
+    waiting: bool = False,
+    advance_at: int | None = None,
 ) -> discord.Embed:
     """Build the active-round (or finished-round) vote embed.
 
@@ -92,22 +100,29 @@ def build_round_embed(
     accent when ``color`` is supplied. When ``color`` is ``None`` it
     falls back to the phase colors (playing blue / results green) so the
     active vs. closed states stay visually distinct with no guild.
+    ``waiting`` is the no-prompt state (the bank had nothing; a posed
+    prompt starts the round); ``advance_at`` the countdown of a timed round.
     """
     title = f"{GAME_ICONS['mlt']} Most Likely To…"
     if closed:
         title += " — Round Over"
     fallback = PHASE_RESULTS if closed else PHASE_PLAYING
     embed = discord.Embed(title=title, color=color or discord.Color(fallback))
-    embed.add_field(
-        name="Prompt",
-        value=discord.utils.escape_markdown(prompt),
-        inline=False,
-    )
+    if waiting:
+        embed.description = waiting_notice("✍️ Pose Prompt", "prompt")
+    else:
+        embed.add_field(
+            name="Prompt",
+            value=discord.utils.escape_markdown(prompt),
+            inline=False,
+        )
     embed.add_field(
         name="Round",
         value=f"{round_num} — {vote_count} votes",
         inline=False,
     )
+    if advance_at and not closed and not waiting:
+        embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
     embed.set_footer(
         text=f"{GAME_ICONS['mlt']} Most Likely To • Round {round_num}"
     )
@@ -147,13 +162,17 @@ def build_results_embed(
     color: discord.Color | None = None,
     *,
     name_fn: NameFn = mention,
+    winners: list[int] | None = None,
 ) -> discord.Embed:
     """Build the per-round results embed shown after votes are tallied.
 
-    Lines are sorted by descending vote count; the top-voted player(s)
-    get a 👑 crown prefix (multiple crowns appear on a tie). When
-    ``tally`` is empty (no votes were cast) the description renders a
-    placeholder so the embed is never blank.
+    Lines are sorted by descending vote count; the crowned player(s) get
+    a 👑 prefix. ``winners`` is what :func:`logic.find_round_winners`
+    decided — the cog passes it so the crowns shown match the crowns
+    banked once a tie at the top has been broken without self-votes
+    (vote-games-62); omitted, the top vote count is crowned (every tied
+    player on a tie). When ``tally`` is empty (no votes were cast) the
+    description renders a placeholder so the embed is never blank.
 
     ``name_fn`` turns a user id into embed-ready (already escaped) text.
 
@@ -167,9 +186,13 @@ def build_results_embed(
     )
     sorted_tally = sorted(tally.items(), key=lambda x: -x[1])
     max_votes = sorted_tally[0][1] if sorted_tally else 0
+    crowned = (
+        set(winners) if winners is not None
+        else {uid for uid, count in sorted_tally if count == max_votes and count > 0}
+    )
     lines: list[str] = []
     for uid, count in sorted_tally:
-        crown = "👑 " if count == max_votes and count > 0 else "   "
+        crown = "👑 " if uid in crowned else "   "
         lines.append(f"{crown}**{name_fn(uid)}** — {count} votes")
     embed.description = "\n".join(lines) if lines else "No votes cast."
     embed.set_footer(

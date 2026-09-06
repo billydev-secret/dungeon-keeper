@@ -13,7 +13,27 @@ const WEEKDAYS = [
   ["5", "Fri", "4"], ["6", "Sat", "5"], ["7", "Sun", "6"],
 ];
 
-let _options = null;   // { games: [{type,name,icon,fields}] }
+let _options = null;   // { games: [{type,name,icon,hosting,fields}], retry_grace_seconds }
+
+// What "schedule it" actually buys, per game (discovery-4). Most party games
+// open a lobby and wait for a human; only a few finish on their own.
+// Keys mirror hosting_kind() / HOSTING_LABEL in games/constants.py.
+const HOSTING_TAG = {
+  self: "Self-running",
+  timer: "Self-running with a round timer",
+  countdown: "Starts itself after a countdown",
+  host: "Needs a host",
+};
+const HOSTING_HINT = {
+  self: "Runs itself: the bot posts it and it finishes on its own — nobody has to be at the keyboard.",
+  timer: "Runs itself only with a round timer set below. Host-paced (0 seconds) it shows one question and "
+    + "waits for someone to press Next, so leave a timer on for an unattended slot.",
+  countdown: "Opens a lobby with a ten-minute countdown and starts itself when it runs out, as long as "
+    + "enough players have joined. The bot still tags whoever creates this schedule when the lobby "
+    + "appears, in case the room is thin.",
+  host: "Opens a lobby and waits for someone to press start. The bot tags whoever creates this schedule "
+    + "the moment the lobby appears — make sure a host will be around.",
+};
 let _channels = [];
 let _roles = [];
 let _editingId = null;  // null = create mode
@@ -59,8 +79,13 @@ export function mount(container) {
               <label>Channel
                 <select class="w-full" data-ctrl="channel"></select>
               </label>
+              <div class="field-hint">Any channel the bot can post in. The allowed-channel list on
+                Global Config only governs games members start themselves with /games play — a schedule
+                posts wherever you point it.</div>
             </div>
           </div>
+
+          <div class="field-hint" data-region="hosting-hint" style="margin:-4px 0 4px;"></div>
 
           <div data-region="game-options" style="margin:4px 0;"></div>
 
@@ -138,7 +163,7 @@ async function init(root) {
   // Game select
   const gameSel = root.querySelector('[data-ctrl="game"]');
   gameSel.innerHTML = _options.games
-    .map((g) => `<option value="${esc(g.type)}">${esc(g.icon)} ${esc(g.name)}</option>`)
+    .map((g) => `<option value="${esc(g.type)}">${esc(g.icon)} ${esc(g.name)} — ${esc(HOSTING_TAG[g.hosting] || HOSTING_TAG.host)}</option>`)
     .join("");
 
   // Channel + role selects
@@ -165,6 +190,8 @@ async function init(root) {
 function renderGameOptions(root, values = {}) {
   const gameType = root.querySelector('[data-ctrl="game"]').value;
   const game = _options.games.find((g) => g.type === gameType);
+  const hosting = (game && game.hosting) || "host";
+  root.querySelector('[data-region="hosting-hint"]').textContent = HOSTING_HINT[hosting] || HOSTING_HINT.host;
   const region = root.querySelector('[data-region="game-options"]');
   const fields = (game && game.fields) || [];
   if (!fields.length) {
@@ -330,12 +357,24 @@ function startEdit(root, row) {
 }
 
 const STATUS_LABEL = {
-  launched: "✅ Launched", skipped_active: "⏭️ Skipped — channel was busy",
+  launched: "✅ Launched", skipped_active: "⏭️ Skipped — channel stayed busy",
   skipped_disabled: "🚫 Skipped — game is off",
   skipped_giveup: "⌛ Gave up — channel stayed busy",
   skipped_hidden: "🙈 Skipped — the room was hidden that day",
   error: "⚠️ Failed", launching: "▶️ Launching now",
 };
+
+// A due slot whose channel is busy stays due and retries every minute until
+// its grace runs out, so "skipped" would be premature — say what it's doing.
+function lastRunLabel(row) {
+  if (!row.last_status) return "";
+  const grace = (_options && _options.retry_grace_seconds) || 0;
+  const stillDue = row.status === "active" && row.next_run_at && row.next_run_at * 1000 <= Date.now();
+  if (row.last_status === "skipped_active" && stillDue) {
+    return ` · ⏳ Channel busy — retrying until ${esc(fmtTs(row.next_run_at + grace))}`;
+  }
+  return ` · Last run: ${esc(STATUS_LABEL[row.last_status] || row.last_status)}`;
+}
 
 async function refreshList(root) {
   const region = root.querySelector('[data-region="list"]');
@@ -360,13 +399,17 @@ async function refreshList(root) {
   region.innerHTML = rows.map((r) => {
     const paused = r.status === "paused";
     const done = r.status === "done" || r.status === "cancelled";
-    const last = r.last_status ? ` · Last run: ${esc(STATUS_LABEL[r.last_status] || r.last_status)}` : "";
+    const last = lastRunLabel(r);
+    const lastLaunched = r.last_launched_at
+      ? `Last launched: ${esc(fmtTs(r.last_launched_at))}`
+      : "Never launched yet";
     const statusTag = paused ? '<span class="tag">Paused</span>'
       : done ? `<span class="tag">${esc(r.status)}</span>` : "";
+    const hostingTag = `<span class="tag">${esc(HOSTING_TAG[r.hosting] || HOSTING_TAG.host)}</span>`;
     return `
       <div class="card" data-id="${r.id}" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px;margin-bottom:8px;border:1px solid var(--rule);border-radius:8px;">
         <div style="min-width:0;">
-          <div style="font-weight:600;">${esc(r.game_icon)} ${esc(r.game_name)} ${statusTag}</div>
+          <div style="font-weight:600;">${esc(r.game_icon)} ${esc(r.game_name)} ${hostingTag} ${statusTag}</div>
           <div class="field-hint" style="margin:2px 0 0;">
             ${esc(chName(r.channel_id))} · ${esc(recurrenceLabel(r))} · ${esc(fmtTime(r.time_of_day))}
             ${r.announce ? " · 📣 Announced" : ""}
@@ -374,6 +417,7 @@ async function refreshList(root) {
           <div class="field-hint" style="margin:2px 0 0;">
             ${done ? "" : `Next launch: ${esc(fmtNextRun(r.next_run_at))}`}${last}
           </div>
+          <div class="field-hint" style="margin:2px 0 0;">${lastLaunched}</div>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0;">
           ${done ? "" : `<button class="btn" data-act="run-now" data-id="${r.id}">Run Now</button>`}

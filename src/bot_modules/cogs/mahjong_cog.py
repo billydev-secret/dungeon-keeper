@@ -38,6 +38,7 @@ from bot_modules.games.mahjong.tiles import FULL_RANK
 from bot_modules.games.mahjong import match_logic as mj_match
 from bot_modules.games.mahjong import views as mj_views
 from bot_modules.games.mahjong.game_logic import (
+    AUTO_PASS,
     ActionRejected,
     AssistReadout,
     GameState,
@@ -48,16 +49,23 @@ from bot_modules.games.mahjong.game_logic import (
 from bot_modules.games.mahjong.mahjong_service import (
     STALE_TABLE,
     MahjongService,
+    NudgeRecord,
     TableError,
     activate_due_cards,
     escrow_amount,
+    fill_bot_allowed,
     get_active_card,
     load_settings,
 )
 from bot_modules.games.mahjong.tile_render import rack_str
+from bot_modules.core.utils import jump_url
 from bot_modules.services.advisor_service import dashboard_url
 from bot_modules.games.mahjong.tiles import Tile, sort_rack
 from bot_modules.services.economy_service import get_balance
+from bot_modules.services.game_start_ping_service import (
+    resolve_game_night_role,
+    role_only_mentions,
+)
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +87,17 @@ class MahjongCog(commands.Cog):
         ] = {}
         #: channel_id → table_id for the on_message sticky routing.
         self.channel_tables: dict[int, int] = {}
+        #: table_id → its last-rendered phase, read by the sticky's ``hold``
+        #: so chat during a claim window can't move the card mid-window.
+        self.table_phase: dict[int, Phase] = {}
+        #: table_id → the pings that still owe a sweep (mahjong-144): the
+        #: plain "your draw" lines of the current turn, and every standing
+        #: second-strike warning, which is kept across turns (the member it
+        #: names is the one not looking) until the seat is no longer one
+        #: miss from folding. This is the fast path; the same record is
+        #: written to the table row after every change, so a restart
+        #: mid-hand can still delete a ping for a turn that has passed.
+        self.nudges: dict[int, NudgeRecord] = {}
 
     async def cog_load(self) -> None:
         self.card_scheduler.start()
@@ -98,6 +117,9 @@ class MahjongCog(commands.Cog):
             state = await self.service.load_state(table_id)
             if meta is None or state is None or meta["status"] != "live":
                 continue  # a past-due timer already closed it (resume race)
+            self.table_phase[table_id] = state.phase
+            # the pings the pre-restart process posted and never swept
+            self.nudges[table_id] = await self.service.get_nudges(table_id)
             self._track_table(table_id, meta["channel_id"])
             self.bot.add_view(
                 mj_views.TableView(self, table_id, register_all=True)
@@ -136,15 +158,25 @@ class MahjongCog(commands.Cog):
                 raise RuntimeError("table closed between trigger and restick")
             return content
 
+        async def hold(_guild_id: int) -> bool:
+            # A chat-driven repost mid-claim-window moved the card — with the
+            # only Mahjong/Call/Pass buttons — during the game's tightest
+            # decision (mahjong-154). The window is seconds long, so the
+            # restick just waits it out; the resolving transition's own
+            # place_or_refresh re-sticks the card anyway.
+            return self.table_phase.get(table_id) is Phase.CLAIM_WINDOW
+
         self.panels[table_id] = StickyPanel(
             f"mahjong table {table_id}", self.bot,
             load_ids=load_ids, save_ids=save_ids, build=build,
+            hold=hold, hold_poll=2.0,
         )
 
     def _untrack_table(self, table_id: int, channel_id: int | None) -> None:
         panel = self.panels.pop(table_id, None)
         if panel is not None:
             panel.cancel_all()
+        self.table_phase.pop(table_id, None)
         if channel_id is not None and self.channel_tables.get(channel_id) == table_id:
             self.channel_tables.pop(channel_id, None)
 
@@ -187,7 +219,9 @@ class MahjongCog(commands.Cog):
             accent, meta["deadline_at"], practice=practice,
         )
         add_bot = False
-        if state.phase is Phase.LOBBY and not practice:
+        # the button shows only where the service would accept the tap:
+        # dial on, and two members already seated (mahjong-143)
+        if not practice and fill_bot_allowed(state):
 
             def _dial():
                 with open_db(self.bot.ctx.db_path) as conn:
@@ -218,6 +252,7 @@ class MahjongCog(commands.Cog):
     async def _on_transition(
         self, table_id: int, state: GameState, events: list
     ) -> None:
+        self.table_phase[table_id] = state.phase
         meta = await self.service.table_meta(table_id)
         if meta is None:
             log.warning("mahjong: table %d transition: no meta — skip", table_id)
@@ -262,6 +297,7 @@ class MahjongCog(commands.Cog):
                     ))
             elif kind == "table_closed":
                 self._untrack_table(table_id, meta["channel_id"])
+                await self._clear_nudges(channel, table_id)
 
         if meta["status"] == "live":
             self._track_table(table_id, meta["channel_id"])
@@ -274,14 +310,121 @@ class MahjongCog(commands.Cog):
             else:
                 log.warning(
                     "mahjong: table %d transition: no panel tracked", table_id)
+            # after the card, so the ping sits under it rather than burying it
+            await self._post_nudges(channel, table_id, state, events)
         elif meta["sticky_message_id"]:
-            # closed: leave the final card in place, buttons gone
+            # closed: the final card says why, buttons gone (mahjong-151)
+            reason = next(
+                (d.get("reason") for k, d in events if k == "table_closed"),
+                meta.get("closed_reason"),
+            )
             try:
                 msg = channel.get_partial_message(meta["sticky_message_id"])
-                await msg.edit(view=None)
+                await msg.edit(
+                    embed=await self._closed_card(guild, state, meta, reason),
+                    view=None,
+                )
             except discord.HTTPException:
                 pass
         await self._refresh_rack_watches(table_id, state, meta, names)
+
+    async def _closed_card(
+        self, guild: discord.Guild, state: GameState, meta: dict,
+        reason: str | None,
+    ) -> discord.Embed:
+        accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
+        return mj_embeds.build_table_panel(
+            state, self._names(guild, state), meta["stake"], 0, accent, None,
+            practice=bool(meta.get("practice")), closed_reason=reason,
+        )
+
+    async def _post_nudges(
+        self, channel, table_id: int, state: GameState, events: list
+    ) -> None:
+        """The turn signal (mahjong-144): a 4-seat hand runs an hour and a
+        seat acts one turn in four, and the only cue used to be a line in
+        the sticky embed — a member who tabbed away folded in three turn
+        timers and, in Duel, paid. So each human turn start posts a plain
+        ``<@id> — your draw`` (content, never an embed; the mention is
+        allow-listed to that one member) and the second strike a warning.
+        The previous turn's draw line is deleted first, so the channel
+        carries at most one turn's worth; the warning stays up across turns
+        — the member it names is the one not looking — until the seat is
+        no longer one miss from folding (``warning_live``).
+
+        Every message id lands on the table row as well as in memory: the
+        deletes all happen on a *later* transition, so a restart in between
+        used to orphan them and leave a member pinged for a turn that had
+        already passed."""
+        record = self.nudges.setdefault(table_id, NudgeRecord())
+        dirty = await self._expire_warnings(channel, record, state)
+        key = mj_embeds.turn_key(state)
+        wanted = list(key) if key is not None else None
+        changed = wanted != record.turn_key
+        lines = mj_embeds.nudge_lines(state, events, turn_changed=changed)
+        if changed:
+            await self._sweep_draws(channel, record)
+            record.turn_key = wanted
+            dirty = True
+        for member_id, content, warning in lines:
+            try:
+                msg = await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions(
+                        everyone=False, roles=False, replied_user=False,
+                        users=[discord.Object(id=member_id)],
+                    ),
+                )
+            except discord.HTTPException:
+                log.warning("Mahjong: nudge failed in #%s", channel, exc_info=True)
+                continue
+            dirty = True
+            if warning:
+                await self._delete_quietly(
+                    channel, record.warnings.pop(member_id, None))
+                record.warnings[member_id] = msg.id
+            else:
+                record.draws.append(msg.id)
+        if dirty:
+            await self.service.set_nudges(table_id, record)
+
+    async def _expire_warnings(
+        self, channel, record: NudgeRecord, state: GameState
+    ) -> bool:
+        """Drop every warning whose seat is no longer one miss from folding.
+        Returns whether anything went, so the caller writes the row once."""
+        stale = [m for m in record.warnings if not mj_embeds.warning_live(state, m)]
+        for member_id in stale:
+            await self._delete_quietly(channel, record.warnings.pop(member_id))
+        return bool(stale)
+
+    async def _sweep_draws(self, channel, record: NudgeRecord) -> None:
+        """The turn moved on: its draw lines go, the warnings stay."""
+        for message_id in record.draws:
+            await self._delete_quietly(channel, message_id)
+        record.draws.clear()
+        record.turn_key = None
+
+    async def _clear_nudges(self, channel, table_id: int) -> None:
+        """Sweep everything, warnings included — the table is going away,
+        and a closed table has nothing left to fold."""
+        record = self.nudges.pop(table_id, None)
+        if record is None:
+            record = await self.service.get_nudges(table_id)
+        await self._sweep_draws(channel, record)
+        for message_id in list(record.warnings.values()):
+            await self._delete_quietly(channel, message_id)
+        record.warnings.clear()
+        await self.service.set_nudges(table_id, record)
+
+    @staticmethod
+    async def _delete_quietly(channel, message_id: int | None) -> None:
+        if message_id is None:
+            return
+        try:
+            await channel.get_partial_message(message_id).delete()
+        except discord.HTTPException:
+            pass  # already gone (a mod swept it) — nothing to keep
 
     #: An interaction token outlives its click by 15 minutes; refresh only
     #: comfortably inside that.
@@ -386,8 +529,13 @@ class MahjongCog(commands.Cog):
             )
             return
         accent = await safe_resolve_accent(self.bot, guild, default=DEFAULT_ACCENT_COLOR)
+        card = active[1] if active else None
         embed = mj_embeds.build_member_panel(
-            active[1] if active else None, settings.stakes_allowed, balance, accent
+            card, settings.stakes_allowed, balance, accent,
+            escrow_for=(
+                (lambda seats, stake: escrow_amount(card, seats, stake))
+                if card is not None else None
+            ),
         )
         await interaction.response.send_message(
             embed=embed, view=mj_views.MemberPanelView(self), ephemeral=True
@@ -455,16 +603,49 @@ class MahjongCog(commands.Cog):
         channel = guild.get_channel(interaction.channel_id)
         if panel is not None and isinstance(channel, discord.TextChannel):
             await panel.place_or_refresh(guild, channel)
+            await self._announce_table(
+                guild, channel, table_id, seat_count, stake, max_rank)
         await interaction.followup.send(
             "Table's open — the card is in the channel. Escrow locks in as "
             "seats fill.", ephemeral=True,
         )
 
+    async def _announce_table(
+        self, guild: discord.Guild, channel: discord.TextChannel,
+        table_id: int, seat_count: int, stake: int, max_rank: int,
+    ) -> None:
+        """One plain Game Night line under a new real table (mahjong-149):
+        the card alone was silent outside its channel, and a 4-seat lobby
+        can't fill on passers-by. Reads the same dial the lobby-games sweep
+        pings (``game_night_ping_role_id``); a guild with no role set posts
+        nothing. Never fails the open — the table is already up."""
+        try:
+            resolved, role_id = await resolve_game_night_role(self.bot, guild.id)
+            if not resolved or role_id is None:
+                return
+            meta = await self.service.table_meta(table_id)
+            if meta is None or not meta.get("sticky_message_id"):
+                return
+            await channel.send(
+                mj_embeds.build_table_open_ping(
+                    role_id, seat_count, stake, seat_count - 1,
+                    jump_url(guild.id, channel.id, int(meta["sticky_message_id"])),
+                    quick=max_rank != FULL_RANK,
+                ),
+                allowed_mentions=role_only_mentions(role_id),
+            )
+        except Exception:
+            log.warning("Mahjong: table-open ping failed for table %d",
+                        table_id, exc_info=True)
+
     async def handle_create_practice(
-        self, interaction: discord.Interaction, seat_count: int
+        self, interaction: discord.Interaction, seat_count: int,
+        max_rank: int = FULL_RANK,
     ) -> None:
         """A practice table (bots plan B5): stake-free, born full of bots,
-        dealt on the ordinary countdown. Same channel rules as a real one."""
+        dealt on the ordinary countdown. Same channel rules as a real one;
+        ``max_rank`` below the full deck is a quick practice table
+        (mahjong-147) and passes the same house gate as a staked one."""
         guild = interaction.guild
         assert guild is not None and interaction.channel_id is not None
         if not isinstance(interaction.channel, discord.TextChannel):
@@ -477,7 +658,7 @@ class MahjongCog(commands.Cog):
         try:
             table_id = await self.service.create_table(
                 guild.id, interaction.channel_id, interaction.user.id,
-                seat_count, 0, practice=True,
+                seat_count, 0, practice=True, max_rank=max_rank,
             )
         except (TableError, ActionRejected) as e:
             await interaction.followup.send(self._dress(str(e)), ephemeral=True)
@@ -822,6 +1003,11 @@ class MahjongCog(commands.Cog):
         if state.phase is Phase.CLAIM_WINDOW:
             if seat in state.claims:
                 kind = state.claims[seat][0]
+                if kind == AUTO_PASS:
+                    # the engine passed for a seat with no legal route —
+                    # not a decision the member made, so not "You passed"
+                    return ("Nothing to claim here — the window moves on "
+                            "without you.")
                 shown = {"pass": "passed", "call": "called",
                          "mahjong": "declared Mahjong"}.get(kind, kind)
                 return f"You {shown} — waiting on the window."

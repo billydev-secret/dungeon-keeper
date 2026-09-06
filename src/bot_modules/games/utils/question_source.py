@@ -1,5 +1,6 @@
 import json
 import random
+import re
 import logging
 from typing import Any
 
@@ -31,19 +32,59 @@ def channel_allows_nsfw(channel) -> bool:
     return False
 
 
+# "Would you rather" / "would you rather:" — the prose lead-in a dashboard
+# curator types. Stripped so the option shown as 🅰️ doesn't start with it.
+_WYR_PREFIX = re.compile(r"^\s*would\s+you\s+rather\b\s*[:,\-–—]?\s*", re.IGNORECASE)
+
+
+def split_wyr_options(text: str | None) -> tuple[str, str] | None:
+    """Split one Would You Rather bank row into ``(option_a, option_b)``.
+
+    The canonical shape is ``a | b``. Every prod row was typed as prose —
+    "Would you rather X, or Y?" — with no separator, and a bank-fed game
+    marked one row served and ended in the same second (vote-games-49). So a
+    row with no ``|`` is split on its **last** ``, or `` (else its last
+    `` or ``), after the "Would you rather" lead-in and a trailing ``?`` are
+    dropped; the same rule feeds the dashboard validator, which stores what
+    it can split as ``a | b``. Two or more ``|`` is ambiguous and a miss, as
+    is a row with an empty side or no ``or`` at all.
+    """
+    if not text:
+        return None
+    body = _WYR_PREFIX.sub("", text.strip()).strip().rstrip("?").strip()
+    if not body:
+        return None
+    if "|" in body:
+        if body.count("|") != 1:
+            return None
+        a, b = body.split("|", 1)
+    else:
+        lowered = body.lower()
+        cut = lowered.rfind(", or ")
+        width = 5
+        if cut < 0:
+            cut = lowered.rfind(" or ")
+            width = 4
+        if cut < 0:
+            return None
+        a, b = body[:cut], body[cut + width:]
+    a, b = a.strip().rstrip(","), b.strip()
+    if not a or not b:
+        return None
+    return a, b
+
+
 async def get_wyr_question(
     db, tags: list[str] | None = None, allow_nsfw: bool = False
 ) -> tuple[str, str] | None:
     """Returns (option_a, option_b) from the bank, or None when it has no match.
 
-    Bank rows store the two options as a single ``a|b`` string; a row without
-    the separator is malformed and treated as a miss.
+    Bank rows store the two options as ``a | b``; a prose row is split on its
+    last "or" (see :func:`split_wyr_options`). A row that can't be split is
+    malformed and treated as a miss.
     """
     result = await _get_bank_question(db, "wyr", tags=tags, allow_nsfw=allow_nsfw)
-    if result and "|" in result:
-        a, b = result.split("|", 1)
-        return a.strip(), b.strip()
-    return None
+    return split_wyr_options(result)
 
 
 async def get_nhie_statement(
@@ -270,9 +311,17 @@ async def get_traditional_question(
 
 async def has_matching_questions(
     db, game_type: str, tags: list[str] | None, allow_nsfw: bool = False,
+    *, kind: str | None = None,
 ) -> bool:
     """True if at least one bank row matches the tag filter (same rules as
     _get_bank_question). Used by slash commands to refuse-on-empty-filtered-pool.
+
+    ``kind`` is FFA's required dimension (``"truth"`` / ``"dare"``): a row
+    must also carry that reserved tag, the way :func:`get_ffa_prompt` demands
+    it — so ``kind:dare tags:lily`` where every lily row is a truth reads as
+    no match here, at the command, rather than passing and having the launch
+    come back empty (anon-tail-76: the host was told the bot lacked channel
+    permissions). ``"random"`` / ``None`` places no kind requirement.
 
     Read-only: unlike the get_* serving functions, this must not mark a
     question served — it's just an existence check.
@@ -281,6 +330,8 @@ async def has_matching_questions(
         "SELECT question_id, question_text, tags, last_served_at FROM games_question_bank WHERE game_type = ?",
         (game_type,),
     )
+    if kind in ("truth", "dare"):
+        rows = [r for r in rows if kind in _parse_tags(r[2])]
     return bool(_filter_bank_rows(rows, set(tags or []), allow_nsfw))
 
 

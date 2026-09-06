@@ -15,8 +15,9 @@ import time as _time
 from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
-from bot_modules.services.whisper_models import STATE_SHARED, Whisper
+from bot_modules.services.whisper_models import STATE_SHARED, Whisper, WhisperConfig
 from bot_modules.services.whisper_service import (
+    GuessOutcome,
     is_locked,
     safe_codefence_content,
 )
@@ -49,12 +50,10 @@ def format_time_ago(created_at: float, *, now: float | None = None) -> str:
 def status_pill(w: Whisper, *, now: float | None = None) -> str:
     """One-word status label used in inbox dropdown rows and embed headers.
 
-    Mirrors the priority order the cog used inline: exposed > solved > locked
-    > no-guesses > shared > new. Locked check delegates to the service so the
+    Mirrors the priority order the cog used inline: solved > locked >
+    no-guesses > shared > new. Locked check delegates to the service so the
     30-day cutoff stays defined in one place.
     """
-    if w.exposed:
-        return "Exposed"
     if w.solved:
         return "Solved"
     if is_locked(w, now=now):
@@ -146,9 +145,43 @@ def filter_whispers_by_message(
 # plain-text body builder here.
 
 
-def format_expose_dm_suffix(sender_label: str) -> str:
-    """The "💥 Sender: ..." line appended to the DM body on expose."""
-    return f"\n\n\U0001f4a5 Sender: {sender_label}"
+def format_sender_guess_feedback(
+    *, whisper_id: int, guessed_label: str, outcome: GuessOutcome
+) -> str:
+    """The one-line DM the sender gets after each guess on their whisper.
+
+    This is the sender's half of the cat-and-mouse — watching the target guess
+    wrong, being caught, or getting away with it — which they used to get no
+    signal of at all (2026-09 review, rotation-rooms-159). ``guessed_label`` is
+    whatever the cog resolved: a display name, or "someone" when the sender
+    holds a no-contact pair with the guessed member. A correct guess never
+    echoes the label — it would only be the sender's own name.
+    """
+    if outcome.correct:
+        return f"Whisper #{whisper_id} — they guessed you. They got you."
+    if outcome.exhausted:
+        return (
+            f"Whisper #{whisper_id} — they guessed {guessed_label}. "
+            "Wrong — they're out of guesses. You're safe."
+        )
+    return (
+        f"Whisper #{whisper_id} — they guessed {guessed_label}. "
+        f"Wrong, {outcome.attempts_remaining} left."
+    )
+
+
+def sender_feedback_wanted(cfg: WhisperConfig, *, sender_role_ids: set[int]) -> bool:
+    """Whether the sender should hear about a guess on their whisper.
+
+    Two gates: the guild's dial (ships off, so whispers already in flight
+    don't start DMing until an admin opts the server in), and the sender
+    still holding the pool role — ``/whisper optout`` is how a member leaves
+    the game, and leaving it means its DMs stop too. A sender who has run
+    ``/whisper forget-me`` has no whisper row left to be guessed on.
+    """
+    if not cfg.sender_feedback:
+        return False
+    return cfg.role_id in sender_role_ids
 
 
 def format_reply_dm_body(

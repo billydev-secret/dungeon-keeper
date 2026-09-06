@@ -322,6 +322,18 @@ def test_purges_user_with_more_messages_than_sqlite_variable_cap(db):
             "guild_id = ? AND author_id = ?",
             id="confession_pending",
         ),
+        # The member's anonymous alias in a confession thread or an FFA prompt
+        # (anon-tail-69): the one row that ties a still-visible pseudonym back
+        # to them. Shares the threads' seven-day sweep and goes at erasure too.
+        pytest.param(
+            "confession_emoji_assignments",
+            "INSERT INTO confession_emoji_assignments "
+            "(guild_id, root_message_id, user_id, emoji_index, name_index, created_at) "
+            "VALUES (?, 4242, ?, 1, 1, 0)",
+            (GUILD, USER),
+            "guild_id = ? AND user_id = ?",
+            id="confession_emoji_assignments",
+        ),
     ],
 )
 def test_purges_review_added_simple_tables(db, table, insert_sql, params, where):

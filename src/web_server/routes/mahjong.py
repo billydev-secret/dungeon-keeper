@@ -271,26 +271,18 @@ async def report(request: Request, user=_ADMIN):
                 )
             ]
             results = [
-                {
-                    "result_id": r["id"],
-                    "hand_no": r["hand_no"],
-                    "mode": r["mode"],
-                    "stake": r["stake"],
-                    "kind": r["kind"],
-                    "winner_id": str(r["winner_id"]) if r["winner_id"] else None,
-                    "line_id": r["line_id"],
-                    "line_name": r["line_name"],
-                    "base_value": r["base_value"],
-                    "won_by": r["won_by"],
-                    "jokerless": bool(r["jokerless"]),
-                    "created_at": r["created_at"],
-                }
+                _result_payload(r)
                 for r in conn.execute(
                     "SELECT * FROM mahjong_results WHERE guild_id = ? "
                     "ORDER BY created_at DESC LIMIT 50",
                     (guild_id,),
                 )
             ]
+            pace = hand_pace(conn.execute(
+                "SELECT created_at, started_at, discards FROM mahjong_results "
+                "WHERE guild_id = ? AND practice = 0",
+                (guild_id,),
+            ).fetchall())
             aggregates = [
                 {
                     "user_id": str(r["user_id"]),
@@ -308,6 +300,58 @@ async def report(request: Request, user=_ADMIN):
                     (guild_id,),
                 )
             ]
-            return {"tables": tables, "results": results, "aggregates": aggregates}
+            return {
+                "tables": tables, "results": results, "aggregates": aggregates,
+                "pace": pace,
+            }
 
     return await run_query(_q)
+
+
+def _result_payload(r) -> dict:
+    """One Recent Hands row. Duration and discards ride along since the
+    columns were written by migration 181 and read by nothing (mahjong-152);
+    both are None for a hand settled before it, never zero."""
+    started = r["started_at"]
+    return {
+        "result_id": r["id"],
+        "hand_no": r["hand_no"],
+        "mode": r["mode"],
+        "stake": r["stake"],
+        "kind": r["kind"],
+        "winner_id": str(r["winner_id"]) if r["winner_id"] else None,
+        "line_id": r["line_id"],
+        "line_name": r["line_name"],
+        "base_value": r["base_value"],
+        "won_by": r["won_by"],
+        "jokerless": bool(r["jokerless"]),
+        "practice": bool(r["practice"]),
+        "created_at": r["created_at"],
+        "duration": (
+            max(0.0, float(r["created_at"]) - float(started))
+            if started is not None else None
+        ),
+        "discards": r["discards"],
+    }
+
+
+def hand_pace(rows) -> dict:
+    """Seconds per discard over the real hands that carry timing — the
+    figure every projected hand length is scaled by, which rested on one
+    observed game. Practice hands are excluded by the caller: a bot's
+    reaction delay is configured, not human, so their pace answers a
+    different question. ``hands`` is how many hands the figure stands on."""
+    seconds = 0.0
+    discards = 0
+    hands = 0
+    for r in rows:
+        if r["started_at"] is None or not r["discards"]:
+            continue
+        seconds += max(0.0, float(r["created_at"]) - float(r["started_at"]))
+        discards += int(r["discards"])
+        hands += 1
+    return {
+        "hands": hands,
+        "seconds_per_discard": round(seconds / discards, 1) if discards else None,
+        "avg_minutes": round(seconds / hands / 60, 1) if hands else None,
+    }

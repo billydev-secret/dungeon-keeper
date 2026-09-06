@@ -36,6 +36,7 @@ __all__ = [
     "submitted_count",
     "get_prior_submission",
     "collect_complete_submissions",
+    "payout_roster",
     "shuffle_reveal_order",
 ]
 
@@ -168,6 +169,18 @@ def collect_complete_submissions(
         uid: data for uid, data in submissions.items()
         if not data.get("partial", False)
     }
+
+
+def payout_roster(
+    complete: dict[str, dict[str, Any]],
+) -> list[int]:
+    """Who the reveal pays: everyone with a complete submission, as ints.
+
+    ``player_count`` on the history row stays the joined roster; the faucet
+    pays only the people who put a story in (trivia-tail-95 — two members
+    could join, press nothing and collect the participation reward).
+    """
+    return [int(uid) for uid in complete.keys()]
 
 
 def shuffle_reveal_order(

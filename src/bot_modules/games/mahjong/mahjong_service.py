@@ -29,13 +29,13 @@ import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.games.mahjong import game_logic as engine
 from bot_modules.games.mahjong.bot_logic import bot_member_id, decide, is_bot_id
-from bot_modules.games.mahjong.game_logic import ASSIST_MODES
+from bot_modules.games.mahjong.game_logic import ASSIST_MODES, clamp_wall_trim
 from bot_modules.games.mahjong.card_logic import (
     Card,
     CardError,
@@ -49,6 +49,7 @@ from bot_modules.games.mahjong.game_logic import (
     TableConfig,
 )
 from bot_modules.games.mahjong.tiles import FULL_RANK, MIN_RANK, shuffled_wall
+from bot_modules.games.utils.game_history import history_insert
 from bot_modules.services import economy_wager_service as wager_svc
 from bot_modules.services.economy_service import (
     apply_credit,
@@ -77,8 +78,25 @@ ANSWERED_WINDOW = 1.5
 #: to still be reachable, or there is nothing to play for.
 MIN_PLAYABLE_LINES = 5
 
-#: Lobby that never fills / settle screen nobody rematches: dissolve (§6.2).
-LOBBY_LIFETIME = 600.0
+#: Lobby that never fills: dissolve (§6.2). Twenty minutes, not the spec's
+#: original ten (mahjong-149): a 4-seat table is filled by people wandering
+#: in from the table-open ping, and ten minutes was shorter than the walk.
+#: No dial — nothing else in the game is tuned against it.
+LOBBY_LIFETIME = 1200.0
+#: Settle screen nobody rematches: close (mahjong-148). A unanimous Rematch
+#: used to have to land inside ``phase_timer`` — 60 s in prod — or an
+#: hour-long table closed on everyone. Ten minutes is the spec's inactivity
+#: rule, and no dial is needed for it. Its own constant rather than the
+#: lobby's: a settle screen holds the channel with nothing left to join.
+SETTLE_LIFETIME = 600.0
+#: Fill bots need company (mahjong-143): with the dial on, a lone host could
+#: open a Duel, seat a house-funded bot and play the house at real stakes
+#: with coach assist running. The plan's definition of a fill table is
+#: "2+ humans + bot(s)"; this is that definition enforced.
+FILL_MIN_HUMANS = 2
+FILL_NEEDS_HUMANS = (
+    "House bots only fill a table — two players need to be seated first."
+)
 
 _HAND_GID_BASE = 100_000
 
@@ -310,6 +328,89 @@ def _hand_gid(table_id: int, hand_no: int) -> int:
     return table_id * _HAND_GID_BASE + hand_no
 
 
+def fill_bot_allowed(state: GameState) -> bool:
+    """May the host seat a house bot here right now (mahjong-143)? Only
+    once ``FILL_MIN_HUMANS`` members are already sitting — so never in a
+    Duel, and at most two bots on a full table. The same predicate hides
+    the Add Bot button, so the button and the refusal can't disagree."""
+    if state.phase is not Phase.LOBBY or len(state.seats) >= state.seat_count:
+        return False
+    humans = sum(1 for s in state.seats if not is_bot_id(s.member_id))
+    return humans >= FILL_MIN_HUMANS
+
+
+def mahjong_help_line(conn, guild_id: int) -> str | None:
+    """One pointer at /mahjong for ``/games help`` while the game is open
+    on this server (mahjong-149). Mahjong is channel-native — no ``/games
+    play`` entry — so the help embed's registry never lists it; this rides
+    the same extra-lines block Survivor uses. None when the dial is off."""
+    if not load_settings(conn, guild_id).enabled:
+        return None
+    return (
+        "🀄 **Meadow Mahjong** — `/mahjong` opens your panel: create or join "
+        "a table in any text channel, study the card, practice against bots"
+    )
+
+
+@dataclass(slots=True)
+class NudgeRecord:
+    """The plain turn pings a live table still owes a sweep (spec §1
+    amendment 6): the key of the turn last pinged, the draw lines posted
+    for it, and ``member_id → message_id`` for every standing second-strike
+    warning.
+
+    It lives on the table row, not only on the cog, because both messages
+    are deleted *later* — the draw line when the next turn begins, the
+    warning once the seat is no longer one miss from folding. A restart in
+    between used to orphan them: the resume path re-armed the table and
+    re-stuck the card, but every message id was gone, so a member kept a
+    ping for a turn that had already passed. The cog still works from its
+    in-memory copy each transition; the row is what makes the copy
+    survivable.
+    """
+
+    turn_key: list | None = None
+    draws: list[int] = field(default_factory=list)
+    warnings: dict[int, int] = field(default_factory=dict)
+
+    def is_empty(self) -> bool:
+        """Nothing outstanding — the column goes back to NULL."""
+        return self.turn_key is None and not self.draws and not self.warnings
+
+    def to_json(self) -> str:
+        return json.dumps({
+            "turn_key": self.turn_key,
+            "draws": self.draws,
+            "warnings": {str(k): v for k, v in self.warnings.items()},
+        })
+
+    @classmethod
+    def from_json(cls, raw: object) -> NudgeRecord:
+        """Parse a stored record; anything unreadable reads as empty. A
+        corrupt cell must not stop a table resuming — the worst case is one
+        stale ping nobody sweeps, which is where this started."""
+        if not isinstance(raw, str) or not raw:
+            return cls()
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        key = data.get("turn_key")
+        warnings: dict[int, int] = {}
+        for member_id, message_id in (data.get("warnings") or {}).items():
+            try:
+                warnings[int(member_id)] = int(message_id)
+            except (TypeError, ValueError):
+                continue
+        return cls(
+            turn_key=list(key) if isinstance(key, list) else None,
+            draws=[int(m) for m in (data.get("draws") or []) if isinstance(m, int)],
+            warnings=warnings,
+        )
+
+
 # ── The service ──────────────────────────────────────────────────────────────
 
 Listener = Callable[[int, GameState, list[engine.Event]], Awaitable[None]]
@@ -383,9 +484,17 @@ class MahjongService:
                             "fit a quick deck — an admin can pick another."
                         )
                 now = time.time()
+                # The trim dial is applied on top of whatever deck the table
+                # plays; clamped here so a stale dial can't deal a wall too
+                # short to finish (mahjong-142 — prod's trim 60 on a quick
+                # deck dealt 17 live tiles).
+                trim = clamp_wall_trim(
+                    settings.duel_wall_trim if seat_count == 2 else 0,
+                    seat_count, max_rank, jokers=settings.wall_jokers,
+                )
                 config = TableConfig(
                     seat_count=seat_count,
-                    wall_trim=settings.duel_wall_trim if seat_count == 2 else 0,
+                    wall_trim=trim,
                     second_charleston=settings.second_charleston,
                     wall_jokers=settings.wall_jokers,
                     max_rank=max_rank,
@@ -527,6 +636,8 @@ class MahjongService:
             state = engine.state_from_dict(json.loads(row["state"]))
             if requester_id != state.host:
                 raise TableError("Only the host can seat a bot.")
+            if not fill_bot_allowed(state):
+                raise TableError(FILL_NEEDS_HUMANS)
             card = self._card_for(conn, row)
             seat_index = len(state.seats)
             bot_id = bot_member_id(table_id, seat_index)
@@ -752,7 +863,9 @@ class MahjongService:
         elif state.phase is Phase.AWAIT_DISCARD:
             deadline = now + settings.turn_timer
         elif state.phase is Phase.SETTLE:
-            deadline = now + settings.phase_timer
+            # not the phase timer: the rematch vote is a between-hands
+            # decision, not a mid-hand beat (mahjong-148)
+            deadline = now + SETTLE_LIFETIME
         else:  # charleston / vote / courtesy
             deadline = now + settings.phase_timer
         self._persist(conn, table_id, state, deadline)
@@ -760,18 +873,23 @@ class MahjongService:
 
     def _settle_money(self, conn, row, state: GameState) -> None:
         """Outcome → coins: settle_split for a scored hand, refunds for a
-        wall game; results, per-seat rows, and stats in the same commit."""
+        wall game; results, per-seat rows, stats and the games record in the
+        same commit. A practice hand moves no coins and keeps no seats or
+        stats (B5 — that decision is about money); it does write the one
+        result row, flagged, so hand timing is measured on every table
+        (mahjong-152)."""
         out = state.outcome
         assert out is not None
-        if bool(row["practice"]):
-            return  # practice hands move no coins and record nothing (B5)
         table_id = int(row["id"])
         guild_id = int(row["guild_id"])
         stake = int(row["stake"])
         gid = _hand_gid(table_id, state.hand_no)
         member_of = {i: s.member_id for i, s in enumerate(state.seats)}
+        practice = bool(row["practice"])
 
-        if out.kind in ("wall_game", "all_fallow"):
+        if practice:
+            coin_deltas = {seat: 0 for seat in member_of}
+        elif out.kind in ("wall_game", "all_fallow"):
             wager_svc.refund_game(conn, GAME_TYPE, gid)
             coin_deltas = {seat: 0 for seat in member_of}
         else:
@@ -787,19 +905,54 @@ class MahjongService:
         # started_at is NULL for a hand dealt before migration 181 — readers
         # must treat that as unknown, never as zero.
         started_at = row["hand_started_at"]
+        winner_id = member_of.get(out.winner) if out.winner is not None else None
         cur = conn.execute(
             "INSERT INTO mahjong_results (guild_id, table_id, hand_no, mode, "
             "stake, card_id, kind, winner_id, line_id, line_name, base_value, "
-            "won_by, jokerless, created_at, started_at, discards) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "won_by, jokerless, created_at, started_at, discards, practice) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (guild_id, table_id, state.hand_no, state.seat_count, stake,
-             str(row["card_row_id"]), out.kind,
-             member_of.get(out.winner) if out.winner is not None else None,
+             str(row["card_row_id"]), out.kind, winner_id,
              out.line_id, out.line_name, out.value, out.won_by,
              1 if out.jokerless_double else 0, now,
-             started_at, state.discard_count),
+             started_at, state.discard_count, 1 if practice else 0),
         )
+        if practice:
+            return  # no seats, no stats, no coins, no games record (B5)
         result_id = int(cur.lastrowid or 0)
+        humans = [m for m in member_of.values() if not is_bot_id(m)]
+        # The games record (mahjong-153): mahjong keeps its own tables and
+        # never had a games_active_games row, so a settled hand was invisible
+        # to Play Statistics and /recap. One row per real hand; the
+        # statement's own exactly-once predicate makes a re-fire harmless.
+        conn.execute(*history_insert(
+            game_id=f"mahjong:{gid}",
+            game_type=GAME_TYPE,
+            channel_id=int(row["channel_id"]),
+            host_id=int(row["host_id"]),
+            player_count=len(humans),
+            round_count=state.discard_count,
+            payload={
+                "players": humans,
+                "table_id": table_id,
+                "hand_no": state.hand_no,
+                "mode": state.seat_count,
+                "stake": stake,
+                "kind": out.kind,
+                "winner_id": winner_id,
+                "line_id": out.line_id,
+                "line_name": out.line_name,
+                "value": out.value,
+                "won_by": out.won_by,
+                "jokerless": bool(out.jokerless_double),
+                "coin_deltas": {
+                    str(member_of[s]): d for s, d in coin_deltas.items()
+                },
+                "bots": len(member_of) - len(humans),
+            },
+            started_at=float(started_at or now),
+            guild_id=guild_id,
+        ))
         for seat, member_id in member_of.items():
             delta = coin_deltas.get(seat, 0)
             conn.execute(
@@ -1069,6 +1222,8 @@ class MahjongService:
                     "deadline_at": row["deadline_at"],
                     "card_row_id": int(row["card_row_id"]),
                     "practice": bool(row["practice"]),
+                    "host_id": int(row["host_id"]),
+                    "closed_reason": row["closed_reason"],
                 }
         return await asyncio.to_thread(_q)
 
@@ -1110,6 +1265,30 @@ class MahjongService:
                 conn.execute(
                     "UPDATE mahjong_tables SET sticky_message_id = ? WHERE id = ?",
                     (message_id, table_id),
+                )
+        await asyncio.to_thread(_q)
+
+    async def get_nudges(self, table_id: int) -> NudgeRecord:
+        """The pings this table still owes a sweep. Empty for a table that
+        has posted none, and for one whose row is gone."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                return NudgeRecord.from_json(
+                    None if row is None else row["nudges"])
+        return await asyncio.to_thread(_q)
+
+    async def set_nudges(self, table_id: int, record: NudgeRecord) -> None:
+        """Record (or clear) the outstanding pings so the sweep still works
+        after a restart. An empty record writes NULL rather than an empty
+        object, so "nothing outstanding" is one shape, not two."""
+        raw = None if record.is_empty() else record.to_json()
+
+        def _q():
+            with open_db(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE mahjong_tables SET nudges = ? WHERE id = ?",
+                    (raw, table_id),
                 )
         await asyncio.to_thread(_q)
 

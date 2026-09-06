@@ -9,6 +9,7 @@ from bot_modules.services.whisper_repo import (
     insert_whisper,
     list_received,
     set_whisper_message_ids,
+    soft_delete_whisper,
     update_whisper_state,
 )
 
@@ -65,11 +66,11 @@ def test_list_received_filters_by_state(sync_db_path: Path):
     with open_db(sync_db_path) as conn:
         w1 = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="a")
         w2 = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="b")
-        update_whisper_state(conn, w2, "hidden")
+        update_whisper_state(conn, w2, "shared")
         pending = list_received(conn, guild_id=GUILD, target_id=TARGET, state="pending")
-        hidden = list_received(conn, guild_id=GUILD, target_id=TARGET, state="hidden")
+        shared = list_received(conn, guild_id=GUILD, target_id=TARGET, state="shared")
     assert {w.id for w in pending} == {w1}
-    assert {w.id for w in hidden} == {w2}
+    assert {w.id for w in shared} == {w2}
 
 
 def test_list_received_excludes_other_guilds(sync_db_path: Path):
@@ -94,9 +95,9 @@ def test_list_received_in_states_combines_filters(sync_db_path: Path):
         from bot_modules.services.whisper_repo import list_received_in_states
         wp = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="p")
         ws = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="s")
-        wh = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="h")
+        wd = insert_whisper(conn, guild_id=GUILD, sender_id=SENDER, target_id=TARGET, message="d")
         update_whisper_state(conn, ws, "shared")
-        update_whisper_state(conn, wh, "hidden")
+        soft_delete_whisper(conn, wd)
         rows = list_received_in_states(
             conn, guild_id=GUILD, target_id=TARGET, states=["pending", "shared"]
         )

@@ -146,6 +146,35 @@ def last_echo_times(
     return row["same_type"], row["any_type"]
 
 
+def previous_game_ended_here(
+    conn: sqlite3.Connection, guild_id: int, echo_key: str, channel_id: int | None
+) -> bool:
+    """Has the game last echoed under *echo_key* already ended, in *channel_id*?
+
+    The per-type hour exists to stop one open lobby being announced twice;
+    once that game is in the history archive the room is open again and a new
+    game there is news (discovery-10). Only the party-game source passes a
+    channel — its refs are game ids — so every other source answers False and
+    keeps the plain hour. Same room only: a Clapback that finished in one
+    channel says nothing about a Clapback opening in another.
+    """
+    if channel_id is None:
+        return False
+    row = conn.execute(
+        "SELECT ref FROM event_echo_log WHERE guild_id = ? AND echo_key = ? "
+        "AND source = ? AND suppressed = 0 ORDER BY echoed_at DESC LIMIT 1",
+        (guild_id, echo_key, SOURCE_PARTY_GAME),
+    ).fetchone()
+    if row is None:
+        return False
+    ended = conn.execute(
+        "SELECT 1 FROM games_game_history WHERE game_id = ? AND channel_id = ? "
+        "AND NOT EXISTS (SELECT 1 FROM games_active_games WHERE game_id = ?) LIMIT 1",
+        (row["ref"], channel_id, row["ref"]),
+    ).fetchone()
+    return ended is not None
+
+
 def claim_echo(
     conn: sqlite3.Connection,
     *,
@@ -310,6 +339,12 @@ async def echo_event(
                 last_same_type=last_same,
                 last_any=last_any,
                 exempt=spec_for(source).exempt,
+                previous_ended=(
+                    source == SOURCE_PARTY_GAME
+                    and previous_game_ended_here(
+                        conn, guild.id, echo_key, origin_channel_id
+                    )
+                ),
             )
             claimed = claim_echo(
                 conn,

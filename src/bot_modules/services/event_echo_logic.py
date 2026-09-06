@@ -206,6 +206,7 @@ def decide(
     last_same_type: float | None,
     last_any: float | None,
     exempt: bool,
+    previous_ended: bool = False,
 ) -> EchoDecision:
     """Apply both cooldowns to a candidate echo.
 
@@ -220,12 +221,25 @@ def decide(
     game policy by forgetting an argument. The per-ref claim still holds an
     exempt echo to one apiece, so "exempt" means "can't be crowded out", not
     "can repeat".
+
+    ``previous_ended`` lifts the **per-type** window only: the game that last
+    echoed under this key has ended (left ``games_active_games``) in the same
+    room, so a new game there is a fresh invitation rather than the same open
+    lobby announced twice — which is all "same type at most hourly" was ever
+    guarding against (discovery-10: the second and third Clapback rounds of
+    an evening were suppressed after the first had finished). The global
+    floor is never lifted; it is the defence that matters. The caller
+    resolves the flag the way it resolves ``exempt``.
     """
     if exempt:
         return EchoDecision(True)
     if last_any is not None and now - last_any < GLOBAL_COOLDOWN_SECONDS:
         return EchoDecision(False, "global")
-    if last_same_type is not None and now - last_same_type < PER_TYPE_COOLDOWN_SECONDS:
+    if (
+        last_same_type is not None
+        and now - last_same_type < PER_TYPE_COOLDOWN_SECONDS
+        and not previous_ended
+    ):
         return EchoDecision(False, "per_type")
     return EchoDecision(True)
 

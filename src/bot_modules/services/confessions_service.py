@@ -9,6 +9,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Iterable
 from typing import Optional
 
 import discord
@@ -155,8 +156,9 @@ def get_or_assign_anon_identity(
         emoji_idx = pop_pool_index(conn, guild_id, root_message_id, "color", _COLOR_POOL_SIZE)
         conn.execute(
             "INSERT OR IGNORE INTO confession_emoji_assignments "
-            "(guild_id, root_message_id, user_id, emoji_index, name_index) VALUES (?, ?, ?, ?, ?)",
-            (guild_id, root_message_id, user_id, emoji_idx, name_idx),
+            "(guild_id, root_message_id, user_id, emoji_index, name_index, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (guild_id, root_message_id, user_id, emoji_idx, name_idx, now_ts()),
         )
         row = conn.execute(
             "SELECT name_index, emoji_index FROM confession_emoji_assignments "
@@ -295,6 +297,7 @@ def _create_tables(conn: sqlite3.Connection) -> None:
             user_id         INTEGER NOT NULL,
             emoji_index     INTEGER NOT NULL,
             name_index      INTEGER NOT NULL DEFAULT -1,
+            created_at      INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (guild_id, root_message_id, user_id)
         )
     """)
@@ -504,9 +507,49 @@ def check_and_bump_limits(
 
 
 def purge_old_thread_posts(db_path: Path, max_age_seconds: int = THREAD_METADATA_TTL_SECONDS) -> int:
+    """The seven-day sweep: thread routing rows **and** the anonymous-alias
+    map. Returns how many rows went.
+
+    ``confession_emoji_assignments`` (user → pseudonym, per root message) had
+    no clock until migration 211 and outlived every thread it served —
+    anon-tail-69 found 445 thread-less rows in prod, each still naming a
+    member beside an alias. Migration 211 backfilled every existing row from
+    its thread's own clock (or the migration moment where no thread row
+    remained), and a row still at 0 is never purged: an unstamped alias is a
+    row we know nothing about, not an old one, and taking it would hand a
+    member a new name mid-thread.
+    """
     cutoff = now_ts() - max_age_seconds
     with open_db(db_path) as conn:
-        cur = conn.execute("DELETE FROM confession_threads WHERE created_at < ?", (cutoff,))
+        threads = conn.execute("DELETE FROM confession_threads WHERE created_at < ?", (cutoff,))
+        aliases = conn.execute(
+            "DELETE FROM confession_emoji_assignments WHERE created_at > 0 AND created_at < ?",
+            (cutoff,),
+        )
+        return max(threads.rowcount, 0) + max(aliases.rowcount, 0)
+
+
+def clear_anon_identities(db_path: Path, guild_id: int, root_message_ids: Iterable[int]) -> int:
+    """Drop the alias map (and the identity pools) for finished root messages.
+
+    Anonymous Truth or Dare keys its persistent aliases on each prompt
+    message; when the host closes the game the prompts can no longer be
+    replied to, so the user → alias rows have nothing left to serve and go
+    now rather than at the TTL. Returns the number of alias rows removed.
+    """
+    roots = [int(r) for r in root_message_ids]
+    if not roots:
+        return 0
+    marks = ", ".join("?" for _ in roots)
+    with open_db(db_path) as conn:
+        cur = conn.execute(
+            f"DELETE FROM confession_emoji_assignments WHERE guild_id = ? AND root_message_id IN ({marks})",
+            (int(guild_id), *roots),
+        )
+        conn.execute(
+            f"DELETE FROM confession_pools WHERE guild_id = ? AND root_message_id IN ({marks})",
+            (int(guild_id), *roots),
+        )
         return max(cur.rowcount, 0)
 
 

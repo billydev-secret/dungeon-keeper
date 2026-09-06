@@ -152,8 +152,38 @@ WAGER_STAKES_TEXT = "Coins on the line — winner takes the pot."
 
 #: What the "📋 Stakes" line says when the loser's nickname is on the table
 #: alongside something else. A nickname-only game keeps ``stakes_text = None``
-#: and each cog's own fallback wording, exactly as before.
-NICK_STAKES_LINE = "🏷️ Loser surrenders their nickname for 24 hours."
+#: and each cog's own fallback wording, exactly as before. The stored line
+#: names the sentence length in force when the game was made (see
+#: :func:`nick_stakes_line`); this bare form is what ``resolve_stakes_text``
+#: uses when a caller passes no line, and what it recognises on the way back.
+NICK_STAKES_PREFIX = "🏷️ Loser surrenders their nickname"
+NICK_STAKES_LINE = f"{NICK_STAKES_PREFIX}."
+WAGER_LINE_PREFIX = "💰 "
+
+
+def nick_stakes_line(span: str | None) -> str:
+    """The nickname-forfeit stakes line, naming the sentence length ("24
+    hours") when the caller knows it. Built at creation from the dial so an
+    admin who sets Nickname Lasts to 48 hours doesn't get cards promising 24."""
+    return f"{NICK_STAKES_PREFIX} for {span}." if span else NICK_STAKES_LINE
+
+
+def custom_stakes_from(stakes_text: str | None) -> str | None:
+    """The challenger's own stakes text, recovered from a persisted string.
+
+    ``resolve_stakes_text`` composes one line per live stake — custom text
+    first, then the wager, then the nickname forfeit. A rematch needs the
+    custom half back on its own: the wager line is re-priced from the ante
+    and the nickname line from the dial, so both are dropped here.
+    """
+    if not stakes_text:
+        return None
+    kept = [
+        line
+        for line in stakes_text.split("\n")
+        if not line.startswith((WAGER_LINE_PREFIX, NICK_STAKES_PREFIX))
+    ]
+    return "\n".join(kept) or None
 
 
 def resolve_nick_stake(
@@ -184,6 +214,7 @@ def resolve_stakes_text(
     wager: int | None,
     nick_stake: bool | None = None,
     wager_line: str | None = None,
+    nick_line: str | None = None,
 ) -> str | None:
     """The stakes string to persist for a game — one line per live stake.
 
@@ -197,7 +228,9 @@ def resolve_stakes_text(
     ``wager_line`` lets the caller pass a line already formatted in the
     guild's currency vocabulary; without it the amount is rendered plainly.
     ``nick_stake`` defaults to the legacy inference so existing callers that
-    don't know about the flag behave as before.
+    don't know about the flag behave as before. ``nick_line`` is the
+    nickname-forfeit line already naming the sentence length
+    (:func:`nick_stakes_line`); without it the bare line is used.
     """
     if nick_stake is None:
         nick_stake = stakes_text is None and wager is None
@@ -206,11 +239,12 @@ def resolve_stakes_text(
         lines.append(stakes_text)
     if wager is not None:
         lines.append(wager_line or f"💰 **{wager:,}** each — winner takes the pot.")
+    forfeit = nick_line or NICK_STAKES_LINE
     if nick_stake:
-        lines.append(NICK_STAKES_LINE)
+        lines.append(forfeit)
     if not lines:
         return None
-    if lines == [NICK_STAKES_LINE]:
+    if lines == [forfeit]:
         # Plain nickname duel: leave it null so nothing about the oldest and
         # most common shape of game changes.
         return None

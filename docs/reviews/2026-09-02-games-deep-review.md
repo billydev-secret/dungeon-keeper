@@ -533,6 +533,70 @@ Collision notes name the live branches that touch the same files.
   and the Guess Who off-switch matter there more than any party-game fix; nothing in
   this queue is specific to it.
 
+## What shipped, and what is left after it
+
+Packages P0 (as a script), P1 through P9 are built and merged on `games-deep-review`,
+along with two rounds of pre-merge fixes from the branch's own code reviews. What
+follows is everything the review opened that is *not* closed by that work, so the
+queue can be read without re-reading the branch.
+
+**Still needs Billy's hand (nothing here is code)**
+
+- **P0 has never been applied.** `scripts/games_review_p0.py` is dry-run by default and
+  reads the prod DB read-only. A dry run against prod today reports 96 changes: the
+  Survivor Week-1 reset, the two Mahjong dials, 69 lowercase tag rows, 23 reshaped WYR
+  rows, and the Photo Challenge ping row. The Survivor step is time-boxed — the opener
+  is Wednesday 09-09, and the Week-1 slate and last call will not fire without it.
+- **A restart** is what makes the whole branch live. Migrations 204 through 213 apply
+  then; every dial added here ships dark, so nothing changes in the server until they
+  are set.
+- **The three unpaid Anagrams games** still need `scripts/replay_gamebot_games.py`.
+  The parser fix stops the bleeding; it does not backfill.
+- **Decisions D3 (retirements) and D5 (XP for play) were not taken**, so no game was
+  retired and no game grants XP. D3's casino half — untick derby, baccarat and dice
+  from the hub — is a dashboard action, not code.
+
+**Deferred on purpose, waiting on other branches (P6b)**
+
+The Guess Who half of P6 was not built: `review-fix-queue-round-2` owns the guess
+modules and `game-start-echo` owns the Risky Rolls cog, and both were unmerged when
+P6 shipped. When they land, P6b is five Guess Who items (a round-lifetime dial shipping
+dark, an `on_member_remove` path matching the opt-out, self-exclusion from the picker,
+a legacy consent backfill, and one hint correction) plus one wiring line each side of
+the Risky Rolls cog's load and unload for the payoff chaser, which today starts lazily
+from the room's own traffic. The arguments are written down and ready to run.
+
+**Known residuals in what shipped**
+
+- **Spin the Compliment can still repost its wrap-up card once.** The wrap is now
+  claimed under the payload lock, so the pool is paid exactly once. The card, though,
+  is sent before `end_game` runs, so a crash in that window leaves the claim released
+  at boot and the re-armed wrap posts the recap a second time. Closing it means
+  claiming the card separately from the payout, which is a design call rather than a
+  defect fix, and the current state is strictly better than the double payment it
+  replaced.
+- **A lobby with a malformed payload now gets no Game Night ping.** The once-only ping
+  flag became a conditional claim, and a row whose JSON will not parse loses the claim
+  rather than winning it. That is the safe direction for a double-ping fix, but it is a
+  behaviour change beyond the finding: such a row used to be pinged.
+- **The AMA hot-seat role seed is marked by the dial key's own presence**, not by a
+  separate flag. A dial an admin clears to (none) writes the key and so stays cleared,
+  which is the intent; a guild whose config row is deleted wholesale would be seeded
+  again.
+- **`refuse_launch` now always applies the channel's own age gate**, where before four
+  bank-only games each passed it at their own door. Today that is a no-op, since those
+  four are the only bank-only types; it changes behaviour only for a future bank-only
+  game that forgets to pass it.
+- **Four browser-only dial ordering guards were left browser-only** (max fuse below min
+  fuse, and the same shape for climb, delay and music). Only the two families the review
+  named were moved server-side. Each of the rest is a two-line addition now that the
+  rule table exists.
+
+**Open decisions, unchanged**
+
+D3, D5, D7 through D11 in the section above are still Billy's. D1, D2, D4 and D6 were
+taken as recommended and are built.
+
 ## Not re-reported, and why
 
 Fantasies' missing age gate (owner decision 07-27); Whisper's one-reply limit (spec

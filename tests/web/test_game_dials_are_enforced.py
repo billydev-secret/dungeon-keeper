@@ -23,6 +23,7 @@ two games with a join phase enforce their player limits.
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -41,6 +42,9 @@ GAMES = {
     "price": "games_price_cog.py",
     "rushmore": "games_rushmore_cog.py",
     "clapback": "games_clapback_cog.py",
+    "hottakes": "games_hottakes_cog.py",
+    "fantasies": "games_fantasies_cog.py",
+    "traditional": "games_traditional_cog.py",
 }
 
 # Dials deleted because nothing read them, with why. Each must stay gone.
@@ -72,7 +76,10 @@ def test_every_dial_names_a_key_its_cog_reads(game: str) -> None:
     if not dials:
         return
     cog = _cog(game)
-    assert "get_game_options" in cog, (
+    # Either the cog reads the row itself, or it goes through the shared
+    # launch-time read (``round_pacing.launch_pacing``), which loads exactly
+    # the same row.
+    assert "get_game_options" in cog or "launch_pacing" in cog, (
         f"games-{game}.js declares {dials} but {GAMES[game]} never loads stored "
         "options, so none of them can take effect"
     )
@@ -110,13 +117,15 @@ def test_clapback_does_not_offer_an_nsfw_toggle() -> None:
     assert "channel_allows_nsfw(channel)" in _cog("clapback")
 
 
-def test_wyr_reveal_voters_is_documented() -> None:
-    """The deleted dial implied votes could be hidden. They cannot: a host or
-    mod can name every voter with a button, and that had never been written
-    down anywhere a member or admin would read."""
+def test_wyr_show_my_vote_is_documented() -> None:
+    """The deleted dial implied votes could be hidden. What actually governs
+    who is named is written down where a member reads it: each voter's own
+    **Show My Vote** (vote-games-61 replaced the host/mod-only Reveal Voters,
+    which named the whole room and refused everyone else)."""
     manual = (_ROOT / "src" / "web_server" / "static" / "manual.html").read_text(encoding="utf-8")
-    assert "Reveal Voters" in manual
-    assert "Reveal Voters" in _cog("wyr")
+    assert "Show My Vote" in manual
+    assert "Show My Vote" in _cog("wyr")
+    assert "Reveal Voters" not in manual
 
 
 # ── Duel panels: the promises they make about being switched off ─────────────
@@ -171,6 +180,71 @@ def test_duel_panel_exposes_the_nickname_denylist(stem: str) -> None:
     src = _duel_panel(stem)
     assert 'name="nick_denylist"' in src
     assert "payload.nick_denylist" in src
+
+
+def test_the_rematch_cooldown_dial_is_read_by_both_game_shapes() -> None:
+    """duels-party-116: 'Wait Before a Rematch' sat on the three duel panels
+    and was read by nothing, while the group games enforced the same dial at
+    48 hours. Both shapes read it now, and it ships at 0 — no cooldown is
+    what every duel behaved like before."""
+    from bot_modules.duels import db as duels_db
+    from web_server.routes.config import _DUEL_SHARED_DEFAULTS
+
+    duel = (_ROOT / "src" / "bot_modules" / "duels" / "base_duel.py").read_text(encoding="utf-8")
+    group = (_ROOT / "src" / "bot_modules" / "duels" / "base_game.py").read_text(encoding="utf-8")
+    assert "duels_db.check_cooldown(" in duel and 'cfg["cooldown_hours"]' in duel
+    assert "duels_db.check_group_cooldown(" in group and 'cfg["cooldown_hours"]' in group
+    assert duels_db._CONFIG_DEFAULTS["cooldown_hours"] == 0
+    assert _DUEL_SHARED_DEFAULTS["cooldown_hours"] == 0
+
+
+@pytest.mark.parametrize("stem", sorted(DUEL_PANELS))
+def test_the_rematch_cooldown_hint_says_it_guards_the_nickname_stake(stem: str) -> None:
+    """The dial only holds back nickname games; a hint promising to stop
+    'the same two people' playing at all would be a lie for a wagered rematch."""
+    src = _duel_panel(stem)
+    hint = re.search(r'numField\("cooldown_hours".*?"([^"]*nickname[^"]*)"', src, re.S)
+    assert hint, f"config-games-{stem}.js's cooldown hint doesn't say it is nickname-only"
+    assert "never held back" in hint.group(1)
+
+
+# ── Per-game mechanics dials that replaced or joined a table (2026-09-04) ────
+# The duel panels' numeric dials are numField(...) calls PUT to a
+# /api/config/games-* route and read back through each game's db.get_config.
+# Chicken's "Climb Time" became the Earliest/Latest Crash pair (the crash is
+# rolled between them and hidden), and Hot Potato's duel gained the group
+# cog's Shortest Hold. Each has to be a key the cog reads, or it is inert.
+
+
+def _duel_num_fields(stem: str) -> list[str]:
+    return re.findall(r'numField\("([a-z_]+)"', _duel_panel(stem))
+
+
+@pytest.mark.parametrize(
+    ("stem", "dials", "reader"),
+    [
+        pytest.param("chicken", ["min_climb", "max_climb"], "chicken/cog.py", id="chicken-crash-range"),
+        pytest.param("hotpotato", ["min_hold"], "hot_potato/cog.py", id="hot-potato-min-hold"),
+    ],
+)
+def test_new_mechanics_dials_are_offered_and_read(stem: str, dials: list[str], reader: str) -> None:
+    from web_server.routes.config import _DUEL_GAMES
+
+    offered = _duel_num_fields(stem)
+    cog = (_COGS / reader).read_text(encoding="utf-8")
+    game_key = DUEL_PANELS[stem][1]
+    for dial in dials:
+        assert dial in offered, f"config-games-{stem}.js no longer offers {dial}"
+        assert dial in _DUEL_GAMES[game_key]["fields"], f"the API cannot write {dial}"
+        assert f'cfg["{dial}"]' in cog, f"{reader} never reads {dial}"
+
+
+def test_chicken_no_longer_offers_a_fixed_public_climb_time() -> None:
+    """duels-party-113: a fixed climb_duration was a public crash point."""
+    from web_server.routes.config import _DUEL_GAMES
+
+    assert "climb_duration" not in _duel_num_fields("chicken")
+    assert "climb_duration" not in _DUEL_GAMES["chicken"]["fields"]
 
 
 # ── A bank is a dial too ────────────────────────────────────────────────────
@@ -238,7 +312,9 @@ def test_every_stored_option_a_cog_reads_has_a_panel_dial() -> None:
     missing: dict[str, list[str]] = {}
     for cog_path in sorted(_COGS.glob("games_*_cog.py")):
         src = cog_path.read_text(encoding="utf-8")
-        m = re.search(r'get_game_options\(self\.db,\s*"([a-z_]+)"', src)
+        m = re.search(
+            r'(?:get_game_options|launch_pacing)\(\s*self\.db,\s*"([a-z_]+)"', src,
+        )
         if not m:
             continue
         game_type = m.group(1)
@@ -293,8 +369,14 @@ def test_every_toggleable_game_gates_its_own_start(game_type: str) -> None:
     src = (_COGS / STARTABLE[game_type]).read_text(encoding="utf-8")
     # The cogs reach their GamesDb differently — most hold `self.db`, Risky
     # Rolls builds one from the app context — so match the call, not the handle.
+    # ``launch_refusal`` (games/utils/launch_guard.py) is the shared guard
+    # that runs check_game_enabled for the entries wired through it, and
+    # ``refuse_launch`` is its interaction-shaped door — the same guard with
+    # the interaction between the db and the game type.
     called = re.search(
-        r'check_game_enabled\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', src
+        r'(?:check_game_enabled|launch_refusal)\(\s*[^,]+,\s*"' + re.escape(game_type) + '"'
+        r'|refuse_launch\(\s*[^,]+,\s*[^,]+,\s*"' + re.escape(game_type) + '"',
+        src,
     )
     assert called, (
         f"{STARTABLE[game_type]} never checks the per-guild enable switch, so "
@@ -329,3 +411,123 @@ def test_the_config_api_knows_every_game_it_can_switch_off() -> None:
         assert base in ALL_GAME_TYPES, (
             f"scheduled launches of {gt} check an enable switch nothing can set"
         )
+
+
+# ── Schedule option choices are dials too ───────────────────────────────────
+# A scheduler dropdown offers what a launch can honour. Name Your Price's
+# schedule schema kept an 'AI generated' scenario source after in-game AI
+# generation was removed (trivia-tail-94): picking it silently ran the bank.
+# Every choice the schema offers must be one the slash command offers.
+
+
+@pytest.mark.parametrize(
+    ("game_type", "cog_file", "entry", "field"),
+    [pytest.param("price", "games_price_cog.py", "price_cmd", "source", id="price-source")],
+)
+def test_schedule_choices_match_the_slash_commands(game_type, cog_file, entry, field):
+    import importlib
+
+    from bot_modules.games.constants import SCHEDULE_OPTION_SCHEMA
+
+    schema = next(f for f in SCHEDULE_OPTION_SCHEMA[game_type] if f["name"] == field)
+    offered = {c["value"] for c in schema["choices"]}
+    module = importlib.import_module(f"bot_modules.cogs.{cog_file[:-3]}")
+    command = getattr(next(v for v in vars(module).values() if isinstance(v, type) and hasattr(v, entry)), entry)
+    slash = {c.value for c in command._params[field].choices}
+    assert offered == slash, f"{game_type}.{field} schedule choices {offered} != slash choices {slash}"
+    assert schema["default"] in offered
+    assert "ai" not in offered
+
+
+# ── The Game Night ping dial ────────────────────────────────────────────────
+# A role dial on Games Global Config is only honest if the sweep that posts
+# the ping reads the same key, through the same registry entry.
+
+
+def test_game_night_ping_dial_is_the_key_the_sweep_pings() -> None:
+    from bot_modules.services.feature_roles import GAME_NIGHT_PING
+
+    assert GAME_NIGHT_PING.key == "game_night_ping_role_id"
+    assert GAME_NIGHT_PING.panel == "games-config" and GAME_NIGHT_PING.opt_in
+    panel = (_PANELS / "games-config.js").read_text(encoding="utf-8")
+    assert "game_night_ping_role_id" in panel
+    route = (_ROOT / "src" / "web_server" / "routes" / "games.py").read_text(encoding="utf-8")
+    assert "GAME_NIGHT_PING.key" in route
+    sweep = (_ROOT / "src" / "bot_modules" / "services" / "game_start_ping_service.py").read_text(encoding="utf-8")
+    assert "GAME_NIGHT_PING.key" in sweep and "role_only_mentions" in sweep
+    # Meadow Mahjong is off the games platform, so its table-open line goes
+    # through the sweep's own reader rather than a second copy of the dial
+    # (mahjong-149)
+    mahjong = (_ROOT / "src" / "bot_modules" / "cogs" / "mahjong_cog.py").read_text(encoding="utf-8")
+    assert "resolve_game_night_role(" in mahjong and "role_only_mentions(" in mahjong
+    assert '"game_night_ping_role_id"' not in mahjong  # no private copy of the key
+
+
+# ── the casino panel (Economy → Casino) ───────────────────────────────
+#
+# Not an optSchema panel: its dials are numInput/checkbox names PUT to
+# /api/config/casino and read back through ``CasinoSettings``. Same rule
+# though — every name the panel offers must be a field the service loads,
+# and the copy must describe what the broadcast does now.
+
+_CASINO_PANEL = _PANELS / "config-casino.js"
+
+
+def _casino_panel_dials() -> list[str]:
+    src = _CASINO_PANEL.read_text(encoding="utf-8")
+    return re.findall(r'(?:numInput|checkbox)\(\s*"([a-z_]+)"', src)
+
+
+def test_every_casino_panel_dial_is_a_setting_the_service_loads() -> None:
+    from dataclasses import fields
+
+    from bot_modules.services.casino_service import CasinoSettings
+
+    dials = _casino_panel_dials()
+    assert dials, "the casino panel declares no dials — did the regex rot?"
+    known = {f.name for f in fields(CasinoSettings)}
+    unread = [d for d in dials if d not in known]
+    assert not unread, f"config-casino.js offers dials nothing loads: {unread}"
+
+
+def test_the_casino_broadcast_multiple_is_a_panel_dial() -> None:
+    """D6 (2026-09-02): the big-win broadcast needs a real multiple, and the
+    multiple is an admin dial, not a constant."""
+    assert "broadcast_min_mult" in _casino_panel_dials()
+
+
+def test_the_casino_daily_comp_is_a_dial_that_ships_dark_and_is_enforced() -> None:
+    """casino-134 (2026-09-04): the return hook is a panel dial, it defaults
+    to off, and both the hub button and the claim itself read it — an
+    admin who never touches the panel gets no comp, and one who sets it
+    gets exactly one spin per member per day."""
+    from bot_modules.cogs.casino.views import build_hub_view
+    from bot_modules.services.casino_service import (
+        DEFAULT_CASINO_SETTINGS,
+        CasinoSettings,
+        claim_daily_comp,
+        comp_on,
+    )
+
+    assert "daily_comp" in _casino_panel_dials()
+    assert DEFAULT_CASINO_SETTINGS.daily_comp == 0
+    assert not comp_on(DEFAULT_CASINO_SETTINGS) and comp_on(CasinoSettings(daily_comp=5))
+    hub_ids = {
+        getattr(item, "custom_id", "") for item in build_hub_view(DEFAULT_CASINO_SETTINGS).children
+    }
+    assert "casino:comp" not in hub_ids
+    assert "casino:comp" in {
+        getattr(item, "custom_id", "")
+        for item in build_hub_view(CasinoSettings(daily_comp=5)).children
+    }
+    # The claim reads the dial itself, so a stale panel cannot bypass it.
+    src = inspect.getsource(claim_daily_comp)
+    assert "settings.daily_comp" in src and "comp_claimed" in src
+
+
+def test_the_casino_panel_no_longer_promises_a_play_again_button() -> None:
+    """casino-139: the public recap lost its buttons in August; the dial's
+    help text still said the broadcast came "with a Play Again button"."""
+    src = _CASINO_PANEL.read_text(encoding="utf-8")
+    assert "Play Again" not in src
+    assert "carries no buttons" in src

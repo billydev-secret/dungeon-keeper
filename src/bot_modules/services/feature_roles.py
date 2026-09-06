@@ -6,20 +6,21 @@ That is where the often-quoted "only 5 of 44 dials are safe to auto-create"
 came from, and it was true about *this file* and misleading about *the bot*.
 The honest sentence, and the one the dashboard now says:
 
-    Dungeon Keeper makes up to **sixteen** named roles for itself, across
-    **fourteen** dials and three mechanisms, plus one more for every member who
+    Dungeon Keeper makes up to **seventeen** named roles for itself, across
+    **fifteen** dials and three mechanisms, plus one more for every member who
     buys a personal role in the perk shop.
 
-Fourteen of the sixteen were the count before round 2; ``guess_role_id`` and
-Voice Control's spectate gate bring it to sixteen (see *create-on-offer*
-below). The perk shop's per-member roles are the unbounded class and are
-deliberately **not** here: their name comes from a member, and adopt-by-name
+Fourteen of the seventeen were the count before round 2; ``guess_role_id`` and
+Voice Control's spectate gate brought it to sixteen (see *create-on-offer*
+below), and the Game Night lobby ping (2026-09-04) to seventeen. The perk
+shop's per-member roles are the unbounded class and are deliberately **not**
+here: their name comes from a member, and adopt-by-name
 plus a member-chosen name is privilege escalation
 (``core/role_provision`` module docstring).
 
 :data:`MANAGED_ROLES` is the whole set. Nothing else may enumerate the bot's
 roles — the roster page (``bot-roles``) is the only surface that can show all
-sixteen together, and a role that is not in this tuple is invisible on it,
+seventeen together, and a role that is not in this tuple is invisible on it,
 which is exactly the state round 2 exists to end.
 
 **Membership rules.** A dial belongs here only if the role exists *because the
@@ -202,6 +203,18 @@ RISKY_PING = _ping(
     panel="config-risky-rolls", panel_label="Risky Rolls",
     dial_label="Ping Role",
 )
+# 2026-09-04 (discovery-2 / clapback-11, decision D4): the one ping every
+# lobby game shares. The start-ping sweep (``game_start_ping_service``) posts
+# it once per lobby the moment the lobby's board exists — member launches and
+# scheduled ones alike — so no game cog has to know it exists.
+GAME_NIGHT_PING = _ping(
+    "game_night_ping_role_id", "the Game Night lobby ping", "Game Night",
+    blurb="Get pinged when a party-game lobby opens.",
+    emoji="🎮",
+    made_when="the next time a party-game lobby opens (Clapback, Most Likely To, …)",
+    panel="games-config", panel_label="Games Global Config",
+    dial_label="Game Night Ping Role",
+)
 PROMOTION_REVIEW_PING = _ping(
     "promotion_review_ping_role_id", "promotion reviews", "Promotion Reviewers",
     blurb="For role managers: be told when someone needs reviewing.",
@@ -360,11 +373,12 @@ WELLNESS_ROLE = FeatureRole(
 )
 
 
-#: Every role the bot can make for itself. Sixteen across fourteen dials.
+#: Every role the bot can make for itself. Seventeen across fifteen dials.
 MANAGED_ROLES: tuple[FeatureRole, ...] = (
     WELCOME_PING,
     QOTD_PING,
     RISKY_PING,
+    GAME_NIGHT_PING,
     PROMOTION_REVIEW_PING,
     ECONOMY_NOTIFY,
     GUESS_ROLE,

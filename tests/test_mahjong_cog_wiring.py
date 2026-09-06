@@ -10,10 +10,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import discord
+import pytest
 
 from bot_modules.cogs.mahjong_cog import MahjongCog
 from bot_modules.games.mahjong import views as mj_views
-from bot_modules.games.mahjong.game_logic import Phase
+from bot_modules.games.mahjong.game_logic import AUTO_PASS, Phase
+from bot_modules.games.mahjong.mahjong_service import NudgeRecord
 
 
 class _StubCtx:
@@ -389,3 +391,336 @@ def test_redeem_menu_carries_the_face_too():
         assert "exposure #3" in select.options[0].label
     finally:
         tile_render._map_cache = None
+
+
+@pytest.mark.parametrize("kind, copy", [
+    pytest.param("pass", "You passed", id="pass"),
+    pytest.param("call", "You called", id="call"),
+    pytest.param("mahjong", "You declared Mahjong", id="mahjong"),
+    pytest.param(AUTO_PASS, "Nothing to claim here", id="auto_pass"),
+])
+def test_rack_context_claim_window_copy_per_response(kind, copy):
+    # mahjong-146: the auto-pass row used to print the raw enum
+    # ("You auto_pass — waiting on the window.") — the Now line most seats
+    # see on most windows.
+    from tests.test_mahjong_game_logic import play_state
+
+    cog = _cog()
+    state = play_state(2, {0: "9c*13", 1: "8b*13"})
+    state.phase = Phase.CLAIM_WINDOW
+    state.live_discarder = 1
+    state.claims = {0: (kind, [])}
+    line = cog._rack_context(state, 0, {100: "You", 101: "Them"})
+    assert line is not None and copy in line
+    assert "auto_pass" not in line
+
+
+def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
+    # mahjong-144: a plain content ping (never an embed) on each human turn
+    # start, allowed_mentions restricted to that member, deleted on the next
+    # transition; the second strike gets its own warning line. Every id is
+    # mirrored onto the table row so a restart can still sweep them.
+    import asyncio
+
+    from tests.test_mahjong_game_logic import play_state
+
+    class _Msg:
+        _next = iter(range(9000, 9999))
+
+        def __init__(self):
+            self.id = next(_Msg._next)
+            self.deleted = False
+
+        async def delete(self):
+            self.deleted = True
+
+    class _Channel:
+        def __init__(self):
+            self.sent: list[tuple[str, discord.AllowedMentions, _Msg]] = []
+
+        async def send(self, content, *, allowed_mentions, **kw):
+            assert "embed" not in kw
+            msg = _Msg()
+            self.sent.append((content, allowed_mentions, msg))
+            return msg
+
+        def get_partial_message(self, message_id):
+            for _, _, msg in self.sent:
+                if msg.id == message_id:
+                    return msg
+            raise AssertionError(f"deleted an unknown message {message_id}")
+
+    class _Service:
+        """Stands in for the row: what the cog last persisted."""
+
+        def __init__(self):
+            self.saved: NudgeRecord | None = None
+
+        async def set_nudges(self, table_id, record):
+            self.saved = NudgeRecord.from_json(
+                None if record.is_empty() else record.to_json())
+
+        async def get_nudges(self, table_id):
+            return self.saved or NudgeRecord()
+
+    cog = _cog()
+    cog.nudges = {}
+    cog.service = _Service()  # type: ignore[assignment]
+    channel = _Channel()
+    state = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=0)
+
+    asyncio.run(cog._post_nudges(channel, 7, state, [("tile_drawn", {"seat": 0})]))
+    content, mentions, first = channel.sent[-1]
+    assert content == "<@100> — your draw."
+    assert [u.id for u in mentions.users] == [100]  # type: ignore[union-attr]
+    assert mentions.everyone is False and mentions.roles is False
+    # and it reached the row, not just the cog
+    assert cog.service.saved is not None  # type: ignore[attr-defined]
+    assert cog.service.saved.draws == [first.id]  # type: ignore[attr-defined]
+
+    # same turn again (a redeem, an assist refresh) → nothing new, nothing gone
+    asyncio.run(cog._post_nudges(channel, 7, state, []))
+    assert len(channel.sent) == 1 and not first.deleted
+
+    # seat 0 times out on its second strike: the auto-discard opens a claim
+    # window (no turn), and the warning is posted there
+    struck = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=0)
+    struck.phase = Phase.CLAIM_WINDOW
+    struck.seats[0].strikes = 2
+    asyncio.run(cog._post_nudges(
+        channel, 7, struck, [("strike", {"seat": 0, "strikes": 2})]))
+    _, _, warning = channel.sent[-1]
+    assert channel.sent[-1][0] == "<@100> — one more missed turn and your seat folds."
+    assert cog.service.saved.warnings == {100: warning.id}  # type: ignore[attr-defined]
+
+    # next turn → the old draw line goes, the next seat gets its own — and
+    # the warning STAYS: the member it names is the one not looking, and a
+    # line that lived only through the claim window warned nobody
+    nxt = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=1)
+    nxt.discard_count = 1
+    nxt.seats[0].strikes = 2
+    asyncio.run(cog._post_nudges(channel, 7, nxt, [("tile_drawn", {"seat": 1})]))
+    assert first.deleted and not warning.deleted
+    assert channel.sent[-1][0] == "<@101> — your draw."
+
+    # a timely act resets the strikes → the warning is no longer true → gone
+    acted = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=1)
+    acted.discard_count = 2
+    asyncio.run(cog._post_nudges(channel, 7, acted, [("tile_drawn", {"seat": 1})]))
+    assert warning.deleted
+
+    # the table closes → every nudge is swept, and the row goes back to empty
+    asyncio.run(cog._post_nudges(
+        channel, 7, struck, [("strike", {"seat": 0, "strikes": 2})]))
+    asyncio.run(cog._clear_nudges(channel, 7))
+    assert all(m.deleted for _, _, m in channel.sent)
+    assert 7 not in cog.nudges
+    assert cog.service.saved.is_empty()  # type: ignore[attr-defined]
+
+
+def test_a_restart_mid_hand_still_sweeps_the_stale_turn_ping():
+    # ship review: the ids lived only on the cog, so a restart orphaned the
+    # "your draw" line — the resumed process re-armed the table but could no
+    # longer delete a ping for a turn that had already passed.
+    import asyncio
+
+    deleted: list[int] = []
+
+    class _Channel:
+        async def send(self, content, *, allowed_mentions, **kw):
+            raise AssertionError("this half of the test posts nothing")
+
+        def get_partial_message(self, message_id):
+            class _P:
+                async def delete(_self):
+                    deleted.append(message_id)
+            return _P()
+
+    class _Service:
+        def __init__(self, record):
+            self.record = record
+
+        async def get_nudges(self, table_id):
+            return self.record
+
+        async def set_nudges(self, table_id, record):
+            self.record = record
+
+    # what the pre-restart process left on the row: turn 0's ping
+    stored = NudgeRecord(turn_key=[1, 0, 0, "wall"], draws=[555])
+    cog = _cog()
+    cog.nudges = {}
+    cog.service = _Service(stored)  # type: ignore[assignment]
+    channel = _Channel()
+
+    # the resumed cog reads the row back …
+    cog.nudges[7] = asyncio.run(cog.service.get_nudges(7))  # type: ignore[attr-defined]
+    # … and the table closing sweeps the stale ping it never posted itself
+    asyncio.run(cog._clear_nudges(channel, 7))
+    assert deleted == [555]
+    assert cog.service.record.is_empty()  # type: ignore[attr-defined]
+
+
+def test_table_sticky_holds_its_restick_through_a_claim_window():
+    # mahjong-154: chat in the first seconds of a claim window used to
+    # delete-and-repost the card — with the only Mahjong/Call/Pass buttons —
+    # mid-window. The panel now waits for the window to resolve.
+    import asyncio
+
+    cog = _cog()
+    cog.bot = _StubBot()  # type: ignore[assignment]
+    cog.panels = {}
+    cog.channel_tables = {}
+    cog.table_phase = {}
+    cog._track_table(7, 5000)
+    panel = cog.panels[7]
+    assert panel._hold is not None
+    assert asyncio.run(panel._hold(900)) is False
+    cog.table_phase[7] = Phase.CLAIM_WINDOW
+    assert asyncio.run(panel._hold(900)) is True
+    cog.table_phase[7] = Phase.AWAIT_DISCARD
+    assert asyncio.run(panel._hold(900)) is False
+    # the window is seconds long; a 15 s re-check would outlast it
+    assert panel._hold_poll <= 3.0
+
+
+def test_create_flow_offers_quick_practice_when_the_house_opened_it():
+    # mahjong-147: the quick deck leads the practice row, on its own row
+    cog = _cog()
+    view = mj_views.CreateTableView(
+        cog, (1, 2), lambda c, s: 0, practice_open=True, short_rank=5)
+    buttons = [b for b in view.children if isinstance(b, discord.ui.Button)]
+    labels = [b.label for b in buttons]
+    assert labels == [
+        "Duel (2)", "Full Table (4)", "Quick Duel (1–5)", "Quick Table (1–5)",
+        "Quick Practice Duel (1–5)", "Quick Practice Table (1–5)",
+        "Practice Duel", "Practice Table",
+    ]
+    assert {b.row for b in buttons if "Practice" in (b.label or "")} == {1}
+    assert {b.row for b in buttons if "Practice" not in (b.label or "")} == {0}
+    plain = mj_views.CreateTableView(cog, (1, 2), lambda c, s: 0, practice_open=True)
+    labels = [b.label for b in plain.children if isinstance(b, discord.ui.Button)]
+    assert not any("Quick Practice" in (lbl or "") for lbl in labels)
+
+
+def test_member_panel_states_the_escrow_per_size_before_any_click():
+    # mahjong-150: the hold used to appear three clicks in
+    from bot_modules.games.mahjong.embeds import build_member_panel
+    from bot_modules.games.mahjong.mahjong_service import escrow_amount, load_card
+    from bot_modules.games.mahjong.card_logic import FIRST_LIGHT_PATH
+    import json
+
+    card = load_card(json.loads(FIRST_LIGHT_PATH.read_text(encoding="utf-8")))
+    embed = build_member_panel(
+        card, (1, 2, 5), 120, escrow_for=lambda seats, st: escrow_amount(card, seats, st))
+    field = next(f for f in embed.fields if f.name == "Escrow per Seat")
+    value = field.value or ""
+    assert "**450** coins for a Duel" in value and "**300** for a Full Table" in value
+    # no card: nothing to price, no field
+    assert build_member_panel(None, (1,), 0).fields == []
+
+
+@pytest.mark.parametrize(
+    "reason, copy",
+    [
+        pytest.param("dissolved", "the lobby never filled", id="dissolved"),
+        pytest.param("expired", "nobody rematched in time", id="expired"),
+        pytest.param("rematch_unfunded", "a seat couldn't cover the next hand's escrow", id="unfunded"),
+        pytest.param("cancelled", "cancelled before the deal", id="cancelled"),
+        pytest.param("closed", "closed from the settle screen", id="closed"),
+        pytest.param("purged", "closed by the house", id="purged"),
+        pytest.param(None, "Table closed.", id="unknown"),
+    ],
+)
+def test_closed_card_says_why(reason, copy):
+    # mahjong-151: the final card used to be whatever the last live render
+    # was — a settle card still asking for a Rematch
+    import asyncio
+    from tests.test_mahjong_game_logic import play_state
+
+    class _Guild:
+        id = 1
+
+        def get_member(self, member_id):
+            return None
+
+    cog = _cog()
+    cog.bot = _StubBot()  # type: ignore[assignment]
+    state = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=0)
+    state.phase = Phase.CLOSED
+    embed = asyncio.run(cog._closed_card(
+        _Guild(), state, {"stake": 1, "practice": False}, reason))  # type: ignore[arg-type]
+    field = next(f for f in embed.fields if f.name == "Closed")
+    assert copy in field.value
+    assert not any(f.name == "Rematch?" for f in embed.fields)
+    assert embed.footer.text and "Closed" in embed.footer.text
+
+
+def test_table_open_ping_is_plain_content_naming_the_role():
+    # mahjong-149: content, never an embed; the role is the only mention
+    from bot_modules.games.mahjong.embeds import build_table_open_ping
+
+    line = build_table_open_ping(77, 4, 2, 3, "https://discord.com/x", quick=False)
+    assert line.startswith("<@&77> ")
+    assert "Full Table" in line and "2/point" in line and "3 seats open" in line
+    assert line.endswith("https://discord.com/x")
+    duel = build_table_open_ping(77, 2, 1, 1, "j", quick=True)
+    assert "Quick Duel" in duel and "1 seat open" in duel
+
+
+def test_table_open_ping_reads_the_game_night_dial_and_skips_when_unset(monkeypatch):
+    # the same reader as the lobby-games sweep; "(none)" posts nothing
+    import asyncio
+    from bot_modules.cogs import mahjong_cog as cog_mod
+
+    class _Channel:
+        id = 5000
+        sent: list = []
+
+        async def send(self, content, *, allowed_mentions):
+            self.sent.append((content, allowed_mentions))
+
+    class _Guild:
+        id = 900
+
+    class _Svc:
+        async def table_meta(self, table_id):
+            return {"sticky_message_id": 4242}
+
+    cog = _cog()
+    cog.bot = _StubBot()  # type: ignore[assignment]
+    cog.service = _Svc()  # type: ignore[assignment]
+    channel = _Channel()
+    calls: list[tuple] = []
+
+    async def unset(bot, guild_id):
+        calls.append((guild_id,))
+        return True, None
+
+    monkeypatch.setattr(cog_mod, "resolve_game_night_role", unset)
+    asyncio.run(cog._announce_table(_Guild(), channel, 7, 4, 1, 9))  # type: ignore[arg-type]
+    assert calls == [(900,)] and channel.sent == []
+
+    async def role(bot, guild_id):
+        return True, 77
+
+    monkeypatch.setattr(cog_mod, "resolve_game_night_role", role)
+    asyncio.run(cog._announce_table(_Guild(), channel, 7, 4, 1, 9))  # type: ignore[arg-type]
+    (content, mentions), = channel.sent
+    assert content.startswith("<@&77> ") and "/channels/900/5000/4242" in content
+    assert [r.id for r in mentions.roles] == [77]  # type: ignore[union-attr]
+    assert mentions.users is False and mentions.everyone is False
+
+
+def test_lobby_hides_add_bot_until_two_members_sit():
+    # mahjong-143: the button and the service refusal share one predicate
+    from bot_modules.games.mahjong.mahjong_service import fill_bot_allowed
+    from bot_modules.games.mahjong.game_logic import TableConfig, create_table, join_table
+
+    lone = create_table(TableConfig(seat_count=4), 100)
+    assert fill_bot_allowed(lone) is False
+    pair, _ = join_table(lone, 101)
+    assert fill_bot_allowed(pair) is True
+    src = Path(__file__).resolve().parent.parent / "src/bot_modules/cogs/mahjong_cog.py"
+    text = src.read_text(encoding="utf-8")
+    assert "fill_bot_allowed(state)" in text

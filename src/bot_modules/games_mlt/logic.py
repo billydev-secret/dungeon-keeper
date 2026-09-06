@@ -28,7 +28,9 @@ Five reusable spines are extracted:
   (including those who received zero votes).
 * :func:`find_round_winners` — return the list of crown recipients
   (top vote-getters; the list has length > 1 only on a tie, and is
-  empty when no votes were cast).
+  empty when no votes were cast). Given the round's votes it breaks a
+  tie at the top without self-votes, so a room that all voted for
+  itself is not all crowned (vote-games-62).
 * :func:`bump_crowns` — increment per-user crown counts after a round.
 
 A pair of codec helpers (:func:`encode_round_votes`,
@@ -185,7 +187,9 @@ def tally_votes(
     return tally
 
 
-def find_round_winners(tally: dict[int, int]) -> list[int]:
+def find_round_winners(
+    tally: dict[int, int], votes: dict[int, int] | None = None,
+) -> list[int]:
     """Return the player IDs tied for the most votes this round.
 
     * Empty list when ``tally`` is empty OR when the top score is 0
@@ -193,13 +197,31 @@ def find_round_winners(tally: dict[int, int]) -> list[int]:
     * Single-element list for a clear winner.
     * Two-or-more-element list on a tie, in iteration order of
       ``tally`` (stable for Python 3.7+).
+
+    Self-votes are allowed and count, but with the round's ``votes``
+    (``{voter: target}``) a **tie at the top is broken without them**: the
+    tied players are re-ranked on votes from other people, and the crown
+    goes to whoever leads that count. A tie of nothing but self-votes —
+    every finalist's only support is their own — crowns no one, so a room
+    that all picked itself is not all crowned (vote-games-62). A tie that
+    survives the re-rank (equal outside support) stays a shared crown.
     """
     if not tally:
         return []
     max_votes = max(tally.values())
     if max_votes <= 0:
         return []
-    return [uid for uid, count in tally.items() if count == max_votes]
+    winners = [uid for uid, count in tally.items() if count == max_votes]
+    if len(winners) < 2 or not votes:
+        return winners
+    outside = {
+        uid: sum(1 for voter, target in votes.items() if target == uid and voter != uid)
+        for uid in winners
+    }
+    best = max(outside.values())
+    if best <= 0:
+        return []
+    return [uid for uid in winners if outside[uid] == best]
 
 
 def bump_crowns(

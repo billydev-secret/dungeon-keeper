@@ -21,6 +21,13 @@ High-leverage pieces:
 * :func:`find_best_answer_record` / :func:`find_closest_matchup_record`
   — recap helpers that return the raw round-history record (plus
   round number) so embed builders can format names separately.
+* :func:`all_eligible_voted` / :func:`submit_window_may_close` /
+  :func:`accept_answer` — the pacing and window rules (2026-09-04): when a
+  matchup may close before its timer, when a submit window may, and
+  whether a late modal still belongs to the round it was opened in.
+* :func:`withdraw_player` / :func:`board_scores` — a leaver's score is
+  withdrawn from the board rather than left to win a game they walked
+  out of.
 """
 
 from __future__ import annotations
@@ -56,6 +63,7 @@ def admit_pending_players(
     players: list[Any],
     pending: list[Any] | None,
     max_players: int,
+    left: list[Any] | None = None,
 ) -> tuple[list[Any], list[Any], list[Any]]:
     """Fold latecomers into the roster at a round boundary.
 
@@ -70,6 +78,11 @@ def admit_pending_players(
     turned away rather than quietly ignored so the caller can say so. They
     start on zero points, which is a real disadvantage — that is the honest
     consequence of joining late, not a bug.
+
+    ``left`` is the payload's withdrawn list (:func:`withdraw_player`), pruned
+    **in place** of anyone admitted: a leaver who rejoins is playing again,
+    and left on it they would render struck through below the board and be
+    skipped for the win while they play.
     """
     roster = list(players)
     admitted: list[Any] = []
@@ -84,14 +97,22 @@ def admit_pending_players(
         seen.add(str(uid))
         roster.append(uid)
         admitted.append(uid)
+    if left is not None:
+        left[:] = [x for x in left if not any(str(x) == str(a) for a in admitted)]
     return roster, admitted, turned_away
 
 
-def admit_player_now(payload: dict, uid: Any, max_players: int) -> str:
+def admit_player_now(
+    payload: dict,
+    uid: Any,
+    max_players: int,
+    forbidden_pairs: Iterable[tuple[Any, Any]] | None = None,
+) -> str:
     """Seat a latecomer in the round that is *taking answers right now*.
 
-    Returns one of ``joined`` / ``already-in`` / ``full`` / ``queued`` /
-    ``already-queued``, and mutates ``payload`` to match.
+    Returns one of ``joined`` / ``joined-unbenched`` / ``already-in`` /
+    ``full`` / ``queued`` / ``queued-parity`` / ``already-queued``, and
+    mutates ``payload`` to match.
 
     :func:`admit_pending_players` holds latecomers to the round boundary, which
     is the right rule once a round has matchups — those are fixed, and moving
@@ -105,9 +126,27 @@ def admit_player_now(payload: dict, uid: Any, max_players: int) -> str:
     both and the caller can say which happened rather than promising "next
     round" when the player is already in this one.
 
-    ``scores_checkpoint`` is seeded alongside ``scores``: the checkpoint is
-    what a crash-resume rolls back to, and a joiner missing from it would be
-    rolled off the scoreboard entirely.
+    **Parity (clapback-5).** The pre-picked bye (§2.1) exists so nobody writes
+    an answer that is never used; a joiner who turns an even writer count odd
+    would force :func:`create_matchups` to bench someone *after* they wrote —
+    the exact complaint the pre-pick fixed. So the writer count is kept even:
+
+    * seating the joiner leaves a field that needs no bye → ``joined``;
+    * otherwise, when a bye was pre-picked and the whole roster plus the
+      joiner pairs cleanly, the bye is **un-benched** (``round_bye`` cleared,
+      so their Submit button opens) → ``joined-unbenched``; the caller reads
+      who that was from the payload *before* calling;
+    * otherwise the joiner is queued for the next round → ``queued-parity``.
+
+    "Needs no bye" is :func:`pick_round_bye`'s own answer over the same
+    ``forbidden_pairs`` the round uses, so an un-benched bye is always
+    pairable — a player the no-contact list keeps apart from everyone stays
+    benched, and three players who include a pair are never treated as a
+    clean round-robin.
+
+    ``scores_checkpoint`` / ``clapbacks_checkpoint`` are seeded alongside
+    ``scores`` / ``clapbacks``: the checkpoints are what a crash-resume rolls
+    back to, and a joiner missing from them would be rolled off the board.
     """
     players = payload.setdefault("players", [])
     if any(str(p) == str(uid) for p in players):
@@ -123,11 +162,45 @@ def admit_player_now(payload: dict, uid: Any, max_players: int) -> str:
     if len(players) >= max_players:
         return "full"
 
+    bye = payload.get("round_bye")
+    roster = [str(p) for p in players] + [str(uid)]
+    writers = [p for p in roster if bye is None or p != str(bye)]
+    verdict = "joined"
+    if not _needs_no_bye(writers, forbidden_pairs):
+        if bye is not None and _needs_no_bye(roster, forbidden_pairs):
+            payload["round_bye"] = None
+            verdict = "joined-unbenched"
+        else:
+            queued = payload.setdefault("pending_players", [])
+            if any(str(q) == str(uid) for q in queued):
+                return "already-queued"
+            queued.append(uid)
+            return "queued-parity"
+
     players.append(uid)
+    # A leaver who rejoins is playing again: off the withdrawn list, or the
+    # board keeps striking them through and skipping them for the win.
+    left = payload.get("left")
+    if left:
+        left[:] = [x for x in left if str(x) != str(uid)]
     payload.setdefault("scores", {}).setdefault(str(uid), 0)
     payload.setdefault("scores_checkpoint", {}).setdefault(str(uid), 0)
     payload.setdefault("clapbacks", {}).setdefault(str(uid), 0)
-    return "joined"
+    payload.setdefault("clapbacks_checkpoint", {}).setdefault(str(uid), 0)
+    return verdict
+
+
+def _needs_no_bye(
+    field: list[Any], forbidden_pairs: Iterable[tuple[Any, Any]] | None,
+) -> bool:
+    """Would :func:`pick_round_bye` seat everyone in ``field``?
+
+    Whether a bye is needed is deterministic (only *who* is random), so the
+    call is made with a pinned rng.
+    """
+    return pick_round_bye(
+        list(field), [], rng=random.Random(0), forbidden_pairs=forbidden_pairs,
+    ) is None
 
 
 def drain_pending_players(payload: dict) -> list[Any]:
@@ -142,6 +215,166 @@ def drain_pending_players(payload: dict) -> list[Any]:
     pending = list(payload.get("pending_players") or [])
     payload["pending_players"] = []
     return pending
+
+
+# ── Pacing: when a window may close before its timer ────────────────────────
+#
+# Clapback runs on two clocks (submit_timer 60–180 s, vote_timer 40–60 s in
+# real games) and until 2026-09-04 both always ran out in full: the vote
+# loop had no early exit by a June decision (ab27201b) taken when voting
+# opened to spectators, and the submit loop only closed at a full house.
+# Prod data: spectators vote in 2–12% of matchups, and roughly half of a
+# game was fixed waiting (clapback-1, clapback-2). Decision D1 (2026-09-04)
+# reverses the June call: a matchup closes once every eligible *player* has
+# voted, with a short grace for a spectator mid-click.
+
+#: Seconds a matchup stays open after every eligible player has voted, so a
+#: spectator who was already reaching for a button still lands.
+VOTE_CLOSE_GRACE_SECONDS = 5
+#: Seconds the submit window waits at one answer short of a full house
+#: before closing on its own — the one absent writer is not coming.
+SUBMIT_IDLE_CLOSE_SECONDS = 20
+#: Fewer answers than this and there is nothing to bracket; an auto-close
+#: (or a host's Close answers) below it would only skip the round.
+MIN_ANSWERS = 2
+
+
+def all_eligible_voted(
+    votes: dict[Any, Any],
+    players: Iterable[Any],
+    pair: Iterable[Any],
+    byes: Iterable[Any] = (),
+) -> bool:
+    """May this matchup close before its timer?
+
+    True once every *eligible* player — the roster minus the two contestants
+    minus a bye who has not voted — has a vote in, and **no spectator has
+    voted**. A bye may vote (the panel tells them so) but is not waited for;
+    once they have, they count like anyone else. A vote from outside the
+    roster means the electorate is open, so the full timer runs: that is the
+    one case the June decision was protecting, kept as the exception rather
+    than the rule.
+
+    ``votes`` is the matchup's ``{voter_id: voted_for}`` map; ids may be
+    any type and are compared as strings.
+    """
+    voters = {str(v) for v in votes}
+    roster = {str(p) for p in players}
+    if voters - roster:
+        return False
+    contestants = {str(p) for p in pair}
+    expected = roster - contestants - {str(b) for b in byes}
+    if not expected:
+        # Nobody to wait for (a 3-player game whose third player withdrew,
+        # or a no-contact bye benched them): an empty electorate is not a
+        # finished one, so the full timer runs rather than closing on zero
+        # votes after the grace.
+        return False
+    return expected <= voters
+
+
+def submit_window_may_close(
+    count: int, expected: int, idle_seconds: float,
+) -> bool:
+    """May the submit window close before its timer?
+
+    Yes at a full house (``count >= expected``), and yes at **one short** of
+    it once nothing has changed for :data:`SUBMIT_IDLE_CLOSE_SECONDS` — every
+    real round that ran its whole window did so because one player had
+    stepped away, and paid them nothing anyway. Never below
+    :data:`MIN_ANSWERS`: closing then would only skip the round.
+    """
+    if count < MIN_ANSWERS:
+        return False
+    if count >= expected:
+        return True
+    return count == expected - 1 and idle_seconds >= _idle_close_seconds()
+
+
+def _idle_close_seconds() -> float:
+    """Read at call time so a test can shorten the wait."""
+    return SUBMIT_IDLE_CLOSE_SECONDS
+
+
+def accept_answer(payload: dict, round_num: int) -> bool:
+    """Does an answer modal opened for ``round_num`` still belong to a round
+    that is taking answers?
+
+    Discord keeps a modal open on the client indefinitely (clapback-4). One
+    sent after its window closed used to be written anyway — lost if the
+    round had bracketed, or filed as the *next* round's entry if that prompt
+    had already posted. It is accepted only while the payload's phase is
+    ``submitting`` and its ``current_round`` is the modal's round.
+    """
+    if payload.get("phase") != "submitting":
+        return False
+    try:
+        return int(payload.get("current_round") or 0) == int(round_num)
+    except (TypeError, ValueError):
+        return False
+
+
+# ── Leaving mid-game ─────────────────────────────────────────────────────────
+
+
+def withdraw_player(payload: dict, uid: Any) -> bool:
+    """Take ``uid`` off the roster and mark their score withdrawn.
+
+    Returns False when they were not playing. A leaver keeps no claim on the
+    game: they are paid nothing (``end_game`` gets the roster as it stands),
+    and since 2026-09-04 their score comes off the board too — it used to
+    stay, so a player who left in round 4 while leading was still 🥇 on every
+    later scoreboard and the recap's ``Winner``, while nobody was paid the win
+    (clapback-17, option a). The score itself is kept, marked in ``left``,
+    so the board can still show it as withdrawn rather than pretend they were
+    never there.
+
+    A latecomer still in ``pending_players`` (waiting for the round boundary)
+    is simply pulled from the queue — they have no score, so nothing goes on
+    ``left`` — rather than told they are not in the game and seated next
+    round anyway.
+    """
+    queued = payload.get("pending_players") or []
+    waiting = [q for q in queued if str(q) == str(uid)]
+    if waiting:
+        for q in waiting:
+            queued.remove(q)
+        return True
+    players = payload.setdefault("players", [])
+    match = [p for p in players if str(p) == str(uid)]
+    if not match:
+        return False
+    for p in match:
+        players.remove(p)
+    left = payload.setdefault("left", [])
+    if not any(str(x) == str(uid) for x in left):
+        left.append(str(uid))
+    return True
+
+
+def board_scores(
+    payload: dict,
+) -> tuple[list[tuple[str, int]], list[tuple[str, int]]]:
+    """``(standing, withdrawn)`` — each ``[(pid, pts)]`` highest-first.
+
+    ``standing`` is everyone still on the roster's claim to the board and is
+    what the medals and the recap's winner come from; ``withdrawn`` is the
+    scores of players who left (:func:`withdraw_player`), rendered apart so
+    the room can see the number without it ranking anyone.
+    """
+    left = {str(x) for x in payload.get("left") or []}
+    scores = payload.get("scores", {})
+    standing = sort_scores({k: v for k, v in scores.items() if str(k) not in left})
+    withdrawn = sort_scores({k: v for k, v in scores.items() if str(k) in left})
+    return standing, withdrawn
+
+
+#: The lobby's honest word about a three-player game (clapback-7): with no
+#: spectators every matchup is judged by the one player not in it.
+THREE_PLAYER_NOTE = (
+    "⚖️ **3 will play** — each matchup is judged by the one player not in it, "
+    "so a fourth evens things up and anyone watching can vote too."
+)
 
 
 #: Discord caps a button label at 80 characters; leave room for the side

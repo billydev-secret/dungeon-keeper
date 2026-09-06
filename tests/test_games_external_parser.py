@@ -401,7 +401,7 @@ def _not_enough_players() -> dict:
         ("Connect 4", parser.GAME_CONNECT4),
         ("Anagrams", parser.GAME_ANAGRAMS),
         ("Chess", None),          # a real Gamebot game we have no parser for
-        ("Survey Says", None),
+        ("Poker", None),
     ],
 )
 def test_game_from_start_reads_the_lobby_embed(name, expected):
@@ -960,3 +960,173 @@ def test_a_crash_after_a_clean_finish_pays_nobody_a_second_time(new_format_game)
     scores, winners = parser.extract_cah_game(window)
     assert scores == {}      # the cog's `if not scores` short-circuit
     assert winners == []
+
+
+# ── Gamebot's 2026-08-15 rewrite of Anagrams (photo-external-99) ─────────────
+#
+# The Scoreboard moved its scores out of the field names and into the
+# description ("**Name** — N points"), the winner line became "<@id> wins!",
+# and payouts silently stopped: three real games went unpaid. These shapes are
+# copied from the real 2026-08-22 18:51 window in the prod buffer.
+
+def _new_scoreboard(points: dict[str, int]) -> dict:
+    desc = "\n\n".join(
+        f"**{name}** — {n} points\n{'TRIP, SAME' if n else 'No words submitted.'}"
+        for name, n in points.items()
+    ) + "\n\n**Skipped words:** COLOGNE"
+    return {"embeds": [{"title": "Scoreboard", "description": desc}]}
+
+
+def _wins(winner: int) -> dict:
+    return {"embeds": [{"title": "Game over!", "description": (
+        f"<@{winner}> wins!\nVote for Gamebot on [top.gg](https://top.gg)!"
+    ), "fields": [{"name": "EP", "value": "**[Level 30]** | +362 XP"}]}]}
+
+
+def test_new_scoreboard_reads_scores_out_of_the_description():
+    embeds = _new_scoreboard({"EP": 1700, "Velocibaker": 0, "UnfeelingFreedom": 1300})["embeds"]
+    assert parser.scores_from_scoreboard(embeds) == {
+        "EP": 1700, "Velocibaker": 0, "UnfeelingFreedom": 1300,
+    }  # "**Skipped words:** COLOGNE" carries no score and is not a player
+
+
+def test_the_real_2026_08_22_anagrams_window_pays_its_three_players():
+    window = [
+        _lobby("Anagrams", [ALICE, BOB, CAROL]),
+        _new_scoreboard({"EP": 1700, "Velocibaker": 0, "UnfeelingFreedom": 1300}),
+        _wins(ALICE),
+    ]
+    assert parser.identify_game(window) == parser.GAME_ANAGRAMS
+    scores, winner = parser.extract_anagrams_game(window)
+    assert scores == {"EP": 1700, "Velocibaker": 0, "UnfeelingFreedom": 1300}
+    assert winner == ALICE
+
+
+def test_winner_reader_accepts_both_phrasings():
+    assert parser.winner_from_game_over(_game_over(ALICE)["embeds"]) == ALICE
+    assert parser.winner_from_game_over(_wins(BOB)["embeds"]) == BOB
+    assert parser.is_game_over(_wins(BOB)["embeds"]) is True
+
+
+def test_a_bare_new_style_finish_is_not_assumed_to_be_cah():
+    # Pre-rewrite, a lone "<@id> is the winner!" was almost always CAH. The
+    # new "<@id> wins!" is Anagrams' and Survey Says' finish, and CAH itself
+    # no longer posts a Game over! — so a lobby-less window holding only that
+    # line pays nobody rather than paying a phantom one-player CAH game. Real
+    # case: Survey Says posts *Final scores* and then, 0.7s later, a Game
+    # over! that bounds into a window of its own.
+    assert parser.identify_game([_wins(ALICE)]) is None
+    assert parser.identify_game([_game_over(ALICE)]) == parser.GAME_CAH
+
+
+# ── Survey Says and Wisecracks (photo-external-101) ─────────────────────────
+#
+# Both finish with a *Final scores* embed whose description lists
+# "**Name**: N points" per player (display names, no mentions); Survey Says
+# adds a "<@id> reached 5 points!" line naming the winner, Wisecracks names
+# nobody. Shapes copied from the 2026-08-20 / 08-21 / 08-22 prod windows.
+
+def _named_final_scores(points: dict[str, int], reached: int | None = None) -> dict:
+    lines = [f"**{name}**: {n} points" for name, n in points.items()]
+    if reached is not None:
+        lines.append(f"<@{reached}> reached 5 points!")
+    return {"embeds": [{"title": "Final scores", "description": "\n".join(lines)}]}
+
+
+def _survey_results(points: dict[str, int]) -> dict:
+    lines = ["The actual number was **65.2%**!"]
+    lines += [f"{'✅' if n else '❌'} **{name}**: {n} points" for name, n in points.items()]
+    lines.append("First to 5 points wins!")
+    return {"embeds": [{"title": "Results", "description": "\n".join(lines)}]}
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("Survey Says", parser.GAME_SURVEY_SAYS),
+        ("Wisecracks", parser.GAME_WISECRACKS),
+    ],
+)
+def test_named_score_games_are_read_off_the_lobby(name, expected):
+    assert parser.game_from_start(_lobby(name, [ALICE])["embeds"]) == expected
+    assert parser.GAME_LABELS[expected] == name
+
+
+def test_survey_says_window_pays_by_final_scores_with_the_declared_winner():
+    window = [
+        _lobby("Survey Says", [ALICE, BOB, CAROL]),
+        _survey_results({"EP": 1, "UnfeelingFreedom": 0, "Velocibaker": 0}),
+        _survey_results({"EP": 4, "UnfeelingFreedom": 4, "Velocibaker": 2}),
+        _named_final_scores({"EP": 5, "UnfeelingFreedom": 4, "Velocibaker": 2}, reached=ALICE),
+    ]
+    assert parser.identify_game(window) == parser.GAME_SURVEY_SAYS
+    scores, winner = parser.extract_named_scores_game(window)
+    assert scores == {"EP": 5, "UnfeelingFreedom": 4, "Velocibaker": 2}
+    assert winner == ALICE
+
+
+def test_wisecracks_final_scores_declare_no_winner():
+    window = [
+        _lobby("Wisecracks", [ALICE, BOB]),
+        _named_final_scores({"UnfeelingFreedom": 1, "EP": 0, "Lily Locket 🌻": 2}),
+    ]
+    assert parser.identify_game(window) == parser.GAME_WISECRACKS
+    scores, winner = parser.extract_named_scores_game(window)
+    assert scores == {"UnfeelingFreedom": 1, "EP": 0, "Lily Locket 🌻": 2}
+    assert winner is None  # the caller derives the top scorer once names resolve
+
+
+def test_round_results_never_count_as_final_scores():
+    # Per-round *Results* carry the same "**Name**: N points" lines under a
+    # ✅/❌ prefix; only the *Final scores* embed is read, so a game Gamebot
+    # dropped mid-run pays nobody rather than paying a half-played round.
+    scores, winner = parser.extract_named_scores_game([
+        _lobby("Survey Says", [ALICE]), _survey_results({"EP": 3}),
+    ])
+    assert scores == {}
+
+
+def test_a_lobby_less_named_final_scores_is_not_mistaken_for_cah():
+    # CAH's Final scores carries a *Standings* field; Survey Says' and
+    # Wisecracks' carry named lines. Without a lobby the two named games
+    # can't be told apart, so the fallback pays nobody rather than guessing.
+    assert parser.identify_game([_named_final_scores({"EP": 5}, reached=ALICE)]) is None
+    assert parser.identify_game([_final_scores({ALICE: 5})]) == parser.GAME_CAH
+
+
+# ── window bounding reports whether it found a boundary (photo-external-110) ─
+
+def test_find_window_start_says_whether_the_window_is_bounded():
+    parsed = [_standings({ALICE: 1}), _standings({ALICE: 2}), _game_over(ALICE)]
+    assert parser.find_window_start(parsed, over_index=2) == (0, False)
+    parsed = [_lobby("Cards Against Humanity", [ALICE]), _standings({ALICE: 2}), _game_over(ALICE)]
+    assert parser.find_window_start(parsed, over_index=2) == (0, True)
+    parsed = [_game_over(BOB), _standings({ALICE: 2}), _game_over(ALICE)]
+    assert parser.find_window_start(parsed, over_index=2) == (1, True)
+
+
+# ── what the health signal counts as a payable finish (photo-external-100) ──
+
+@pytest.mark.parametrize(
+    ("window", "expected"),
+    [
+        pytest.param([_lobby("Cards Against Humanity", [ALICE]), _standings({ALICE: 3}), _game_over(ALICE)],
+                     parser.GAME_CAH, id="cah"),
+        pytest.param([_lobby("Cards Against Humanity", [ALICE]), _not_enough_players(),
+                      {"embeds": [{"title": "Game over!", "description": "To play…"}]}],
+                     None, id="abandoned-lobby"),
+        pytest.param([_crashed()], None, id="crash-after-a-clean-finish"),
+        pytest.param([_lobby("Chess", [ALICE, BOB]), _game_over(ALICE)], None, id="unparsed-game"),
+        pytest.param([_lobby("Anagrams", [ALICE]), _new_scoreboard({"EP": 900}), _wins(ALICE)],
+                     parser.GAME_ANAGRAMS, id="anagrams"),
+        pytest.param([_lobby("Anagrams", [ALICE]),
+                      {"embeds": [{"title": "Game over!", "description": "Nobody won this one."}]}],
+                     None, id="solo-anagrams-run-nobody-won"),
+        pytest.param([_c4_start(ALICE, [ALICE, BOB]), _c4_game_over(ALICE)], parser.GAME_CONNECT4, id="connect4"),
+        pytest.param([_lobby("Survey Says", [ALICE]), _named_final_scores({"EP": 5}, reached=ALICE)],
+                     parser.GAME_SURVEY_SAYS, id="survey-says"),
+        pytest.param([_wins(ALICE)], None, id="trailing-game-over-after-final-scores"),
+    ],
+)
+def test_payable_game_mirrors_what_the_cog_would_pay(window, expected):
+    assert parser.payable_game(window) == expected

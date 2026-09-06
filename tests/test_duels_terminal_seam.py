@@ -11,6 +11,7 @@ import json
 import time
 from pathlib import Path
 
+import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.chicken import db as chdb
@@ -277,3 +278,101 @@ def _bail_interaction(user_id: int):
     interaction = fake_interaction()
     interaction.user.id = user_id
     return interaction
+
+
+# ── A settled game is recorded in games_game_history (duels-party-122) ─────────
+
+
+def _history_rows(db_path: Path, game_type: str) -> list[dict]:
+    with open_db(db_path) as conn:
+        rows = conn.execute(
+            "SELECT game_id, game_type, host_id, player_count, round_count, payload, "
+            "started_at, guild_id FROM games_game_history WHERE game_type = ?",
+            (game_type,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+async def test_resolution_records_one_history_row(db, sync_db_path):
+    """135 prod games never reached Play Statistics: the duel and group games
+    keep their own tables and never had a games_active_games row for
+    end_game to archive. The settling hook now writes the history row itself,
+    keyed on the game type so two tables' integer ids can't collide."""
+    cog = _chicken(db, sync_db_path)
+    game = await _climbing(db, [1, 2, 3])
+    await cog._crash(game.id)  # RESOLVED_NO_NICK
+
+    rows = _history_rows(sync_db_path, "chicken")
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["game_id"] == f"chicken:{game.id}"
+    assert row["host_id"] == 1
+    assert row["player_count"] == 3
+    assert row["round_count"] == 1
+    assert row["guild_id"] == GUILD
+    assert row["started_at"]  # NOT NULL, and the dashboard parses it
+    payload = json.loads(row["payload"])
+    assert payload["players"] == [1, 2, 3]
+    assert payload["state"] == "RESOLVED_NO_NICK"
+
+    # The sweep and the resume path re-fire the hook; the row stays single.
+    await cog._on_terminal_state(game.id, "RESOLVED_NO_NICK")
+    assert len(_history_rows(sync_db_path, "chicken")) == 1
+
+
+async def test_duel_history_row_names_the_challenger_as_host(db, sync_db_path):
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = RecordingQuickdraw(FakeEconGamesBot(db, sync_db_path, [1, 2]))  # type: ignore[arg-type]
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await qdb.set_game_state(db, gid, "ACTIVE", qd_state="DRAW", fired_at=time.time())
+    await cog._db_set_state(gid, "RESOLVED_NO_NICK", winner_id=2, loser_id=1)
+
+    rows = _history_rows(sync_db_path, "quickdraw")
+    assert len(rows) == 1
+    assert rows[0]["host_id"] == 1
+    assert rows[0]["player_count"] == 2
+    assert json.loads(rows[0]["payload"])["winner_id"] == 2
+
+
+# ── A settled duel starts the pair's rematch clock (duels-party-116) ──────────
+
+
+@pytest.mark.parametrize(
+    ("state", "on_clock"),
+    [
+        pytest.param("RESOLVED_NO_NICK", True, id="settled"),
+        pytest.param("RESOLVED", True, id="settled-awaiting-nick"),
+        pytest.param("ABANDONED", False, id="abandoned"),
+        pytest.param("VOID", False, id="void"),
+    ],
+)
+async def test_only_a_settled_duel_records_the_pair_cooldown(db, sync_db_path, state, on_clock):
+    """The rematch dial reads duel_cooldowns, which nothing wrote for a duel
+    until the terminal seam started recording every settled pair — the
+    timer-driven Hot Potato path included, since it ends through the same
+    hook."""
+    from bot_modules.duels import db as duels_db
+
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = RecordingQuickdraw(FakeEconGamesBot(db, sync_db_path, [1, 2]))  # type: ignore[arg-type]
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await qdb.set_game_state(db, gid, "ACTIVE", qd_state="DRAW", fired_at=time.time())
+
+    await cog._db_set_state(gid, state, winner_id=2, loser_id=1)
+
+    remaining = await duels_db.check_cooldown(db, GUILD, "quickdraw", 2, 1, 1)
+    assert (remaining is not None and remaining > 0) is on_clock
+
+
+@pytest.mark.parametrize("state", ["ABANDONED", "VOID", "EXPIRED_PENDING", "DECLINED"])
+async def test_unsettled_ends_write_no_history_row(db, sync_db_path, state):
+    """Only a game that was played goes on the record — the same rule as the
+    faucet, which these states never reach either."""
+    with open_db(sync_db_path) as conn:
+        save_econ_settings(conn, GUILD, {"enabled": True})
+    cog = RecordingQuickdraw(FakeEconGamesBot(db, sync_db_path, [1, 2]))  # type: ignore[arg-type]
+    gid = await qdb.create_game(db, GUILD, CH, 1, 2, None)
+    await cog._db_set_state(gid, state)
+    assert _history_rows(sync_db_path, "quickdraw") == []

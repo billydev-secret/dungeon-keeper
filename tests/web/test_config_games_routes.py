@@ -64,7 +64,7 @@ def test_shared_tier_defaults_before_any_write(authed_client, route, key, _game)
     """With no row written, the section reports the shared defaults rather
     than erroring or omitting keys."""
     sec = _section(authed_client, key)
-    assert sec["cooldown_hours"] == 48
+    assert sec["cooldown_hours"] == 0  # enforced everywhere, ships at 0 (duels-party-116)
     assert sec["sentence_hours"] == 24
     assert sec["max_nick_length"] == 32
     assert sec["max_stakes_length"] == 200
@@ -148,8 +148,8 @@ def test_channel_allowlist_survives_snowflake_sized_ids(authed_client):
         pytest.param(
             "games-hot-potato",
             "games_hot_potato",
-            {"min_timer": 15.0, "max_timer": 50.0},
-            {"min_timer": 15.0, "max_timer": 50.0},
+            {"min_timer": 15.0, "max_timer": 50.0, "min_hold": 1.5},
+            {"min_timer": 15.0, "max_timer": 50.0, "min_hold": 1.5},
             id="hot_potato",
         ),
         pytest.param(
@@ -174,8 +174,8 @@ def test_channel_allowlist_survives_snowflake_sized_ids(authed_client):
         pytest.param(
             "games-chicken",
             "games_chicken",
-            {"climb_duration": 30.0, "min_players": 3, "max_players": 9},
-            {"climb_duration": 30.0, "min_players": 3, "max_players": 9},
+            {"min_climb": 12.0, "max_climb": 30.0, "min_players": 3, "max_players": 9},
+            {"min_climb": 12.0, "max_climb": 30.0, "min_players": 3, "max_players": 9},
             id="chicken",
         ),
         pytest.param(
@@ -236,10 +236,6 @@ def test_per_game_tier_round_trips(authed_client, route, key, payload, expected)
             id="hp_group-min_fuse-floor",
         ),
         pytest.param(
-            "games-hot-potato-group", "games_hot_potato_group", "max_fuse", 1.0, 10.0,
-            id="hp_group-max_fuse-floor",
-        ),
-        pytest.param(
             "games-hot-potato-group", "games_hot_potato_group", "min_hold", -1.0, 0.0,
             id="hp_group-min_hold-floor",
         ),
@@ -252,8 +248,12 @@ def test_per_game_tier_round_trips(authed_client, route, key, payload, expected)
             id="hp_group-max_players-floor",
         ),
         pytest.param(
-            "games-chicken", "games_chicken", "climb_duration", 1.0, 5.0,
-            id="chicken-climb_duration-floor",
+            "games-hot-potato", "games_hot_potato", "min_hold", -1.0, 0.0,
+            id="hot_potato-min_hold-floor",
+        ),
+        pytest.param(
+            "games-chicken", "games_chicken", "min_climb", 1.0, 5.0,
+            id="chicken-min_climb-floor",
         ),
         pytest.param(
             "games-chicken", "games_chicken", "min_players", 1, 2,
@@ -292,6 +292,37 @@ def test_per_game_clamps(authed_client, route, key, field, sent, expected):
 
 
 @pytest.mark.parametrize(
+    ("route", "key", "low_field", "high_field", "low", "sent", "expected"),
+    [
+        pytest.param(
+            "games-hot-potato-group", "games_hot_potato_group",
+            "min_fuse", "max_fuse", 5.0, 1.0, 10.0,
+            id="hp_group-max_fuse-floor",
+        ),
+        pytest.param(
+            "games-chicken", "games_chicken",
+            "min_climb", "max_climb", 5.0, 1.0, 5.0,
+            id="chicken-max_climb-floor",
+        ),
+    ],
+)
+def test_a_range_ceiling_clamps_to_its_floor(
+    authed_client, route, key, low_field, high_field, low, sent, expected
+):
+    """The ceiling of a min/max range still clamps up to its own floor.
+
+    Sent alone it would land below the *default* minimum, which the route now
+    refuses as an inverted range — a real refusal, not a clamping bug — so the
+    floor of the pair is lowered in the same save.
+    """
+    resp = authed_client.put(
+        f"/api/config/{route}", json={low_field: low, high_field: sent}
+    )
+    assert resp.status_code == 200
+    assert _section(authed_client, key)[high_field] == expected
+
+
+@pytest.mark.parametrize(
     ("sent", "expected"),
     [pytest.param(True, 1, id="true"), pytest.param(False, 0, id="false")],
 )
@@ -317,7 +348,7 @@ def test_shared_tier_is_per_game_not_global(authed_client):
     assert _section(authed_client, "games_pressure")["cooldown_hours"] == 5
     assert _section(authed_client, "games_chicken")["cooldown_hours"] == 11
     # A game never written to still reports the default.
-    assert _section(authed_client, "games_quickdraw")["cooldown_hours"] == 48
+    assert _section(authed_client, "games_quickdraw")["cooldown_hours"] == 0
 
 
 # ── field-table / model contract ──────────────────────────────────────

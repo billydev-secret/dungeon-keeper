@@ -28,7 +28,7 @@ export function mount(container) {
       <div class="panel">
         <header>
           <h2>Chicken</h2>
-          <div class="subtitle">A nerve game: the meter climbs and whoever bails last, wins — the one who cracks first takes the forfeit</div>
+          <div class="subtitle">A nerve game: the meter climbs toward a hidden crash point — bail last to win, but anyone still holding when it blows takes the forfeit</div>
         </header>
         <div data-region="status"></div>
         ${renderMetaWarning()}
@@ -39,9 +39,16 @@ export function mount(container) {
               "A lobby will not begin until this many people have joined.", { min: 2, max: 50 })}
             ${numField("max_players", "Most Players Per Lobby", cfg.max_players,
               "Once a lobby is this full, nobody else can join it.", { min: 2, max: 50 })}
-            ${numField("climb_duration", "Climb Time (seconds)", cfg.climb_duration,
-              "How long the meter takes to travel from 0 to 100. Shorter climbs make for tense, quick rounds.",
-              { min: 5, max: 600 })}
+          </div>
+
+          <div class="card">
+            <div class="section-label">Crash</div>
+            ${numField("min_climb", "Earliest Crash (seconds)", cfg.min_climb,
+              "The meter never blows sooner than this after the climb starts.",
+              { min: 5, max: 600, step: "0.5" })}
+            ${numField("max_climb", "Latest Crash (seconds)", cfg.max_climb,
+              "The meter always blows by this point, and the bar is drawn against it — so a crash at the earliest moment shows partway up the bar. The actual moment is picked at random between the two and never shown, so nobody can count it out.",
+              { min: 5, max: 600, step: "0.5" })}
           </div>
 
           <div class="card">
@@ -70,7 +77,7 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Availability</div>
             ${numField("cooldown_hours", "Wait Between Games (hours)", cfg.cooldown_hours,
-              "How long a player must wait after one game before joining another. 0 lets people play back to back.",
+              "How long a player must wait after a nickname game before joining another nickname game. Wagered and custom-stakes games are never held back. 0 lets people play back to back.",
               { min: 0, max: 8760 })}
             ${numField("challenge_limit_per_hour", "Games Started Per Person Per Hour", cfg.challenge_limit_per_hour,
               "How many of these games one person may open in an hour. Set to 0 for no limit. This is a spam brake, not a pacing rule &mdash; a busy games night can easily run through a low number.",
@@ -113,7 +120,8 @@ export function mount(container) {
       ["cooldown_hours", "Wait Between Games", 0, 8760, false],
       ["challenge_limit_per_hour", "Games Started Per Person Per Hour", 0, 999, false],
       ["sentence_hours", "Nickname Lasts", 1, 8760, false],
-      ["climb_duration", "Climb Time", 5, 600, true],
+      ["min_climb", "Earliest Crash", 5, 600, true],
+      ["max_climb", "Latest Crash", 5, 600, true],
       ["min_players", "Fewest Players to Start", 2, 50, false],
       ["max_players", "Most Players Per Lobby", 2, 50, false],
       ["max_nick_length", "Longest Nickname", 1, 32, false],
@@ -138,6 +146,11 @@ export function mount(container) {
       if (payload.max_players < payload.min_players) {
         showStatus(status, false, "Most Players Per Lobby cannot be lower than Fewest Players to Start");
         form.querySelector("[name=max_players]").focus();
+        return;
+      }
+      if (payload.max_climb < payload.min_climb) {
+        showStatus(status, false, "Latest Crash cannot be sooner than Earliest Crash");
+        form.querySelector("[name=max_climb]").focus();
         return;
       }
       try {

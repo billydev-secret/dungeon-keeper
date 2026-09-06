@@ -199,6 +199,14 @@ async def test_get_config_defaults(db):
     cfg = await hpdb.get_config(db, GUILD)
     assert cfg["min_timer"] == pytest.approx(10.0)
     assert cfg["max_timer"] == pytest.approx(45.0)
+    # duels-party-119: the group cog's anti-ping-pong wait, adopted by the duel.
+    assert cfg["min_hold"] == pytest.approx(2.0)
+
+
+async def test_min_hold_round_trips_through_the_table(db):
+    await hpdb.upsert_config(db, GUILD, min_hold=0.0)
+    cfg = await hpdb.get_config(db, GUILD)
+    assert cfg["min_hold"] == pytest.approx(0.0)
 
 
 async def test_upsert_config_updates_values(db):
@@ -237,3 +245,13 @@ async def test_add_style_points_separate_users(db):
     await hpdb.add_style_points(db, GUILD, 2, 5)
     assert await _style_points(db, GUILD, 1) == 20
     assert await _style_points(db, GUILD, 2) == 5
+
+
+async def test_get_style_total_reads_the_running_total(db):
+    """The cumulative table was write-only until the result card started
+    quoting it (duels-party-119)."""
+    assert await hpdb.get_style_total(db, GUILD, 1) == 0
+    await hpdb.add_style_points(db, GUILD, 1, 15)
+    await hpdb.add_style_points(db, GUILD, 1, 10)
+    assert await hpdb.get_style_total(db, GUILD, 1) == 25
+    assert await hpdb.get_style_total(db, GUILD + 1, 1) == 0

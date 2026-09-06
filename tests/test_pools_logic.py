@@ -228,3 +228,55 @@ def test_a_quiet_panel_repaints_hourly(last_paint, now, expected):
     """A stake-driven repaint stamps the same clock, so this only fires in a
     quiet hour — the in-progress candle still has to advance."""
     assert L.refresh_due(last_paint, now) is expected
+
+
+# ── casino-136: the one-sided warning and the last-hour reminder ───────
+
+CLOSE = 100_000.0
+
+
+@pytest.mark.parametrize(
+    "split, expected",
+    [
+        pytest.param(L.PoolSplit(400, 0), L.UNDER, id="under-is-empty"),
+        pytest.param(L.PoolSplit(0, 250), L.OVER, id="over-is-empty"),
+        pytest.param(L.PoolSplit(400, 250), None, id="both-backed"),
+        pytest.param(L.PoolSplit(0, 0), None, id="nobody-yet-is-not-one-sided"),
+    ],
+)
+def test_unbacked_side_names_the_side_that_would_void_the_market(split, expected):
+    assert L.unbacked_side(split) == expected
+
+
+@pytest.mark.parametrize(
+    "now, expected",
+    [
+        pytest.param(CLOSE - 3601, False, id="more-than-an-hour-out"),
+        pytest.param(CLOSE - 3600, True, id="exactly-an-hour-out"),
+        pytest.param(CLOSE - 1, True, id="last-second"),
+        pytest.param(CLOSE, False, id="closed-is-not-closing"),
+        pytest.param(CLOSE + 600, False, id="after-close"),
+    ],
+)
+def test_closing_soon_is_the_last_hour_of_open_betting(now, expected):
+    assert L.closing_soon(CLOSE, now) is expected
+
+
+@pytest.mark.parametrize(
+    "last_paint, now, expected",
+    [
+        pytest.param(CLOSE - 7200, CLOSE - 3700, False, id="not-in-the-window-yet"),
+        pytest.param(CLOSE - 7200, CLOSE - 3500, True, id="stale-paint-inside-window"),
+        pytest.param(CLOSE - 3500, CLOSE - 3400, False, id="already-painted-this-hour"),
+        pytest.param(CLOSE - 3599, CLOSE - 60, False, id="a-stake-repaint-counts"),
+        pytest.param(CLOSE - 7200, CLOSE + 60, False, id="closed-never-reminds"),
+        pytest.param(0.0, CLOSE - 1800, True, id="never-painted-reminds"),
+    ],
+)
+def test_reminder_fires_once_when_the_last_hour_opens(last_paint, now, expected):
+    """The hourly refresh can land anywhere in the hour, so a panel painted
+    70 minutes before close would otherwise show no last-hour note until
+    ten minutes out. The reminder repaint fires the first tick inside the
+    window whose last paint predates it — and a stake-driven repaint inside
+    the window already carries the note, so it counts."""
+    assert L.reminder_due(last_paint, CLOSE, now) is expected

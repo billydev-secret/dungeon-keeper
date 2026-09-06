@@ -13,12 +13,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import discord
+import pytest
 
 from bot_modules.services.whisper_models import (
-    STATE_HIDDEN,
     STATE_PENDING,
     STATE_SHARED,
     Whisper,
+    WhisperConfig,
     WhisperReply,
     WhisperState,
 )
@@ -37,10 +38,10 @@ from bot_modules.whisper.logic import (
     check_send_cooldown,
     filter_whispers_by_message,
     format_cooldown_message,
-    format_expose_dm_suffix,
     format_hourly_cap_message,
     format_reply_dm_body,
     format_send_dm_body,
+    format_sender_guess_feedback,
     format_time_ago,
     fuzzy_score_members,
     inbox_action_buttons,
@@ -50,9 +51,11 @@ from bot_modules.whisper.logic import (
     preview,
     prune_recent_target_sends,
     recompute_inbox_after_delete,
+    sender_feedback_wanted,
     status_pill,
 )
 from bot_modules.core.branding import SECTION_SPACER
+from bot_modules.services.whisper_service import GuessOutcome
 
 
 def _unspaced(value: str | None) -> str:
@@ -142,12 +145,13 @@ def test_format_time_ago_clamps_to_zero_for_future_inputs():
 # ── status_pill ───────────────────────────────────────────────────────
 
 
-def test_status_pill_exposed_beats_everything():
-    w = _whisper(exposed=True, solved=True, guesses_left=0)
-    assert status_pill(w, now=1_000.0) == "Exposed"
+def test_status_pill_solved_beats_everything():
+    # Solved outranks out-of-guesses: a solve consumed the last guess.
+    w = _whisper(solved=True, guesses_left=0)
+    assert status_pill(w, now=w.created_at + 1) == "Solved"
 
 
-def test_status_pill_solved_when_not_exposed():
+def test_status_pill_solved():
     w = _whisper(solved=True)
     assert status_pill(w, now=w.created_at + 1) == "Solved"
 
@@ -170,14 +174,6 @@ def test_status_pill_shared_for_pending_shared_state():
 
 def test_status_pill_new_for_pending_fresh_whisper():
     w = _whisper(state=STATE_PENDING)
-    assert status_pill(w, now=w.created_at + 1) == "New"
-
-
-def test_status_pill_hidden_state_falls_through_to_new():
-    # Hidden state with no other flags is treated as "New" — there's no
-    # dedicated pill for hidden because hidden whispers don't appear in
-    # the inbox in the first place.
-    w = _whisper(state=STATE_HIDDEN)
     assert status_pill(w, now=w.created_at + 1) == "New"
 
 
@@ -300,13 +296,62 @@ def test_build_share_feed_embed_escapes_markdown():
     assert "\\*bold\\*" in desc
 
 
-# ── format_expose_dm_suffix ────────────────────────────────────────────
+# ── sender feedback (2026-09 review, rotation-rooms-159) ───────────────
+#
+# The sender used to hear nothing after sending: no signal on a wrong guess,
+# on being unmasked, or on the target running out of guesses. Each guess now
+# DMs them one line. Copy is pinned here so the three outcomes can't drift.
 
 
-def test_format_expose_dm_suffix_uses_label():
-    out = format_expose_dm_suffix("<@123>")
-    assert "Sender: <@123>" in out
-    assert out.startswith("\n\n")
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        pytest.param(
+            GuessOutcome(correct=False, attempts_remaining=2, exhausted=False),
+            "Whisper #42 — they guessed Alice. Wrong, 2 left.",
+            id="wrong-plural",
+        ),
+        pytest.param(
+            GuessOutcome(correct=False, attempts_remaining=1, exhausted=False),
+            "Whisper #42 — they guessed Alice. Wrong, 1 left.",
+            id="wrong-singular",
+        ),
+        pytest.param(
+            GuessOutcome(correct=False, attempts_remaining=0, exhausted=True),
+            "Whisper #42 — they guessed Alice. Wrong — they're out of guesses. "
+            "You're safe.",
+            id="exhausted",
+        ),
+        pytest.param(
+            GuessOutcome(correct=True, attempts_remaining=2, exhausted=False),
+            "Whisper #42 — they guessed you. They got you.",
+            id="correct-never-echoes-the-label",
+        ),
+    ],
+)
+def test_format_sender_guess_feedback(outcome, expected):
+    assert format_sender_guess_feedback(
+        whisper_id=42, guessed_label="Alice", outcome=outcome,
+    ) == expected
+
+
+@pytest.mark.parametrize(
+    ("dial", "sender_roles", "expected"),
+    [
+        pytest.param(True, {7001, 5}, True, id="on-and-in-pool"),
+        pytest.param(False, {7001}, False, id="dial-off-ships-dark"),
+        pytest.param(True, {5}, False, id="sender-opted-out"),
+        pytest.param(True, set(), False, id="sender-left"),
+    ],
+)
+def test_sender_feedback_wanted(dial, sender_roles, expected):
+    """The dial ships OFF (prod whispers in flight must not start DMing until
+    an admin flips it), and a sender who has since opted out of the pool has
+    left the game — they don't get its DMs."""
+    cfg = WhisperConfig(
+        guild_id=9001, role_id=7001, channel_id=8001, sender_feedback=dial,
+    )
+    assert sender_feedback_wanted(cfg, sender_role_ids=sender_roles) is expected
 
 
 # ── format_reply_dm_body ───────────────────────────────────────────────

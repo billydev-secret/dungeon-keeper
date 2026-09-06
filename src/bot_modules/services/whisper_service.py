@@ -42,10 +42,15 @@ ERROR_GUESS_SELF = "❌ You can't guess yourself."
 ERROR_GUESS_ALREADY_SOLVED = "❌ This whisper has already been solved."
 ERROR_GUESS_NO_ATTEMPTS = "❌ No more guesses left."
 ERROR_GUESS_LOCKED = "❌ This whisper is too old — guesses are locked."
+# Refusals for a pick that cannot be the sender. Neither consumes a guess —
+# the guild-side picker is Discord's native member select, which offers every
+# member of the server rather than the opt-in pool, so a stray pick would
+# otherwise burn a third of the target's attempts on someone who could never
+# have sent it (2026-09 review, rotation-rooms-167).
+ERROR_GUESS_IS_BOT = "❌ That's a bot — pick a real member."
+ERROR_GUESS_NOT_IN_POOL = "❌ They aren't in the Whisper pool — that one's free."
 
 ERROR_ALREADY_DECIDED = "❌ Already decided."
-ERROR_EXPOSE_NOT_TARGET = "❌ Only the recipient can expose this."
-ERROR_EXPOSE_NEEDS_SOLVE = "❌ Can only expose a solved whisper."
 
 ERROR_DELETE_NOT_TARGET = "❌ Only the recipient can delete a whisper."
 ERROR_ALREADY_DELETED = "❌ This whisper is already deleted."
@@ -115,9 +120,7 @@ def is_locked(whisper: Whisper, *, now: float | None = None) -> bool:
 
 def is_terminal_for_sender(whisper: Whisper, *, now: float | None = None) -> bool:
     """True when no further game-state change can happen — so the sender inbox
-    auto-hides it. Exposed (revealed), out-of-guesses without solve, or age-locked."""
-    if whisper.exposed:
-        return True
+    auto-hides it. Out-of-guesses without solve, or age-locked."""
     if whisper.guesses_left == 0 and not whisper.solved:
         return True
     return is_locked(whisper, now=now)
@@ -152,6 +155,25 @@ def evaluate_guess(
     )
 
 
+def guess_candidate_rejection(
+    cfg: WhisperConfig,
+    *,
+    candidate_role_ids: set[int],
+    candidate_is_bot: bool,
+) -> str | None:
+    """Why a picked member can't be guessed, or None when the pick stands.
+
+    Checked before ``evaluate_guess`` so a refused pick never reaches the
+    atomic consume. A guild with no pool role configured has no pool to be
+    outside of, so only the bot check applies there.
+    """
+    if candidate_is_bot:
+        return ERROR_GUESS_IS_BOT
+    if cfg.role_id and cfg.role_id not in candidate_role_ids:
+        return ERROR_GUESS_NOT_IN_POOL
+    return None
+
+
 class TransitionValidationError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -167,18 +189,6 @@ def validate_share(whisper: Whisper, *, invoker_id: int) -> None:
     _check_target(whisper, invoker_id, ERROR_GUESS_NOT_TARGET)
     if whisper.state != STATE_PENDING:
         raise TransitionValidationError(ERROR_ALREADY_DECIDED)
-
-
-def validate_hide(whisper: Whisper, *, invoker_id: int) -> None:
-    _check_target(whisper, invoker_id, ERROR_GUESS_NOT_TARGET)
-    if whisper.state != STATE_PENDING:
-        raise TransitionValidationError(ERROR_ALREADY_DECIDED)
-
-
-def validate_expose(whisper: Whisper, *, invoker_id: int) -> None:
-    _check_target(whisper, invoker_id, ERROR_EXPOSE_NOT_TARGET)
-    if not whisper.solved:
-        raise TransitionValidationError(ERROR_EXPOSE_NEEDS_SOLVE)
 
 
 def validate_delete(whisper: Whisper, *, invoker_id: int) -> None:

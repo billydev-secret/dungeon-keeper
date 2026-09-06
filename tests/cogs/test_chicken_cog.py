@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import discord
+import pytest
 import pytest_asyncio
 
 from bot_modules.cogs.chicken import db as chdb
@@ -46,7 +47,7 @@ async def cog(db: GamesDb) -> ChickenCog:
     return ChickenCog(FakeBot(db))  # type: ignore[arg-type]
 
 
-async def _climbing(db, *, alive, bail_log=None, roster=None, stakes=None):
+async def _climbing(db, *, alive, bail_log=None, roster=None, stakes=None, crash_at=15.0):
     roster = roster or alive
     gid = await chdb.create_lobby(db, GUILD, CH, roster[0], stakes)
     now = time.time()
@@ -58,6 +59,7 @@ async def _climbing(db, *, alive, bail_log=None, roster=None, stakes=None):
         bail_log=json.dumps(bail_log or []),
         climb_started_at=now - 5.0,
         climb_duration=25.0,
+        crash_at=crash_at,
     )
     return await chdb.get_game(db, gid)
 
@@ -83,7 +85,7 @@ async def test_crash_with_bailer_nicks_one_crasher(cog, db):
     g = await chdb.get_game(db, game.id)
     assert g.state == "RESOLVED"
     assert g.winner_id == 3          # bravest bailer
-    assert g.loser_id == 1           # deterministic crasher
+    assert g.loser_id in (1, 2)      # one crasher, drawn at random (duels-party-123)
 
 
 async def test_crash_total_wipeout_no_nick(cog, db):
@@ -220,6 +222,102 @@ async def test_lobby_start_begins_climb(cog, db):
         assert g.climb_started_at is not None
     finally:
         cog._cancel_timers(gid)
+
+
+# ── hidden crash point (duels-party-113) ───────────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("min_climb", "max_climb"),
+    [
+        pytest.param(10.0, 25.0, id="defaults"),
+        pytest.param(8.0, 12.0, id="tight-range"),
+        pytest.param(20.0, 20.0, id="fixed"),
+    ],
+)
+async def test_start_rolls_a_hidden_crash_inside_the_dials(cog, db, min_climb, max_climb):
+    """The crash is rolled in [min_climb, max_climb] and the meter is drawn
+    over max_climb, so the bar can blow partway up — the old fixed, public
+    climb_duration let a table count the crash out."""
+    await chdb.upsert_config(db, GUILD, min_climb=min_climb, max_climb=max_climb)
+    gid = await chdb.create_lobby(db, GUILD, CH, 1, None)
+    await chdb.set_game_state(db, gid, "LOBBY", roster=json.dumps([1, 2]), alive="[1, 2]")
+    game = await chdb.get_game(db, gid)
+    try:
+        await cog.on_game_start(game)
+        g = await chdb.get_game(db, gid)
+        assert g.climb_duration == pytest.approx(max_climb)
+        assert g.crash_at is not None
+        assert min_climb <= g.crash_at <= max_climb
+    finally:
+        cog._cancel_timers(gid)
+
+
+async def test_start_never_inverts_a_ceiling_below_the_floor(cog, db):
+    await chdb.upsert_config(db, GUILD, min_climb=30.0, max_climb=12.0)
+    gid = await chdb.create_lobby(db, GUILD, CH, 1, None)
+    await chdb.set_game_state(db, gid, "LOBBY", roster=json.dumps([1, 2]), alive="[1, 2]")
+    game = await chdb.get_game(db, gid)
+    try:
+        await cog.on_game_start(game)
+        g = await chdb.get_game(db, gid)
+        assert g.crash_at == pytest.approx(30.0)
+        assert g.climb_duration == pytest.approx(30.0)
+    finally:
+        cog._cancel_timers(gid)
+
+
+async def test_resume_schedules_the_crash_from_crash_at_not_the_meter(cog, db, monkeypatch):
+    """After a restart the crash timer must fire at the rolled crash point,
+    while the ticker keeps drawing the bar to its ceiling."""
+    scheduled: list[tuple[float, float]] = []
+    monkeypatch.setattr(
+        cog, "_schedule", lambda gid, crash_in, total: scheduled.append((crash_in, total))
+    )
+    game = await _climbing(db, alive=[1, 2], crash_at=15.0)  # started 5s ago, meter 25s
+    await cog.on_game_resume(game)
+    (crash_in, total), = scheduled
+    assert crash_in == pytest.approx(10.0, abs=0.5)
+    assert total == pytest.approx(20.0, abs=0.5)
+
+
+async def test_resume_of_a_pre_migration_row_crashes_at_the_meter_end(cog, db, monkeypatch):
+    scheduled: list[tuple[float, float]] = []
+    monkeypatch.setattr(
+        cog, "_schedule", lambda gid, crash_in, total: scheduled.append((crash_in, total))
+    )
+    game = await _climbing(db, alive=[1, 2], crash_at=None)
+    await cog.on_game_resume(game)
+    (crash_in, total), = scheduled
+    assert crash_in == pytest.approx(20.0, abs=0.5)
+    assert total == pytest.approx(20.0, abs=0.5)
+
+
+async def test_live_card_does_not_promise_a_crash_at_100(cog, db):
+    game = await _climbing(db, alive=[1, 2])
+    embed = cog.render_game_state(game, FakeGuild(), COLOR_YELLOW)
+    text = (embed.description or "") + " ".join(f.value or "" for f in embed.fields)
+    assert "crash at 100%" not in text
+    assert "hidden" in (embed.description or "")
+
+
+async def test_crash_card_names_the_meter_reading_and_the_draw(cog, db):
+    bail = [{"player_id": 3, "bail_ts": time.time(), "meter_pct": 40.0}]
+    game = await _climbing(db, alive=[1, 2], bail_log=bail, roster=[1, 2, 3], crash_at=15.0)
+    game.winner_id, game.loser_id = 3, 2
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.title == "💥 Crash at 60%!"
+    stake = next(f for f in embed.fields if f.name == "💀 Takes the Stake")
+    assert "drawn at random" in (stake.value or "")
+
+
+async def test_wipeout_card_says_the_pot_is_refunded(cog, db):
+    """A total wipeout used to end on 'No winner, no nicknames' with the
+    refund only visible as a separate wager line — say it on the card."""
+    game = await _climbing(db, alive=[1, 2, 3], bail_log=[], roster=[1, 2, 3], crash_at=15.0)
+    embed = cog.render_result_state(game, FakeGuild())
+    assert embed.title == "💥 Total Wipeout!"
+    assert "everyone crashed at 60%" in (embed.description or "")
+    assert "pot is refunded" in (embed.description or "")
 
 
 # ── embed colors (accent + win=green / loss=red) ───────────────────────────────

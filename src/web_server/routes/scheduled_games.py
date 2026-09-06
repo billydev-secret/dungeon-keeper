@@ -16,6 +16,7 @@ from bot_modules.games.constants import (
     GAME_NAMES,
     SCHEDULABLE_GAME_TYPES,
     SCHEDULE_OPTION_SCHEMA,
+    hosting_kind,
 )
 from bot_modules.services.scheduled_games_service import (
     GIVEUP_GRACE_SECONDS,
@@ -83,17 +84,27 @@ def _validate(body: ScheduleBody) -> tuple[int, int, str | None]:
 async def schedule_options(
     _: AuthenticatedUser = Depends(require_game_host),
 ):
-    """Schedulable game types + per-game option schema for the UI."""
+    """Schedulable game types + per-game option schema for the UI.
+
+    ``hosting`` says whether the game runs itself once posted (``self``), runs
+    itself only when a round timer is set (``timer``), or opens a lobby and
+    waits for a human (``host``) — so the panel can say which before an admin
+    schedules a game night nobody will host (discovery-4).
+    ``retry_grace_seconds`` is how long a due slot keeps retrying past a busy
+    channel, for the panel's "retrying until" line.
+    """
     return {
         "games": [
             {
                 "type": g,
                 "name": GAME_NAMES.get(g, g),
                 "icon": GAME_ICONS.get(g, "🎮"),
+                "hosting": hosting_kind(g),
                 "fields": SCHEDULE_OPTION_SCHEMA.get(g, []),
             }
             for g in SCHEDULABLE_GAME_TYPES
         ],
+        "retry_grace_seconds": GIVEUP_GRACE_SECONDS,
     }
 
 
@@ -124,6 +135,7 @@ async def list_schedules(
                 continue
             d["game_name"] = GAME_NAMES.get(d["game_type"], d["game_type"])
             d["game_icon"] = GAME_ICONS.get(d["game_type"], "🎮")
+            d["hosting"] = hosting_kind(d["game_type"])
             d["recur_days"] = json.loads(d["recur_days"]) if d.get("recur_days") else None
             try:
                 d["options"] = json.loads(d.get("options") or "{}")

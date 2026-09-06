@@ -506,3 +506,81 @@ def test_the_sweep_leaves_a_confession_inside_the_window(sync_db_path: Path):
 
 def test_the_sweep_reports_nothing_when_the_queue_is_empty(sync_db_path: Path):
     assert purge_expired_pending(sync_db_path) == []
+
+
+# ── the alias map has a clock now (anon-tail-69, migration 211) ──
+
+from bot_modules.services.confessions_service import (  # noqa: E402
+    THREAD_METADATA_TTL_SECONDS,
+    clear_anon_identities,
+    upsert_thread_post,
+)
+
+
+def _alias_rows(db_path: Path) -> list[tuple[int, int]]:
+    with open_db(db_path) as conn:
+        return [
+            (int(r["root_message_id"]), int(r["user_id"]))
+            for r in conn.execute(
+                "SELECT root_message_id, user_id FROM confession_emoji_assignments ORDER BY 1, 2"
+            )
+        ]
+
+
+def test_an_alias_is_stamped_when_assigned(sync_db_path: Path):
+    before = int(time.time())
+    get_or_assign_anon_identity(sync_db_path, GUILD, 500, 7)
+    with open_db(sync_db_path) as conn:
+        row = conn.execute(
+            "SELECT created_at FROM confession_emoji_assignments WHERE root_message_id = 500"
+        ).fetchone()
+    assert int(row["created_at"]) >= before
+
+
+def test_the_seven_day_sweep_takes_stale_aliases_with_the_threads(sync_db_path: Path):
+    """445 thread-less alias rows had piled up in prod, each still naming a
+    member beside a pseudonym: the sweep never reached the table because it
+    had no timestamp to reach it by."""
+    get_or_assign_anon_identity(sync_db_path, GUILD, 500, 7)   # fresh: stays
+    get_or_assign_anon_identity(sync_db_path, GUILD, 600, 8)   # old: goes
+    upsert_thread_post(sync_db_path, GUILD, 601, 10, 600, 8)
+    stale = int(time.time()) - THREAD_METADATA_TTL_SECONDS - 60
+    with open_db(sync_db_path) as conn:
+        conn.execute(
+            "UPDATE confession_emoji_assignments SET created_at = ? WHERE root_message_id = 600", (stale,)
+        )
+        conn.execute("UPDATE confession_threads SET created_at = ? WHERE root_message_id = 600", (stale,))
+
+    assert purge_old_thread_posts(sync_db_path) == 2  # one thread row, one alias row
+    assert _alias_rows(sync_db_path) == [(500, 7)]
+
+
+def test_an_unstamped_alias_is_never_swept(sync_db_path: Path):
+    """A row still at 0 is one we know nothing about, not an old one.
+
+    Migration 211 backfills every pre-existing row, but the sweep must not
+    lean on that: purging a zero-stamp alias hands the member a new name and
+    colour mid-thread (the first cut of 211 did exactly that to every alias
+    on a thread still inside its week)."""
+    get_or_assign_anon_identity(sync_db_path, GUILD, 500, 7)
+    upsert_thread_post(sync_db_path, GUILD, 500, 10, 500, 7)
+    with open_db(sync_db_path) as conn:
+        conn.execute("UPDATE confession_emoji_assignments SET created_at = 0")
+    assert purge_old_thread_posts(sync_db_path) == 0
+    assert _alias_rows(sync_db_path) == [(500, 7)]
+
+
+def test_clear_anon_identities_drops_only_the_named_roots(sync_db_path: Path):
+    get_or_assign_anon_identity(sync_db_path, GUILD, 500, 7)
+    get_or_assign_anon_identity(sync_db_path, GUILD, 500, 8)
+    get_or_assign_anon_identity(sync_db_path, GUILD, 600, 7)
+    get_or_assign_anon_identity(sync_db_path, GUILD + 1, 500, 7)  # another guild, same root id
+
+    assert clear_anon_identities(sync_db_path, GUILD, [500]) == 2
+    assert _alias_rows(sync_db_path) == [(500, 7), (600, 7)]
+    with open_db(sync_db_path) as conn:
+        pools = conn.execute(
+            "SELECT COUNT(*) FROM confession_pools WHERE guild_id = ? AND root_message_id = 500", (GUILD,)
+        ).fetchone()[0]
+    assert pools == 0
+    assert clear_anon_identities(sync_db_path, GUILD, []) == 0

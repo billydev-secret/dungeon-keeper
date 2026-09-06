@@ -149,6 +149,7 @@ async def test_nick_submit_skips_rename_when_loser_outranks_bot(monkeypatch):
     interaction.user.id = WINNER_ID
     interaction.guild = guild
     interaction.response.send_message = _async_noop()
+    interaction.response.is_done = MagicMock(return_value=False)
 
     async def _get_config(db, gid, gtype):
         return {"max_nick_length": 32, "nick_denylist": "[]", "sentence_hours": 24}
@@ -180,7 +181,9 @@ async def test_nick_submit_skips_rename_when_loser_outranks_bot(monkeypatch):
 
     edit_spy.assert_not_called()  # loser never renamed
     apply_spy.assert_not_called()  # no sentence recorded
-    set_state.assert_any_call(game.id, "NO_NICK_SET")
+    # …and the state says why (duels-party-118): NO_NICK_SET alone used to
+    # cover four different endings.
+    set_state.assert_any_call(game.id, "NO_NICK_SET", nick_reason="loser_outranks")
     msg = sent.call_args[0][0]
     assert OLD_NAME in msg and "win stands" in msg
 

@@ -1,8 +1,9 @@
 # Sticky-panel extraction — plan
 
 **Status:** Groups A and B **done** — including `guess`, migrated 2026-08-06,
-which closes group B. Group C stays out by design. `whisper` and `confessions`
-remain unmigrated (they were never blocked on anything; they are simply behind).
+which closes group B, and `whisper`, migrated 2026-09-04. Group C stays out by
+design. `confessions` remains unmigrated (it was never blocked on anything; it
+is simply behind).
 
 `bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
 debounce, id cache, post-before-delete placer, signature gate and listener —
@@ -64,15 +65,15 @@ into one that forwards to all three panels.
 
 | Site | What it needs | What it gains |
 |---|---|---|
-| `whisper_cog` launcher | nothing — it is simply *behind* the family | it has **no debounce and no id cache**, so it does a threaded DB read *and* a full delete+send per message |
+| `whisper_cog` launcher | **migrated 2026-09-04** (games deep review, rotation-rooms-166). New `whisper_launcher_channel_id` config key (no migration) stores where the launcher actually is, with a fallback to the feed channel for launchers posted before the key existed | it had **no debounce and no id cache** — a threaded DB read *and* a full delete+send per message; now the known-guilds fast path, the 6s trailing debounce, post-before-delete and the shielded placement. Boot re-sticks only a buried launcher (`only_if_buried`) instead of churning every guild's on every restart |
 | `confessions_cog` launcher | an `after_place` hook for its component-based duplicate sweep (already implemented on `StickyPanel`) | it has **no throttle at all** and costs ≥5 REST calls per repost, the worst in the codebase; its config reads are **synchronous sqlite on the event loop** |
 | `dm_perms_cog` panel | nothing, if a trailing-edge debounce may replace its leading-edge 2s cooldown — that is a **user-visible timing change** and needs a decision | drops a `history(limit=1)` probe; `set_panel_settings` currently runs sync on the event loop |
 | `pen_pals_cog` panel | nothing | fixes a real bug: `channel.send` is unguarded *after* the old panel is deleted, so a failed send permanently orphans the panel. Also has **no `cog_unload`**, leaking coroutines |
 | `guess_cog` prompt | **migrated 2026-08-06.** Needed `StickyPanel` to accept `VoiceChannel`/`Thread`, which it now does per-panel via `target_types` — global widening was wrong, because the auction card's channel warning relies on threads staying out of the default set | gained the per-guild lock, the TTL id cache, the known-guilds fast path, post-before-delete and the shielded placement. It was carrying **more** than the missing lock this row used to claim — see below |
 
-`pen_pals`, `dm_perms`, `voice_master` and (since 2026-08-06) `guess` are
-migrated. `whisper` and `confessions` are not yet done and remain the two worst
-offenders on the hot path.
+`pen_pals`, `dm_perms`, `voice_master`, (since 2026-08-06) `guess` and (since
+2026-09-04) `whisper` are migrated. `confessions` is not yet done and remains
+the worst offender on the hot path.
 
 **Behaviour changes that shipped with these:**
 
@@ -282,8 +283,8 @@ pure refactor** — worth verifying on the live server rather than trusting test
 alone. The same applies to every group-B site: see the behaviour-change list
 above.
 
-Ten of the twelve surveyed sites now share one implementation. `whisper` and
-`confessions` are the two remaining migratable ones.
+Eleven of the twelve surveyed sites now share one implementation. `confessions`
+is the one remaining migratable site.
 
 ## What the 2026-08-06 cross-cutting review changed
 

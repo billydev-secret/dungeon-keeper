@@ -16,7 +16,8 @@ High-leverage pieces:
   at least one real (non-skipped, non-empty) pick.
 * :func:`tally_votes` — turns a ``{voter: target}`` map into the winner
   uids, max-vote count, and the sorted ``[(uid, votes)]`` list the
-  winner embed and recap both consume.
+  winner embed and recap both consume; a tie is broken on fewest skips,
+  then lowest total pick time (social-prompt-36).
 * :func:`compute_recap_stats` — derives the first-pick, skipped, fast/
   slow, and unanimous/split fields the recap embed renders. Pulled out
   so the parsing of ``f"{uid}_{rnd}"`` keys lives in one place.
@@ -155,15 +156,57 @@ def eligible_voters(
     return eligible
 
 
+def skip_count(uid: int, skipped: list[str]) -> int:
+    """How many of ``uid``'s picks ran out the clock (``f"{uid}_{round}"`` keys)."""
+    prefix = f"{uid}_"
+    return sum(1 for key in skipped if key.startswith(prefix))
+
+
+def total_pick_time(uid: int, pick_times: dict[str, float | None]) -> float:
+    """Seconds ``uid`` spent on the picks they completed (skips store None)."""
+    prefix = f"{uid}_"
+    return sum(t for key, t in pick_times.items() if key.startswith(prefix) and t is not None)
+
+
+def break_tie(
+    tied: list[int],
+    skipped: list[str] | None,
+    pick_times: dict[str, float | None] | None,
+) -> list[int]:
+    """Narrow a vote tie: fewest skips wins, then the lowest total pick time.
+
+    A tie is common at Rushmore's three-player floor (the vote cycles), and
+    every tied uid used to win and be paid. Both tie-breaks are earned in
+    the draft itself — showing up for your picks, and being decisive — so
+    they are fair game. Returns every uid still tied after both, so a true
+    dead heat (identical skips and times) is still shared.
+    """
+    if len(tied) < 2:
+        return list(tied)
+    skips = skipped or []
+    times = pick_times or {}
+    fewest = min(skip_count(uid, skips) for uid in tied)
+    tied = [uid for uid in tied if skip_count(uid, skips) == fewest]
+    if len(tied) < 2:
+        return tied
+    fastest = min(total_pick_time(uid, times) for uid in tied)
+    return [uid for uid in tied if total_pick_time(uid, times) == fastest]
+
+
 def tally_votes(
-    votes: dict[int, int], eligible: list[int],
+    votes: dict[int, int],
+    eligible: list[int],
+    *,
+    skipped: list[str] | None = None,
+    pick_times: dict[str, float | None] | None = None,
 ) -> tuple[list[int], int, list[tuple[int, int]]]:
     """Tally ``{voter: target}`` votes into winners + sorted results.
 
     Returns ``(winner_uids, max_votes, all_results)``:
 
-    * ``winner_uids`` is every uid tied for the most votes (often a
-      single id, possibly several on a tie). Empty when no votes were
+    * ``winner_uids`` is the uid with the most votes; a tie is broken by
+      :func:`break_tie` on ``skipped`` / ``pick_times`` when given, and
+      only a dead heat after both leaves several. Empty when no votes were
       cast.
     * ``max_votes`` is the top vote count, or 0 when no votes.
     * ``all_results`` is ``[(uid, votes)]`` covering every player in
@@ -178,7 +221,9 @@ def tally_votes(
 
     if tally:
         max_votes = max(tally.values())
-        winner_uids = [uid for uid, v in tally.items() if v == max_votes]
+        winner_uids = break_tie(
+            [uid for uid, v in tally.items() if v == max_votes], skipped, pick_times,
+        )
     else:
         winner_uids = []
         max_votes = 0
@@ -315,14 +360,16 @@ def can_start(players: list[int], min_players: int = MIN_PLAYERS) -> bool:
 def clamp_player_limits(min_players: int, max_players: int) -> tuple[int, int]:
     """Clamp the dashboard's player limits into what the draft can actually run.
 
-    The floor is at least 2 (a one-player draft is not a game) and the ceiling
-    never exceeds :data:`MAX_PLAYERS`, whatever the dashboard stored — a server
-    that saved 200 before this dial was bounded must not produce a lobby the
-    vote message cannot render. A ceiling below the floor is raised to meet it,
+    The floor is at least :data:`MIN_PLAYERS` (a two-player draft is a
+    guaranteed 1–1 vote — nobody can vote for themselves — and a one-player
+    draft is not a game; social-prompt-36) and the ceiling never exceeds
+    :data:`MAX_PLAYERS`, whatever the dashboard stored — a server that saved
+    200 before this dial was bounded must not produce a lobby the vote
+    message cannot render. A ceiling below the floor is raised to meet it,
     so the pair can never describe a lobby nobody can start.
     """
-    min_players = max(2, min(int(min_players or MIN_PLAYERS), MAX_PLAYERS))
-    max_players = max(2, min(int(max_players or MAX_PLAYERS), MAX_PLAYERS))
+    min_players = max(MIN_PLAYERS, min(int(min_players or MIN_PLAYERS), MAX_PLAYERS))
+    max_players = max(MIN_PLAYERS, min(int(max_players or MAX_PLAYERS), MAX_PLAYERS))
     if max_players < min_players:
         max_players = min_players
     return min_players, max_players

@@ -42,9 +42,10 @@ export function mount(container) {
             <div class="field">
               <label>Log Channel</label>
               <span data-picker="log_channel_id"></span>
-              <div class="field-hint">A moderator-only record naming who sent each
-                whisper, so abuse can be traced. "(disabled)" means nobody, including
-                moderators, can find out who sent a whisper.</div>
+              <div class="field-hint">A moderator-only Discord channel that mirrors
+                each reply and report as it happens. Sender identity is always visible
+                on the Whisper Audit page regardless of this setting — "(disabled)"
+                only turns off the channel mirror.</div>
             </div>
           </div>
 
@@ -53,8 +54,9 @@ export function mount(container) {
             <div class="field">
               <label>Required Role</label>
               <span data-picker="role_id"></span>
-              <div class="field-hint">Only members holding this role may send
-                whispers. "(none)" lets everyone in the server send them.</div>
+              <div class="field-hint">Only members holding this role may send or
+                receive whispers — it is the opt-in pool <code>/whisper optin</code>
+                grants. "(none)" turns sending off.</div>
             </div>
           </div>
 
@@ -68,6 +70,17 @@ export function mount(container) {
               <div class="field-hint">How many tries the recipient gets to name the
                 sender before the whisper stays anonymous forever. Applies to whispers
                 sent after you save — ones already out keep the number they promised.</div>
+            </div>
+            <div class="field">
+              <label style="display:flex; gap:6px; align-items:center;">
+                <input type="checkbox" name="sender_feedback" ${w.sender_feedback ? "checked" : ""} />
+                Tell the sender how the guessing goes
+              </label>
+              <div class="field-hint"><strong>Off by default.</strong> Checked, the
+                sender gets a short DM after each guess on their whisper — who was
+                guessed and whether it was right, that they were caught, or that the
+                recipient is out of guesses. Senders who opt out of Whisper stop
+                getting them. Applies to every whisper, including ones already out.</div>
             </div>
           </div>
 
@@ -152,6 +165,7 @@ export function mount(container) {
           cooldown_seconds: cooldown,
           hourly_cap_per_target: cap,
           guesses_per_whisper: guesses,
+          sender_feedback: fd.get("sender_feedback") === "on",
         });
         showStatus(status, true);
       } catch (err) {

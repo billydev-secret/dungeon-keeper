@@ -20,11 +20,10 @@ from bot_modules.core.branding import prime_accent_cache
 from bot_modules.duels.base_duel import BaseDuel
 from bot_modules.duels.filters import game_is_nick_stake
 from bot_modules.games.command_groups import games
-from bot_modules.duels.views import ResultView
 from bot_modules.services.embeds import COLOR_RED, COLOR_YELLOW
 
 from . import db as hpdb
-from .game import HotPotatoGame, compute_style_points
+from .game import HotPotatoGame, compute_style_points, hold_remaining
 from .views import PassView
 
 log = logging.getLogger("dungeonkeeper.hot_potato")
@@ -119,6 +118,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             if new_log and new_log[-1]["passed_at"] is None:
                 new_log[-1] = {**new_log[-1], "passed_at": now}
 
+            style_totals: dict[int, int] = {}
             if game.started_at and game.timer_seconds:
                 style_pts = compute_style_points(
                     new_log, game.started_at, game.timer_seconds, loser_id, winner_id
@@ -126,8 +126,9 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 for uid, pts in style_pts.items():
                     if pts > 0:
                         await hpdb.add_style_points(self.db, game.guild_id, uid, pts)
-            else:
-                style_pts = {}
+                        style_totals[uid] = await hpdb.get_style_total(
+                            self.db, game.guild_id, uid
+                        )
 
             game.winner_id = winner_id
             game.loser_id = loser_id
@@ -155,20 +156,21 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 winner_m = guild.get_member(winner_id)
                 loser_m = guild.get_member(loser_id)
                 ping_content = " ".join(m.mention for m in (winner_m, loser_m) if m)
-                result_embed = self.render_result_state(game, guild)
+                sentence_hours = (
+                    await self._sentence_hours(game.guild_id) if nick_mode else None
+                )
+                result_embed = self.render_result_state(
+                    game, guild, sentence_hours=sentence_hours,
+                    style_totals=style_totals,
+                )
+                # Name the Loser in nickname mode, Run It Back in every mode —
+                # the same buttons _finalize_result posts.
+                result_view = self._result_view(game, winner_id=winner_id, loser_id=loser_id)
                 try:
-                    if nick_mode:
-                        result_view = ResultView(
-                            game.id, winner_id, loser_id, self._handle_set_nick
-                        )
-                        result_msg = await channel.send(  # type: ignore[union-attr]
-                            content=ping_content, embed=result_embed, view=result_view
-                        )
-                        self.bot.add_view(result_view, message_id=result_msg.id)
-                    else:
-                        result_msg = await channel.send(  # type: ignore[union-attr]
-                            content=ping_content, embed=result_embed
-                        )
+                    result_msg = await channel.send(  # type: ignore[union-attr]
+                        content=ping_content, embed=result_embed, view=result_view
+                    )
+                    self.bot.add_view(result_view, message_id=result_msg.id)
                     result_message_id = result_msg.id
                 except (discord.Forbidden, discord.HTTPException):
                     pass
@@ -295,6 +297,8 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         imposed_nick: str | None = None,
         original_name: str | None = None,
         self_apply_nick: str | None = None,
+        sentence_hours: int | None = None,
+        style_totals: dict[int, int] | None = None,
         **_kwargs,
     ) -> discord.Embed:
         winner = guild.get_member(game.winner_id)  # type: ignore[arg-type]
@@ -313,7 +317,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         embed.add_field(name="💀 Loser", value=loser_name, inline=True)
         embed.add_field(name="🥔 Passes", value=str(pass_count), inline=True)
 
-        stakes_text = game.stakes_text or "24-hour nickname surrender."
+        stakes_text = game.stakes_text or self.nick_forfeit_copy(sentence_hours)
         embed.add_field(name="📋 Stakes", value=stakes_text, inline=False)
 
         if (
@@ -329,12 +333,18 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 game.loser_id,
                 game.winner_id,
             )
+            # Per-game points are the tie flavour; the running total is the
+            # only place the cumulative table is ever read (duels-party-119).
             lines = []
             for uid, pts in style_pts.items():
                 if pts > 0:
                     m = guild.get_member(uid)
                     name = m.display_name if m else str(uid)
-                    lines.append(f"**{name}**: +{pts} pts")
+                    total = (style_totals or {}).get(uid)
+                    line = f"**{name}**: +{pts} pts"
+                    if total is not None:
+                        line += f" — now has {total:,} style points"
+                    lines.append(line)
             if lines:
                 embed.add_field(
                     name="✨ Style Points (Danger Zone)",
@@ -343,31 +353,25 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
                 )
 
         if self_apply_nick:
-            # Discord blocks the bot from renaming the guild owner, so the
-            # sentence is real but has to be applied by hand. Saying "is now
-            # known as" here would be a plain lie about what happened.
             embed.add_field(
                 name="🏷️ Nickname — Over To You",
-                value=(
-                    f"Discord won't let me rename the server owner, so "
-                    f"**{original_name or loser_name}** has to set "
-                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                value=self.nick_self_apply_copy(
+                    original_name or loser_name, self_apply_nick, sentence_hours
                 ),
                 inline=False,
             )
         elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=self.nick_applied_copy(
+                    original_name or loser_name, imposed_nick, sentence_hours
+                ),
                 inline=False,
             )
         elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
-                value=(
-                    f"**{winner_name}**, press **Name the loser** within 5 minutes. "
-                    "The nickname lasts 24 hours."
-                ),
+                value=self.awaiting_nick_copy(winner_name, sentence_hours),
                 inline=False,
             )
 
@@ -393,6 +397,14 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
             return ("rejected", None)
 
         now = time.time()
+        cfg = await hpdb.get_config(self.db, game.guild_id)
+        wait = hold_remaining(game.pass_log, player_id, now, float(cfg["min_hold"]))
+        if wait > 0:
+            await interaction.followup.send(
+                f"Hold it a moment — you can pass after {float(cfg['min_hold']):.0f}s.",
+                ephemeral=True,
+            )
+            return ("rejected", None)
         new_holder = (
             game.challenger_id if player_id == game.target_id else game.target_id
         )
@@ -418,7 +430,7 @@ class HotPotatoDuel(BaseDuel, name="HotPotatoCog"):
         user="The player you're challenging",
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — you both ante this; winner takes the pot",
-        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
+        nickname="Also stake nicknames? The winner renames the loser (default: only when nothing else is staked)",
     )
     async def hp_challenge(
         self,

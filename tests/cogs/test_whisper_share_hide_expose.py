@@ -1,4 +1,8 @@
-"""Cog-level: share / delete / expose flows."""
+"""Cog-level: share / delete flows.
+
+(The file keeps its historical name; the Expose button it once covered was
+dead code and was deleted in the 2026-09 games review.)
+"""
 from __future__ import annotations
 
 import time
@@ -57,13 +61,6 @@ def _make_delete_button():
     bot = MagicMock()
     bot.ctx.db_path = ":memory:"
     return WhisperDeleteButton(bot, 42)
-
-
-def _make_expose_button():
-    from bot_modules.cogs.whisper_cog import WhisperExposeButton
-    bot = MagicMock()
-    bot.ctx.db_path = ":memory:"
-    return WhisperExposeButton(bot, 42)
 
 
 # ── Share ─────────────────────────────────────────────────────────────────────
@@ -264,51 +261,3 @@ async def test_delete_from_inbox_leaves_other_message_alone():
         await button.callback(interaction)
 
     other_msg.edit.assert_not_called()
-
-
-# ── Expose ────────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_expose_solved_target_edits_feed_message():
-    button = _make_expose_button()
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-    interaction.message = MagicMock()
-    interaction.message.content = "✅ You're Right!"
-    interaction.message.edit = AsyncMock()
-    interaction.guild = MagicMock()
-    interaction.guild.get_member = MagicMock(return_value=FakeMember(id=SENDER, display_name="Sender"))
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
-         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
-        await button.callback(interaction)
-
-    mexp.assert_called_once()
-    interaction.message.edit.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_expose_unsolved_rejected():
-    button = _make_expose_button()
-    interaction = fake_interaction(user=FakeMember(id=TARGET))
-    interaction.response.send_message = AsyncMock()
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=False)), \
-         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
-        await button.callback(interaction)
-
-    mexp.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_expose_non_target_rejected():
-    button = _make_expose_button()
-    interaction = fake_interaction(user=FakeMember(id=9999))
-    interaction.response.send_message = AsyncMock()
-
-    with patch("bot_modules.cogs.whisper_cog._do_load_whisper", return_value=_w(solved=True)), \
-         patch("bot_modules.cogs.whisper_cog._do_mark_exposed") as mexp:
-        await button.callback(interaction)
-
-    mexp.assert_not_called()

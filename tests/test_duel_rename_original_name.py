@@ -74,6 +74,8 @@ def _chicken_game():
     return SimpleNamespace(
         winner_id=WINNER_ID, loser_id=LOSER_ID, stakes_text=None,
         alive=[], bail_log=[],
+        # The crash card names the meter reading at the blow (migration 208).
+        crash_at=15.0, climb_duration=25.0,
     )
 
 

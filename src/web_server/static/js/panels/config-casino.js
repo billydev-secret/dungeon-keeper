@@ -90,6 +90,17 @@ export function mount(container) {
         "currency.",
     ));
 
+    const cardComp = card("Daily Comp");
+    cardComp.appendChild(field(
+      "Daily Comp (free spin amount)",
+      numInput("daily_comp", c.daily_comp ?? 0, 0, "1", 100000),
+      "A free slots spin, on the house, once per member per server day: a " +
+        "\uD83C\uDF81 Daily Comp button joins the hub panel and pays whatever " +
+        "the reels land at this stake. Nothing is wagered \u2014 it never " +
+        "counts against the daily cap, the stats or the jackpot. 0 (the " +
+        "default) offers no comp and hides the button.",
+    ));
+
     // Wrapping flex row (not fixed-width) so phones stack the toggles.
     const cardTables = card("Games");
     const tables = document.createElement("div");
@@ -158,9 +169,18 @@ export function mount(container) {
       "Big-Win Broadcast Threshold",
       numInput("broadcast_min_payout", c.broadcast_min_payout ?? 0, 0),
       "Players spin privately, but the floor ticker shows recent action. A " +
-        "win of at least this much also posts publicly in the casino " +
-        "channel with a Play Again button. 0 never broadcasts (jackpot " +
-        "hits are always announced).",
+        "win of at least this much \u2014 that also clears the multiple " +
+        "below \u2014 posts a public recap in the casino channel. The recap " +
+        "carries no buttons. 0 never broadcasts (jackpot hits are always " +
+        "announced).",
+    ));
+    cardFloor.appendChild(field(
+      "Broadcast Minimum Multiple",
+      numInput("broadcast_min_mult", c.broadcast_min_mult ?? 3, 1, "1", 1000),
+      "A win must also pay at least this many times its stake to be " +
+        "announced, so a routine even-money win on a big stake stays " +
+        "private while a 6\u00d7 slots hit on a small one still posts. 3 is " +
+        "the default; 1 announces on the amount alone.",
     ));
     const pingRow = document.createElement("div");
     pingRow.style.cssText = "display:flex; flex-wrap:wrap; gap:8px 16px;";
@@ -198,11 +218,13 @@ export function mount(container) {
         ["min_bet", "Minimum Bet", 1, null],
         ["max_bet", "Maximum Bet", 0, null],
         ["daily_wager_cap", "Daily Wager Cap", 0, null],
+        ["daily_comp", "Daily Comp", 0, 100000],
         ["jackpot_cut_pct", "Share of Each Losing Bet", 0, 100],
         ["jackpot_seed", "Starting Pot After a Win", 0, null],
         ["round_idle_seconds", "Abandoned Round Timeout", 60, 840],
         ["blackjack_idle_seconds", "Blackjack Idle Timeout", 30, 840],
         ["broadcast_min_payout", "Big-Win Broadcast Threshold", 0, null],
+        ["broadcast_min_mult", "Broadcast Minimum Multiple", 1, 1000],
       ]) {
         const raw = String(fd.get(name) ?? "").trim();
         const v = parseInt(raw, 10);

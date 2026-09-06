@@ -38,7 +38,10 @@ log = logging.getLogger("dungeonkeeper.hot_potato_group")
 class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
 
     GAME_KEY = "hot_potato_group"
-    GAME_DISPLAY_NAME = "Hot Potato"
+    # "(Group)" everywhere it renders: the duel is also "Hot Potato", and a
+    # refusal, lobby ping or audit-log reason naming the wrong one was
+    # unreadable (duels-party-120).
+    GAME_DISPLAY_NAME = "Hot Potato (Group)"
 
     def __init__(self, bot: Bot) -> None:
         super().__init__(bot)
@@ -49,7 +52,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
 
     hotpotatogroup = app_commands.Group(
         name="hotpotatogroup",
-        description="Hot Potato for groups — pass the bomb before it blows!",
+        description="Hot Potato (Group) — pass the bomb round the circle before it blows!",
     )
 
     # ── DB hooks ──────────────────────────────────────────────────────────────
@@ -222,7 +225,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
             mentions = " ".join(f"<@{u}>" for u in game.alive)
             try:
                 await channel.send(  # type: ignore[union-attr]
-                    f"🔄 Bot restarted — Hot Potato resuming. {mentions}"
+                    f"🔄 Bot restarted — Hot Potato (Group) resuming. {mentions}"
                 )
             except (discord.Forbidden, discord.HTTPException):
                 pass
@@ -236,6 +239,41 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
     async def on_game_resolved(self, game_id: int) -> None:
         self._cancel_timer(game_id)
         self._accents.pop(game_id, None)
+
+    async def on_player_left(self, game: HotPotatoGroupGame, user_id: int) -> None:
+        """A leaver who was holding the bomb hands it to the next player in
+        the circle; the fuse keeps burning. Without this the round pointed
+        at someone who was gone and nobody could pass until it blew — and
+        the detonation would have eliminated the leaver a second time."""
+        if game.holder_id != user_id:
+            return
+        now = time.time()
+        # ``alive`` no longer has the leaver, so walk the roster order with
+        # them still in it: the bomb goes to whoever sat after them.
+        circle = [u for u in game.roster if u in game.alive or u == user_id]
+        new_holder = next_holder_clockwise(circle or game.alive, user_id)
+        new_log = list(game.pass_log)
+        if new_log and new_log[-1].get("passed_at") is None:
+            new_log[-1] = {**new_log[-1], "passed_at": now}
+        new_log.append({"holder_id": new_holder, "received_at": now, "passed_at": None})
+        await self._db_set_state(
+            game.id, "ACTIVE",
+            holder_id=new_holder,
+            pass_log=json.dumps(new_log),
+            last_action_at=now,
+        )
+        guild = self.bot.get_guild(game.guild_id)
+        fresh = await hpgdb.get_game(self.db, game.id)
+        if guild and fresh and fresh.message_id:
+            await self._edit_message_silent(
+                fresh.channel_id, fresh.message_id,
+                self.render_game_state(fresh, guild),
+                self.build_game_view(game.id),
+            )
+        await self._announce_to_channel(
+            game.id,
+            f"🔁 **{self._member_label(guild, new_holder)}** is holding now.",
+        )
 
     def render_game_state(
         self, game: HotPotatoGroupGame, guild: discord.Guild
@@ -251,7 +289,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         emoji = shake_emoji(elapsed, game.fuse_seconds or 0.0)
 
         embed = discord.Embed(
-            title=f"{emoji} Hot Potato",
+            title=f"{emoji} Hot Potato (Group)",
             color=self._accents.get(game.id, COLOR_YELLOW),
         )
         embed.add_field(name="Still in", value=alive_names, inline=False)
@@ -262,7 +300,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         embed.add_field(
             name="🤲 Holding", value=f"**{holder}** — pass it before it blows!", inline=False
         )
-        stakes = game.stakes_text or "Final loser surrenders their nickname for 24h."
+        stakes = game.stakes_text or "Loser surrenders their nickname."
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
         apply_section_spacing(embed)
         return embed
@@ -275,6 +313,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         imposed_nick: str | None = None,
         original_name: str | None = None,
         self_apply_nick: str | None = None,
+        sentence_hours: int | None = None,
         **_kwargs,
     ) -> discord.Embed:
         def name(uid: int | None) -> str:
@@ -287,7 +326,7 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
         loser_name = name(game.loser_id)
 
         embed = discord.Embed(
-            title="💥 Hot Potato — Game Over",
+            title="💥 Hot Potato (Group) — Game Over",
             description=f"**{loser_name}** was holding the final blast!",
             color=COLOR_RED,
         )
@@ -305,35 +344,29 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
                 inline=False,
             )
 
-        stakes = game.stakes_text or "24-hour nickname surrender."
+        stakes = game.stakes_text or self.nick_forfeit_copy(sentence_hours)
         embed.add_field(name="📋 Stakes", value=stakes, inline=False)
 
         if self_apply_nick:
-            # Discord blocks the bot from renaming the guild owner, so the
-            # sentence is real but has to be applied by hand. Saying "is now
-            # known as" here would be a plain lie about what happened.
             embed.add_field(
                 name="🏷️ Nickname — Over To You",
-                value=(
-                    f"Discord won't let me rename the server owner, so "
-                    f"**{original_name or loser_name}** has to set "
-                    f"**{self_apply_nick}** themselves. It stands for 24 hours."
+                value=self.nick_self_apply_copy(
+                    original_name or loser_name, self_apply_nick, sentence_hours
                 ),
                 inline=False,
             )
         elif imposed_nick:
             embed.add_field(
                 name="🏷️ Nickname Applied",
-                value=f"**{original_name or loser_name}** is now known as **{imposed_nick}** for 24 hours.",
+                value=self.nick_applied_copy(
+                    original_name or loser_name, imposed_nick, sentence_hours
+                ),
                 inline=False,
             )
         elif game_is_nick_stake(game):
             embed.add_field(
                 name="⏳ Awaiting Nickname",
-                value=(
-                    f"**{winner_name}**, press **Name the loser** within 5 minutes. "
-                    "The nickname lasts 24 hours."
-                ),
+                value=self.awaiting_nick_copy(winner_name, sentence_hours),
                 inline=False,
             )
         apply_section_spacing(embed)
@@ -386,11 +419,11 @@ class HotPotatoGroupGameCog(BaseGame, name="HotPotatoGroupCog"):
 
     # ── Slash commands ────────────────────────────────────────────────────────
 
-    @hotpotatogroup.command(name="start", description="Open a Hot Potato lobby")
+    @hotpotatogroup.command(name="start", description="Open a Hot Potato (Group) lobby")
     @app_commands.describe(
         stakes="Optional custom stakes text (max 200 chars)",
         wager="Optional coin wager — every player antes this; winner takes the pot",
-        nickname="Also stake nicknames? Winner renames the loser for 24h (default: only when nothing else is staked)",
+        nickname="Also stake nicknames? The winner renames the loser (default: only when nothing else is staked)",
     )
     async def hpg_start(
         self,

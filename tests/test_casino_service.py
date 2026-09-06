@@ -1971,16 +1971,54 @@ def test_ticker_rows_land_via_instant_settle_paths(db):
         svc.settle_slots(conn, GUILD, A, 20, ("🌻", "🍀", "🐝"), now=NOW + 1)
         hand_id = _deal(conn, stake=30)
         svc.settle_blackjack_hand(conn, hand_id, 60, "win", now=NOW + 2)
+        logged = conn.execute(
+            "SELECT user_id, game, stake, payout FROM casino_ticker "
+            "WHERE guild_id = ? ORDER BY id DESC",
+            (GUILD,),
+        ).fetchall()
         rows = svc.recent_ticker(conn, GUILD)
     # newest first, one row per resolved play
     assert [
         (int(r["user_id"]), str(r["game"]), int(r["stake"]), int(r["payout"]))
-        for r in rows
+        for r in logged
     ] == [
         (A, "blackjack", 30, 60),
         (A, "slots", 20, 0),
         (A, "coinflip", 10, 18),  # 10 * 37 // 20
     ]
+    # …but the hub shows one line per player, so A's latest is the whole
+    # ticker (casino-135).
+    assert [
+        (int(r["user_id"]), str(r["game"]), int(r["stake"]), int(r["payout"]))
+        for r in rows
+    ] == [(A, "blackjack", 30, 60)]
+
+
+def test_ticker_shows_the_latest_play_per_player_not_one_grinders_run(db):
+    """casino-135: at prod volume the ticker was one member's last six slots
+    spins, repainted every 8s — everyone else was pushed off within a
+    minute. Two players, twenty spins: both still show, newest first."""
+    with open_db(db) as conn:
+        svc.record_ticker(conn, GUILD, B, "coinflip", 10, 18, now=NOW)
+        for i in range(20):
+            svc.record_ticker(conn, GUILD, A, "slots", 5, i, now=NOW + 1 + i)
+        rows = svc.recent_ticker(conn, GUILD)
+    assert [(int(r["user_id"]), int(r["payout"])) for r in rows] == [
+        (A, 19), (B, 18),
+    ]
+
+
+def test_six_distinct_players_survive_a_grind_burst(db):
+    """TICKER_KEEP is sized so a single member's burst cannot push five
+    other players off the panel — 100 spins is a long slots session."""
+    others = [B + i for i in range(5)]
+    with open_db(db) as conn:
+        for i, uid in enumerate(others):
+            svc.record_ticker(conn, GUILD, uid, "coinflip", 10, 0, now=NOW + i)
+        for i in range(100):
+            svc.record_ticker(conn, GUILD, A, "slots", 5, 0, now=NOW + 10 + i)
+        rows = svc.recent_ticker(conn, GUILD)
+    assert [int(r["user_id"]) for r in rows] == [A, *reversed(others)]
 
 
 def test_ticker_now_carries_the_private_round_games(db):
@@ -2017,9 +2055,11 @@ def test_ticker_still_skips_pools(db):
 
 def test_ticker_trims_to_keep_and_respects_limit(db):
     with open_db(db) as conn:
+        # A distinct player per row, so the per-player window is not what
+        # shortens the read — only the limit is.
         for i in range(svc.TICKER_KEEP + 7):
             svc.record_ticker(
-                conn, GUILD, A, "slots", 5, i, now=NOW + i
+                conn, GUILD, A + i, "slots", 5, i, now=NOW + i
             )
         total = conn.execute(
             "SELECT COUNT(*) AS n FROM casino_ticker WHERE guild_id = ?",
@@ -2046,6 +2086,15 @@ def test_broadcast_min_payout_defaults_off_and_roundtrips(db):
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 0
         svc.save_casino_settings(conn, GUILD, {"broadcast_min_payout": 500})
         assert svc.load_casino_settings(conn, GUILD).broadcast_min_payout == 500
+
+
+def test_broadcast_min_mult_defaults_to_three_and_roundtrips(db):
+    """D6: the multiple ships at 3 for every guild — a guild that never
+    touches the dial gets the flood fix — and survives the round trip."""
+    with open_db(db) as conn:
+        assert svc.load_casino_settings(conn, GUILD).broadcast_min_mult == 3
+        svc.save_casino_settings(conn, GUILD, {"broadcast_min_mult": 5})
+        assert svc.load_casino_settings(conn, GUILD).broadcast_min_mult == 5
 
 
 def test_broadcast_ping_defaults_on_and_roundtrips(db):
@@ -2555,3 +2604,177 @@ def test_casino_play_is_a_known_trigger_kind():
     # The defect this fixes: the quest row existed, the kind did not.
     assert "casino_play" in TRIGGER_KINDS
     assert "casino_play" in TRIGGER_KIND_INFO
+
+
+# ── the daily comp (casino-134, 2026-09-04) ────────────────────────────
+#
+# One house-funded slots spin a day from the hub. Ships DARK: the dial is
+# 0 by default and nothing below fires until an admin sets it. The spin is
+# not a wager — nothing is debited, the cap is untouched, and the play
+# tables (stats, weekly, daily net, ticker) never see it.
+
+_TRIPLE_HONEY = ("🍯", "🍯", "🍯")
+_NO_PAIR = ("🌻", "🍀", "🐝")
+
+
+def _comp_day_bounds(conn, now=NOW):
+    from bot_modules.core.db_utils import get_tz_offset_hours
+
+    day = svc.local_day_for(now, get_tz_offset_hours(conn, GUILD))
+    return svc.local_day_bounds(day, get_tz_offset_hours(conn, GUILD))
+
+
+def test_daily_comp_ships_dark(db):
+    """Default 0 = no comp: the claim refuses and the hub predicate is off."""
+    assert svc.DEFAULT_CASINO_SETTINGS.daily_comp == 0
+    with open_db(db) as conn:
+        assert not svc.comp_on(svc.load_casino_settings(conn, GUILD))
+        err, result = svc.claim_daily_comp(conn, GUILD, A, now=NOW)
+        assert err is not None and result is None
+        assert get_balance(conn, GUILD, A) == 0
+        assert conn.execute("SELECT COUNT(*) FROM casino_daily").fetchone()[0] == 0
+
+
+def test_daily_comp_dial_roundtrips(db):
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        s = svc.load_casino_settings(conn, GUILD)
+    assert s.daily_comp == 5
+    assert svc.comp_on(s)
+    # The comp is a spin on the slots: a closed slots table has no reels.
+    assert not svc.comp_on(svc.CasinoSettings(daily_comp=5, slots_enabled=False))
+
+
+def test_daily_comp_pays_a_win_from_the_house(db, monkeypatch):
+    monkeypatch.setattr(logic, "spin_slots", lambda: _TRIPLE_HONEY)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        err, result = svc.claim_daily_comp(conn, GUILD, A, now=NOW)
+        assert err is None and result is not None
+        assert result.amount == 5 and result.reels == _TRIPLE_HONEY
+        expected, label = logic.slots_payout(_TRIPLE_HONEY, 5)
+        assert result.payout == expected > 0 and result.label == label
+        # House-funded: the only ledger row is the payout — no stake, ever.
+        assert _kinds(conn, A) == [(svc.PAYOUT_KIND, expected)]
+        assert get_balance(conn, GUILD, A) == expected
+        meta = json.loads(conn.execute(
+            "SELECT meta FROM econ_ledger WHERE user_id = ?", (A,)
+        ).fetchone()["meta"])
+        assert meta["game"] == "slots" and meta["comp"] == 5
+
+
+def test_daily_comp_loss_costs_nothing_and_feeds_nothing(db, monkeypatch):
+    monkeypatch.setattr(logic, "spin_slots", lambda: _NO_PAIR)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        err, result = svc.claim_daily_comp(conn, GUILD, A, now=NOW)
+        assert err is None and result is not None
+        assert result.payout == 0 and result.label is None
+        assert _kinds(conn, A) == []
+        # No stake was lost, so the jackpot has nothing to skim.
+        assert svc.get_jackpot(conn, GUILD) == 0
+
+
+def test_daily_comp_is_not_a_wager(db, monkeypatch):
+    """The cap, the play stats, the week, the day's net and the ticker all
+    stay untouched — the comp is a gift, not turnover."""
+    monkeypatch.setattr(logic, "spin_slots", lambda: _TRIPLE_HONEY)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5, "daily_wager_cap": 50})
+        assert svc.claim_daily_comp(conn, GUILD, A, now=NOW)[0] is None
+        used, cap, _ = svc.daily_cap_status(conn, GUILD, A, now=NOW)
+        assert (used, cap) == (0, 50)
+        for table in (
+            "casino_member_stats", "casino_weekly", "casino_daily_net",
+            "casino_ticker",
+        ):
+            assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+        # …and the day's full cap is still there to bet with.
+        _fund(conn, A, 100)
+        assert svc.take_stake(conn, GUILD, A, 50, "slots", now=NOW) is None
+
+
+def test_daily_comp_is_once_per_guild_local_day(db, monkeypatch):
+    monkeypatch.setattr(logic, "spin_slots", lambda: _TRIPLE_HONEY)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        assert svc.claim_daily_comp(conn, GUILD, A, now=NOW)[0] is None
+        assert svc.comp_claimed_today(conn, GUILD, A, now=NOW)
+        err, result = svc.claim_daily_comp(conn, GUILD, A, now=NOW + 3600)
+        assert err is not None and result is None
+        _, day_end = _comp_day_bounds(conn)
+        assert f"<t:{int(day_end)}:R>" in err
+        # Paid exactly once.
+        assert len(_kinds(conn, A)) == 1
+        # Another member's comp is their own.
+        assert svc.claim_daily_comp(conn, GUILD, B, now=NOW)[0] is None
+        # The next guild-local day opens a fresh one.
+        assert not svc.comp_claimed_today(conn, GUILD, A, now=day_end + 1)
+        assert svc.claim_daily_comp(conn, GUILD, A, now=day_end + 1)[0] is None
+        assert len(_kinds(conn, A)) == 2
+
+
+def test_daily_comp_day_follows_the_guild_clock(db, monkeypatch):
+    """Same casino_daily day-roll as the cap: guild-local, not UTC."""
+    monkeypatch.setattr(logic, "spin_slots", lambda: _NO_PAIR)
+    with open_db(db) as conn:
+        set_config_value(conn, "tz_offset_hours", "-10", GUILD)
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        # NOW is 08:00 UTC on 2027-01-15 — 22:00 on the 14th at UTC-10, so
+        # the local day rolls two hours later while the UTC one does not.
+        _, day_end = _comp_day_bounds(conn)
+        assert svc.local_day_for(NOW, 0) == svc.local_day_for(day_end, 0)
+        assert svc.claim_daily_comp(conn, GUILD, A, now=NOW)[0] is None
+        assert svc.claim_daily_comp(conn, GUILD, A, now=NOW + 3600)[0] is not None
+        # A UTC-keyed claim would still be "today" here; the guild's is not.
+        assert svc.claim_daily_comp(conn, GUILD, A, now=day_end)[0] is None
+
+
+@pytest.mark.parametrize(
+    ("setup", "channel_id"),
+    [
+        pytest.param(
+            lambda c: svc.save_casino_settings(c, GUILD, {"channel_id": 0}),
+            None, id="casino-closed",
+        ),
+        pytest.param(lambda c: None, CHAN + 1, id="wrong-channel"),
+        pytest.param(
+            lambda c: svc.save_casino_settings(c, GUILD, {"slots_enabled": False}),
+            None, id="slots-closed",
+        ),
+        pytest.param(
+            lambda c: save_econ_settings(c, GUILD, {"enabled": False}),
+            None, id="economy-off",
+        ),
+    ],
+)
+def test_daily_comp_honours_the_casino_gates(db, monkeypatch, setup, channel_id):
+    """A stale hub panel's button must not hand out spins the casino
+    itself would refuse — and a refused claim is not a claim."""
+    monkeypatch.setattr(logic, "spin_slots", lambda: _TRIPLE_HONEY)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        setup(conn)
+        err, result = svc.claim_daily_comp(
+            conn, GUILD, A, channel_id=channel_id, now=NOW
+        )
+        assert err is not None and result is None
+        assert _kinds(conn, A) == []
+        assert not svc.comp_claimed_today(conn, GUILD, A, now=NOW)
+
+
+def test_daily_comp_never_touches_the_jackpot(db, monkeypatch):
+    """Triple 7️⃣ on a comp pays the flat table, not the pot — the pot is
+    built from real lost stakes and belongs to a real bet."""
+    monkeypatch.setattr(logic, "spin_slots", lambda: (logic.SEVEN,) * 3)
+    with open_db(db) as conn:
+        svc.save_casino_settings(conn, GUILD, {"daily_comp": 5})
+        _fund(conn, B, 100)
+        assert svc.take_stake(conn, GUILD, B, 100, "slots", now=NOW) is None
+        svc.settle_slots(conn, GUILD, B, 100, _NO_PAIR, now=NOW)
+        pot_before = svc.get_jackpot(conn, GUILD)
+        assert pot_before > 0
+        err, result = svc.claim_daily_comp(conn, GUILD, A, now=NOW)
+        assert err is None and result is not None
+        assert result.payout == logic.slots_payout((logic.SEVEN,) * 3, 5)[0]
+        assert svc.get_jackpot(conn, GUILD) == pot_before

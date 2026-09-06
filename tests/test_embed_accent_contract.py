@@ -33,6 +33,7 @@ from bot_modules.games_clapback import embeds as clapback_embeds
 from bot_modules.games_compliment import embeds as compliment_embeds
 from bot_modules.games_config import embeds as games_config_embeds
 from bot_modules.games_fantasies import embeds as fantasies_embeds
+from bot_modules.games_help import embeds as games_help_embeds
 from bot_modules.games_hottakes import embeds as hottakes_embeds
 from bot_modules.games_mfk import embeds as mfk_embeds
 from bot_modules.games_mlt import embeds as mlt_embeds
@@ -130,6 +131,11 @@ def _welcome_member() -> MagicMock:
 
 
 CASES = [
+    case(
+        "games_help.detail",
+        lambda **kw: games_help_embeds.build_game_detail_embed("wyr", **kw),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
     case(
         "member_info.panel",
         lambda **kw: member_info_embeds.build_member_info_embed(
@@ -307,6 +313,37 @@ CASES = [
         lambda **kw: nhie_embeds.build_recap_embed(winner_id=42, guilt_scores={"42": 1}, **kw),
         discord.Color(games_constants.PHASE_RECAP),
     ),
+    case(
+        "nhie.recap_ended",
+        lambda **kw: nhie_embeds.build_recap_embed(
+            winner_id=None, guilt_scores={"42": 1}, ended=True, **kw
+        ),
+        discord.Color(games_constants.PHASE_RECAP),
+    ),
+    case(
+        "nhie.round_waiting",
+        lambda **kw: nhie_embeds.build_round_embed(
+            statement="", guilty=[], innocent=[], round_num=1, waiting=True, **kw
+        ),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
+    case(
+        "wyr.recap",
+        lambda **kw: wyr_embeds.build_wyr_recap_embed(
+            {"1": {"a": [1], "b": [2], "q": "x OR y"}}, **kw
+        ),
+        discord.Color(games_constants.PHASE_RECAP),
+    ),
+    case(
+        "wyr.round_waiting",
+        lambda **kw: wyr_embeds.build_wyr_embed("Alice", "", "", [], [], True, 1, waiting=True, **kw),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
+    case(
+        "mlt.round_waiting",
+        lambda **kw: mlt_embeds.build_round_embed("", round_num=1, vote_count=0, waiting=True, **kw),
+        discord.Color(games_constants.PHASE_PLAYING),
+    ),
     # ── most likely to ───────────────────────────────────────────────────
     case(
         "mlt.join",
@@ -363,6 +400,16 @@ CASES = [
     case(
         "price.start",
         lambda **kw: price_embeds.build_start_embed("Host", 1, 5, **kw),
+        None,
+    ),
+    case(
+        "price.lobby",
+        lambda **kw: price_embeds.build_lobby_embed("Host", ["Ann"], 5, "bank", **kw),
+        None,
+    ),
+    case(
+        "price.scenario_wait",
+        lambda **kw: price_embeds.build_scenario_wait_embed("Host", 1, 5, "host", **kw),
         None,
     ),
     case(
@@ -475,6 +522,11 @@ CASES = [
         discord.Color(games_constants.BRAND_COLOR),
     ),
     case(
+        "compliment.wrap_recap",
+        lambda **kw: compliment_embeds.build_wrap_recap_embed(5, 6, **kw),
+        discord.Color(games_constants.BRAND_COLOR),
+    ),
+    case(
         "mfk.assignments",
         lambda **kw: mfk_embeds.build_assignments_embed(
             {1: [2, 3, 4], 2: [1, 3, 4]}, name_fn=_named, **kw
@@ -579,6 +631,15 @@ CASES = [
     ),
     # ── casino (fallback is the house gold; older casino builders are
     # ledger debt below — new ones land here) ────────────────────────────
+    case(
+        # The blank comp spin (payout 0) is the accent-colored state; a
+        # paying one is results-green.
+        "casino.comp",
+        lambda **kw: casino_embeds.build_comp_embed(
+            _econ_settings(), 7, ("🌻", "🍀", "🐝"), 5, 0, None, kw.get("color")
+        ),
+        discord.Color(services_embeds.COLOR_GOLD),
+    ),
     case(
         "casino.baccarat_round",
         lambda **kw: casino_embeds.build_baccarat_round_embed(
@@ -972,6 +1033,9 @@ KNOWN_UNCOVERED = {
     # the settlement's void variants are deliberately grey — no accent path.
     "bot_modules.games.mahjong.embeds.build_mahjong_reveal",
     "bot_modules.games.mahjong.embeds.build_settlement",
+    # The table-open Game Night line is a content string, not an embed — a
+    # role mention only notifies from message content (mahjong-149).
+    "bot_modules.games.mahjong.embeds.build_table_open_ping",
     # Bios carries its own per-guild dial (`bios_embed_color`, BiosConfig) and
     # takes it as a required `embed_color=` argument rather than the optional
     # `color=` the contract probes — there is no accent path to pass through and
@@ -1028,6 +1092,7 @@ KNOWN_UNCOVERED = {
     "bot_modules.games_ama.embeds.build_main_embed",
     "bot_modules.games_ama.embeds.build_panel_embed",
     "bot_modules.games_ama.embeds.build_question_embed",
+    "bot_modules.games_ama.embeds.build_screened_dm_embed",
     "bot_modules.games_config.embeds.build_audit_channel_embed",
     "bot_modules.games_config.embeds.build_channel_allowed_embed",
     "bot_modules.games_config.embeds.build_channel_disallowed_embed",
@@ -1061,6 +1126,9 @@ KNOWN_UNCOVERED = {
     "bot_modules.services.risky_roll.formatters.build_pending_prompt_content",
     "bot_modules.services.risky_roll.formatters.build_pending_question_summary",
     "bot_modules.services.risky_roll.formatters.build_question_reply_content",
+    "bot_modules.services.risky_roll.formatters.build_pending_chase_content",
+    "bot_modules.services.risky_roll.formatters.build_posted_chase_content",
+    "bot_modules.services.risky_roll.formatters.build_fallback_question_content",
     "bot_modules.services.embeds.build_admin_mirror_embed",
     "bot_modules.starboard.embeds.build_starboard_embed",
     "bot_modules.voice_master.embeds.build_claim_done_embed",

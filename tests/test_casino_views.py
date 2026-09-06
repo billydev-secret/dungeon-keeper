@@ -10,8 +10,15 @@ from __future__ import annotations
 import discord
 import pytest
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 from bot_modules.cogs.casino.views import (
+    STEP_EXPIRED_MSG,
+    _AmountBetModal,
     AmountPickerView,
+    CasinoHubView,
+    CoinflipSideView,
     DerbyBetButton,
     RouletteBetModal,
     RouletteNumberView,
@@ -40,6 +47,34 @@ def test_hub_view_drops_disabled_tables():
 def test_hub_view_full_house_by_default():
     ids = _custom_ids(build_hub_view(CasinoSettings()))
     assert {f"casino:{game}" for game in GAMES} <= ids
+
+
+@pytest.mark.parametrize(
+    ("settings", "shown"),
+    [
+        # casino-134: the comp ships DARK — no button until the dial is set.
+        pytest.param(CasinoSettings(), False, id="default-off"),
+        pytest.param(CasinoSettings(daily_comp=5), True, id="dial-on"),
+        # A spin on the slots needs the slots open.
+        pytest.param(
+            CasinoSettings(daily_comp=5, slots_enabled=False), False,
+            id="slots-closed",
+        ),
+    ],
+)
+def test_hub_view_offers_the_daily_comp_only_while_it_is_on(settings, shown):
+    ids = _custom_ids(build_hub_view(settings))
+    assert ("casino:comp" in ids) is shown
+    # The full registered view always routes a stale panel's press.
+    assert "casino:comp" in _custom_ids(CasinoHubView())
+
+
+def test_hub_view_comp_button_shares_the_utility_row():
+    """Ten tables plus the comp is the hub's worst case: four game rows and
+    a three-button utility row is still within Discord's five."""
+    rows = _rows(build_hub_view(CasinoSettings(daily_comp=5)))
+    assert rows[-1] == ["Daily Comp", "My Stats", "How It Works"]
+    assert len(rows) == 5
 
 
 def _rows(view) -> list[list[str]]:
@@ -155,8 +190,6 @@ def test_every_dynamic_item_is_registered_at_cog_load():
 
 # ── the amount ladder (ephemeral-UI audit M2 / M3) ───────────────────
 
-from types import SimpleNamespace  # noqa: E402
-from unittest.mock import AsyncMock  # noqa: E402
 
 
 def _fake_modal_factory():
@@ -239,6 +272,80 @@ async def test_a_timed_out_step_puts_the_board_back():
     expiry.assert_awaited_once()
 
 
+def _bound_interaction():
+    """What a step needs from the interaction that showed it: only the way
+    back into its own message once the token is the last handle left."""
+    return SimpleNamespace(edit_original_response=AsyncMock())
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(
+            lambda: AmountPickerView(_fake_modal_factory()[0], _options(25, 50)),
+            id="hub-ladder",
+        ),
+        pytest.param(CoinflipSideView, id="coinflip-picker"),
+    ],
+)
+async def test_an_expired_hub_step_says_so_instead_of_failing_silently(make):
+    """casino-141: a member who opened Heads/Tails or the ladder from the hub
+    and came back later pressed a dead button and got Discord's generic
+    "This interaction failed", with no hint to reopen from the hub. The
+    step now disables itself and says what to do instead."""
+    view = make()
+    interaction = _bound_interaction()
+    view.bind(interaction)
+
+    await view.on_timeout()
+
+    assert all(child.disabled for child in view.children)
+    kwargs = interaction.edit_original_response.await_args.kwargs
+    assert kwargs["content"] == STEP_EXPIRED_MSG
+    assert kwargs["view"] is view
+
+
+async def test_an_unbound_step_still_disables_itself_on_expiry():
+    """No interaction to edit through is not an error — the buttons still go
+    grey so the view can't be pressed by whatever does hold the message."""
+    view = CoinflipSideView()
+    await view.on_timeout()
+    assert all(child.disabled for child in view.children)
+
+
+async def test_a_step_that_restores_a_board_does_not_also_say_expired():
+    """The private-round tables put their board back on expiry, which
+    replaces this message — writing "expired" over it first would race the
+    repaint. The expiry hook keeps precedence."""
+    expiry = AsyncMock()
+    make_modal, _, _ = _fake_modal_factory()
+    view = AmountPickerView(make_modal, _options(25), on_expiry=expiry)
+    interaction = _bound_interaction()
+    view.bind(interaction)
+
+    await view.on_timeout()
+
+    expiry.assert_awaited_once()
+    interaction.edit_original_response.assert_not_awaited()
+
+
+async def test_an_expired_step_whose_message_is_gone_is_not_an_error():
+    """The member may have dismissed the ephemeral already; a failed edit is
+    the normal end of an abandoned step, not something to raise from a
+    timeout task nobody is awaiting."""
+    view = CoinflipSideView()
+    interaction = SimpleNamespace(
+        edit_original_response=AsyncMock(
+            side_effect=discord.HTTPException(
+                SimpleNamespace(status=404, reason="Not Found"), "gone"
+            )
+        )
+    )
+    view.bind(interaction)
+    await view.on_timeout()  # does not raise
+    assert all(child.disabled for child in view.children)
+
+
 def test_roulette_number_view_covers_the_whole_wheel_in_two_selects():
     """37 numbers overflow one select's 25-option cap, so the wheel splits.
 
@@ -297,9 +404,12 @@ def _press_from(*, ephemeral: bool | None):
     )
     return SimpleNamespace(
         message=message,
+        extras={},
         response=SimpleNamespace(
-            send_modal=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock()
+            send_modal=AsyncMock(), send_message=AsyncMock(),
+            edit_message=AsyncMock(), defer=AsyncMock(),
         ),
+        edit_original_response=AsyncMock(),
     )
 
 
@@ -330,6 +440,42 @@ async def test_a_press_inside_a_private_surface_replaces_it_in_place():
     kwargs = interaction.response.edit_message.await_args.kwargs
     assert kwargs["content"] == "**Red** — how much?"
     assert kwargs["embed"] is None
+
+
+@pytest.mark.parametrize("ephemeral", [False, True], ids=["from-the-hub", "in-place"])
+async def test_a_shown_step_is_bound_to_the_interaction_that_showed_it(ephemeral):
+    """Both render paths hand the step its way back into the message, so
+    the expiry copy can land whichever way the step was opened."""
+    make_modal, _, _ = _fake_modal_factory()
+    interaction = _press_from(ephemeral=ephemeral)
+
+    await _cog()._open_amount_picker(
+        interaction, make_modal, _options(25), prompt="**Slots** — how much?"
+    )
+
+    responder = (
+        interaction.response.edit_message if ephemeral
+        else interaction.response.send_message
+    )
+    view = responder.await_args.kwargs["view"]
+    await view.on_timeout()
+    kwargs = interaction.edit_original_response.await_args.kwargs
+    assert kwargs["content"] == STEP_EXPIRED_MSG
+
+
+async def test_the_hub_coinflip_button_binds_the_side_picker():
+    interaction = SimpleNamespace(
+        response=SimpleNamespace(send_message=AsyncMock()),
+        edit_original_response=AsyncMock(),
+    )
+    await CasinoHubView().coinflip.callback(interaction)
+    view = interaction.response.send_message.await_args.kwargs["view"]
+    assert isinstance(view, CoinflipSideView)
+    await view.on_timeout()
+    assert (
+        interaction.edit_original_response.await_args.kwargs["content"]
+        == STEP_EXPIRED_MSG
+    )
 
 
 async def test_no_legal_stake_falls_back_to_the_typed_box():
@@ -388,7 +534,9 @@ async def test_backing_out_hands_the_claim_back():
     ui = SimpleNamespace(key="derby")
     cancel, expiry = cog._window_step_handlers(guild, ui, 3)  # type: ignore[arg-type]
 
-    interaction = SimpleNamespace(response=SimpleNamespace(defer=AsyncMock()))
+    interaction = SimpleNamespace(
+        response=SimpleNamespace(defer=AsyncMock()), extras={}
+    )
     await cancel(interaction)
     assert repaint.await_count == 1
 
@@ -405,7 +553,7 @@ async def test_a_refused_bet_puts_the_board_back(monkeypatch):
     cog = _cog()
     repaint = AsyncMock()
     cog._repaint_window = repaint  # type: ignore[method-assign]
-    interaction = SimpleNamespace(user=SimpleNamespace(id=5))
+    interaction = SimpleNamespace(user=SimpleNamespace(id=5), extras={})
 
     await cog._finish_window_bet(
         interaction,  # type: ignore[arg-type]
@@ -426,7 +574,9 @@ async def test_back_re_renders_the_picker_a_hub_ladder_replaced():
     cancel = CasinoCog._back_to(
         "How dangerous do you want it?", build_mines_risk_view
     )
-    interaction = SimpleNamespace(response=SimpleNamespace(edit_message=AsyncMock()))
+    interaction = SimpleNamespace(
+        response=SimpleNamespace(edit_message=AsyncMock()), extras={}
+    )
 
     await cancel(interaction)
 
@@ -434,6 +584,155 @@ async def test_back_re_renders_the_picker_a_hub_ladder_replaced():
     assert kwargs["content"] == "How dangerous do you want it?"
     assert kwargs["embed"] is None
     assert len(kwargs["view"].children) == len(logic.MINES_BOMB_CHOICES)
+
+
+async def test_back_binds_the_step_it_re_renders():
+    """Back re-renders the coinflip picker into the same message; that fresh
+    view has its own 120s clock and needs the same way back to expire."""
+    cancel = CasinoCog._back_to("Heads or tails?", CoinflipSideView)
+    interaction = SimpleNamespace(
+        response=SimpleNamespace(edit_message=AsyncMock()),
+        edit_original_response=AsyncMock(),
+        extras={},
+    )
+
+    await cancel(interaction)
+
+    view = interaction.response.edit_message.await_args.kwargs["view"]
+    await view.on_timeout()
+    assert (
+        interaction.edit_original_response.await_args.kwargs["content"]
+        == STEP_EXPIRED_MSG
+    )
+
+# ── a replaced step's clock stops with it (games-deep-review K1) ──────
+
+
+@pytest.mark.parametrize(
+    "make",
+    [
+        pytest.param(
+            lambda: AmountPickerView(_fake_modal_factory()[0], _options(25, 50)),
+            id="hub-ladder",
+        ),
+        pytest.param(CoinflipSideView, id="coinflip-picker"),
+    ],
+)
+async def test_a_consumed_step_leaves_the_card_that_replaced_it_alone(make):
+    """K1: discord.py keeps a replaced view's timeout running, so the
+    coinflip picker's 120s clock (and the ladder's 600s) woke after its
+    message had become the result card and wrote "This step expired" over
+    the card and its Play Again button — and over a blackjack hand still
+    in play. A press that replaces the step now stops it, and a late
+    expiry is a no-op."""
+    view = make()
+    interaction = _press_from(ephemeral=True)
+    view.bind(interaction)
+    assert await view.interaction_check(interaction)  # the press that hands off
+    await _cog()._respond_private(interaction, discord.Embed(title="Heads!"))
+
+    await view.on_timeout()  # the old clock, had it still been running
+
+    assert view.is_finished()
+    interaction.edit_original_response.assert_not_awaited()
+
+
+async def _via_show_step(cog, interaction):
+    make_modal, _, _ = _fake_modal_factory()
+    await cog._show_step(
+        interaction, content="how much?",
+        view=AmountPickerView(make_modal, _options(25)),
+    )
+
+
+async def _via_back_to(cog, interaction):
+    await CasinoCog._back_to("Heads or tails?", CoinflipSideView)(interaction)
+
+
+async def _via_respond_private(cog, interaction):
+    await cog._respond_private(interaction, discord.Embed(title="Slots"))
+
+
+async def _via_board_back(cog, interaction):
+    cog._repaint_window = AsyncMock()
+    cancel, _ = cog._window_step_handlers(
+        SimpleNamespace(id=1), SimpleNamespace(key="derby"), 3
+    )
+    await cancel(interaction)
+
+
+async def _via_placed_bet(cog, interaction):
+    cog._repaint_window = AsyncMock()
+    await cog._finish_window_bet(
+        interaction, SimpleNamespace(key="roulette"), SimpleNamespace(id=1),
+        7, 25, None, "Red",
+    )
+
+
+@pytest.mark.parametrize(
+    "hand_off",
+    [
+        pytest.param(_via_show_step, id="step->step"),
+        pytest.param(_via_back_to, id="ladder->picker (Back)"),
+        pytest.param(_via_respond_private, id="ladder->result card"),
+        pytest.param(_via_board_back, id="ladder->board (Back)"),
+        pytest.param(_via_placed_bet, id="ladder->board (bet placed)"),
+    ],
+)
+async def test_a_press_that_replaces_the_step_stops_its_clock(hand_off, monkeypatch):
+    """Every path that writes something else into a step's message stops
+    the step it was pressed on; nothing stops a step whose press only
+    opened a modal or an apology, since that step is still standing."""
+    import bot_modules.cogs.casino.cog as casino_cog
+
+    monkeypatch.setattr(casino_cog, "safe_ephemeral", AsyncMock())
+    make_modal, _, _ = _fake_modal_factory()
+    view = AmountPickerView(make_modal, _options(25), on_cancel=AsyncMock())
+    interaction = _press_from(ephemeral=True)
+    interaction.user = SimpleNamespace(id=5)
+
+    assert await view.interaction_check(interaction)  # discord.py's pre-callback hook
+    assert not view.is_finished()
+    await hand_off(_cog(), interaction)
+
+    assert view.is_finished()
+
+
+async def test_a_press_that_only_opens_the_typed_box_leaves_the_step_running():
+    """Custom… puts a modal over the ladder; the member may cancel it and
+    tap a rung instead, so the ladder must still answer."""
+    make_modal, _, _ = _fake_modal_factory()
+    view = AmountPickerView(make_modal, _options(25))
+    interaction = _press_from(ephemeral=True)
+    await view.interaction_check(interaction)
+
+    await _cog()._open_amount_picker(interaction, make_modal, [], prompt="?")
+
+    interaction.response.send_modal.assert_awaited_once()
+    assert not view.is_finished()
+
+
+async def test_the_typed_box_hands_off_the_step_it_was_opened_over():
+    """The submit is a fresh interaction, so the modal itself has to carry
+    the step for the result card to stop it."""
+
+    class _Modal(_AmountBetModal):
+        async def _place(self, cog, interaction, amount):
+            await cog._respond_private(interaction, discord.Embed(title=str(amount)))
+
+    modal = _Modal(title="Slots", default_amount=40)
+    view = AmountPickerView(lambda: modal, _options(25))
+    custom = next(c for c in view.children if c.label == "Custom…")
+    await custom.callback(_picker_interaction())
+    assert not view.is_finished()
+
+    submit = _press_from(ephemeral=True)
+    submit.client = SimpleNamespace(get_cog=lambda name: _cog())
+    await modal.on_submit(submit)
+
+    assert view.is_finished()
+    submit.response.edit_message.assert_awaited_once()
+
 
 
 # ── a closed table refuses at the picker, not only on the hub ─────────

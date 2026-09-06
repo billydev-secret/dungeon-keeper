@@ -112,11 +112,23 @@ class CasinoSettings:
     # in the casino channel (results themselves render ephemerally).
     # 0 = never broadcast.
     broadcast_min_payout: int = 0
+    # …and must also be at least this many times the stake (D6, 2026-09-02):
+    # the bar alone let 1,000-coin even-money wins flood the channel once
+    # the top players moved to that stake. 1 = amount only.
+    broadcast_min_mult: int = casino_logic.BROADCAST_MIN_MULT_DEFAULT
     # Whether the loudest broadcast tier carries an @here. Only that top rung
     # ever pings, so this is the whole ping surface: unchecked, a Legendary
     # win still posts its card, just quietly. Defaults on — the ping is the
     # behaviour every guild already had.
     broadcast_ping_enabled: bool = True
+    # The daily comp (casino-134, 2026-09-04): a house-funded slots spin
+    # of this many coins, once per member per guild-local day, from a 🎁
+    # button on the hub. 0 = no comp (ships dark). Not a wager — nothing is
+    # debited, the cap is untouched, and no play table records it — so it
+    # is a gift the house makes to bring casual players back to the floor,
+    # not turnover. It rides the flat slots paytable: a triple-7️⃣ comp pays
+    # the 120× floor, never the progressive pot, which real lost stakes built.
+    daily_comp: int = 0
     # Bot bookkeeping (the hub panel message + where it lives, so a channel
     # move can clean up the old panel) — not dashboard-editable.
     panel_message_id: int = 0
@@ -215,6 +227,14 @@ def game_enabled(settings: CasinoSettings, game: str) -> bool:
 def pools_channel(settings: CasinoSettings) -> int:
     """Where the daily market lives. Falls back to the casino channel."""
     return settings.pools_channel_id or settings.channel_id
+
+
+def comp_on(settings: CasinoSettings) -> bool:
+    """Whether the hub offers the daily comp: a dial above 0 AND the slots
+    open — the comp is a spin on the slots, and a closed table has no
+    reels. ``build_hub_view`` drops the 🎁 button on this, and the claim
+    itself re-checks it against a stale panel."""
+    return settings.daily_comp > 0 and settings.slots_enabled
 
 
 # ── the money choke point ──────────────────────────────────────────────
@@ -430,6 +450,96 @@ def refund(
     )
 
 
+# ── the daily comp ─────────────────────────────────────────────────────
+
+
+class CompResult(NamedTuple):
+    """One claimed comp spin, ready to render."""
+
+    amount: int
+    reels: tuple[str, str, str]
+    payout: int
+    label: str | None
+
+
+def comp_claimed_today(
+    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    *, now: float | None = None,
+) -> bool:
+    """Whether the member already had today's comp (guild-local day)."""
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+
+    ts = time.time() if now is None else now
+    day = local_day_for(ts, get_tz_offset_hours(conn, guild_id))
+    row = conn.execute(
+        "SELECT comp_claimed FROM casino_daily "
+        "WHERE guild_id = ? AND user_id = ? AND local_day = ?",
+        (guild_id, user_id, day),
+    ).fetchone()
+    return row is not None and int(row["comp_claimed"]) > 0
+
+
+def claim_daily_comp(
+    conn: sqlite3.Connection, guild_id: int, user_id: int,
+    *, channel_id: int | None = None, now: float | None = None,
+) -> tuple[str | None, CompResult | None]:
+    """Spin the member's daily comp, or return the member-facing reason not.
+
+    Guard order mirrors ``take_stake`` (economy → casino open → right
+    channel → slots open → the dial) so a stale hub panel's 🎁 button can
+    never hand out what the casino would refuse a bet for. The claim is
+    booked on ``casino_daily`` before the reels turn: the upsert only
+    flips ``comp_claimed`` 0 → 1, so a second press on the same guild-local
+    day — or two at once — finds nothing to flip and gets the reset time
+    instead. The row's ``wagered`` stays 0.
+
+    The spin is not a wager. Nothing is debited, the cap is untouched, a
+    win is a plain ``casino_payout`` (meta ``comp`` = the spun amount) and
+    a loss feeds nothing; ``record_play`` and the ticker never see it, so
+    stats, the week's highlights and the day's standings stay a record of
+    money the member actually put down.
+    """
+    from bot_modules.core.db_utils import get_tz_offset_hours  # noqa: PLC0415
+
+    econ = load_econ_settings(conn, guild_id)
+    if not econ.enabled:
+        return "The economy isn't enabled here, so the casino can't run.", None
+    settings = load_casino_settings(conn, guild_id)
+    if not settings.channel_id:
+        return "The casino is closed.", None
+    if channel_id is not None and channel_id != settings.channel_id:
+        return f"The casino has moved — find it in <#{settings.channel_id}>.", None
+    if not settings.slots_enabled:
+        return TABLE_CLOSED, None
+    if settings.daily_comp <= 0:
+        return "There's no comp on offer right now.", None
+    ts = time.time() if now is None else now
+    offset = get_tz_offset_hours(conn, guild_id)
+    day = local_day_for(ts, offset)
+    if conn.execute(
+        "INSERT INTO casino_daily (guild_id, user_id, local_day, wagered, "
+        "comp_claimed) VALUES (?, ?, ?, 0, 1) "
+        "ON CONFLICT(guild_id, user_id, local_day) "
+        "DO UPDATE SET comp_claimed = 1 WHERE comp_claimed = 0",
+        (guild_id, user_id, day),
+    ).rowcount != 1:
+        _, day_end = local_day_bounds(day, offset)
+        return (
+            f"You've already had today's comp — the next one is yours "
+            f"<t:{int(day_end)}:R>.",
+            None,
+        )
+    amount = settings.daily_comp
+    reels = casino_logic.spin_slots()
+    payout, label = casino_logic.slots_payout(reels, amount)
+    if payout:
+        pay_out(
+            conn, guild_id, user_id, payout, "slots",
+            meta={"reels": "".join(reels), "comp": amount},
+        )
+    return None, CompResult(amount, reels, payout, label)
+
+
 # ── progressive jackpot + play stats ───────────────────────────────────
 
 
@@ -514,9 +624,12 @@ TICKER_GAMES = (
     "coinflip", "slots", "blackjack", "war", "mines",
     "roulette", "derby", "baccarat", "dice", "keno",
 )
-# Rows kept per guild — a small multiple of what the hub ever renders, so
-# the trim never fights the reader.
-TICKER_KEEP = 25
+# Rows kept per guild. The hub shows the latest play of each of the last
+# few DISTINCT players, so the log has to outlast one member's grind: at
+# 25 rows a single slots session pushed everyone else off the panel inside
+# a minute (casino-135). 200 covers a long burst and is still one indexed
+# trim per insert.
+TICKER_KEEP = 200
 
 
 def record_ticker(
@@ -547,10 +660,19 @@ def record_ticker(
 def recent_ticker(
     conn: sqlite3.Connection, guild_id: int, limit: int = 6
 ) -> list[sqlite3.Row]:
-    """Newest-first recent instant-game plays for the hub's ticker."""
+    """Newest-first plays for the hub's ticker — one row per player.
+
+    Each player's LATEST play, not the last ``limit`` rows: the ticker is
+    the casino's social texture, and at prod volume the raw tail was one
+    grinder's last six spins repainted every 8s, with everyone else pushed
+    off within a minute (casino-135).
+    """
     return conn.execute(
-        "SELECT user_id, game, stake, payout FROM casino_ticker "
-        "WHERE guild_id = ? ORDER BY id DESC LIMIT ?",
+        "SELECT user_id, game, stake, payout FROM ("
+        "  SELECT id, user_id, game, stake, payout, "
+        "    ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY id DESC) AS rn "
+        "  FROM casino_ticker WHERE guild_id = ?"
+        ") WHERE rn = 1 ORDER BY id DESC LIMIT ?",
         (guild_id, limit),
     ).fetchall()
 

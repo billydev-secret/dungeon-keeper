@@ -15,10 +15,221 @@ sequence deterministically in tests.
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .models import PendingQuestionState, PostedQuestionState, RiskyRollState
+
+
+# ── Chasing the payoff ───────────────────────────────────────────────
+#
+# The round's payoff is the winner's question, and most rounds never got
+# one: the winner walked off, nothing re-pinged anyone, and the 7-day sweep
+# deleted the prompt in silence. Two per-guild dials in the shared config
+# table chase it. Both ship at 0 (off) — a dial an admin has not touched
+# changes nothing about a live round.
+
+#: Config key: hours after which the winner is re-pinged once to ask, and
+#: (once a question exists) the answerer is re-pinged once to reply.
+PAYOFF_CHASE_HOURS_KEY = "risky_chase_hours"
+#: Config key: hours after which a winner who still has not asked has a
+#: question drawn from the bank and posted for them.
+PAYOFF_FALLBACK_HOURS_KEY = "risky_fallback_hours"
+#: The dashboard's upper bound on either dial — a week, the same clock the
+#: sweep runs on; a window longer than that would never fire.
+PAYOFF_HOURS_MAX = 168
+#: How often the chaser looks at the pending and posted questions.
+PAYOFF_TICK_SECONDS = 300
+#: How many times the fallback may try to post a question for one prompt
+#: before the prompt is abandoned. A fallback can fail for reasons no tick
+#: will fix — an empty question bank, a channel the bot can no longer see, a
+#: pairing the no-contact list now forbids — and without a ceiling the
+#: five-minute sweep retried it for the seven days until the prompt aged out.
+FALLBACK_MAX_ATTEMPTS = 3
+#: The wait after the first failed attempt; each further failure doubles it
+#: (1 h, then 2 h), so three attempts span three hours rather than three
+#: hundred ticks.
+FALLBACK_RETRY_BASE_SECONDS = 3600
+
+
+@dataclass(frozen=True)
+class PayoffDials:
+    """A guild's two payoff dials, in hours. 0 means that dial is off."""
+
+    chase_hours: int = 0
+    fallback_hours: int = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self.chase_hours > 0 or self.fallback_hours > 0
+
+
+class PayoffAction(str, Enum):
+    CHASE = "chase"
+    FALLBACK = "fallback"
+
+
+def normalize_payoff_hours(raw) -> int:
+    """A stored dial value as an int, clamped to ``0..PAYOFF_HOURS_MAX``.
+
+    The config table stores text; anything unparseable or negative reads as
+    0 (off) rather than as a window that fires at once.
+    """
+    try:
+        hours = int(raw)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(PAYOFF_HOURS_MAX, hours))
+
+
+def unasked_questioners(pending: PendingQuestionState) -> list[int]:
+    """Who still owes this prompt a question, winner first.
+
+    The winner is listed first so the fallback speaks for them by default;
+    the second questioner (the 1 rule) only gets it when the winner has
+    already asked and it is their turn that stalled.
+    """
+    return [
+        uid
+        for uid in (pending.winner_id, pending.extra_questioner_id)
+        if uid is not None and uid not in pending.questioners_asked
+    ]
+
+
+def fallback_retry_delay(attempts: int) -> float:
+    """How long the fallback waits after *attempts* failed tries.
+
+    Doubling, from :data:`FALLBACK_RETRY_BASE_SECONDS`: an hour after the
+    first failure, two after the second. The failure modes are the slow kind
+    (a bank an admin has to fill, a channel to restore), so retrying on the
+    five-minute tick only fills the log.
+    """
+    return FALLBACK_RETRY_BASE_SECONDS * float(2 ** max(0, attempts - 1))
+
+
+def fallback_abandoned(pending: PendingQuestionState) -> bool:
+    """Whether the deck has given up drawing a question for this prompt."""
+    return pending.fallback_attempts >= FALLBACK_MAX_ATTEMPTS
+
+
+def fallback_retry_due(pending: PendingQuestionState, now: float) -> bool:
+    """Whether a fallback that failed before may be tried again now."""
+    if pending.fallback_attempts <= 0 or pending.fallback_attempted_at is None:
+        return True
+    delay = fallback_retry_delay(pending.fallback_attempts)
+    return now - pending.fallback_attempted_at >= delay
+
+
+def record_fallback_failure(pending: PendingQuestionState, now: float) -> None:
+    """Count one failed fallback attempt against *pending*, in place.
+
+    The caller persists the row afterwards, so the count survives a restart
+    and an unpostable prompt is not retried from zero every boot.
+    """
+    pending.fallback_attempts += 1
+    pending.fallback_attempted_at = now
+
+
+def pending_payoff_action(
+    pending: PendingQuestionState, dials: PayoffDials, now: float
+) -> PayoffAction | None:
+    """What the chaser should do about a prompt nobody has asked on yet.
+
+    The fallback wins when both are due — after a restart, or with a chase
+    window no shorter than the fallback window — so a stalled prompt gets
+    the question, not a nag *and* the question. The chase fires once
+    (``chased_at`` is set when it goes), and only while at least one
+    questioner still owes a question. A prompt with no usable age (the
+    ``created_at`` column arrived in migration 173; the sweep clears those
+    rows at startup) is left alone rather than treated as infinitely old.
+
+    A fallback that has already failed is left alone until its backoff has
+    passed, and a prompt whose attempts are spent is abandoned — no chase
+    either, since a due fallback outranks it and the deck has given up
+    speaking for this winner (ship review, 2026-09-05).
+    """
+    if pending.created_at <= 0 or not unasked_questioners(pending):
+        return None
+    age = now - pending.created_at
+    if dials.fallback_hours > 0 and age >= dials.fallback_hours * 3600:
+        if fallback_abandoned(pending) or not fallback_retry_due(pending, now):
+            return None
+        return PayoffAction.FALLBACK
+    if (
+        dials.chase_hours > 0
+        and pending.chased_at is None
+        and age >= dials.chase_hours * 3600
+    ):
+        return PayoffAction.CHASE
+    return None
+
+
+def posted_chase_due(
+    posted: PostedQuestionState, dials: PayoffDials, now: float
+) -> bool:
+    """Whether the answerer of a posted question gets their one re-ping now.
+
+    Only the chase dial applies here: there is nobody to answer *for*. The
+    posted-question row has always carried ``created_at``, so no age guard.
+    """
+    return (
+        dials.chase_hours > 0
+        and posted.chased_at is None
+        and now - posted.created_at >= dials.chase_hours * 3600
+    )
+
+
+def fallback_blocked(
+    asker_id: int,
+    target_ids: set[int],
+    blocked_pairs: set[tuple[int, int]],
+) -> bool:
+    """Whether posting a bank question from *asker_id* to *target_ids* would
+    put a no-contact pair in touch.
+
+    The pairing was gated on the draw when the round resolved, but the list
+    can change in the hours before the fallback fires, and a question the
+    bot posts *for* someone is still that person's question to the target.
+    *blocked_pairs* is keyed low-first, as ``no_contact_pairs_among`` returns.
+    """
+    return any(
+        (min(asker_id, t), max(asker_id, t)) in blocked_pairs for t in target_ids
+    )
+
+
+def posted_chase_blocked(
+    posted: PostedQuestionState, blocked_pairs: set[tuple[int, int]]
+) -> bool:
+    """Whether the answerer re-ping for a posted question must be skipped.
+
+    Same reasoning as `fallback_blocked`: the pairing was gated on the draw,
+    but the list can change in the hours before the chase fires, and the
+    chase pings the answerer(s) with the asker's question attached. It is
+    one message to everyone who may reply, so **any** answerer on the list
+    with the asker skips the whole chase — a deck question included, since
+    the reply still goes to the asker. *blocked_pairs* is keyed low-first.
+    """
+    return fallback_blocked(posted.asker_id, posted.allowed_replier_ids, blocked_pairs)
+
+
+def build_history_payload(state: RiskyRollState) -> dict:
+    """The ``games_game_history`` payload for a resolved round.
+
+    ``players`` is what ``game_roster`` reads back for the unique-players
+    count; the rest is the roll summary a report can show. Keys are strings
+    because the payload is JSON — ids round-trip as text like every other
+    game's.
+    """
+    return {
+        "players": sorted(state.rolls),
+        "rolls": {str(uid): roll for uid, roll in sorted(state.rolls.items())},
+        "highest_user": state.highest_user,
+        "lowest_user": state.lowest_user,
+        "second_lowest_user": state.second_lowest_user,
+        "second_highest_user": state.second_highest_user,
+    }
 
 
 def serialize_user_ids(user_ids: set[int]) -> str | None:

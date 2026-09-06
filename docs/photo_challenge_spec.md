@@ -30,11 +30,53 @@ dashboard section (see History).
    `PHOTO CHALLENGE`) over the **guild icon**, falling back to the schedule
    creator's avatar. The card posts as a bare image (`photo.png`); if a ping
    role is configured, the message content is that role mention
-   (`AllowedMentions(roles=True)`).
+   (`AllowedMentions(roles=True)`). **That is the card's only ping**: photo
+   schedule rows are created with `announce=0` and every save through
+   `PUT /schedule/{id}` forces `announce=0`, `announce_role_id=NULL`,
+   `options='{}'`, so a row inherited from the shared scheduler (prod row 7
+   carried `announce=1` + a role and pinged members daily through a line the
+   panel never showed — photo-external-103) can never announce a second time.
+   The one-off copy of that legacy role into the config's `ping_role_id` is
+   `scripts/games_review_p0.py --only photo`.
+3b. **Yesterday's recap.** Right after the card, one plain-text line
+   (`games_photo.logic.previous_day_recap` + `recap_line`, posted by
+   `PhotoCog._post_recap`): *"Yesterday: 17 photos from 15 people — most
+   loved: Name's, <jump link>"* — photos and distinct posters with
+   `media_kind = 'media'` in the channel over the previous 24 h (bot's own
+   posts and deleted messages excluded), and the photo with the most
+   reactions (`SUM(message_reactions.count)`, earliest wins a tie) as a
+   `discord.com/channels/...` link. The poster is named through
+   `build_name_fn`, never a `<@id>`; the message is sent with
+   `AllowedMentions.none()` and `suppress_embeds`. No line when nobody
+   posted, and no "most loved" when nothing was reacted to. A recap failure
+   is logged and never blocks the card (photo-external-105).
 4. **No live game state.** The play is recorded to history fire-and-forget:
-   `create_game` → `update_session` → `end_game` immediately. Members just
-   post photos in the channel afterwards; nothing tracks "the round" beyond
-   the history row, and payouts (below) are per-post, not per-card.
+   `create_game(guild_id=…)` → `end_game(payload={'prompt','tags'}, bot=…)`
+   immediately, so the row carries the prompt it showed and the guild it
+   belongs to (until 2026-09-04 every card archived `guild_id = 0` and an
+   empty payload — photo-external-102). It opens no game-night session: a
+   bot post is not a game night (`NO_ROSTER_TYPES`). Members just post
+   photos in the channel afterwards, and payouts (below) are per-post, not
+   per-card.
+5. **The card is counted at the next launch.** Before posting today's card,
+   `games_photo.logic.backfill_card_counts` fills in every uncounted card in
+   the channel whose 24 h window has closed: `player_count` = distinct
+   members who posted an image there in the 24 h after the card,
+   `round_count` = images posted, both from the `messages` table's
+   ingest-time `media_kind = 'media'` (the same signal the `photo_post`
+   faucet pays on; no message content is read), the bot's own posts
+   excluded. The row's payload gets `counted: true` so a genuine 0 is not
+   re-read, a legacy `guild_id = 0` is repaired to the channel's guild, and
+   only cards from the last 30 days, ten per launch, are considered — a
+   channel that fell behind catches up over a few days (until 2026-09-05
+   the age floor compared `strftime('%s')` text against an integer and never
+   held). This is what makes the Ping Response report's "Played" cell and
+   Play Statistics' per-game counts real for photo (a card younger than a
+   day still reads 0 and the report shows it blank, photo-external-104).
+   The row holds counts only, never poster ids — `photo` is in
+   `NO_ROSTER_TYPES` — so photo posters are not part of Play Statistics'
+   **Unique Players**, which is rebuilt from archived rosters. Counting never
+   blocks the launch: a failure is logged and the card still posts.
 
 **NSFW:** prompt selection passes `allow_nsfw=channel_allows_nsfw(channel)` —
 gated on Discord's own `channel.is_nsfw()` (threads inherit the parent;
@@ -101,7 +143,11 @@ game-host role — every `/api/photo-challenge` route requires
     `next_run_at=now`; fires on the next poll, reusing the busy/disabled
     guards), edit, delete. Last-run status is shown per row (`launching`,
     `launched`, `skipped_active`, `skipped_disabled`, `skipped_giveup`,
-    `skipped_hidden`, `skipped_late`, `error`).
+    `skipped_hidden`, `skipped_late` — "bot was offline at post time", the
+    scheduler's label for a recurring slot missed by more than the grace
+    period — `error`). The Setup hint names the Income Sources rate as the
+    payout and the `photo_post` quest as an optional stacking bonus
+    (photo-external-107).
   - An inline **Prompt Bank** section (`mountGamePanel`, `game_type='photo'`).
 
 Photo Challenge is a single dashboard page. The separate **Prompts & AI**
@@ -135,7 +181,9 @@ games/economy infrastructure:
   `SCHEDULABLE_GAME_TYPES` in `games/constants.py`, and
   `routes/scheduled_games.py` filters listings to that set).
 - `games_question_bank` (`game_type='photo'`) — the prompt bank.
-- `games_game_history` — one row per posted card (via `create_game`).
+- `games_game_history` — one row per posted card (via `create_game`):
+  `payload = {prompt, tags}` plus `counted` once filled; `player_count` /
+  `round_count` written by the next launch's backfill (step 5).
 - `econ_photo_rewards(guild_id, user_id, local_day)` — migration
   `101_econ_photo_rewards.sql`, the flat award's once-per-day dedup anchor.
 - Trigger-kind renames: `079_photo_react_trigger.sql`

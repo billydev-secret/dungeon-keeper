@@ -18,7 +18,11 @@ import discord
 
 from bot_modules.games.constants import GAME_ICONS, BRAND_COLOR
 from bot_modules.games.utils.live_bar import build_bar
-from bot_modules.games_ama.logic import remaining_questions_text
+from bot_modules.games_ama.logic import (
+    DEFAULT_QUESTIONS_PER_TURN,
+    mode_label,
+    remaining_questions_text,
+)
 from bot_modules.core.branding import apply_section_spacing
 
 # A function that maps a uid (as int) to a display name.
@@ -45,7 +49,7 @@ def build_lobby_embed(
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Hot Seat", value="—", inline=True)
-    embed.add_field(name="Mode", value=mode, inline=True)
+    embed.add_field(name="Mode", value=mode_label(mode), inline=True)
     embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
     apply_section_spacing(embed)
     return embed
@@ -60,6 +64,8 @@ def build_main_embed(
     name_resolver: NameResolver,
     payload: dict[str, Any] | None = None,
     color: "discord.Color | None" = None,
+    *,
+    per_turn: int = DEFAULT_QUESTIONS_PER_TURN,
 ) -> discord.Embed:
     """Build the live game embed (hot seat + queue + progress bar).
 
@@ -67,7 +73,8 @@ def build_main_embed(
     place. When ``hot_seat_name`` is ``None`` the seat is open and the
     description prompts for a volunteer. When ``payload`` is provided a
     progress bar field is appended; tests can omit it to exercise the
-    "no progress yet" branch.
+    "no progress yet" branch. ``per_turn`` is the server's Questions per
+    Turn dial; ``questions_this_turn`` counts the seat's answers so far.
     """
     if color is None:
         color = discord.Color(BRAND_COLOR)
@@ -75,7 +82,7 @@ def build_main_embed(
         desc = "Who's taking the hot seat?"
         hot_seat_str = "—"
     else:
-        remaining_blurb = remaining_questions_text(questions_this_turn)
+        remaining_blurb = remaining_questions_text(questions_this_turn, per_turn)
         desc = (
             f"Ask **{hot_seat_name}** anything — questions are anonymous.\n"
             f"{remaining_blurb}"
@@ -89,7 +96,7 @@ def build_main_embed(
     )
     embed.add_field(name="Host", value=host_name, inline=True)
     embed.add_field(name="Hot Seat", value=hot_seat_str, inline=True)
-    embed.add_field(name="Mode", value=mode, inline=True)
+    embed.add_field(name="Mode", value=mode_label(mode), inline=True)
 
     if queue:
         queue_names = [name_resolver(uid) for uid in queue]
@@ -174,7 +181,7 @@ def build_panel_embed(
         color=color,
     )
     embed.add_field(name="Host", value=host_name, inline=True)
-    embed.add_field(name="Mode", value=mode, inline=True)
+    embed.add_field(name="Mode", value=mode_label(mode), inline=True)
 
     if panel:
         names = [name_resolver(uid) for uid in panel]
@@ -199,6 +206,33 @@ def build_panel_embed(
 
     embed.set_footer(text=f"{GAME_ICONS['ama']} Anonymous AMA")
     apply_section_spacing(embed)
+    return embed
+
+
+def build_screened_dm_embed(
+    question_text: str,
+    target_name: str,
+    channel_mention: str,
+    color: "discord.Color | None" = None,
+) -> discord.Embed:
+    """The host's DM for a screened question awaiting approval.
+
+    Carries the question text itself — the Approve / Reject buttons ride on
+    this message, so it is the only place the host can read what they are
+    approving (until 2026-09-04 the DM named the target and the room but
+    never showed the question).
+    """
+    if color is None:
+        color = discord.Color(BRAND_COLOR)
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['ama']} Screened Question",
+        description=(
+            f"📨 New screened question for **{target_name}** (in {channel_mention}):\n\n"
+            f'"{discord.utils.escape_markdown(question_text)}"'
+        ),
+        color=color,
+    )
+    embed.set_footer(text="Approve to post it anonymously, or reject it. These buttons don't expire.")
     return embed
 
 
@@ -311,7 +345,7 @@ def build_recap_embed(
         inline=False,
     )
     embed.add_field(name="🔄 Hot Seat Rotations", value=str(rotations), inline=True)
-    embed.add_field(name="🎙️ Mode", value=mode.title(), inline=True)
+    embed.add_field(name="🎙️ Mode", value=mode_label(mode), inline=True)
     embed.set_footer(text=f"{GAME_ICONS['ama']} Thanks for playing Anonymous AMA!")
     apply_section_spacing(embed)
     return embed

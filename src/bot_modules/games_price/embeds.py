@@ -6,7 +6,10 @@ with no network and no mocks of the Bot/Guild API.
 
 Per-round flow uses four embeds:
 
-* :func:`build_start_embed` — initial "starting up" placeholder
+* :func:`build_lobby_embed` — the join lobby (Join / Start), with the roster
+* :func:`build_start_embed` — "starting up" placeholder between lobby and round 1
+* :func:`build_scenario_wait_embed` — the board while the host (or the room)
+  writes this round's scenario
 * :func:`build_scenario_embed` — submission phase with live count
 * :func:`build_reveal_embed` — sorted price ladder + summary stats
 * :func:`build_vote_embed` — voting phase prompt
@@ -37,6 +40,91 @@ from bot_modules.core.branding import apply_section_spacing
 
 def _footer(host_name: str) -> str:
     return f"{GAME_ICONS['price']} Name Your Price • Hosted by {host_name}"
+
+
+# What the lobby says about where scenarios will come from.
+SOURCE_LABELS: dict[str, str] = {
+    "bank": "the question bank",
+    "host": "the host writes them",
+    "players": "anyone can write one — first in wins",
+}
+
+
+def build_lobby_embed(
+    host_name: str,
+    players: list[str],
+    rounds: int,
+    source: str,
+    color: discord.Color | None = None,
+    start_at: int | None = None,
+    min_players: int = 2,
+) -> discord.Embed:
+    """The join lobby posted by ``/games play price``.
+
+    ``players`` are pre-resolved display names (the cog resolves against
+    the guild). ``start_at`` is the host's advertised start (``start_in``),
+    rendered as a live relative timestamp; at that moment the game starts
+    itself once ``min_players`` have joined (the start-ping sweep calls the
+    cog's auto-starter), so the field says so.
+    """
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['price']} Name Your Price",
+        description=(
+            "Press **Join** to play. Each round a scenario is posed and everyone "
+            "who joined names their price in secret — the round closes as soon as "
+            "the whole room has answered."
+        ),
+        color=color or discord.Color(PHASE_JOINING),
+    )
+    embed.add_field(name="Host", value=discord.utils.escape_markdown(host_name), inline=True)
+    embed.add_field(name="Rounds", value=str(rounds), inline=True)
+    embed.add_field(name="Scenarios", value=SOURCE_LABELS.get(source, source), inline=True)
+    if start_at:
+        embed.add_field(
+            name="⏰ Starting",
+            value=f"<t:{start_at}:R> — on its own, once {min_players} have joined",
+            inline=False,
+        )
+    roster = "\n".join(discord.utils.escape_markdown(n) for n in players) if players else "—"
+    embed.add_field(name=f"Players ({len(players)})", value=roster, inline=False)
+    embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
+    return embed
+
+
+def build_scenario_wait_embed(
+    host_name: str,
+    round_num: int,
+    total_rounds: int,
+    source: str,
+    color: discord.Color | None = None,
+) -> discord.Embed:
+    """The board while this round's scenario is being written.
+
+    Replaces the public ``<@host>`` ping the round used to post every time
+    (trivia-tail-97): the **📝 Write Scenario** button sits on the board and
+    only the host (or, for ``players``, anyone) can open it. Says what
+    happens if nobody writes one.
+    """
+    who = "Anyone in the room" if source == "players" else "The host"
+    embed = discord.Embed(
+        title=(
+            f"{GAME_ICONS['price']} Name Your Price — "
+            f"Round {round_num}/{total_rounds}"
+        ),
+        color=color or discord.Color(PHASE_JOINING),
+    )
+    embed.add_field(
+        name="Scenario",
+        value=(
+            f"✍️ {who} is writing this round's scenario — press **📝 Write Scenario** "
+            "below. If nobody does within two minutes, one is drawn from the question bank."
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=_footer(host_name))
+    apply_section_spacing(embed)
+    return embed
 
 
 def build_start_embed(
@@ -78,12 +166,15 @@ def build_scenario_embed(
     submitted: int,
     total_players: int | None = None,
     color: discord.Color | None = None,
+    roster_submitted: int | None = None,
 ) -> discord.Embed:
     """Per-round submission embed shown alongside the Name-Your-Price button.
 
     ``timer_secs`` is rendered as a Discord countdown timestamp.
     ``submitted`` / ``total_players`` drive the live submission counter
-    that the cog refreshes after every modal submit. ``color`` is the guild
+    that the cog refreshes after every modal submit; ``roster_submitted``
+    is how many of ``total_players`` have answered when the crowd may also
+    submit, so a spectator's price never reads as a joined player's. ``color`` is the guild
     accent (playing is a non-winner phase); ``PHASE_PLAYING`` is the no-guild
     fallback.
     """
@@ -103,8 +194,14 @@ def build_scenario_embed(
         inline=False,
     )
     sub_text = f"💵 Submitted: **{submitted}**"
-    if total_players is not None:
-        sub_text += f"/{total_players}"
+    if total_players is not None and roster_submitted is not None:
+        sub_text += (
+            f" ({roster_submitted}/{total_players} who joined"
+            " — the round closes once everyone who joined has answered)"
+        )
+    elif total_players is not None:
+        sub_text += f"/{total_players} — the round closes once everyone has answered"
+    sub_text += "\n⏭️ The host can press **Skip** to close it early."
     embed.add_field(name="Submissions", value=sub_text, inline=False)
     embed.set_footer(text=_footer(host_name))
     apply_section_spacing(embed)
@@ -295,6 +392,8 @@ def build_recap_embed(
 
 
 __all__: list[str] = [
+    "build_lobby_embed",
+    "build_scenario_wait_embed",
     "build_start_embed",
     "build_scenario_embed",
     "build_reveal_embed",

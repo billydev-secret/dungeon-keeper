@@ -2,8 +2,15 @@ import json
 import random
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+#: The starter pack. It lives next to the other games content in
+#: ``bot_modules/games/``; the cog used to resolve it relative to the repo
+#: root, where no such file exists, so the pack had never loaded in prod
+#: (trivia-tail-82).
+SEED_PATH = str(Path(__file__).resolve().parents[2] / "games" / "templates_seed.json")
 
 HEAT_LABELS = {1: "🌶️ Flirty", 2: "🌶️🌶️ Spicy", 3: "🌶️🌶️🌶️ Filthy", 4: "💀 Unhinged"}
 HEAT_ICONS = {1: "🌶️", 2: "🌶️🌶️", 3: "🌶️🌶️🌶️", 4: "💀"}
@@ -166,48 +173,78 @@ async def get_channel_max_tier(db, channel_id: int) -> int:
     return row["max_tier"] if row else 4
 
 
-async def seed_templates_from_file(db, path: str, author_id: int):
-    """Load templates_seed.json into the DB if no published templates exist yet."""
-    row = await db.fetchone(
-        "SELECT COUNT(*) AS cnt FROM legitlibs_templates WHERE status = 'published'"
-    )
-    if row and row["cnt"] > 0:
-        return
+async def seed_templates_from_file(db, path: str, author_id: int) -> int:
+    """Load the starter pack into the shared global pool (``guild_id = 0``).
 
+    Idempotent per template: a row is keyed on (global, title, body), so a
+    guild that has authored templates of its own still gets the pack once and
+    a second boot adds nothing. The file carries no ids — ``template_id`` is
+    an ``INTEGER PRIMARY KEY`` and AUTOINCREMENT assigns it (the old string
+    ids failed every insert with a datatype mismatch). Tags are stored the
+    way the dashboard stores them, as a comma-separated string.
+
+    Returns how many templates were added.
+    """
     try:
-        import json as _json
         with open(path, "r", encoding="utf-8") as f:
-            templates = _json.load(f)
+            templates = json.load(f)
     except FileNotFoundError:
         log.warning("templates_seed.json not found at %s — skipping seed.", path)
-        return
+        return 0
     except Exception as e:
         log.error("Failed to load templates_seed.json: %s", e)
-        return
+        return 0
 
-    imported = 0
+    added = 0
     for t in templates:
         try:
-            await db.execute(
+            tags = t.get("tags", [])
+            tags_text = ", ".join(tags) if isinstance(tags, list) else str(tags or "")
+            cur = await db.execute(
                 """
-                INSERT OR IGNORE INTO legitlibs_templates
-                    (template_id, title, body, tier, tags, status, player_min, player_max,
-                     blanks, author_id, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO legitlibs_templates
+                    (title, body, tier, tags, status, player_min, player_max,
+                     blanks, author_id, notes, guild_id)
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM legitlibs_templates
+                    WHERE guild_id = 0 AND title = ? AND body = ?
+                )
                 """,
                 (
-                    t["template_id"], t["title"], t["body"], t["tier"],
-                    json.dumps(t.get("tags", [])), t.get("status", "published"),
+                    t["title"], t["body"], t["tier"], tags_text,
+                    t.get("status", "published"),
                     t.get("player_min", 2), t.get("player_max", 99),
                     json.dumps(t["blanks"]), t.get("author_id", author_id),
                     t.get("notes", ""),
+                    t["title"], t["body"],
                 ),
             )
-            imported += 1
+            added += int(cur.rowcount or 0)
         except Exception as e:
-            log.error("Failed to seed template %s: %s", t.get("template_id"), e)
+            log.error("Failed to seed template %r: %s", t.get("title"), e)
 
-    log.info("Seeded %d templates from %s.", imported, path)
+    if added:
+        log.info("Seeded %d LegitLibs templates from %s.", added, path)
+    return added
+
+
+def _parse_tags(raw) -> list[str]:
+    """Tags as stored by either writer: the dashboard saves a comma-separated
+    string (``'poem'``, ``'dating, romantic'``), older seeds a JSON list."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    text = str(raw).strip()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return [str(t).strip() for t in parsed if str(t).strip()]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return [t.strip() for t in text.split(",") if t.strip()]
 
 
 def _row_to_template(row) -> dict:
@@ -216,7 +253,7 @@ def _row_to_template(row) -> dict:
         "title": row["title"],
         "body": row["body"],
         "tier": row["tier"],
-        "tags": json.loads(row["tags"]) if row["tags"] else [],
+        "tags": _parse_tags(row["tags"]),
         "status": row["status"],
         "player_min": row["player_min"],
         "player_max": row["player_max"],

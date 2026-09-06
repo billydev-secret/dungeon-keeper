@@ -1,0 +1,26 @@
+-- Migration 212: the turn ping survives a restart (2026-09-05, games deep
+-- review ship pass, docs/reviews/2026-09-02-games-deep-review-findings.md
+-- mahjong-144 follow-up).
+--
+-- The "<@id> — your draw" line under the table card and the second-strike
+-- warning are both plain messages the cog posts and later deletes: the draw
+-- line when the next turn begins, the warning once the seat is no longer one
+-- miss from folding. Their message ids lived only on the cog object, so a
+-- restart mid-hand orphaned them — the resume path re-armed the table and
+-- re-stuck the card, but nothing could still delete a ping for a turn that
+-- had already passed, and the member kept a stale mention sitting in the
+-- channel.
+--
+-- One nullable TEXT column on the existing table row, not a new table: the
+-- record is a property of the live table (turn key, the draw-line ids, and
+-- member id → warning id), it dies with the table, and it is written in the
+-- same place the state already is. NULL means "nothing outstanding", which
+-- is what every table has until it posts its first nudge.
+--
+-- Per-user data: the JSON does name member ids (whose warning is standing),
+-- but only for seats already recorded in `mahjong_seats`, and the column is
+-- cleared the moment the warning is swept or the table closes. It adds no
+-- new subject-id column, so docs/data_register.md needs no new row —
+-- mahjong_tables is already registered and purged with the table.
+
+ALTER TABLE mahjong_tables ADD COLUMN nudges TEXT;

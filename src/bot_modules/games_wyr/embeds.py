@@ -10,7 +10,8 @@ states (open → round-over → closed) by re-calling this builder with the
 right ``closed`` flag. :func:`build_closed_embed` is a small wrapper
 that produces the final "CLOSED" variant used by the close-game flow.
 
-A revealed round names its voters through a ``name_fn``
+A named voter — one who pressed **👀 Show My Vote**, or every voter on a
+fully ``revealed`` round — renders through a ``name_fn``
 (``services/name_resolver.build_name_fn``): a ``<@id>`` inside an embed
 is resolved by the *reading* client from its own cache, so it renders as
 a bare number for any viewer who hasn't seen that member. The default
@@ -20,13 +21,27 @@ pass a real resolver (a test walks its render sites).
 
 from __future__ import annotations
 
+from collections.abc import Collection
+
 import discord
 
 from bot_modules.games.constants import (
     GAME_ICONS,
     PHASE_PLAYING,
+    PHASE_RECAP,
 )
 from bot_modules.games.utils.live_bar import build_bar
+from bot_modules.games.utils.round_pacing import (
+    TIMER_FIELD_NAME,
+    timer_field_value,
+    waiting_notice,
+)
+from bot_modules.games_wyr.logic import (
+    count_votes,
+    most_divisive_round,
+    played_rounds,
+    shown_on_side,
+)
 from bot_modules.core.branding import apply_section_spacing
 from bot_modules.services.name_resolver import NameFn, mention
 
@@ -44,12 +59,20 @@ def build_wyr_embed(
     color: discord.Color | None = None,
     *,
     name_fn: NameFn = mention,
+    waiting: bool = False,
+    advance_at: int | None = None,
+    shown: Collection[int] | None = None,
 ) -> discord.Embed:
     """Build the main WYR round embed.
 
     ``closed`` flips the title suffix to ``— ROUND OVER``; ``revealed``
     lists each option's voters by name (via ``name_fn``) under its bar.
-    Both flags can combine.
+    ``shown`` names only the voters who pressed **👀 Show My Vote**
+    (vote-games-61) — each side lists its shown voters and counts the
+    rest as anonymous. Both flags can combine. ``waiting`` renders the
+    round with no question yet (the bank had nothing to serve — a posed
+    question starts it), and ``advance_at`` adds the live countdown of a
+    timed round.
 
     Per the 2026-07-21 embed-color ruling, WYR (a voting game with no
     single winner) always uses the guild accent — pass it via ``color``.
@@ -68,6 +91,11 @@ def build_wyr_embed(
         title += " — Round Over"
     embed = discord.Embed(title=title, color=color or discord.Color(PHASE_PLAYING))
     embed.add_field(name="Round", value=str(round_num), inline=False)
+    if waiting:
+        embed.description = waiting_notice("✍️ Pose Question", "question")
+        embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather • Round {round_num}")
+        apply_section_spacing(embed)
+        return embed
     esc = discord.utils.escape_markdown
     embed.add_field(name="🅰️", value=esc(option_a), inline=True)
     embed.add_field(name="🅱️", value=esc(option_b), inline=True)
@@ -81,9 +109,28 @@ def build_wyr_embed(
         b_names = ", ".join(name_fn(uid) for uid in votes_b) if votes_b else "—"
         a_label += f"\n{a_names}"
         b_label += f"\n{b_names}"
+    elif shown:
+        shown_list = list(shown)
+        for side, label in ((votes_a, "a"), (votes_b, "b")):
+            named = shown_on_side(side, shown_list)
+            if not named:
+                continue
+            line = ", ".join(name_fn(uid) for uid in named)
+            hidden = len(side) - len(named)
+            if hidden:
+                line += f" +{hidden} anonymous"
+            if label == "a":
+                a_label += f"\n{line}"
+            else:
+                b_label += f"\n{line}"
 
     embed.add_field(name="Votes", value=f"{a_label}\n{b_label}", inline=False)
-    anon_badge = " • 👁 Anonymous" if anonymous else ""
+    if advance_at and not closed:
+        embed.add_field(name=TIMER_FIELD_NAME, value=timer_field_value(advance_at), inline=False)
+    # Not a constant badge: it says what the default is and how to opt out
+    # of it (vote-games-61 — "Anonymous" alone read as a promise nobody
+    # could act on).
+    anon_badge = " • 👁 Anonymous unless you Show My Vote" if anonymous else ""
     embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather • Round {round_num}{anon_badge}")
     apply_section_spacing(embed)
     return embed
@@ -101,6 +148,7 @@ def build_closed_embed(
     color: discord.Color | None = None,
     *,
     name_fn: NameFn = mention,
+    shown: Collection[int] | None = None,
 ) -> discord.Embed:
     """Build the final ``CLOSED`` embed used by the close-game flow.
 
@@ -123,6 +171,46 @@ def build_closed_embed(
         revealed=revealed,
         color=color,
         name_fn=name_fn,
+        shown=shown,
     )
     embed.title = f"{GAME_ICONS['wyr']} Would You Rather — Closed"
+    return embed
+
+
+def build_wyr_recap_embed(
+    rounds: dict,
+    *,
+    color: discord.Color | None = None,
+    reason: str | None = None,
+) -> discord.Embed:
+    """The game-over card: rounds played, total votes, the most divisive
+    question and its split.
+
+    Posted by the host's **🏁 End Game**, the round cap and ``/games end``
+    (vote-games-52 / discovery-3 — until 2026-09-04 the only ending WYR had
+    was the red Force-Closed card or the 24h sweep). Vote counts only; who
+    voted is each voter's own to show, on the round, with Show My Vote.
+    """
+    embed = discord.Embed(
+        title=f"{GAME_ICONS['wyr']} Would You Rather — Game Over",
+        color=color or discord.Color(PHASE_RECAP),
+    )
+    played = played_rounds(rounds)
+    if reason == "round_cap":
+        embed.description = "That's the last round — thanks for playing!"
+    embed.add_field(name="Rounds Played", value=str(len(played)), inline=True)
+    embed.add_field(name="Total Votes", value=str(count_votes(rounds)), inline=True)
+    most_div = most_divisive_round(rounds)
+    if most_div is not None:
+        a, b = len(most_div.get("a") or []), len(most_div.get("b") or [])
+        question = discord.utils.escape_markdown(str(most_div.get("q", "")))[:200]
+        embed.add_field(
+            name="Most Divisive",
+            value=f"{question}\n🅰️ {a} — 🅱️ {b}",
+            inline=False,
+        )
+    else:
+        embed.add_field(name="Most Divisive", value="No votes were cast.", inline=False)
+    embed.set_footer(text=f"{GAME_ICONS['wyr']} Would You Rather • Final tally")
+    apply_section_spacing(embed)
     return embed

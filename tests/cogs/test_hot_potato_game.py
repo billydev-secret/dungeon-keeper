@@ -3,11 +3,46 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from bot_modules.cogs.hot_potato.game import (
     HotPotatoGame,
     compute_style_points,
     game_from_row,
+    hold_remaining,
 )
+
+
+# ── hold_remaining (duels-party-119) ──────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("pass_log", "holder", "now", "min_hold", "expected"),
+    [
+        pytest.param(
+            [{"holder_id": 2, "received_at": 100.0, "passed_at": None}], 2, 100.5, 2.0, 1.5,
+            id="still-inside-the-hold",
+        ),
+        pytest.param(
+            [{"holder_id": 2, "received_at": 100.0, "passed_at": None}], 2, 102.0, 2.0, 0.0,
+            id="hold-served",
+        ),
+        pytest.param(
+            [{"holder_id": 2, "received_at": 100.0, "passed_at": None}], 2, 100.1, 0.0, 0.0,
+            id="dial-off",
+        ),
+        pytest.param([], 2, 100.1, 2.0, 0.0, id="no-log"),
+        pytest.param(
+            [{"holder_id": 1, "received_at": 100.0, "passed_at": None}], 2, 100.1, 2.0, 0.0,
+            id="log-does-not-name-this-holder",
+        ),
+        pytest.param(
+            [{"holder_id": 2, "received_at": None, "passed_at": None}], 2, 100.1, 2.0, 0.0,
+            id="no-received-at",
+        ),
+    ],
+)
+def test_hold_remaining(pass_log, holder, now, min_hold, expected):
+    assert hold_remaining(pass_log, holder, now, min_hold) == pytest.approx(expected)
 
 
 # ── compute_style_points ──────────────────────────────────────────────────────

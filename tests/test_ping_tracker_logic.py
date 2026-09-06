@@ -477,6 +477,27 @@ def test_game_player_counts_falls_back_to_a_live_lobby(conn):
     assert pts.query_game_player_counts(conn, ["g2"]) == {"g2": 2}
 
 
+@pytest.mark.parametrize(
+    "game_type, count, expected",
+    [
+        # The daily photo post archives at 0 before anyone replies: unknown, blank.
+        ("photo", 0, {}),
+        # A photo row with a real count (a later task filling it in) is reported.
+        ("photo", 12, {"g3": 12}),
+        # Any other game at 0 really had nobody — 0 is the honest answer.
+        ("mlt", 0, {"g3": 0}),
+    ],
+)
+def test_game_player_counts_treats_a_zero_photo_row_as_unknown(conn, game_type, count, expected):
+    conn.execute(
+        "INSERT INTO games_game_history "
+        "(game_id, game_type, channel_id, host_id, player_count, started_at)"
+        " VALUES ('g3', ?, ?, ?, ?, '2026-01-01')",
+        (game_type, CHANNEL, PINGER, count),
+    )
+    assert pts.query_game_player_counts(conn, ["g3"]) == expected
+
+
 def test_game_player_counts_omits_a_game_it_cannot_read(conn):
     """Absent means "we don't know" — the panel renders that as blank, and it
     must never be confused with a roster of zero."""

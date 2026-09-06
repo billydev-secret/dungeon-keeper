@@ -188,9 +188,14 @@ class _ApplyConfigView(discord.ui.View):
     re-validates the change before writing."""
 
     def __init__(
-        self, db_path: Path, guild: discord.Guild, proposals: list[ConfigProposal]
+        self,
+        bot: Bot,
+        db_path: Path,
+        guild: discord.Guild,
+        proposals: list[ConfigProposal],
     ) -> None:
         super().__init__(timeout=600)
+        self._bot = bot
         self._db_path = db_path
         self._guild = guild
         for prop in proposals[:_MAX_PROPOSALS]:
@@ -215,7 +220,7 @@ class _ApplyConfigView(discord.ui.View):
                 # admin_only settings are re-checked against the clicker, not
                 # the asker — the reply is ephemeral, but the gate shouldn't
                 # depend on that being true.
-                apply_config_change(
+                feature_slug = apply_config_change(
                     self._db_path, self._guild, prop,
                     is_admin=is_server_admin(member),
                     actor_id=member.id,
@@ -226,6 +231,11 @@ class _ApplyConfigView(discord.ui.View):
                 btn.label = f"Failed: {e}"[:80]
                 await interaction.response.edit_message(view=self)
                 return
+            if feature_slug:
+                # The same signal a dashboard save sends, so a cog that caches
+                # its config at boot (the whisper launcher's known-guild set,
+                # the casino hub) picks the change up without a restart.
+                self._bot.dispatch(f"{feature_slug}_config_change", self._guild.id)
             log.info(
                 "%s applied advisor proposal in guild %s: %s",
                 member.display_name, self._guild.id, prop.display,
@@ -525,7 +535,7 @@ class AdvisorCog(commands.Cog):
         if proposals and guild is not None:
             _proposal_fields(embed, proposals)
         view = (
-            _ApplyConfigView(self.bot.ctx.db_path, guild, proposals)
+            _ApplyConfigView(self.bot, self.bot.ctx.db_path, guild, proposals)
             if proposals and guild is not None
             else discord.utils.MISSING
         )

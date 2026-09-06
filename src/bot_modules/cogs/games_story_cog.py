@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -10,14 +11,12 @@ import discord
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
-from bot_modules.games.constants import HOW_TO_PLAY
+from bot_modules.games.constants import HOW_TO_PLAY, play_description
 from bot_modules.games.command_groups import play
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.game_manager import (
     finish_launch_response,
-    check_allowed_channel,
-    check_game_enabled,
     create_game,
     update_game_message,
     update_game_payload,
@@ -30,6 +29,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games_story.embeds import (
     build_attribution_embed,
     build_complete_story_embed,
@@ -37,6 +37,7 @@ from bot_modules.games_story.embeds import (
     build_turn_embed,
 )
 from bot_modules.games_story.logic import (
+    DEFAULT_TURN_SECONDS,
     add_player,
     append_sentence,
     assemble_story_text,
@@ -45,20 +46,35 @@ from bot_modules.games_story.logic import (
     build_turn_order,
     chunk_attribution_lines,
     clamp_max_sentences,
+    format_drop_notice,
+    format_leave_notice,
     format_skip_notice,
     format_story_opening,
+    note_turn_outcome,
     pick_current_player,
     remove_player,
     resolve_starter,
+    rotation_after_turn,
+    roster_for_payout,
+    should_drop_writer,
     should_end_after_skip,
+    writer_may_skip,
+    writer_skip_unlock_at,
 )
 
 log = logging.getLogger(__name__)
 
-_TURN_TIMEOUT = 300  # seconds per turn
+_TURN_TIMEOUT = DEFAULT_TURN_SECONDS  # seconds per turn
 
 
 class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
+    """The sentence box. Submitting hands the sentence straight to the turn
+    view (``on_submit`` sets its event); the modal is never awaited, so a
+    box the writer dismisses leaks nothing — it simply times out with the
+    turn (anon-tail-78: each dismissal used to park a coroutine on
+    ``modal.wait()`` for the life of the process).
+    """
+
     context_field = discord.ui.TextInput(
         label="Context (for reference)",
         style=discord.TextStyle.paragraph,
@@ -71,10 +87,14 @@ class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
         placeholder="Continue the story…",
     )
 
-    def __init__(self, game_id: str, player_id: int, context_text: str = ""):
-        super().__init__()
+    def __init__(
+        self, game_id: str, player_id: int, context_text: str = "",
+        turn_view: "StoryTurnView | None" = None,
+    ):
+        super().__init__(timeout=_TURN_TIMEOUT)
         self.game_id = game_id
         self.player_id = player_id
+        self.turn_view = turn_view
         self._submitted = False
         self._value: str | None = None
         if context_text:
@@ -84,13 +104,27 @@ class StorySentenceModal(discord.ui.Modal, title="Add Your Sentence"):
         log.info("%s submitted story sentence in #%s", interaction.user.display_name, channel_name(interaction.channel))
         self._submitted = True
         self._value = self.sentence.value
+        view = self.turn_view
+        if view is not None and self._value and not view._submitted_event.is_set():
+            view._submitted_text = self._value
+            view._submitted_event.set()
+            view.stop()
         await interaction.response.send_message("✅ Your sentence has been added!", ephemeral=True)
 
 
 class StoryTurnView(discord.ui.View):
-    """Per-turn view with Write and Skip buttons."""
+    """Per-turn view with Write, Skip and Leave buttons.
 
-    def __init__(self, game_id: str, host_id: int, current_player_id: int, context_text: str, db, bot):
+    Skip is the host's or a mod's at any time, and **any writer's** once the
+    turn has been open :data:`WRITER_SKIP_AFTER_SECONDS` (anon-tail-73: only
+    the host could skip, so an AFK host stalled the story). Leave takes the
+    presser out of the rotation after this turn.
+    """
+
+    def __init__(
+        self, game_id: str, host_id: int, current_player_id: int, context_text: str, db, bot,
+        turn_order: list[int] | None = None,
+    ):
         super().__init__(timeout=_TURN_TIMEOUT)
         self.game_id = game_id
         self.host_id = host_id
@@ -98,9 +132,12 @@ class StoryTurnView(discord.ui.View):
         self.context_text = context_text
         self.db = db
         self.bot = bot
+        self.turn_order = list(turn_order or [])
+        self.opened_at = time.time()
         self._submitted_event = asyncio.Event()
         self._submitted_text: str | None = None
         self._skipped = False
+        self._left: set[int] = set()
 
     @discord.ui.button(label="✍️ Write Your Sentence", style=discord.ButtonStyle.primary, custom_id="story_write")
     async def write(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -108,29 +145,46 @@ class StoryTurnView(discord.ui.View):
         if interaction.user.id != self.current_player_id:
             await interaction.response.send_message("It's not your turn!", ephemeral=True)
             return
-        modal = StorySentenceModal(self.game_id, self.current_player_id, self.context_text)
+        modal = StorySentenceModal(self.game_id, self.current_player_id, self.context_text, turn_view=self)
         await interaction.response.send_modal(modal)
-        timed_out = await modal.wait()
-        if modal._submitted and modal._value:
-            self._submitted_text = modal._value
-            self._submitted_event.set()
-            self.stop()
-        elif timed_out:
-            # Modal was closed or timed out without submitting — unblock the loop
-            self._skipped = True
-            self._submitted_event.set()
-            self.stop()
+
+    def _skip_now(self) -> None:
+        self._skipped = True
+        self._submitted_event.set()
+        self.stop()
 
     @discord.ui.button(label="⏭️ Skip", style=discord.ButtonStyle.secondary, custom_id="story_skip")
     async def skip(self, interaction: discord.Interaction, button: discord.ui.Button):
         log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
-        if not is_host_or_mod(interaction, self.host_id):
-            await interaction.response.send_message("❌ Only the host or a mod can skip.", ephemeral=True)
+        if not is_host_or_mod(interaction, self.host_id) and not writer_may_skip(
+            interaction.user.id, turn_order=self.turn_order, opened_at=self.opened_at, now=time.time(),
+        ):
+            if interaction.user.id in self.turn_order:
+                unlock = writer_skip_unlock_at(self.opened_at)
+                await interaction.response.send_message(
+                    f"❌ Only the host or a mod can skip right now — any writer can <t:{unlock}:R>.",
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message("❌ Only the host, a mod, or a writer can skip.", ephemeral=True)
             return
-        self._skipped = True
-        self._submitted_event.set()
-        self.stop()
+        self._skip_now()
         await interaction.response.send_message("⏩ Player skipped.", ephemeral=True)
+
+    @discord.ui.button(label="🚪 Leave", style=discord.ButtonStyle.secondary, custom_id="story_leave_turn")
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        log.info("%s pressed '%s' in #%s", interaction.user.display_name, button.label, channel_name(interaction.channel))
+        uid = interaction.user.id
+        if uid not in self.turn_order or uid in self._left:
+            await interaction.response.send_message("You're not in this story's rotation.", ephemeral=True)
+            return
+        self._left.add(uid)
+        await interaction.response.send_message(
+            "✅ You've left the story — you'll be dropped from the rotation after this turn.", ephemeral=True,
+        )
+        # The current writer leaving is also a skip: nothing is coming.
+        if uid == self.current_player_id:
+            self._skip_now()
 
 
 class StoryJoinView(discord.ui.View):
@@ -210,11 +264,14 @@ class StoryJoinView(discord.ui.View):
                     delete_after=15,
                 )
 
-        payload["host_id"] = interaction.user.id
         # The row must stop reading as an open lobby — the start-ping sweep
-        # polls state='joining' and a story outlives its countdown.
+        # polls state='joining' and a story outlives its countdown. The host
+        # stays the row's host: a mod pressing Start on the host's behalf used
+        # to become the host for Skip purposes (anon-tail-77).
         await update_game_state(self.db, self.game_id, "playing")
-        await self.cog._run_story(interaction, self.game_id, payload, interaction.channel)
+        await self.cog._run_story(
+            interaction, self.game_id, payload, interaction.channel, host_id=self.host_id,
+        )
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="story_htp")
     async def how_to_play(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -230,7 +287,7 @@ class StoryCog(commands.Cog):
     def db(self):
         return self.bot.games_db
 
-    @app_commands.command(name="story", description="Start a Story Builder (Exquisite Corpse) game!")
+    @app_commands.command(name="story", description=play_description("story"))
     @app_commands.describe(
         max_sentences="Total sentences in the story (max 30)",
         visibility="blind = only see previous sentence, full = see whole story",
@@ -252,17 +309,11 @@ class StoryCog(commands.Cog):
         start_in: app_commands.Range[int, 1, 60] | None = None,
     ):
         log.info("%s used /games play story in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        if not await check_allowed_channel(self.db, interaction.channel_id):
-            await interaction.response.send_message(
-                "This channel isn't set up for games. An admin can enable it from the web dashboard.",
-                ephemeral=True,
-            )
-            return
-        if not await check_game_enabled(self.db, "story", interaction.guild_id or 0):
-            await interaction.response.send_message(
-                "Story Builder is currently disabled on this server.",
-                ephemeral=True,
-            )
+        # The one launch guard every door shares: allowed channel, enabled
+        # dial, and no game already running in this channel.
+        refusal = await refuse_launch(self.db, interaction, "story")
+        if refusal:
+            await interaction.response.send_message(refusal, ephemeral=True)
             return
 
         await interaction.response.defer()
@@ -340,9 +391,22 @@ class StoryCog(commands.Cog):
         await update_session(self.db, channel.id, game_id, [host_id])
         return game_id
 
-    async def _run_story(self, interaction, game_id: str, payload: dict, channel):
+    async def _run_story(
+        self, interaction, game_id: str, payload: dict, channel, *, host_id: int | None = None,
+    ):
+        """The turn loop. ``host_id`` is the lobby's host (the row's, not
+        whoever pressed Start); a caller without one falls back to the
+        payload's legacy ``host_id`` key.
+
+        Pacing (anon-tail-73): a turn is :data:`_TURN_TIMEOUT` seconds; a
+        writer who misses two turns in a row (timed out, dismissed the box or
+        was skipped) is dropped from the rotation with a notice; a writer who
+        pressed Leave is dropped after the turn; an all-miss lap still ends
+        the story.
+        """
         guild = channel.guild if hasattr(channel, "guild") else None
-        host_id = payload.get("host_id", 0)
+        if host_id is None:
+            host_id = int(payload.get("host_id", 0) or 0)
 
         players = payload["players"]
         max_sentences = payload.get("max_sentences", 10)
@@ -363,6 +427,8 @@ class StoryCog(commands.Cog):
         sentence_count = 1  # starter already counted
         turn_index = 0
         consecutive_skips = 0
+        misses: dict[int, int] = {}   # writer -> consecutive missed turns
+        left: set[int] = set()        # writers who pressed Leave
 
         def _name_for(pid: int) -> str:
             if guild is None:
@@ -370,7 +436,7 @@ class StoryCog(commands.Cog):
             m = guild.get_member(pid)
             return m.display_name if m else str(pid)
 
-        while sentence_count < max_sentences:
+        while sentence_count < max_sentences and turn_order:
             # Check if game was closed
             if game_id not in self.bot.active_views:
                 break
@@ -384,7 +450,10 @@ class StoryCog(commands.Cog):
 
             # Single turn message: ping + buttons
             mention = current_member.mention if current_member else f"**{player_name}**"
-            turn_view = StoryTurnView(game_id, host_id, current_player_id, context_text, self.db, self.bot)
+            turn_view = StoryTurnView(
+                game_id, host_id, current_player_id, context_text, self.db, self.bot,
+                turn_order=turn_order,
+            )
 
             turn_color = await safe_resolve_accent(self.bot, guild, log_label="story")
             turn_embed = build_turn_embed(
@@ -396,9 +465,12 @@ class StoryCog(commands.Cog):
                 color=turn_color,
             )
 
-            timeout_min = _TURN_TIMEOUT // 60
+            timeout_min = max(1, _TURN_TIMEOUT // 60)
             turn_msg = await channel.send(
-                content=f"{mention} — it's your turn! You have **{timeout_min} minutes** to write. Click below to start.",
+                content=(
+                    f"{mention} — it's your turn! You have **{timeout_min} minute{'s' if timeout_min != 1 else ''}** "
+                    "to write. Click below to start."
+                ),
                 embed=turn_embed,
                 view=turn_view,
             )
@@ -423,21 +495,51 @@ class StoryCog(commands.Cog):
             if game_id not in self.bot.active_views:
                 break
 
-            if turn_view._skipped and not turn_view._submitted_text:
+            # Writers who pressed Leave during the turn go after it resolves.
+            leaving = set(turn_view._left) - left
+            for pid in leaving:
+                left.add(pid)
+                await channel.send(
+                    format_leave_notice(_name_for(pid)),
+                    delete_after=15,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            if leaving:
+                # Persist the leavers: the sweep and ``/games end`` rebuild
+                # the roster from the payload (``game_roster._story``) and
+                # must drop a never-wrote leaver the way the reveal does.
+                payload["left"] = sorted(left)
+                await update_game_payload(self.db, game_id, payload)
+            drop: set[int] = set(leaving)
+
+            missed = turn_view._skipped and not turn_view._submitted_text
+            if missed:
                 await channel.send(
                     format_skip_notice(player_name),
                     delete_after=15,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
                 consecutive_skips += 1
-                turn_index += 1
-                # If every player in the rotation was skipped, end the story
-                if should_end_after_skip(consecutive_skips, len(turn_order)):
+                note_turn_outcome(misses, current_player_id, missed=True)
+                if current_player_id not in drop and should_drop_writer(misses, current_player_id):
+                    drop.add(current_player_id)
+                    await channel.send(
+                        format_drop_notice(player_name),
+                        allowed_mentions=discord.AllowedMentions.none(),
+                    )
+                if drop:
+                    # A shrunken rotation starts a fresh lap: the missed turns
+                    # were the leaver's, not the writers who remain.
+                    consecutive_skips = 0
+                turn_order, turn_index = rotation_after_turn(turn_order, turn_index, drop)
+                # If every writer in the rotation was skipped, end the story
+                if not turn_order or should_end_after_skip(consecutive_skips, len(turn_order)):
                     await channel.send("📖 All writers were skipped — ending the story.")
                     break
                 continue
 
             consecutive_skips = 0  # reset on successful submission
+            note_turn_outcome(misses, current_player_id, missed=False)
             new_sentence = turn_view._submitted_text
             assert new_sentence is not None  # not skipped ⇒ a sentence was submitted
             append_sentence(payload, current_player_id, new_sentence)
@@ -446,13 +548,15 @@ class StoryCog(commands.Cog):
 
             await channel.send(f"> *{discord.utils.escape_markdown(new_sentence)}*", allowed_mentions=discord.AllowedMentions.none())
             sentence_count += 1
-            turn_index += 1
+            turn_order, turn_index = rotation_after_turn(turn_order, turn_index, drop)
 
         # If game was closed by host, skip final reveal
         if game_id not in self.bot.active_views:
             return
 
-        await self._reveal_story(channel, game_id, sentences, players, guild)
+        await self._reveal_story(
+            channel, game_id, sentences, roster_for_payout(players, sentences, left), guild,
+        )
 
     async def _reveal_story(self, channel, game_id: str, sentences: list, players: list, guild):
         def _name_for(author_id: int) -> str:

@@ -1,4 +1,4 @@
-"""scripts/games_review_p0.py — the four P0 prod-state writes from the games deep review."""
+"""scripts/games_review_p0.py — the P0 prod-state writes from the games deep review."""
 
 from __future__ import annotations
 
@@ -52,7 +52,30 @@ def _seed(db: Path, *, week1_kickoff: float) -> None:
             question_text TEXT NOT NULL, added_by INTEGER NOT NULL DEFAULT 0,
             added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, tags TEXT NOT NULL DEFAULT '[]',
             last_served_at TIMESTAMP);
+        CREATE TABLE games_scheduled (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER,
+            channel_id INTEGER, game_type TEXT, options TEXT NOT NULL DEFAULT '{}',
+            announce INTEGER NOT NULL DEFAULT 0, announce_role_id INTEGER);
+        CREATE TABLE games_game_config (guild_id INTEGER, game_type TEXT,
+            enabled INTEGER NOT NULL DEFAULT 1, options TEXT NOT NULL DEFAULT '{}',
+            updated_at TIMESTAMP, PRIMARY KEY (guild_id, game_type));
         """
+    )
+    # The prod shape (row 7): a legacy photo row announcing with a role while
+    # the photo config carries no ping role; a second guild's row is clean;
+    # a third guild's row announces with no config row at all.
+    conn.executemany(
+        "INSERT INTO games_scheduled (id, guild_id, channel_id, game_type, options, announce, "
+        "announce_role_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [
+            (7, 1, 50, "photo", '{"prompt": ""}', 1, 777),
+            (8, 2, 51, "photo", "{}", 0, None),
+            (9, 3, 52, "photo", "{}", 1, 888),
+            (10, 1, 53, "wyr", "{}", 1, 999),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO games_game_config (guild_id, game_type, enabled, options) VALUES "
+        "(1, 'photo', 1, '{\"channel_id\": \"50\", \"ping_role_id\": \"\"}')"
     )
     conn.execute(
         "INSERT INTO survivor_seasons VALUES (3, 1, 'real', 'enrolling', 2026, ?)",
@@ -98,14 +121,14 @@ def test_dry_run_writes_nothing(tmp_path):
     before = _q(db, "SELECT config FROM survivor_seasons") + _q(db, "SELECT value FROM config") + _q(db, "SELECT question_text, tags FROM games_question_bank")
     changed = p0.run_steps(db, list(p0.STEPS), apply=False)
     after = _q(db, "SELECT config FROM survivor_seasons") + _q(db, "SELECT value FROM config") + _q(db, "SELECT question_text, tags FROM games_question_bank")
-    assert changed == 1 + 2 + 2 + 1
+    assert changed == 1 + 2 + 2 + 1 + 2
     assert before == after
 
 
 def test_apply_is_idempotent(tmp_path):
     db = tmp_path / "t.db"
     _seed(db, week1_kickoff=time.time() + 5 * 86400)
-    assert p0.run_steps(db, list(p0.STEPS), apply=True) == 6
+    assert p0.run_steps(db, list(p0.STEPS), apply=True) == 8
     cfg = json.loads(_q(db, "SELECT config FROM survivor_seasons WHERE id = 3")[0][0])
     assert (cfg["last_slate_week"], cfg["last_lastcall_week"], cfg["channel_id"]) == (0, 0, 5)
     done = json.loads(_q(db, "SELECT config FROM survivor_seasons WHERE id = 2")[0][0])
@@ -118,7 +141,30 @@ def test_apply_is_idempotent(tmp_path):
     assert json.loads(rows["ffa"][1]) == ["dare", "nsfw"]
     wyr = [r[0] for r in _q(db, "SELECT question_text FROM games_question_bank WHERE game_type='wyr' ORDER BY question_id")]
     assert wyr == ["sneeze glitter | burp bubbles", "already | split", "Would you rather never sleep again?"]
+    sched = {r[0]: r[1:] for r in _q(db, "SELECT id, announce, announce_role_id, options FROM games_scheduled")}
+    assert sched[7] == (0, None, "{}")
+    assert sched[9] == (0, None, "{}")
+    assert sched[10] == (1, 999, "{}"), "a non-photo row is left alone"
+    cfg = {g: json.loads(o) for g, o in _q(db, "SELECT guild_id, options FROM games_game_config WHERE game_type='photo'")}
+    assert cfg[1] == {"channel_id": "50", "ping_role_id": "777"}, "the role moved into the panel's dial"
+    assert cfg[3]["ping_role_id"] == "888", "a guild with no config row gets one"
     assert p0.run_steps(db, list(p0.STEPS), apply=True) == 0, "second run is a no-op"
+
+
+def test_photo_step_never_overwrites_a_ping_role_the_panel_already_has(tmp_path):
+    db = tmp_path / "t.db"
+    _seed(db, week1_kickoff=time.time() + 5 * 86400)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE games_game_config SET options = '{\"channel_id\": \"50\", \"ping_role_id\": \"123\"}' "
+        "WHERE guild_id = 1"
+    )
+    conn.commit()
+    conn.close()
+    assert p0.run_steps(db, ["photo"], apply=True) == 2
+    cfg = json.loads(_q(db, "SELECT options FROM games_game_config WHERE guild_id = 1")[0][0])
+    assert cfg["ping_role_id"] == "123"
+    assert _q(db, "SELECT announce FROM games_scheduled WHERE id = 7") == [(0,)]
 
 
 def test_survivor_reset_skips_a_season_whose_week_1_has_kicked_off(tmp_path):

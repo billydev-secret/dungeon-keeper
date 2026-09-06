@@ -13,6 +13,8 @@ from __future__ import annotations
 import pytest
 
 from bot_modules.games_price.embeds import (
+    build_lobby_embed,
+    build_scenario_wait_embed,
     build_recap_embed,
     build_reveal_embed,
     build_round_results_embed,
@@ -21,6 +23,13 @@ from bot_modules.games_price.embeds import (
     build_vote_embed,
 )
 from bot_modules.games_price.logic import (
+    MIN_PLAYERS,
+    MIN_VOTERS,
+    lobby_players,
+    resolve_source,
+    roster_all_in,
+    toggle_player,
+    vote_possible,
     MAX_PRICE,
     MIN_PRICE,
     build_ladder,
@@ -410,7 +419,7 @@ def test_build_scenario_embed_renders_scenario_and_submission_count() -> None:
     by_name = {f.name: f.value for f in embed.fields}
     assert by_name["Scenario"] is not None
     assert "eat a bug" in by_name["Scenario"]
-    assert by_name["Submissions"] == "💵 Submitted: **3**"
+    assert by_name["Submissions"].startswith("💵 Submitted: **3**\n")
 
 
 def test_build_scenario_embed_shows_total_when_provided() -> None:
@@ -418,7 +427,15 @@ def test_build_scenario_embed_shows_total_when_provided() -> None:
         "Alice", "x", 1, 1, 30, submitted=2, total_players=4
     )
     by_name = {f.name: f.value for f in embed.fields}
-    assert by_name["Submissions"] == "💵 Submitted: **2**/4"
+    assert by_name["Submissions"].startswith("💵 Submitted: **2**/4 — ")
+
+
+def test_build_scenario_embed_counts_the_lobby_separately_from_the_crowd() -> None:
+    embed = build_scenario_embed(
+        "Alice", "x", 1, 1, 30, submitted=3, total_players=3, roster_submitted=2
+    )
+    by_name = {f.name: f.value for f in embed.fields}
+    assert by_name["Submissions"].startswith("💵 Submitted: **3** (2/3 who joined")
 
 
 def test_build_scenario_embed_escapes_markdown_in_scenario() -> None:
@@ -660,3 +677,232 @@ async def test_show_recap_pays_all_submitters(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert set(call.kwargs["player_ids"]) == {1, 2, 3}
     assert call.kwargs["bot"] is bot
+
+
+# ── the lobby, the vote floor and the source default (trivia-tail-85/86/87) ──
+
+
+def test_two_voters_forced_to_cross_vote_always_tie():
+    """Why the vote needs three: with two submitters the self-vote refusal
+    leaves each exactly one target, so both are crowned every round."""
+    winners, votes = tally_winners({1: 2, 2: 1})
+    assert sorted(winners) == [1, 2] and votes == 1
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [
+        pytest.param(0, False, id="nobody"),
+        pytest.param(1, False, id="one-is-reveal-only"),
+        pytest.param(2, False, id="two-is-reveal-only"),
+        pytest.param(3, True, id="three-votes"),
+        pytest.param(8, True, id="a-room"),
+    ],
+)
+def test_vote_possible(count, expected):
+    assert MIN_VOTERS == 3
+    assert vote_possible(count) is expected
+
+
+@pytest.mark.parametrize(
+    ("requested", "bank_has_rows", "expected"),
+    [
+        pytest.param(None, True, "bank", id="no-choice-bank-full"),
+        pytest.param(None, False, "host", id="no-choice-bank-empty"),
+        pytest.param("", True, "bank", id="blank-bank-full"),
+        pytest.param("host", True, "host", id="explicit-host-wins"),
+        pytest.param("players", False, "players", id="explicit-players-wins"),
+        pytest.param("bank", False, "bank", id="explicit-bank-even-if-empty"),
+        pytest.param("ai", True, "bank", id="retired-ai-runs-on-the-bank"),
+        pytest.param("both", False, "host", id="retired-both-empty-bank"),
+        pytest.param("BANK", False, "bank", id="case-insensitive"),
+    ],
+)
+def test_resolve_source(requested, bank_has_rows, expected):
+    assert resolve_source(requested, bank_has_rows) == expected
+
+
+def test_toggle_player_joins_then_leaves():
+    payload: dict = {}
+    assert toggle_player(payload, 5) == "joined"
+    assert toggle_player(payload, 6) == "joined"
+    assert payload["players"] == [5, 6]
+    assert toggle_player(payload, 5) == "left"
+    assert payload["players"] == [6]
+
+
+def test_lobby_players_coerces_and_dedupes():
+    assert lobby_players({"players": ["1", 2, "x", 2]}) == [1, 2]
+    assert lobby_players({}) == []
+
+
+@pytest.mark.parametrize(
+    "roster,submitted,expected",
+    [
+        # A spectator's price never fills a joined player's seat (P5): with
+        # 3 joined and 3 prices in, the round used to close on a headcount
+        # and lock the third joined player out.
+        pytest.param({1, 2, 3}, {1, 2, 4}, False, id="spectator-fills-no-seat"),
+        pytest.param({1, 2, 3}, {1, 2, 3, 4}, True, id="roster-complete-plus-spectator"),
+        pytest.param({1, 2, 3}, {1, 2, 3}, True, id="roster-complete"),
+        pytest.param({1, 2, 3}, {1, 2}, False, id="one-short"),
+        pytest.param(set(), {1, 2, 3}, False, id="no-roster-runs-the-timer"),
+        pytest.param(set(), set(), False, id="nothing-at-all"),
+    ],
+)
+def test_roster_all_in(roster, submitted, expected):
+    assert roster_all_in(roster, submitted) is expected
+
+
+def test_lobby_floor_is_mirrored_in_the_sweep_registry():
+    from bot_modules.games.constants import LOBBY_GAME_TYPES, LOBBY_MIN_PLAYERS, LOBBY_START_BUTTON
+
+    assert "price" in LOBBY_GAME_TYPES
+    assert LOBBY_MIN_PLAYERS["price"] == MIN_PLAYERS == 2
+    assert LOBBY_START_BUTTON["price"] == "Start"
+
+
+def test_build_lobby_embed_lists_the_roster_source_and_countdown():
+    embed = build_lobby_embed("Host", ["Ann", "Bob"], 5, "bank", start_at=1_700_000_000, min_players=2)
+    names = {f.name: f.value for f in embed.fields}
+    assert names["Players (2)"] == "Ann\nBob"
+    assert names["Scenarios"] == "the question bank"
+    assert "<t:1700000000:R>" in names["⏰ Starting"] and "once 2 have joined" in names["⏰ Starting"]
+    assert "Join" in (embed.description or "")
+
+
+def test_build_lobby_embed_without_countdown_or_players():
+    embed = build_lobby_embed("Host", [], 3, "host")
+    names = {f.name: f.value for f in embed.fields}
+    assert names["Players (0)"] == "—"
+    assert "⏰ Starting" not in names
+    assert names["Scenarios"] == "the host writes them"
+
+
+@pytest.mark.parametrize(
+    ("source", "who"),
+    [pytest.param("host", "The host", id="host"), pytest.param("players", "Anyone in the room", id="players")],
+)
+def test_build_scenario_wait_embed_says_who_writes(source, who):
+    embed = build_scenario_wait_embed("Host", 2, 5, source)
+    assert "Round 2/5" in (embed.title or "")
+    value = embed.fields[0].value or ""
+    assert who in value and "Write Scenario" in value and "question bank" in value
+
+
+def test_build_scenario_embed_names_the_hosts_skip_and_the_early_close():
+    embed = build_scenario_embed("Host", "Eat a bug", 1, 5, 30, 1, 4)
+    field = next(f for f in embed.fields if f.name == "Submissions")
+    assert "1**/4" in (field.value or "")
+    assert "closes once everyone has answered" in (field.value or "")
+    assert "**Skip**" in (field.value or "")
+
+
+# ── the submission view closes on the roster, and End Game pays ──────────
+
+
+class _FakeTimer:
+    def __init__(self) -> None:
+        self.skipped = False
+
+    def skip(self) -> None:
+        self.skipped = True
+
+
+def _game_view(bot, expected: set[int], **kw):
+    cog = price_cog.PriceCog(bot)  # type: ignore[arg-type]
+    return price_cog.PriceGameView(
+        game_id=kw.get("game_id", "g"), host_id=1, host_name="Host", scenario="Eat a bug",
+        round_num=1, total_rounds=3, timer_secs=30, db=bot.games_db, bot=bot, cog=cog,
+        expected_ids=expected, settings={"rounds": 3},
+    )
+
+
+@pytest.mark.parametrize(
+    ("expected", "prices", "closes"),
+    [
+        pytest.param({1, 2}, {1: 10, 2: 20}, True, id="everyone-in-closes"),
+        pytest.param({1, 2, 3}, {1: 10, 2: 20}, False, id="one-short-waits"),
+        # Submission is open to the room: a spectator's price counts in the
+        # reveal but fills nobody's seat, so three prices for a three-seat
+        # roster with one joined player still waiting keeps the round open
+        # (it used to close on the headcount and lock that player out).
+        pytest.param({1, 2, 3}, {1: 10, 2: 20, 9: 30}, False, id="spectator-fills-no-seat"),
+        pytest.param({1, 2, 3}, {1: 10, 2: 20, 9: 30, 3: 40}, True, id="roster-in-plus-spectator-closes"),
+        pytest.param(set(), {1: 10, 2: 20}, False, id="no-roster-runs-the-timer"),
+    ],
+)
+async def test_price_modal_closes_the_round_when_the_roster_has_answered(sync_db_path, expected, prices, closes):
+    bot = _SpyBot(sync_db_path)
+    view = _game_view(bot, expected)
+    view._timer = _FakeTimer()  # type: ignore[assignment]
+    responses: list = []
+
+    async def _send(*a, **kw):
+        responses.append((a, kw))
+
+    for uid, amount in prices.items():
+        modal = price_cog.PriceModal(view)
+        modal.price._value = str(amount)
+        interaction = SimpleNamespace(
+            user=SimpleNamespace(id=uid, display_name=f"u{uid}"),
+            channel=SimpleNamespace(name="games"),
+            response=SimpleNamespace(send_message=_send),
+        )
+        await modal.on_submit(interaction)  # type: ignore[arg-type]
+    assert view.prices == prices
+    assert view._timer.skipped is closes  # type: ignore[union-attr]
+
+
+def test_game_view_has_an_end_game_button_and_the_dead_close_path_is_gone():
+    button = price_cog.PriceGameView.end_game_button
+    assert button.__discord_ui_model_kwargs__["label"] == "End Game"
+    src = inspect.getsource(button)
+    assert "is_host_or_mod" in src and "ConfirmCloseView" in src and "end_early" in src
+    assert not hasattr(price_cog.PriceCog, "_end_game")
+
+
+async def test_end_early_keeps_this_rounds_prices_and_pays_through_the_recap(monkeypatch, sync_db_path):
+    spy = AsyncMock()
+    monkeypatch.setattr(price_cog, "end_game", spy)
+    bot = _SpyBot(sync_db_path)
+    payload = {
+        "settings": {"rounds": 3}, "total_rounds": 3,
+        "rounds": {"1": {"prices": {"1": 100, "2": 200}}},
+        "scores": {"reasonable_wins": {}, "unhinged_wins": {}},
+    }
+    gid = await create_game(bot.games_db, 100, 1, "price", payload=payload)
+    view = _game_view(bot, {1, 2, 3}, game_id=gid)
+    view.round_num = 2
+    view.prices = {3: 50}
+    view._timer = _FakeTimer()  # type: ignore[assignment]
+    view._msg = SimpleNamespace(edit=AsyncMock())
+    bot.active_views[gid] = view
+
+    await view.cog.end_early(view, FakeChannel(id=100), None)
+
+    assert view._closed and view._timer.skipped  # type: ignore[union-attr]
+    call = spy.await_args
+    assert call is not None and set(call.kwargs["player_ids"]) == {1, 2, 3}
+    assert call.kwargs["round_count"] == 2
+    assert gid not in bot.active_views
+    # A second press does nothing — the row is already claimed.
+    await view.cog.end_early(view, FakeChannel(id=100), None)
+    assert spy.await_count == 1
+
+
+def test_lobby_view_offers_join_leave_start_help_cancel():
+    view = price_cog.PriceLobbyView("g", 1, None, None, None)  # type: ignore[arg-type]
+    labels = [child.label for child in view.children]
+    assert labels == ["Join", "Leave", "Start", "❓ Help", "Cancel"]
+    assert view.timeout is None  # survives a restart via recover_game
+
+
+def test_scenario_prompt_view_has_no_dead_edit_and_gates_on_the_host():
+    src = inspect.getsource(price_cog.ScenarioPromptView)
+    assert "edit_original_response" not in src
+    assert "is_host_or_mod" in src
+    assert not hasattr(price_cog, "HostWriteView") and not hasattr(price_cog, "PlayerWriteView")
+
+
+import inspect  # noqa: E402

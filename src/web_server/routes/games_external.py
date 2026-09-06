@@ -70,11 +70,17 @@ async def _refresh_cog_cache(request: Request, guild_id: int) -> bool:
 
 @router.get("/games-external")
 async def get_tracking(request: Request, _: AuthenticatedUser = _MOD):
-    """Every watch for this guild plus how much each has banked.
+    """Every watch for this guild plus how much each has banked — and whether
+    it is still paying anyone.
 
     Counts are narrowed by both bot *and* channel: a bot watched in several
     channels has one row each, and an unscoped count would report the bot's
-    whole total against every one of them.
+    whole total against every one of them. The banked count alone keeps
+    climbing whether or not a coin is paid, so each row also carries
+    ``last_payout_at`` and ``unpaid_finishes`` (finishes in the last 30 days
+    the parser would pay but that carry no claim) — a format change by the
+    watched bot shows up here instead of by someone noticing in Discord
+    (photo-external-100).
     """
     db = _db(request)
     guild_id = get_active_guild_id(request)
@@ -84,18 +90,21 @@ async def get_tracking(request: Request, _: AuthenticatedUser = _MOD):
     for w in watches:
         bot_user_id = int(w["bot_user_id"])
         channel_id = int(w["channel_id"])
+        kind = str(w["kind"])
+        unpaid = await logic.unpaid_finishes(db, guild_id, channel_id, bot_user_id, kind)
         rows.append(
             {
                 "channel_id": str(channel_id),
                 "bot_user_id": str(bot_user_id),
-                "kind": str(w["kind"]),
-                "kind_label": logic.WATCH_KIND_LABELS.get(
-                    str(w["kind"]), str(w["kind"])
-                ),
+                "kind": kind,
+                "kind_label": logic.WATCH_KIND_LABELS.get(kind, kind),
                 "enabled": bool(w["enabled"]),
                 "banked": await logic.count_messages(
                     db, guild_id, bot_user_id, channel_id
                 ),
+                "last_payout_at": await logic.last_payout_at(db, guild_id, channel_id, kind),
+                "unpaid_finishes": len(unpaid),
+                "unpaid_days": logic.UNPAID_LOOKBACK_DAYS,
             }
         )
     return {

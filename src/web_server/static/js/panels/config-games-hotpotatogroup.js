@@ -49,7 +49,7 @@ export function mount(container) {
               "A round's bomb always goes off by this point. The actual moment is picked at random between the two, so nobody can count it out.",
               { min: 10, max: 600, step: "0.5" })}
             ${numField("min_hold", "Must Hold For (seconds)", cfg.min_hold,
-              "How long someone has to keep the bomb before they are allowed to pass it on. This stops instant hot-potato ping-pong.",
+              "How long someone has to keep the bomb before they are allowed to pass it on. This stops instant hot-potato ping-pong. It has to be shorter than the shortest fuse, or nobody is ever allowed to pass.",
               { min: 0, max: 60, step: "0.5" })}
           </div>
 
@@ -79,7 +79,7 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Availability</div>
             ${numField("cooldown_hours", "Wait Between Games (hours)", cfg.cooldown_hours,
-              "How long a player must wait after one game before joining another. 0 lets people play back to back.",
+              "How long a player must wait after a nickname game before joining another nickname game. Wagered and custom-stakes games are never held back. 0 lets people play back to back.",
               { min: 0, max: 8760 })}
             ${numField("challenge_limit_per_hour", "Games Started Per Person Per Hour", cfg.challenge_limit_per_hour,
               "How many of these games one person may open in an hour. Set to 0 for no limit. This is a spam brake, not a pacing rule &mdash; a busy games night can easily run through a low number.",
@@ -149,6 +149,11 @@ export function mount(container) {
       if (payload.max_fuse < payload.min_fuse) {
         showStatus(status, false, "Longest Fuse cannot be shorter than Shortest Fuse");
         form.querySelector("[name=max_fuse]").focus();
+        return;
+      }
+      if (payload.min_hold >= payload.min_fuse) {
+        showStatus(status, false, "Must Hold For has to be shorter than Shortest Fuse, or nobody is ever allowed to pass the bomb");
+        form.querySelector("[name=min_hold]").focus();
         return;
       }
       if (payload.max_players < payload.min_players) {
