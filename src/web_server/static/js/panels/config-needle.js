@@ -68,7 +68,6 @@ function channelCard(r, channels) {
   const replyType = safeOf(VALID_REPLY_TYPES, r.reply_type, "default");
   const isCustomTitle = titleType === "custom";
   const isCustomReply = replyType === "custom";
-  const reactionsOn   = !!r.status_reactions;
 
   const uid = `nd-${esc(String(r.channel_id))}`;
 
@@ -118,18 +117,12 @@ function channelCard(r, channels) {
       <div class="field">
         <label for="${uid}-reactions">Emoji Added to Every Post</label>
         <input type="text" name="default_reactions" id="${uid}-reactions" value="${esc(r.default_reactions)}" placeholder="👍,👎" />
-        <div class="field-hint">Separate emoji with commas. The bot reacts with each one on the message that started the thread — handy for quick voting. Leave blank for none.</div>
+        <div class="field-hint">Separate emoji with commas. The bot reacts with each one on the message that started the thread — handy for quick voting, or just to cue people to react. They are decoration only: the bot never reads them back or takes them off. Leave blank for none.</div>
       </div>
 
       <div style="display:flex;flex-direction:column;gap:4px;">
         ${checkbox("include_bots", r.include_bots, "Also Thread Messages From Bots",
           "Unchecked, messages posted by bots and webhooks are left alone.")}
-        ${checkbox("status_reactions", r.status_reactions, "Mark Thread Status with Emoji",
-          "The bot reacts on the original post with the markers set under Server-Wide Defaults, so members can see at a glance whether its thread is still open, archived or locked.")}
-        <span data-archive-immediately-wrap style="${reactionsOn ? "" : "display:none"}">
-          ${checkbox("archive_immediately", r.archive_immediately, "Clear the Open Marker on the First Reply",
-            "The first reply from anyone other than the person who started the thread takes the open marker off, so the channel shows at a glance which posts nobody has answered yet. It does NOT archive or close the thread — conversation carries on as normal.")}
-        </span>
       </div>
 
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap;">
@@ -147,26 +140,6 @@ function globalSettingsCard(needle) {
     <form class="form card" data-needle-global>
       <div class="section-label">Server-Wide Defaults</div>
       <div class="field-hint" style="margin-bottom:10px;">These apply to every auto-threaded channel below.</div>
-
-      <div class="section-label" style="margin-top:4px;">Thread Status Markers</div>
-      <div class="field-hint" style="margin-bottom:10px;">One emoji per state, reacted onto the original post so its thread's status is readable without opening it. Only one is ever showing at a time. Leave a box empty to skip that state.</div>
-      <div class="field-row">
-        <div class="field">
-          <label for="nd-emoji-unanswered">Thread Open</label>
-          <input type="text" name="emoji_unanswered" id="nd-emoji-unanswered" value="${esc(needle.emoji_unanswered)}" style="max-width:80px;" placeholder="🔵" />
-          <div class="field-hint">Added to the original post the moment its thread is created, and taken off when the thread archives or locks — or earlier, on the first reply, if you switch that on per channel below.</div>
-        </div>
-        <div class="field">
-          <label for="nd-emoji-archived">Thread Archived</label>
-          <input type="text" name="emoji_archived" id="nd-emoji-archived" value="${esc(needle.emoji_archived)}" style="max-width:80px;" placeholder="✅" />
-          <div class="field-hint">Replaces the open marker once the thread is archived — whether that happened on its own or a moderator did it.</div>
-        </div>
-        <div class="field">
-          <label for="nd-emoji-locked">Thread Locked</label>
-          <input type="text" name="emoji_locked" id="nd-emoji-locked" value="${esc(needle.emoji_locked)}" style="max-width:80px;" placeholder="🔒" />
-          <div class="field-hint">Replaces the other markers when a moderator locks the thread so nobody can reply.</div>
-        </div>
-      </div>
 
       <div class="field">
         <label for="nd-default-reply">Default Thread Message</label>
@@ -187,7 +160,7 @@ export function mount(container) {
   container.innerHTML = `<div class="panel"><div class="empty">Loading…</div></div>`;
   return mountAsync(container, async () => {
     const [config, channels] = await Promise.all([loadConfig(), loadChannels()]);
-    render(container, config.needle || { channels: [], emoji_unanswered: "🔵", emoji_archived: "✅", emoji_locked: "🔒", default_reply: "" }, channels);
+    render(container, config.needle || { channels: [], default_reply: "" }, channels);
   }, { errorMsg: "Couldn’t load the auto-thread settings." });
 }
 
@@ -247,8 +220,6 @@ function render(container, needle, channels) {
         <div style="display:flex;flex-direction:column;gap:4px;">
           ${checkbox("include_bots", false, "Also Thread Messages From Bots",
             "Unchecked, messages posted by bots and webhooks are left alone.")}
-          ${checkbox("status_reactions", false, "Show Answered / Unanswered Emoji",
-            "The bot marks each thread with the emoji set under Server-Wide Defaults.")}
         </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:8px;">
           <button type="submit" class="btn btn-primary">Add Channel</button>
@@ -275,9 +246,6 @@ function wireGlobal(container) {
     const fd = new FormData(form);
     try {
       await apiPut("/api/config/needle/settings", {
-        emoji_unanswered: fd.get("emoji_unanswered") || "",
-        emoji_archived:   fd.get("emoji_archived")   || "",
-        emoji_locked:     fd.get("emoji_locked")     || "",
         default_reply:    fd.get("default_reply")    || "",
       });
       showStatus(status, true);
@@ -302,13 +270,6 @@ function wireShowHide(container) {
     sel.addEventListener("change", () => {
       const f = form.querySelector("[data-custom-reply-field]");
       if (f) f.style.display = sel.value === "custom" ? "" : "none";
-    });
-  });
-  container.querySelectorAll("input[name=status_reactions]").forEach(chk => {
-    const form = chk.closest("form");
-    chk.addEventListener("change", () => {
-      const wrap = form.querySelector("[data-archive-immediately-wrap]");
-      if (wrap) wrap.style.display = chk.checked ? "" : "none";
     });
   });
 }
@@ -429,8 +390,6 @@ function buildPayload(fd, statusEl, form) {
     delete_behavior:     fd.get("delete_behavior")     || DEFAULT_DELETE_BEHAVIOR,
     reply_type:          fd.get("reply_type")          || DEFAULT_REPLY_TYPE,
     custom_reply:        fd.get("custom_reply")        || "",
-    status_reactions:    fd.has("status_reactions"),
-    archive_immediately: fd.has("archive_immediately"),
     default_reactions:   fd.get("default_reactions")   || "",
   };
 }

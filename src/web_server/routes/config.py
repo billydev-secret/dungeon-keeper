@@ -538,15 +538,10 @@ def _needle_section(conn, guild_id: int) -> dict:
                 "delete_behavior": c.delete_behavior,
                 "reply_type": c.reply_type,
                 "custom_reply": c.custom_reply,
-                "status_reactions": c.status_reactions,
-                "archive_immediately": c.archive_immediately,
                 "default_reactions": c.default_reactions,
             }
             for c in channels
         ],
-        "emoji_unanswered": gcfg.emoji_unanswered,
-        "emoji_archived": gcfg.emoji_archived,
-        "emoji_locked": gcfg.emoji_locked,
         "default_reply": gcfg.default_reply,
     }
 
@@ -5171,8 +5166,6 @@ class NeedleChannelUpdate(BaseModel):
     delete_behavior:     str  = "archive_if_empty"
     reply_type:          str  = "default"
     custom_reply:        str  = ""
-    status_reactions:    bool = False
-    archive_immediately: bool = False
     default_reactions:   str  = ""
 
 
@@ -5204,16 +5197,10 @@ async def update_event_echo(
 
 
 class NeedleGlobalUpdate(BaseModel):
-    emoji_unanswered: str | None = None
-    emoji_archived:   str | None = None
-    emoji_locked:     str | None = None
     default_reply:    str | None = None
 
 
 _NEEDLE_FIELDS = {
-    "emoji_unanswered": ("needle_emoji_unanswered", _raw),
-    "emoji_archived": ("needle_emoji_archived", _raw),
-    "emoji_locked": ("needle_emoji_locked", _raw),
     "default_reply": ("needle_default_reply", _raw),
 }
 
@@ -5267,8 +5254,6 @@ async def upsert_needle_channel(
                 delete_behavior=body.delete_behavior,
                 reply_type=body.reply_type,
                 custom_reply=body.custom_reply,
-                status_reactions=body.status_reactions,
-                archive_immediately=body.archive_immediately,
                 default_reactions=body.default_reactions,
             )
         return {"ok": True}
