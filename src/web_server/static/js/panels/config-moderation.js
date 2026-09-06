@@ -12,6 +12,7 @@ import {
   mountRoleMultiPicker,
   mountAsync,
 } from "../config-helpers.js";
+import { esc } from "../api.js";
 import { confirmDialog } from "../ui.js";
 import { mountRoleDialStates } from "../role-dial-state.js";
 
@@ -22,6 +23,11 @@ export function mount(container) {
     const [config, channels, categories, roles] = await Promise.all([loadConfig(), loadChannels(), loadCategories(), loadRoles()]);
     const m = config.moderation;
     let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
+    const priv = config.privacy || {};
+    let currentMsgRetention = priv.message_retention_enabled === "1" ? "1" : "0";
+    let currentBehRetention = priv.behavioural_retention_enabled === "1" ? "1" : "0";
+    const msgDays = priv.message_content_retention_days || "365";
+    const behDays = priv.behavioural_retention_days || "180";
 
     container.innerHTML = `
       <div class="panel">
@@ -95,6 +101,18 @@ export function mount(container) {
               <label>Transcript Channel</label>
               <span data-picker="transcript_channel_id"></span>
               <div class="field-hint">Where jail and ticket transcripts are posted. Falls back to the log channel when unset.</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="section-label">Data Retention</div>
+            <div class="field">
+              <label><input type="checkbox" name="message_retention_enabled" id="mod-msg-retention"${currentMsgRetention === "1" ? " checked" : ""} /> Clear message text after ${esc(msgDays)} days</label>
+              <div class="field-hint">Only applies where message content is archived at all. The message itself stays &mdash; who posted, where, when, its sentiment score and who it mentioned &mdash; so nothing on the reports changes; it is the words and any attachments that go.</div>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" name="behavioural_retention_enabled" id="mod-beh-retention"${currentBehRetention === "1" ? " checked" : ""} /> Delete interaction records after ${esc(behDays)} days</label>
+              <div class="field-hint">Who reacted to, replied to, followed or pinged whom. Joins and leaves are never deleted &mdash; they are how tenure is worked out. <strong>Leave this off for now:</strong> the ${esc(behDays)}-day figure is still under review, because the Connection Graph&rsquo;s replay reads further back than that and would lose its earliest weeks.</div>
             </div>
           </div>
 
@@ -182,6 +200,18 @@ export function mount(container) {
           ticket_notify_on_create: fd.has("ticket_notify_on_create") ? "1" : "0",
           warning_threshold: threshold,
         });
+        // Retention shares the privacy endpoint. Only call it on a real change
+        // so a routine moderation save doesn't rewrite the key every time.
+        const newMsgRetention = form.querySelector("#mod-msg-retention").checked ? "1" : "0";
+        const newBehRetention = form.querySelector("#mod-beh-retention").checked ? "1" : "0";
+        if (newMsgRetention !== currentMsgRetention || newBehRetention !== currentBehRetention) {
+          await apiPut("/api/config/privacy", {
+            message_retention_enabled: newMsgRetention,
+            behavioural_retention_enabled: newBehRetention,
+          });
+          currentMsgRetention = newMsgRetention;
+          currentBehRetention = newBehRetention;
+        }
         // Storage level uses a dedicated endpoint (switching to "none" purges
         // existing content). Only call it when the value actually changed so a
         // routine moderation save doesn't re-trigger the purge.

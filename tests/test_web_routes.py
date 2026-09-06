@@ -282,6 +282,80 @@ def test_update_privacy_switch_to_none_purges_existing_content(ctx, make_client)
         assert row["sentiment"] == 0.4  # derivation kept
 
 
+@pytest.mark.parametrize("field,key,predicate", [
+    (
+        "message_retention_enabled",
+        "MESSAGE_RETENTION_CONFIG_KEY",
+        "message_retention_enabled",
+    ),
+    (
+        "behavioural_retention_enabled",
+        "BEHAVIOURAL_RETENTION_CONFIG_KEY",
+        "behavioural_retention_enabled",
+    ),
+])
+def test_retention_dial_round_trips_and_arms_the_sweep(
+    ctx, make_client, field, key, predicate
+):
+    """Ticking a box must be what arms that arm, and unticking must disarm it.
+
+    Each dial gates a destructive sweep, and the stored polarity has already
+    been inverted once during development (a single ``data_retention_disabled``
+    where absent meant *on*). A flip the panel and the service disagreed about
+    would either delete for a guild that opted out or never run for one that
+    opted in, and nothing else proves which way round it is wired.
+    """
+    from bot_modules.services import retention_service
+
+    config_key = getattr(retention_service, key)
+    is_on = getattr(retention_service, predicate)
+    client = make_client()
+
+    with open_db(ctx.db_path) as conn:
+        assert is_on(conn, ctx.guild_id) is False
+
+    assert client.put("/api/config/privacy", json={field: "1"}).status_code == 200
+    with open_db(ctx.db_path) as conn:
+        assert get_config_value(conn, config_key, "", ctx.guild_id) == "1"
+        assert is_on(conn, ctx.guild_id) is True
+
+    assert client.put("/api/config/privacy", json={field: "0"}).status_code == 200
+    with open_db(ctx.db_path) as conn:
+        assert is_on(conn, ctx.guild_id) is False
+
+    assert client.get("/api/config").json()["privacy"][field] == "0"
+
+
+def test_retention_arms_are_independent(ctx, make_client):
+    """The reason there are two dials: one must not arm or disarm the other."""
+    from bot_modules.services import retention_service
+
+    client = make_client()
+    client.put("/api/config/privacy", json={"message_retention_enabled": "1"})
+
+    with open_db(ctx.db_path) as conn:
+        assert retention_service.message_retention_enabled(conn, ctx.guild_id) is True
+        assert (
+            retention_service.behavioural_retention_enabled(conn, ctx.guild_id)
+            is False
+        )
+
+
+def test_retention_dial_does_not_disturb_the_storage_level(ctx, make_client):
+    """The controls share one endpoint; none may write another's key."""
+    with open_db(ctx.db_path) as conn:
+        set_config_value(conn, "message_storage_level", "all", ctx.guild_id)
+
+    client = make_client()
+    client.put("/api/config/privacy", json={"message_retention_enabled": "1"})
+
+    with open_db(ctx.db_path) as conn:
+        assert (
+            get_config_value(conn, "message_storage_level", "", ctx.guild_id)
+            == "all"
+        )
+
+
 def test_update_privacy_to_all_persists_without_purge(ctx, make_client):
     _seed_message(ctx, 2, "keep me")
 
