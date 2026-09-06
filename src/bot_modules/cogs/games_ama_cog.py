@@ -28,7 +28,7 @@ from bot_modules.games.utils.game_manager import (
     update_session,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games.utils.audit import audit_anonymous
 from bot_modules.services.anon_audit_service import (
@@ -55,6 +55,7 @@ from bot_modules.games_ama.embeds import (
     build_recap_embed,
     build_screened_dm_embed,
 )
+from bot_modules.games_ama.ping_role_service import resolve_ping_role_id
 from bot_modules.games_ama.logic import (
     AMA_FORMAT_HOT_SEAT,
     AMA_FORMAT_PANEL,
@@ -108,7 +109,11 @@ ENDED_CARD_FOOTER = "AMA ended"
 END_DENIED_TEXT = "❌ Only the host or a mod can end the AMA."
 
 # Per-game dashboard dials (games-ama.js optSchema). Read once at launch and
-# carried in the payload so a restart keeps them.
+# carried in the payload so a restart keeps them. The ping role's key is
+# declared here — the dial-enforcement sweep reads this file to check every
+# dial the panel offers is one the cog reads — but reading and one-time
+# seeding of that dial belong to ``games_ama.ping_role_service``, whose
+# ``PING_ROLE_KEY`` is the same string (pinned by a test).
 OPT_PING_ROLE = "hot_seat_ping_role_id"
 OPT_QUESTIONS_PER_TURN = "questions_per_turn"
 
@@ -1766,9 +1771,7 @@ class AMACog(commands.Cog):
         log.info("%s used /games play ama in #%s", interaction.user.display_name, channel_name(interaction.channel))
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "ama", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "ama")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -1797,12 +1800,13 @@ class AMACog(commands.Cog):
         game_format = normalize_format(options.get("format"))
         # Per-server dials from the AMA dashboard panel: the role pinged on a
         # new hot seat (none by default) and how many answers make a turn.
+        # A guild that has never answered the ping dial (OPT_PING_ROLE) and
+        # already has an @AMA role — the one the retired by-name lookup
+        # pinged — has it seeded once here; a cleared dial stays cleared.
         game_opts = await get_game_options(self.db, "ama", guild_id)
-        raw_role = game_opts.get(OPT_PING_ROLE)
-        try:
-            ping_role_id = int(raw_role) if raw_role else None
-        except (TypeError, ValueError):
-            ping_role_id = None
+        ping_role_id = await resolve_ping_role_id(
+            self.db, guild_id, game_opts, getattr(channel, "guild", None)
+        )
         per_turn = resolve_questions_per_turn(game_opts.get(OPT_QUESTIONS_PER_TURN))
         game_id = await create_game(
             self.db,

@@ -23,6 +23,8 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
+from bot_modules.core.utils import jump_url
+
 log = logging.getLogger(__name__)
 
 # How long after a card its answers are counted. A daily schedule posts the
@@ -187,8 +189,6 @@ def recap_line(
     line = f"Yesterday: {photos} from {people}"
     if recap.most_loved is not None:
         message_id, author_id, _n = recap.most_loved
-        line += (
-            f" — most loved: {name_fn(author_id)}'s, "
-            f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}"
-        )
+        link = jump_url(int(guild_id), int(channel_id), int(message_id))
+        line += f" — most loved: {name_fn(author_id)}'s, {link}"
     return line

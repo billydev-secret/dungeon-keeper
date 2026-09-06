@@ -183,6 +183,13 @@ class PendingQuestionState:
     #: When the one "your question is still waiting" re-ping went out
     #: (``None`` = not yet). Persisted so a restart cannot send it twice.
     chased_at: float | None = None
+    #: How many times the deck has tried and failed to draw a question for
+    #: this prompt, and when the last of those tries was. The fallback backs
+    #: off between attempts and gives up after
+    #: ``logic.FALLBACK_MAX_ATTEMPTS`` — an empty bank or a deleted channel
+    #: used to be retried on every five-minute tick for a week.
+    fallback_attempts: int = 0
+    fallback_attempted_at: float | None = None
 
     @property
     def questions_remaining(self) -> int:

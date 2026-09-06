@@ -236,10 +236,6 @@ def test_per_game_tier_round_trips(authed_client, route, key, payload, expected)
             id="hp_group-min_fuse-floor",
         ),
         pytest.param(
-            "games-hot-potato-group", "games_hot_potato_group", "max_fuse", 1.0, 10.0,
-            id="hp_group-max_fuse-floor",
-        ),
-        pytest.param(
             "games-hot-potato-group", "games_hot_potato_group", "min_hold", -1.0, 0.0,
             id="hp_group-min_hold-floor",
         ),
@@ -258,10 +254,6 @@ def test_per_game_tier_round_trips(authed_client, route, key, payload, expected)
         pytest.param(
             "games-chicken", "games_chicken", "min_climb", 1.0, 5.0,
             id="chicken-min_climb-floor",
-        ),
-        pytest.param(
-            "games-chicken", "games_chicken", "max_climb", 1.0, 5.0,
-            id="chicken-max_climb-floor",
         ),
         pytest.param(
             "games-chicken", "games_chicken", "min_players", 1, 2,
@@ -297,6 +289,37 @@ def test_per_game_clamps(authed_client, route, key, field, sent, expected):
     resp = authed_client.put(f"/api/config/{route}", json={field: sent})
     assert resp.status_code == 200
     assert _section(authed_client, key)[field] == expected
+
+
+@pytest.mark.parametrize(
+    ("route", "key", "low_field", "high_field", "low", "sent", "expected"),
+    [
+        pytest.param(
+            "games-hot-potato-group", "games_hot_potato_group",
+            "min_fuse", "max_fuse", 5.0, 1.0, 10.0,
+            id="hp_group-max_fuse-floor",
+        ),
+        pytest.param(
+            "games-chicken", "games_chicken",
+            "min_climb", "max_climb", 5.0, 1.0, 5.0,
+            id="chicken-max_climb-floor",
+        ),
+    ],
+)
+def test_a_range_ceiling_clamps_to_its_floor(
+    authed_client, route, key, low_field, high_field, low, sent, expected
+):
+    """The ceiling of a min/max range still clamps up to its own floor.
+
+    Sent alone it would land below the *default* minimum, which the route now
+    refuses as an inverted range — a real refusal, not a clamping bug — so the
+    floor of the pair is lowered in the same save.
+    """
+    resp = authed_client.put(
+        f"/api/config/{route}", json={low_field: low, high_field: sent}
+    )
+    assert resp.status_code == 200
+    assert _section(authed_client, key)[high_field] == expected
 
 
 @pytest.mark.parametrize(

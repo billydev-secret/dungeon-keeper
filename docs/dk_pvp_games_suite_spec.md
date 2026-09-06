@@ -558,6 +558,30 @@ Chairs hit hyphenated multi-word paths instead — `PUT /api/config/games-hot-po
 | Chicken | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour`, `min_climb`, `max_climb`, `min_players`, `max_players` |
 | Musical Chairs | `cooldown_hours`, `sentence_hours`, `channel_allowlist`, `max_nick_length`, `max_stakes_length`, `challenge_limit_per_hour`, `min_music`, `max_music`, `scramble_window`, `false_start_elim`, `min_players`, `max_players` |
 
+**Dial pairs that only work in one order are refused by the route, not just by the
+panel.** Every numeric field is clamped to its own floor, but two pairings make a
+game unplayable without either value being out of range, and until 2026-09-05 they
+were checked in the browser alone — a direct `PUT`, or a tab left open while someone
+else saved, stored them happily:
+
+- `min_hold` >= the shortest fuse (`min_timer` for the duel, `min_fuse` for the group
+  game) — the holder is never allowed to pass before the bomb goes off, so the loser
+  is whoever caught it first.
+- `min_players` > `max_players` (Hot Potato group, Chicken, Musical Chairs) — the
+  lobby closes to new joins before it is ever allowed to start, so it never fills.
+- An inverted min/max range: `min_climb` > `max_climb` (Chicken), `min_timer` >
+  `max_timer` (Hot Potato duel), `min_fuse` > `max_fuse` (Hot Potato group). Chicken's
+  is the one this branch made reachable — migration 208 replaced the single
+  `climb_duration` with a range.
+
+`_DUEL_DIAL_RULES` in `web_server/routes/config.py` holds all three families, checked
+against the
+*effective* dials (what is stored, overlaid with what this save changes, since every
+field is independently optional) before anything is written. A conflict is a `422`
+naming the offending pair in the panel's own labels; the save is rejected whole, so a
+refused request writes nothing. `min_hold == fuse - 1` and `min_players == max_players`
+are legal and stay legal.
+
 `channel_allowlist`/`max_nick_length`/`max_stakes_length`/`challenge_limit_per_hour` are exposed
 for all six games, not
 just Pressure Cooker as the old (dead) commands had it — they were always enforced

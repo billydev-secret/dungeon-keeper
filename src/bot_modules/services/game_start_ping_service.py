@@ -70,9 +70,12 @@ provisioned on first use like the other ping roles; a stored "(none)" keeps
 the sweep silent). ``content=`` with ``AllowedMentions(roles=[role])`` and a
 jump link, never inside an embed. Platform-level on purpose: every ``/games
 play`` launch and every scheduled launch gets it without a per-cog edit. A
-schedule that announces itself marks the lobby as pinged before announcing so
-the two never stack; ``game_night_pinged`` in the payload is the once-only
-flag, claimed before the send like ``start_ping_sent``.
+schedule that announces itself claims the lobby before announcing so the two
+never stack; ``game_night_pinged`` in the payload is the once-only flag, and
+both senders take it as a **claim** (``claim_game_night_ping`` — an UPDATE
+that matches only while the flag is unset) before they send, so the loser of a
+race between a sweep tick and a launch announcement stays silent rather than
+posting the second ping.
 """
 from __future__ import annotations
 
@@ -96,6 +99,7 @@ from bot_modules.games.constants import (
     LOBBY_MIN_PLAYERS,
     LOBBY_START_BUTTON,
 )
+from bot_modules.games.utils.game_manager import resolve_guild_id
 from bot_modules.services import ping_tracker_service
 from bot_modules.services.feature_roles import GAME_NIGHT_PING
 
@@ -496,8 +500,8 @@ async def send_start_ping(channel, game_type: str, host_id: int) -> bool:
         return False
 
 
-async def set_payload_flag(db, game_id: str, flag: str) -> None:
-    """Set one once-only flag on the game's payload.
+async def set_payload_flag(db, game_id: str, flag: str) -> bool:
+    """Claim one once-only flag on the game's payload. True if this call set it.
 
     A targeted ``json_set``, deliberately **not** a read-modify-write. Several
     lobby writers (mlt join/leave, story, clapback) mutate the payload without
@@ -505,31 +509,55 @@ async def set_payload_flag(db, game_id: str, flag: str) -> None:
     join and either lose that join or lose this flag — the latter costing a
     duplicate nudge 15s later. One UPDATE touching one key can't lose either.
     ``flag`` is one of the module's own constants, never caller text.
+
+    The UPDATE only matches a row where the flag is *unset*, so it is a claim
+    and not just a write: two senders racing for the same once-only line (the
+    sweep's Game Night ping and a schedule's own announcement, which are
+    separate loops and can be mid-flight together) both call this first, and
+    exactly one is told it won. A row that has gone away, or whose payload is
+    malformed enough for ``json_extract`` to refuse it, answers False — the
+    safe direction, since a caller that can't claim doesn't send.
     """
     if flag not in _PAYLOAD_FLAGS:
         raise ValueError(f"unknown payload flag {flag!r}")
     try:
-        await db.execute(
+        cur = await db.execute(
             "UPDATE games_active_games "
-            f"SET payload = json_set(payload, '$.{flag}', json('true')) "
-            "WHERE game_id = ?",
+            f"SET payload = json_set(COALESCE(NULLIF(payload, ''), '{{}}'), '$.{flag}', json('true')) "
+            f"WHERE game_id = ? AND json_extract(COALESCE(NULLIF(payload, ''), '{{}}'), '$.{flag}') IS NULL",
             (game_id,),
         )
     except Exception:
         # Malformed payload JSON — json_set refuses it. The nudge is already
         # sent (or unsendable); log rather than let the sweep retry forever.
         log.warning("start ping: could not flag game %s as %s", game_id, flag, exc_info=True)
+        return False
+    return bool(getattr(cur, "rowcount", 0) > 0)
 
 
-async def mark_start_ping_sent(db, game_id: str) -> None:
+async def mark_start_ping_sent(db, game_id: str) -> bool:
     """Flag the nudge as delivered so the next tick skips this lobby."""
-    await set_payload_flag(db, game_id, START_PING_SENT_FLAG)
+    return await set_payload_flag(db, game_id, START_PING_SENT_FLAG)
 
 
-async def mark_game_night_pinged(db, game_id: str) -> None:
-    """Flag the Game Night ping as done — the scheduler calls this before its
-    own announcement so a schedule that announces never pings twice."""
-    await set_payload_flag(db, game_id, GAME_NIGHT_PINGED_FLAG)
+async def claim_game_night_ping(db, game_id: str, *, no_row_wins: bool = False) -> bool:
+    """Claim the one Game Night line this game is allowed. True for the
+    winner only — the sweep and an announcing schedule both ask, and the
+    loser stays quiet rather than stacking a second ping on one game opening.
+
+    ``no_row_wins`` is for a launcher announcing its own launch: a game that
+    keeps its round in memory (risky_roll) has no ``games_active_games`` row
+    to flag, and the sweep only ever pings rows it can see — so "no row" is a
+    win there, while for the sweep itself a row that has gone is a game that
+    ended and gets nothing.
+    """
+    if await set_payload_flag(db, game_id, GAME_NIGHT_PINGED_FLAG):
+        return True
+    if not no_row_wins:
+        return False
+    return await db.fetchone(
+        "SELECT 1 FROM games_active_games WHERE game_id = ?", (game_id,)
+    ) is None
 
 
 async def resolve_game_night_role(bot, guild_id: int) -> tuple[bool, int | None]:
@@ -595,8 +623,12 @@ async def _game_night_ping(bot, db, row, payload: dict, guild_id: int, roles: di
     if not resolved:
         return
     game_id = row["game_id"]
-    # Claim first: a lost flag write after a successful send is a second ping.
-    await mark_game_night_pinged(db, game_id)
+    # Claim first: a lost flag write after a successful send is a second ping,
+    # and the row was read at the top of the tick — a schedule that announces
+    # its own launch may have claimed the line since, in which case this sweep
+    # says nothing rather than pinging the same lobby twice.
+    if not await claim_game_night_ping(db, game_id):
+        return
     if role_id is None:
         return
     channel_id = int(row["channel_id"])
@@ -688,7 +720,7 @@ async def _process_lobby(
     # tick — there is nothing to link at until then.
     if not payload.get(GAME_NIGHT_PINGED_FLAG) and row["message_id"]:
         if guild_id is None:
-            guild_id = await _guild_id_for(db, row)
+            guild_id = await resolve_guild_id(db, row)
         await _game_night_ping(bot, db, row, payload, guild_id, {} if roles is None else roles)
 
     # Countdown auto-start (clapback-8): the sweep starts the game itself when
@@ -757,20 +789,6 @@ async def _process_lobby(
         log.warning("idle nudge failed for %s in channel %s", game_type, row["channel_id"], exc_info=True)
 
 
-async def _guild_id_for(db, row) -> int:
-    """The row's guild — its own column, or the channel's guild for a row
-    written before the column existed."""
-    try:
-        guild_id = int(row["guild_id"] or 0)
-    except (IndexError, KeyError, TypeError, ValueError):
-        guild_id = 0
-    if guild_id == 0:
-        from bot_modules.games.utils.game_manager import guild_for_channel  # noqa: PLC0415
-
-        guild_id = await guild_for_channel(db, int(row["channel_id"]))
-    return guild_id
-
-
 async def _dials_for(db, guild_id: int, cache: dict[int, IdleLobbyDials]) -> IdleLobbyDials:
     """The idle dials for a guild, read once per guild per tick."""
     if guild_id not in cache:
@@ -804,7 +822,7 @@ async def game_start_ping_loop(bot) -> None:
             roles_cache: dict[int, tuple[bool, int | None]] = {}
             for row in rows:
                 try:
-                    guild_id = await _guild_id_for(db, row)
+                    guild_id = await resolve_guild_id(db, row)
                     dials = await _dials_for(db, guild_id, dials_cache)
                     await _process_lobby(
                         bot, db, row, now, dials=dials, guild_id=guild_id, roles=roles_cache,

@@ -420,13 +420,17 @@ class GameEnd:
     coins_paid: int = 0
 
 
-async def _resolve_guild_id(db, row, bot) -> int:
-    """The guild a history row belongs to.
+async def resolve_guild_id(db, row, bot=None) -> int:
+    """The guild a game row belongs to.
 
     Stamped at creation since migration 204, so normally it is just copied.
     A row still at 0 (created before the column existed, or by a launcher
     that could not name its guild) is re-derived: from the bot's channel
     cache when a bot is at hand, else from the channel allowlist.
+
+    Shared by everything that reads a game row's guild — ``end_game`` here
+    and the lobby sweep in ``game_start_ping_service``, which kept its own
+    bot-less copy of this until 2026-09-05.
     """
     try:
         stored = int(row["guild_id"] or 0)
@@ -521,7 +525,7 @@ async def end_game(
     elif player_count == 0 and roster:
         player_count = len(roster)  # a roster was named; count what was named
 
-    guild_id = await _resolve_guild_id(db, row, bot)
+    guild_id = await resolve_guild_id(db, row, bot)
 
     archived = dict(payload)
     if reason:

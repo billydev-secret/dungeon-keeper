@@ -29,7 +29,7 @@ import logging
 import secrets
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from bot_modules.core.db_utils import get_config_value, open_db
@@ -350,6 +350,65 @@ def mahjong_help_line(conn, guild_id: int) -> str | None:
         "🀄 **Meadow Mahjong** — `/mahjong` opens your panel: create or join "
         "a table in any text channel, study the card, practice against bots"
     )
+
+
+@dataclass(slots=True)
+class NudgeRecord:
+    """The plain turn pings a live table still owes a sweep (spec §1
+    amendment 6): the key of the turn last pinged, the draw lines posted
+    for it, and ``member_id → message_id`` for every standing second-strike
+    warning.
+
+    It lives on the table row, not only on the cog, because both messages
+    are deleted *later* — the draw line when the next turn begins, the
+    warning once the seat is no longer one miss from folding. A restart in
+    between used to orphan them: the resume path re-armed the table and
+    re-stuck the card, but every message id was gone, so a member kept a
+    ping for a turn that had already passed. The cog still works from its
+    in-memory copy each transition; the row is what makes the copy
+    survivable.
+    """
+
+    turn_key: list | None = None
+    draws: list[int] = field(default_factory=list)
+    warnings: dict[int, int] = field(default_factory=dict)
+
+    def is_empty(self) -> bool:
+        """Nothing outstanding — the column goes back to NULL."""
+        return self.turn_key is None and not self.draws and not self.warnings
+
+    def to_json(self) -> str:
+        return json.dumps({
+            "turn_key": self.turn_key,
+            "draws": self.draws,
+            "warnings": {str(k): v for k, v in self.warnings.items()},
+        })
+
+    @classmethod
+    def from_json(cls, raw: object) -> NudgeRecord:
+        """Parse a stored record; anything unreadable reads as empty. A
+        corrupt cell must not stop a table resuming — the worst case is one
+        stale ping nobody sweeps, which is where this started."""
+        if not isinstance(raw, str) or not raw:
+            return cls()
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        key = data.get("turn_key")
+        warnings: dict[int, int] = {}
+        for member_id, message_id in (data.get("warnings") or {}).items():
+            try:
+                warnings[int(member_id)] = int(message_id)
+            except (TypeError, ValueError):
+                continue
+        return cls(
+            turn_key=list(key) if isinstance(key, list) else None,
+            draws=[int(m) for m in (data.get("draws") or []) if isinstance(m, int)],
+            warnings=warnings,
+        )
 
 
 # ── The service ──────────────────────────────────────────────────────────────
@@ -1206,6 +1265,30 @@ class MahjongService:
                 conn.execute(
                     "UPDATE mahjong_tables SET sticky_message_id = ? WHERE id = ?",
                     (message_id, table_id),
+                )
+        await asyncio.to_thread(_q)
+
+    async def get_nudges(self, table_id: int) -> NudgeRecord:
+        """The pings this table still owes a sweep. Empty for a table that
+        has posted none, and for one whose row is gone."""
+        def _q():
+            with open_db(self.db_path) as conn:
+                row = self._table_row_opt(conn, table_id)
+                return NudgeRecord.from_json(
+                    None if row is None else row["nudges"])
+        return await asyncio.to_thread(_q)
+
+    async def set_nudges(self, table_id: int, record: NudgeRecord) -> None:
+        """Record (or clear) the outstanding pings so the sweep still works
+        after a restart. An empty record writes NULL rather than an empty
+        object, so "nothing outstanding" is one shape, not two."""
+        raw = None if record.is_empty() else record.to_json()
+
+        def _q():
+            with open_db(self.db_path) as conn:
+                conn.execute(
+                    "UPDATE mahjong_tables SET nudges = ? WHERE id = ?",
+                    (raw, table_id),
                 )
         await asyncio.to_thread(_q)
 

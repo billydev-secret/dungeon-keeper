@@ -42,8 +42,11 @@ from bot_modules.services.risky_roll.logic import (
     PAYOFF_FALLBACK_HOURS_KEY,
     PAYOFF_HOURS_MAX,
     PayoffAction,
+    FALLBACK_MAX_ATTEMPTS,
     PayoffDials,
+    fallback_abandoned,
     fallback_blocked,
+    fallback_retry_delay,
     normalize_payoff_hours,
     pending_payoff_action,
     posted_chase_blocked,
@@ -145,6 +148,29 @@ def test_dials_enabled_only_when_either_is_set():
             id="nobody owes a question",
         ),
         pytest.param(
+            {"fallback_attempts": 1, "fallback_attempted_at": T0 + 6 * H},
+            PayoffDials(fallback_hours=6), 6.5, None,
+            id="a failed fallback backs off for an hour",
+        ),
+        pytest.param(
+            {"fallback_attempts": 1, "fallback_attempted_at": T0 + 6 * H},
+            PayoffDials(fallback_hours=6), 7, PayoffAction.FALLBACK,
+            id="the backoff has passed: try again",
+        ),
+        pytest.param(
+            {"fallback_attempts": 2, "fallback_attempted_at": T0 + 7 * H},
+            PayoffDials(fallback_hours=6), 8, None,
+            id="the second failure waits twice as long",
+        ),
+        pytest.param(
+            {
+                "fallback_attempts": FALLBACK_MAX_ATTEMPTS,
+                "fallback_attempted_at": T0 + 9 * H,
+            },
+            PayoffDials(chase_hours=2, fallback_hours=6), 500, None,
+            id="attempts spent: the prompt is abandoned, not chased instead",
+        ),
+        pytest.param(
             {
                 "prompt_kind": PromptKind.TWO_QUESTIONERS, "extra_questioner_id": EXTRA,
                 "questioners_asked": {WINNER},
@@ -157,6 +183,15 @@ def test_dials_enabled_only_when_either_is_set():
 def test_pending_payoff_action(pending_kwargs, dials, age_hours, expected):
     pending = _pending(**pending_kwargs)
     assert pending_payoff_action(pending, dials, T0 + age_hours * H) is expected
+
+
+def test_fallback_backoff_doubles_and_then_gives_up():
+    """An empty bank or a deleted channel is not fixed by the next tick, so
+    the deck waits an hour, then two, then stops trying."""
+    assert fallback_retry_delay(1) == H
+    assert fallback_retry_delay(2) == 2 * H
+    assert fallback_abandoned(_pending()) is False
+    assert fallback_abandoned(_pending(fallback_attempts=FALLBACK_MAX_ATTEMPTS)) is True
 
 
 def test_unasked_questioners_lists_the_winner_first():
@@ -254,6 +289,22 @@ async def test_store_pending_question_round_trips_chased_at(store: StateStore):
     await store.save_pending_question(loaded)
     (again,) = await store.load_pending_questions()
     assert again.chased_at == T0 + 2 * H
+
+
+async def test_store_pending_question_round_trips_the_fallback_attempts(store: StateStore):
+    """The count has to survive a restart, or an unpostable prompt starts
+    its three attempts again on every boot."""
+    pending = _pending()
+    await store.save_pending_question(pending)
+    (fresh,) = await store.load_pending_questions()
+    assert (fresh.fallback_attempts, fresh.fallback_attempted_at) == (0, None)
+
+    fresh.fallback_attempts = 2
+    fresh.fallback_attempted_at = T0 + 8 * H
+    await store.save_pending_question(fresh)
+    (again,) = await store.load_pending_questions()
+    assert again.fallback_attempts == 2
+    assert again.fallback_attempted_at == T0 + 8 * H
 
 
 async def test_store_posted_question_round_trips_chase_and_bank_flags(store: StateStore):
@@ -623,6 +674,39 @@ async def test_fallback_leaves_the_prompt_alone_when_the_bank_is_empty(wired):
         assert await rr_views.run_payoff_pass(wired.client, now=T0 + 6 * H) == 0
     assert wired.channel.sent == []
     assert "g1" in rr_state.pending_questions
+    # The failure is counted and stamped, so the next tick backs off.
+    assert rr_state.pending_questions["g1"].fallback_attempts == 1
+
+
+async def test_fallback_backs_off_and_gives_up_on_a_bank_that_stays_empty(wired):
+    """Nothing about an empty bank changes in five minutes. Before the
+    backoff the sweep re-drew every tick for the seven days the prompt
+    lives; now it tries three times, an hour apart, and abandons it."""
+    _set_dials(wired.db_path, 1, fallback=6)
+    await _register_pending(_pending())
+
+    patched, draw = _bank(None)
+    with patched:
+        # Due, and fails.
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 6 * H) == 0
+        # Still inside the first backoff: not even a draw is attempted.
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 6.5 * H) == 0
+        assert draw.await_count == 1
+        # An hour later, and two hours after that.
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 7 * H) == 0
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 9 * H) == 0
+        assert draw.await_count == 3
+        # Spent: the prompt is left alone for good, however long it sits.
+        assert await rr_views.run_payoff_pass(wired.client, now=T0 + 500 * H) == 0
+        assert draw.await_count == 3
+
+    assert wired.channel.sent == []
+    pending = rr_state.pending_questions["g1"]
+    assert pending.fallback_attempts == FALLBACK_MAX_ATTEMPTS
+    # And the give-up survives a restart: the store carries the count.
+    assert rr_state.store is not None
+    (loaded,) = await rr_state.store.load_pending_questions()
+    assert loaded.fallback_attempts == FALLBACK_MAX_ATTEMPTS
 
 
 async def test_fallback_for_a_room_question_pings_everyone_but_the_askers_no_contact_partner(wired):

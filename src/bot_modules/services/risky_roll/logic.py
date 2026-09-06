@@ -42,6 +42,16 @@ PAYOFF_FALLBACK_HOURS_KEY = "risky_fallback_hours"
 PAYOFF_HOURS_MAX = 168
 #: How often the chaser looks at the pending and posted questions.
 PAYOFF_TICK_SECONDS = 300
+#: How many times the fallback may try to post a question for one prompt
+#: before the prompt is abandoned. A fallback can fail for reasons no tick
+#: will fix — an empty question bank, a channel the bot can no longer see, a
+#: pairing the no-contact list now forbids — and without a ceiling the
+#: five-minute sweep retried it for the seven days until the prompt aged out.
+FALLBACK_MAX_ATTEMPTS = 3
+#: The wait after the first failed attempt; each further failure doubles it
+#: (1 h, then 2 h), so three attempts span three hours rather than three
+#: hundred ticks.
+FALLBACK_RETRY_BASE_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -88,6 +98,40 @@ def unasked_questioners(pending: PendingQuestionState) -> list[int]:
     ]
 
 
+def fallback_retry_delay(attempts: int) -> float:
+    """How long the fallback waits after *attempts* failed tries.
+
+    Doubling, from :data:`FALLBACK_RETRY_BASE_SECONDS`: an hour after the
+    first failure, two after the second. The failure modes are the slow kind
+    (a bank an admin has to fill, a channel to restore), so retrying on the
+    five-minute tick only fills the log.
+    """
+    return FALLBACK_RETRY_BASE_SECONDS * float(2 ** max(0, attempts - 1))
+
+
+def fallback_abandoned(pending: PendingQuestionState) -> bool:
+    """Whether the deck has given up drawing a question for this prompt."""
+    return pending.fallback_attempts >= FALLBACK_MAX_ATTEMPTS
+
+
+def fallback_retry_due(pending: PendingQuestionState, now: float) -> bool:
+    """Whether a fallback that failed before may be tried again now."""
+    if pending.fallback_attempts <= 0 or pending.fallback_attempted_at is None:
+        return True
+    delay = fallback_retry_delay(pending.fallback_attempts)
+    return now - pending.fallback_attempted_at >= delay
+
+
+def record_fallback_failure(pending: PendingQuestionState, now: float) -> None:
+    """Count one failed fallback attempt against *pending*, in place.
+
+    The caller persists the row afterwards, so the count survives a restart
+    and an unpostable prompt is not retried from zero every boot.
+    """
+    pending.fallback_attempts += 1
+    pending.fallback_attempted_at = now
+
+
 def pending_payoff_action(
     pending: PendingQuestionState, dials: PayoffDials, now: float
 ) -> PayoffAction | None:
@@ -100,11 +144,18 @@ def pending_payoff_action(
     questioner still owes a question. A prompt with no usable age (the
     ``created_at`` column arrived in migration 173; the sweep clears those
     rows at startup) is left alone rather than treated as infinitely old.
+
+    A fallback that has already failed is left alone until its backoff has
+    passed, and a prompt whose attempts are spent is abandoned — no chase
+    either, since a due fallback outranks it and the deck has given up
+    speaking for this winner (ship review, 2026-09-05).
     """
     if pending.created_at <= 0 or not unasked_questioners(pending):
         return None
     age = now - pending.created_at
     if dials.fallback_hours > 0 and age >= dials.fallback_hours * 3600:
+        if fallback_abandoned(pending) or not fallback_retry_due(pending, now):
+            return None
         return PayoffAction.FALLBACK
     if (
         dials.chase_hours > 0

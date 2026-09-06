@@ -420,6 +420,7 @@ async def test_close_generate_embed_names_members_and_pings_in_content(monkeypat
 
 # ── the wrap-up (social-prompt-39) ───────────────────────────────────
 
+import asyncio  # noqa: E402
 import time as _time  # noqa: E402
 
 from bot_modules.cogs.games_config_cog import RECAP_ENDING_COGS  # noqa: E402
@@ -427,15 +428,18 @@ from bot_modules.core.db_utils import open_db  # noqa: E402
 from bot_modules.games.utils.game_manager import (  # noqa: E402
     get_active_game_by_id,
     get_game_payload,
+    modify_payload,
 )
 from bot_modules.games_compliment.embeds import build_wrap_recap_embed  # noqa: E402
 from bot_modules.games_compliment.logic import (  # noqa: E402
     STATE_WRAPPING,
     WRAP_NUDGE_AFTER_SECONDS,
     WRAP_SECONDS,
+    claim_wrap,
     delivered_givers,
     delivered_line,
     parse_pairings,
+    release_wrap_claim,
     stragglers,
     wrap_schedule,
     wrap_seconds_remaining,
@@ -546,6 +550,19 @@ def test_wrap_recap_embed_has_the_count_and_a_footer():
     assert embed.footer.text is not None and "Spin the Compliment" in embed.footer.text
 
 
+def test_claim_wrap_is_won_once_and_released_for_a_wrap_that_never_finished():
+    """The ten-minute timer and the host's /games end both call finish_wrap;
+    only the first claim may post the card and pay the pool."""
+    payload: dict = {}
+    assert claim_wrap(payload) is True
+    assert claim_wrap(payload) is False
+    # A live row at boot means the winner died before end_game paid, so the
+    # claim is stale and recovery drops it.
+    assert release_wrap_claim(payload) is True
+    assert release_wrap_claim(payload) is False
+    assert claim_wrap(payload) is True
+
+
 def test_games_end_hands_a_wrapping_compliment_to_its_recap():
     assert RECAP_ENDING_COGS["compliment"] == "ComplimentCog"
 
@@ -616,6 +633,43 @@ async def test_finish_wrap_posts_the_recap_pays_the_pool_and_records_who_deliver
     await bot.games_db.execute("DELETE FROM games_active_games WHERE game_id = ?", (gid,))
     assert await cog.finish_wrap(channel, gid) is False
     assert spy.await_count == 1
+
+
+async def test_two_finish_wraps_at_once_post_and_pay_once(sync_db_path, quiet, monkeypatch):
+    """The timer firing while the host runs /games end: both see a live row,
+    so only the payload claim can stop the pool being paid twice."""
+    bot, cog, gid = await _wrapping_game(sync_db_path, delivered_by=(1,))
+    spy = AsyncMock()
+    monkeypatch.setattr(compliment_cog, "end_game", spy)
+    channel = _channel()
+
+    results = await asyncio.gather(
+        cog.finish_wrap(channel, gid), cog.finish_wrap(channel, gid),
+    )
+
+    assert sorted(results) == [False, True]
+    assert spy.await_count == 1
+    assert channel.send.await_count == 1
+
+
+async def test_recovering_a_wrap_clears_a_stale_claim_so_it_can_finish(sync_db_path, quiet, monkeypatch):
+    """A restart mid-finish leaves the row live with the claim set; the
+    re-armed wrap must be able to win it, not refuse itself forever."""
+    bot, cog, gid = await _wrapping_game(sync_db_path)
+    def _stale_claim(payload: dict) -> None:
+        claim_wrap(payload)
+
+    await modify_payload(bot.games_db, gid, _stale_claim)
+    monkeypatch.setattr(cog, "arm_wrap", lambda *_a: None)
+    row = await get_active_game_by_id(bot.games_db, gid)
+    payload = await get_game_payload(bot.games_db, gid)
+
+    assert await cog.recover_game(row, payload, _channel(), SimpleNamespace(id=77)) is True
+
+    assert "wrap_finished" not in await get_game_payload(bot.games_db, gid)
+    spy = AsyncMock()
+    monkeypatch.setattr(compliment_cog, "end_game", spy)
+    assert await cog.finish_wrap(_channel(), gid) is True
 
 
 async def test_wrap_nudge_reposts_with_checks_and_pings_only_the_stragglers(sync_db_path, quiet):

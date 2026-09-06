@@ -74,6 +74,13 @@ body below. 1–2 predate any code (2026-08-21); 3 records the assist addon.
      one not looking — and is deleted once the seat is no longer one miss
      from folding (a timely act reset the strikes, the seat folded, or the
      table closed; `warning_live`). Bot seats are never pinged.
+     Both deletes happen on a *later* transition, so the outstanding ids
+     are mirrored onto the table row (`mahjong_tables.nudges`, a nullable
+     JSON blob: turn key, draw-line ids, `member_id → warning id`) and read
+     back on resume — a restart mid-hand used to orphan them and leave a
+     member pinged for a turn that had already passed. NULL means nothing
+     is outstanding; the row is rewritten whenever a ping is posted or
+     swept.
    - *Claim-window ticks.* The per-seat response ticks on the table card show
      ✅ only for a response the seat **chose**; a seat the engine auto-passed
      (no legal route to the tile) renders exactly like an undecided one (…).
@@ -315,7 +322,7 @@ src/bot_modules/games/mahjong/
 
 **Actions:** `create, join, cancel, charleston_pick(tiles, blind_n), vote(bool), courtesy_propose(n), courtesy_pick(tiles), discard(tile), claim(pass|call(group)|mahjong), redeem_joker(exposure_id, tile), timeout, rematch`. Every transition validates seat, phase, and legality; illegal → typed rejection (never a crash, never a public message).
 
-**Serialization:** engine state is a dataclass serialized to `mahjong_tables` after every transition; on bot restart, live tables reload and re-arm their timers. Timers (`asyncio` tasks in the service layer) emit `timeout` actions; never sleep inside `game_logic`.
+**Serialization:** engine state is a dataclass serialized to `mahjong_tables` after every transition; on bot restart, live tables reload and re-arm their timers, and re-read the outstanding turn pings (`nudges`) so the sweep survives the restart. Timers (`asyncio` tasks in the service layer) emit `timeout` actions; never sleep inside `game_logic`.
 
 **Simultaneous phases** (Charleston picks, votes, proposals): collect per-seat sub-states, resolve when all seats responded or phase timer (60s) fires; missing seats auto-resolve (pass 3 random non-jokers / vote no / propose 0) and accrue an AFK strike.
 
@@ -369,7 +376,7 @@ Prefer **application-owned emoji** (uploaded to the bot application, usable in a
 | Table | Contents | Per-user | Purge |
 |---|---|---|---|
 | `mahjong_cards` | card JSON, active flag, schedule | no | — |
-| `mahjong_tables` | serialized engine state, mode, sticky message id | yes (seats) | dissolve seat, refund escrow |
+| `mahjong_tables` | serialized engine state, mode, sticky message id, outstanding turn-ping ids (`nudges`, amendment 6) | yes (seats) | dissolve seat, refund escrow |
 | `mahjong_results` | mode, winner, line id, payout, flags, hand timing, `practice` flag (practice hands record this row only — amendment 7) | yes | winner anonymised |
 | `mahjong_stats` | per-member aggregates | yes | purged |
 

@@ -8,6 +8,8 @@ slash entries, Play Again buttons, scheduler and rotation will all send.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from bot_modules.games.constants import GAME_NAMES
@@ -19,9 +21,10 @@ from bot_modules.games.utils.launch_guard import (
     busy_message,
     disabled_message,
     empty_bank_message,
-    jump_url,
+    board_link,
     launch_refusal,
     no_tag_match_message,
+    refuse_launch,
 )
 from bot_modules.services.games_db import GamesDb
 
@@ -181,10 +184,10 @@ async def test_relaunch_refusal_is_this_guard(db):
     assert f"https://discord.com/channels/{GUILD}/{CHAN}/{MSG}" in msg
 
 
-def test_jump_url_needs_every_part():
-    assert jump_url(GUILD, CHAN, MSG) == f"https://discord.com/channels/{GUILD}/{CHAN}/{MSG}"
-    assert jump_url(GUILD, CHAN, None) is None
-    assert jump_url(0, CHAN, MSG) is None
+def test_board_link_needs_every_part():
+    assert board_link(GUILD, CHAN, MSG) == f"https://discord.com/channels/{GUILD}/{CHAN}/{MSG}"
+    assert board_link(GUILD, CHAN, None) is None
+    assert board_link(0, CHAN, MSG) is None
 
 
 def test_the_copy_has_one_owner():
@@ -194,3 +197,57 @@ def test_the_copy_has_one_owner():
     assert not hasattr(game_manager, "CHANNEL_BUSY_MSG")
     assert not hasattr(game_manager, "CHANNEL_NOT_ALLOWED_MSG")
     assert launch_guard.CHANNEL_NOT_ALLOWED_MSG.startswith("This channel isn't set up for games")
+
+
+# ── the interaction doors ────────────────────────────────────────────────────
+
+
+def _interaction(*, nsfw: bool = False, channel_id: int | None = CHAN, guild_id: int | None = GUILD):
+    """A slash entry / button press, as much of one as the guard reads."""
+    return SimpleNamespace(
+        channel_id=channel_id,
+        guild_id=guild_id,
+        channel=SimpleNamespace(is_nsfw=lambda: nsfw),
+    )
+
+
+async def test_refuse_launch_is_the_same_guard_with_the_interaction_unpacked(db):
+    await _allow(db)
+    await _bank_row(db, "clapback")
+    # Off the allowlist channel-wise is still the first answer...
+    assert await refuse_launch(db, _interaction(channel_id=999), "clapback") == CHANNEL_NOT_ALLOWED_MSG
+    # ...and a clear board is a clear board.
+    assert await refuse_launch(db, _interaction(), "clapback") is None
+    # The running-game line still names the game and links to its board, so
+    # the interaction door loses nothing by going through here.
+    await create_game(db, CHAN, 5, "nhie", message_id=MSG, guild_id=GUILD)
+    msg = await refuse_launch(db, _interaction(), "clapback")
+    assert msg is not None and "Never Have I Ever" in msg
+    assert f"https://discord.com/channels/{GUILD}/{CHAN}/{MSG}" in msg
+
+
+async def test_refuse_launch_reads_the_channels_own_age_gate(db):
+    """The reason this helper exists: four doors passed ``allow_nsfw`` and the
+    rest forgot, so an NSFW-only bank read as empty in its own room."""
+    await _allow(db)
+    await _bank_row(db, "clapback", tags='["nsfw"]')
+    assert await refuse_launch(db, _interaction(nsfw=False), "clapback") == empty_bank_message("clapback")
+    assert await refuse_launch(db, _interaction(nsfw=True), "clapback") is None
+
+
+async def test_refuse_launch_forwards_the_bank_arguments(db):
+    await _allow(db)
+    await _bank_row(db, "mlt")
+    # A tag nothing carries is the tag-miss line, not the empty-bank one.
+    assert await refuse_launch(db, _interaction(), "mlt", tags=["lily"]) == no_tag_match_message(["lily"])
+    # Host-supplied material skips the bank entirely.
+    await db.execute("DELETE FROM games_question_bank")
+    assert await refuse_launch(db, _interaction(), "mlt") == empty_bank_message("mlt")
+    assert await refuse_launch(db, _interaction(), "mlt", host_supplied=True) is None
+    # And a label overrides the display name in the copy.
+    assert "Party Time" in (await refuse_launch(db, _interaction(), "mlt", label="Party Time") or "")
+
+
+async def test_refuse_launch_survives_an_interaction_with_no_guild(db):
+    """A DM-context press has no guild id; the guard must answer, not raise."""
+    assert await refuse_launch(db, _interaction(guild_id=None), "clapback") == CHANNEL_NOT_ALLOWED_MSG

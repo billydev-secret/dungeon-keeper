@@ -48,7 +48,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
@@ -576,10 +576,7 @@ class RushmoreRecapView(discord.ui.View):
         # Any member may press it and becomes the new host. The same gate as
         # the slash entry still applies: an admin who unticks the game on the
         # dashboard mid-evening must not be overridden by the recap card.
-        refusal = await launch_refusal(
-            self.cog.db, "rushmore", interaction.channel_id,
-            interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.cog.db, interaction, "rushmore")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -711,9 +708,7 @@ class RushmoreCog(commands.Cog):
         )
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "rushmore", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "rushmore")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

@@ -890,6 +890,83 @@ def _duel_game_updates(body, game_key: str) -> dict:
     return out
 
 
+# Dial pairs that only mean anything in one order. Each entry is
+# (low field, high field, strict?, message), and the labels are the panel's own
+# so the refusal names what the admin is looking at. The panels check these in
+# the browser too, but a direct PUT — or a tab left open while another admin
+# saved — went straight past that and stored a game nobody can play, so the
+# rules live here as well and the browser is only the fast feedback.
+_PLAYER_COUNT_RULE = (
+    "min_players", "max_players", False,
+    "Fewest Players to Start ({low}) cannot be more than Most Players Per "
+    "Lobby ({high}) — a lobby that full would never be allowed to start.",
+)
+
+_DUEL_DIAL_RULES: dict[str, list[tuple]] = {
+    # A holder who may not pass until after the shortest fuse has burned is
+    # never allowed to pass at all: the bomb is a coin toss on whoever caught it.
+    "hot_potato": [
+        (
+            "min_hold", "min_timer", True,
+            "Shortest Hold ({low}s) has to be shorter than Shortest Fuse "
+            "({high}s), or nobody is ever allowed to pass the potato.",
+        ),
+    ],
+    "hot_potato_group": [
+        (
+            "min_hold", "min_fuse", True,
+            "Must Hold For ({low}s) has to be shorter than Shortest Fuse "
+            "({high}s), or nobody is ever allowed to pass the bomb.",
+        ),
+        _PLAYER_COUNT_RULE,
+    ],
+    "chicken": [
+        # New on 2026-09: migration 208 split the single climb duration into a
+        # range, so an inverted pair is a state this branch made reachable.
+        (
+            "min_climb", "max_climb", False,
+            "Earliest Crash ({low}s) cannot be later than Latest Crash "
+            "({high}s) — there would be no moment left for the plane to fall.",
+        ),
+        _PLAYER_COUNT_RULE,
+    ],
+    "musical_chairs": [_PLAYER_COUNT_RULE],
+}
+
+# The fuse ranges: same shape, same reason. The browser has always checked
+# these; the route checks them too so a direct PUT, or a tab left open while
+# another admin saved, cannot store the pair the panel refuses.
+_DUEL_DIAL_RULES["hot_potato"].append(
+    (
+        "min_timer", "max_timer", False,
+        "Shortest Fuse ({low}s) cannot be longer than Longest Fuse ({high}s).",
+    )
+)
+_DUEL_DIAL_RULES["hot_potato_group"].append(
+    (
+        "min_fuse", "max_fuse", False,
+        "Shortest Fuse ({low}s) cannot be longer than Longest Fuse ({high}s).",
+    )
+)
+
+
+def _duel_dial_conflict(game_key: str, values: dict) -> str | None:
+    """The first broken ordering rule for this game, as a message, or None."""
+    for low_field, high_field, strict, message in _DUEL_DIAL_RULES.get(game_key, []):
+        low, high = values.get(low_field), values.get(high_field)
+        if low is None or high is None:
+            continue
+        if low > high or (strict and low == high):
+            return message.format(low=_dial_num(low), high=_dial_num(high))
+    return None
+
+
+def _dial_num(value) -> str:
+    """Render a dial for a message: 2 rather than 2.0, 2.5 kept as 2.5."""
+    number = float(value)
+    return str(int(number)) if number.is_integer() else str(number)
+
+
 async def _save_duel_game(request, game_key: str, body) -> dict:
     """Shared body of the six /config/games-* handlers."""
     ctx = get_ctx(request)
@@ -899,6 +976,18 @@ async def _save_duel_game(request, game_key: str, body) -> dict:
         shared = _duel_shared_updates(body)
         game = _duel_game_updates(body, game_key)
         with ctx.open_db() as conn:
+            if game:
+                # Judge the *effective* dials — stored values overlaid with this
+                # save — because every field is independently optional, so half
+                # a pair can arrive on its own.
+                spec = _DUEL_GAMES[game_key]
+                effective = _duel_game_table_row(
+                    conn, guild_id, spec["table"], spec["defaults"]
+                )
+                effective.update(game)
+                conflict = _duel_dial_conflict(game_key, effective)
+                if conflict:
+                    raise HTTPException(422, conflict)
             _duel_game_upsert(conn, guild_id, game_key, shared, game)
         return {"ok": True}
 

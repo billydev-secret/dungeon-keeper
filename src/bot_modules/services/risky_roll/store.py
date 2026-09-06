@@ -303,8 +303,9 @@ class StateStore:
                 INSERT INTO risky_pending_questions (
                     game_id, channel_id, guild_id, winner_id, prompt_message_id,
                     participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                    extra_questioner_id, questioners_asked, created_at, chased_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    extra_questioner_id, questioners_asked, created_at, chased_at,
+                    fallback_attempts, fallback_attempted_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(game_id) DO UPDATE SET
                     channel_id = excluded.channel_id,
                     guild_id = excluded.guild_id,
@@ -315,7 +316,9 @@ class StateStore:
                     prompt_kind = excluded.prompt_kind,
                     extra_questioner_id = excluded.extra_questioner_id,
                     questioners_asked = excluded.questioners_asked,
-                    chased_at = excluded.chased_at
+                    chased_at = excluded.chased_at,
+                    fallback_attempts = excluded.fallback_attempts,
+                    fallback_attempted_at = excluded.fallback_attempted_at
                     -- created_at is NOT refreshed: a two-questioner round
                     -- re-saves this row when the first of the two asks, and
                     -- restarting the clock there would let a half-finished
@@ -332,6 +335,8 @@ class StateStore:
                     serialize_user_ids(state.questioners_asked),
                     state.created_at,
                     state.chased_at,
+                    state.fallback_attempts,
+                    state.fallback_attempted_at,
                 ),
             )
 
@@ -351,7 +356,8 @@ class StateStore:
                 """
                 SELECT game_id, channel_id, guild_id, winner_id, prompt_message_id,
                        participant_user_ids, lowest_tie_user_ids, prompt_kind,
-                       extra_questioner_id, questioners_asked, created_at, chased_at
+                       extra_questioner_id, questioners_asked, created_at, chased_at,
+                       fallback_attempts, fallback_attempted_at
                 FROM risky_pending_questions
                 """
             ).fetchall()
@@ -370,6 +376,12 @@ class StateStore:
                 questioners_asked=deserialize_user_ids(row["questioners_asked"]),
                 created_at=float(row["created_at"]) if row["created_at"] is not None else 0.0,
                 chased_at=float(row["chased_at"]) if row["chased_at"] is not None else None,
+                fallback_attempts=int(row["fallback_attempts"] or 0),
+                fallback_attempted_at=(
+                    float(row["fallback_attempted_at"])
+                    if row["fallback_attempted_at"] is not None
+                    else None
+                ),
             )
             for row in rows
         ]

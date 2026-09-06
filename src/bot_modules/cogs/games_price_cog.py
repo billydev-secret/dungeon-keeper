@@ -54,7 +54,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import (
     channel_allows_nsfw,
     get_price_scenario,
@@ -638,10 +638,7 @@ class PriceRecapView(discord.ui.View):
         """Open a fresh lobby with the presser as host, behind the same gate
         as the slash entry: an admin who unticks the game on the dashboard
         mid-evening must not be overridden by the recap card."""
-        refusal = await launch_refusal(
-            self.cog.db, "price", interaction.channel_id,
-            interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.cog.db, interaction, "price")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -800,9 +797,7 @@ class PriceCog(commands.Cog):
         )
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "price", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "price")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

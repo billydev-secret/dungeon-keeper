@@ -28,8 +28,12 @@ from __future__ import annotations
 
 import random
 import statistics
-from collections.abc import Iterable
 from typing import Any
+
+from bot_modules.games.utils.round_pacing import (  # noqa: F401  (re-exported)
+    active_voters,
+    everyone_has_voted,
+)
 
 # Seconds a take stays open for votes when the dashboard dial is unset.
 # 0 on the dial means host-paced (Next only), as it does for WYR/NHIE/MLT.
@@ -97,41 +101,6 @@ def voting_refusal(takes: list[dict[str, Any]]) -> str | None:
         f"❌ Need at least {MIN_TAKES} hot takes before voting — with just one, "
         "everyone would know whose it is."
     )
-
-
-def active_voters(
-    takes: list[dict[str, Any]],
-    results: list[dict[str, Any]],
-    *,
-    exclude: int | None = None,
-) -> set[int]:
-    """The room a take is waiting on: everyone who submitted a take plus
-    everyone who has voted on an earlier take this game, minus the take's
-    own author (who may not vote on it). A member who only ever votes joins
-    the set from their first vote onward.
-    """
-    room: set[int] = set()
-    for t in takes:
-        if isinstance(t, dict) and t.get("user_id") is not None:
-            room.add(int(t["user_id"]))
-    for r in results:
-        if isinstance(r, dict):
-            room.update(int(v) for v in r.get("voters") or [])
-    if exclude is not None:
-        room.discard(int(exclude))
-    return room
-
-
-def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
-    """True when every expected voter has voted — the vote-complete auto-advance.
-
-    An empty expected set never advances (nobody to wait for is not the same
-    as everyone having spoken); the timer or Next handles that take.
-    """
-    expected_set = {int(u) for u in expected}
-    if not expected_set:
-        return False
-    return expected_set <= {int(u) for u in voted}
 
 
 def build_voting_start_message(takes: list[dict[str, Any]]) -> str:

@@ -29,7 +29,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games_story.embeds import (
     build_attribution_embed,
     build_complete_story_embed,
@@ -311,9 +311,7 @@ class StoryCog(commands.Cog):
         log.info("%s used /games play story in #%s", interaction.user.display_name, channel_name(interaction.channel))
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "story", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "story")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

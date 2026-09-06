@@ -49,7 +49,7 @@ export function mount(container) {
               "A round's bomb always goes off by this point. The actual moment is picked at random between the two, so nobody can count it out.",
               { min: 10, max: 600, step: "0.5" })}
             ${numField("min_hold", "Must Hold For (seconds)", cfg.min_hold,
-              "How long someone has to keep the bomb before they are allowed to pass it on. This stops instant hot-potato ping-pong.",
+              "How long someone has to keep the bomb before they are allowed to pass it on. This stops instant hot-potato ping-pong. It has to be shorter than the shortest fuse, or nobody is ever allowed to pass.",
               { min: 0, max: 60, step: "0.5" })}
           </div>
 
@@ -149,6 +149,11 @@ export function mount(container) {
       if (payload.max_fuse < payload.min_fuse) {
         showStatus(status, false, "Longest Fuse cannot be shorter than Shortest Fuse");
         form.querySelector("[name=max_fuse]").focus();
+        return;
+      }
+      if (payload.min_hold >= payload.min_fuse) {
+        showStatus(status, false, "Must Hold For has to be shorter than Shortest Fuse, or nobody is ever allowed to pass the bomb");
+        form.querySelector("[name=min_hold]").focus();
         return;
       }
       if (payload.max_players < payload.min_players) {

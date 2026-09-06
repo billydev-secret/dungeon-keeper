@@ -22,6 +22,9 @@ Reusable pieces:
 * :func:`wrap_schedule` / :func:`wrap_seconds_remaining` — the timing
   of the ten-minute wrap: a nudge halfway, the recap at the end, and how
   much of it is left after a restart.
+* :func:`claim_wrap` / :func:`release_wrap_claim` — the once-only claim
+  that keeps the timer and the host's own ``/games end`` from both paying
+  the pool for one round.
 
 ``serialize_pairings`` / :func:`parse_pairings` and :func:`pairing_ids`
 are tiny dict transformations the cog used to inline; pulling them out
@@ -45,6 +48,12 @@ WRAP_NUDGE_AFTER_SECONDS = 300
 # games_active_games.state while the wrap runs — a lobby is "joining", so
 # the idle-lobby sweep and recovery can tell the two apart.
 STATE_WRAPPING = "wrapping"
+
+# Payload key claimed by whoever finishes the wrap first. The ten-minute
+# timer and the host's own ``/games end`` both call ``finish_wrap``; without
+# a claim the loser reposted the wrap-up card and paid the pool a second
+# time (ship review, 2026-09-05).
+WRAP_CLAIMED_KEY = "wrap_finished"
 
 
 def join_participant(payload: dict[str, Any], user_id: int) -> bool:
@@ -179,6 +188,31 @@ def stragglers(pairings: dict[int, int], delivered: Iterable[int]) -> list[int]:
     """Givers still owing a compliment, in pairing order."""
     done = set(delivered)
     return [giver for giver in pairings if giver not in done]
+
+
+def claim_wrap(payload: dict[str, Any]) -> bool:
+    """Test-and-set the once-only wrap claim. True for the first caller only.
+
+    The cog runs this inside ``modify_payload``, so the read and the write
+    happen under the game's payload lock: the ten-minute timer and a host
+    pressing ``/games end`` at the same moment cannot both win, and only the
+    winner posts the wrap-up card and pays the pool.
+    """
+    if payload.get(WRAP_CLAIMED_KEY):
+        return False
+    payload[WRAP_CLAIMED_KEY] = True
+    return True
+
+
+def release_wrap_claim(payload: dict[str, Any]) -> bool:
+    """Drop a claim left behind by a wrap that never finished.
+
+    ``end_game`` archives the row, so a game found still live at boot means
+    the winner died mid-finish and nothing was paid — recovery clears the
+    claim before re-arming, otherwise the re-armed wrap would refuse itself
+    and the game would sit live until the 24-hour sweep.
+    """
+    return payload.pop(WRAP_CLAIMED_KEY, None) is not None
 
 
 def wrap_schedule(generated_at: int) -> tuple[int, int]:

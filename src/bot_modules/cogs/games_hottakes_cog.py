@@ -24,7 +24,6 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     finish_launch_response,
     create_game,
-    get_game_options,
     update_game_message,
     update_game_payload,
     update_game_state,
@@ -35,13 +34,13 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.round_pacing import (
     MAX_ROUND_SECONDS,
     RoundPacing,
-    resolve_pacing,
+    launch_pacing,
 )
 from bot_modules.games_hottakes.embeds import (
     build_lobby_embed,
@@ -61,7 +60,6 @@ from bot_modules.games_hottakes.logic import (
     tally_votes,
     voting_refusal,
 )
-from bot_modules.services.game_start_ping_service import resolve_start_epoch
 
 log = logging.getLogger(__name__)
 
@@ -384,9 +382,7 @@ class HotTakesCog(commands.Cog):
         take_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
     ):
         log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        refusal = await launch_refusal(
-            self.db, "hottakes", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "hottakes")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -419,15 +415,15 @@ class HotTakesCog(commands.Cog):
         ``start_in`` stamps ``start_epoch`` for the countdown and the host
         nudge, and the idle-lobby dials and Game Night ping apply.
         """
-        game_opts = await get_game_options(self.db, "hottakes", guild_id)
-        round_seconds, _ = resolve_pacing(options, {"round_seconds": DEFAULT_TAKE_SECONDS, **game_opts})
-        start_epoch = resolve_start_epoch(options)
-        payload: dict = {
+        pacing = await launch_pacing(
+            self.db, "hottakes", guild_id, options,
+            default_round_seconds=DEFAULT_TAKE_SECONDS,
+        )
+        start_epoch = pacing.start_epoch
+        payload: dict = pacing.stamp({
             "takes": [], "results": [], "participants": [],
-            "round_seconds": round_seconds,
-        }
-        if start_epoch:
-            payload["start_epoch"] = start_epoch
+            "round_seconds": pacing.round_seconds,
+        })
         game_id = await create_game(
             self.db,
             channel.id,

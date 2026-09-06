@@ -29,10 +29,12 @@ from .logic import (
     build_one_rule_prompt_state,
     choose_roll,
     effective_min_game_seconds,
+    fallback_abandoned,
     fallback_blocked,
     has_blocked_edge,
     posted_chase_blocked,
     pending_payoff_action,
+    record_fallback_failure,
     posted_chase_due,
     unasked_questioners,
 )
@@ -448,10 +450,14 @@ async def run_payoff_pass(client: discord.Client, now: float | None = None) -> i
             try:
                 if action is PayoffAction.FALLBACK:
                     sent = await _post_fallback_question(client, pending, now)
+                    if not sent:
+                        await _record_fallback_failure(pending, now)
                 else:
                     sent = await _chase_pending(client, pending, dials, now)
             except Exception:
                 log.exception("Risky Rolls: %s failed for prompt %s.", action.value, pending.game_id)
+                if action is PayoffAction.FALLBACK:
+                    await _record_fallback_failure(pending, now)
                 continue
         if sent:
             acted += 1
@@ -476,6 +482,30 @@ async def run_payoff_pass(client: discord.Client, now: float | None = None) -> i
             touched_channels.add(posted.channel_id)
 
     return acted
+
+
+async def _record_fallback_failure(pending: PendingQuestionState, now: float) -> None:
+    """Count one failed fallback and persist it, giving up after the last.
+
+    Every reason a fallback can fail is one the next tick cannot fix — an
+    empty bank, a channel the bot can no longer reach, a pairing the
+    no-contact list now forbids — so the attempt is stamped and the prompt
+    backs off (``logic.fallback_retry_delay``) instead of being picked up
+    again five minutes later for the week the row lives.
+    """
+    record_fallback_failure(pending, now)
+    if app_state.store is not None:
+        try:
+            await app_state.store.save_pending_question(pending)
+        except Exception:
+            # In-memory the count still stands, so the backoff holds until a
+            # restart; losing the row must not take the whole pass down.
+            log.exception("Risky Rolls: could not record a failed fallback for %s.", pending.game_id)
+    if fallback_abandoned(pending):
+        log.warning(
+            "Risky Rolls: giving up on a fallback question for prompt %s after %d attempts.",
+            pending.game_id, pending.fallback_attempts,
+        )
 
 
 async def _chase_pending(

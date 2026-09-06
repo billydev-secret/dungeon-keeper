@@ -9,6 +9,8 @@ the pure rules; the cogs' wiring is covered in each game's logic test.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 
 import pytest
 
@@ -285,3 +287,57 @@ async def test_advance_check_host_then_role_then_voter_unlock(sync_db_path):
     assert msg is not None and "Vote first" in msg
     hosted = RoundPacing(round_seconds=0, scheduled=False, opened_at=1.0)
     assert await rp.advance_check(_interaction(3), host_id=1, db=db, pacing=hosted, has_voted=True) == rp.ADVANCE_DENIED
+
+
+# ── launch_pacing: the whole read a launch does, in one call ─────────────────
+
+
+async def _dial_options(db: GamesDb, game_type: str, options: dict) -> None:
+    await db.execute(
+        "INSERT INTO games_game_config (guild_id, game_type, options) VALUES (?, ?, ?)",
+        (4242, game_type, json.dumps(options)),
+    )
+
+
+async def test_launch_pacing_reads_the_dashboard_dials_and_the_countdown(sync_db_path):
+    db = GamesDb(sync_db_path)
+    await _dial_options(db, "wyr", {"round_seconds": 45, "max_rounds": 3})
+    pacing = await rp.launch_pacing(db, "wyr", 4242, {"start_in": 5})
+    assert (pacing.round_seconds, pacing.max_rounds) == (45, 3)
+    # start_in minutes became an epoch roughly five minutes out.
+    assert pacing.start_epoch is not None
+    assert 4 * 60 < pacing.start_epoch - time.time() < 6 * 60
+    # The row rides along so a lobby game reads its roster dials without a
+    # second fetch.
+    assert pacing.game_opts["max_rounds"] == 3
+
+
+async def test_launch_pacing_option_beats_dial_beats_builtin_default(sync_db_path):
+    db = GamesDb(sync_db_path)
+    # Nothing configured at all: the built-ins, and no countdown.
+    bare = await rp.launch_pacing(db, "nhie", 4242, {})
+    assert (bare.round_seconds, bare.max_rounds, bare.start_epoch) == (0, DEFAULT_MAX_ROUNDS, None)
+    # A game with its own pace passes it in; the dial still wins over it.
+    defaulted = await rp.launch_pacing(db, "nhie", 4242, {}, default_round_seconds=45)
+    assert defaulted.round_seconds == 45
+    await _dial_options(db, "nhie", {"round_seconds": 20})
+    dialled = await rp.launch_pacing(db, "nhie", 4242, {}, default_round_seconds=45)
+    assert dialled.round_seconds == 20
+    # And the launch's own option wins over the dial — even at 0 (host-paced).
+    chosen = await rp.launch_pacing(db, "nhie", 4242, {"round_seconds": 0}, default_round_seconds=45)
+    assert chosen.round_seconds == 0
+
+
+@pytest.mark.parametrize(
+    ("start_epoch", "expected"),
+    [
+        pytest.param(1_700_000_000, {"a": 1, "start_epoch": 1_700_000_000}, id="countdown-is-stamped"),
+        pytest.param(None, {"a": 1}, id="no-countdown-leaves-no-key"),
+        pytest.param(0, {"a": 1}, id="zero-is-no-countdown-not-a-stamped-zero"),
+    ],
+)
+def test_launch_pacing_stamps_the_payload_only_when_there_is_a_countdown(start_epoch, expected):
+    pacing = rp.LaunchPacing(round_seconds=0, max_rounds=10, start_epoch=start_epoch)
+    payload = {"a": 1}
+    assert pacing.stamp(payload) is payload
+    assert payload == expected

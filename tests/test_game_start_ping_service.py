@@ -904,10 +904,43 @@ async def test_game_night_ping_is_skipped_for_a_lobby_the_scheduler_announced(sy
     bot = _Bot(db, {CHAN: chan})
     monkeypatch.setattr(svc, "resolve_game_night_role", AsyncMock(return_value=(True, ROLE)))
     gid = await _board(db)
-    await svc.mark_game_night_pinged(db, gid)
+    await svc.claim_game_night_ping(db, gid)
     row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
     await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
     assert chan.sends == []
+
+
+async def test_game_night_ping_stands_down_when_a_launch_claims_it_mid_tick(sync_db_path, monkeypatch):
+    """The sweep reads its rows at the top of the tick, then does slow work
+    (role lookup) before sending. A schedule announcing the same launch in
+    that window claims the line — the sweep must re-check at send time, or
+    the room is pinged twice for one game opening."""
+    db = GamesDb(sync_db_path)
+    chan = _Chan()
+    bot = _Bot(db, {CHAN: chan})
+    gid = await _board(db)
+    row = await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
+
+    async def _role(_bot, _guild_id):
+        # Stands in for the announcement landing while the role is resolved.
+        await svc.claim_game_night_ping(db, gid)
+        return True, ROLE
+
+    monkeypatch.setattr(svc, "resolve_game_night_role", _role)
+    await svc._process_lobby(bot, db, row, NOW, dials=DIALS)
+
+    assert chan.sends == []
+
+
+async def test_claim_game_night_ping_is_won_once(sync_db_path):
+    db = GamesDb(sync_db_path)
+    gid = await _board(db)
+    assert await svc.claim_game_night_ping(db, gid) is True
+    assert await svc.claim_game_night_ping(db, gid) is False
+    # An in-memory game (risky_roll) has no row to flag: nothing else can
+    # have called that room, so the launcher's own announcement goes out.
+    assert await svc.claim_game_night_ping(db, "no-such-game") is False
+    assert await svc.claim_game_night_ping(db, "no-such-game", no_row_wins=True) is True
 
 
 async def test_loop_resolves_the_role_once_per_guild_per_tick(sync_db_path, monkeypatch):

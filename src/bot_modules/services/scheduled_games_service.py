@@ -45,7 +45,7 @@ from bot_modules.services import ping_tracker_service
 from bot_modules.services.game_start_ping_service import (
     SCHEDULED_AUTO_START_MINUTES,
     auto_starter_for,
-    mark_game_night_pinged,
+    claim_game_night_ping,
     mark_start_ping_sent,
     resolve_start_epoch,
     send_start_ping,
@@ -491,11 +491,14 @@ async def _process_due(bot, games_db, row, now: float) -> None:
         # a launch that then failed had already pinged a role about a game
         # nobody would find (todo #97). Every DB-backed launcher writes
         # message_id before returning, so the row is readable by now.
-        if row["announce"]:
-            # The schedule's own announcement stands in for the platform's
-            # Game Night ping — flagged before the send so the start-ping
-            # sweep can't slip a second line in between.
-            await mark_game_night_pinged(games_db, gid)
+        # The schedule's own announcement stands in for the platform's Game
+        # Night ping, and claims it before the send so the start-ping sweep
+        # can't slip a second line in between. The claim can be *lost*: the
+        # sweep runs on its own 15s clock and may have pinged this lobby in
+        # the moments between the board appearing and this line — in which
+        # case the room has already been called and the schedule stays quiet
+        # rather than pinging twice for one game opening.
+        if row["announce"] and await claim_game_night_ping(games_db, gid, no_row_wins=True):
             board = await get_active_game_by_id(games_db, gid)
             message_id = board["message_id"] if board else None
             role_id = row["announce_role_id"]

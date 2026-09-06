@@ -76,7 +76,10 @@ def test_every_dial_names_a_key_its_cog_reads(game: str) -> None:
     if not dials:
         return
     cog = _cog(game)
-    assert "get_game_options" in cog, (
+    # Either the cog reads the row itself, or it goes through the shared
+    # launch-time read (``round_pacing.launch_pacing``), which loads exactly
+    # the same row.
+    assert "get_game_options" in cog or "launch_pacing" in cog, (
         f"games-{game}.js declares {dials} but {GAMES[game]} never loads stored "
         "options, so none of them can take effect"
     )
@@ -309,7 +312,9 @@ def test_every_stored_option_a_cog_reads_has_a_panel_dial() -> None:
     missing: dict[str, list[str]] = {}
     for cog_path in sorted(_COGS.glob("games_*_cog.py")):
         src = cog_path.read_text(encoding="utf-8")
-        m = re.search(r'get_game_options\(self\.db,\s*"([a-z_]+)"', src)
+        m = re.search(
+            r'(?:get_game_options|launch_pacing)\(\s*self\.db,\s*"([a-z_]+)"', src,
+        )
         if not m:
             continue
         game_type = m.group(1)
@@ -365,9 +370,13 @@ def test_every_toggleable_game_gates_its_own_start(game_type: str) -> None:
     # The cogs reach their GamesDb differently — most hold `self.db`, Risky
     # Rolls builds one from the app context — so match the call, not the handle.
     # ``launch_refusal`` (games/utils/launch_guard.py) is the shared guard
-    # that runs check_game_enabled for the entries wired through it.
+    # that runs check_game_enabled for the entries wired through it, and
+    # ``refuse_launch`` is its interaction-shaped door — the same guard with
+    # the interaction between the db and the game type.
     called = re.search(
-        r'(?:check_game_enabled|launch_refusal)\(\s*[^,]+,\s*"' + re.escape(game_type) + '"', src
+        r'(?:check_game_enabled|launch_refusal)\(\s*[^,]+,\s*"' + re.escape(game_type) + '"'
+        r'|refuse_launch\(\s*[^,]+,\s*[^,]+,\s*"' + re.escape(game_type) + '"',
+        src,
     )
     assert called, (
         f"{STARTABLE[game_type]} never checks the per-guild enable switch, so "

@@ -9,7 +9,7 @@ from bot_modules.games.constants import play_description
 from bot_modules.games.utils.game_manager import (
     channel_name, finish_launch_response, end_game, sign_off_game_chore,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.command_groups import play
 from .classic_logic import clamp_tier, tier_clamp_note
 from .data import SEED_PATH, get_channel_max_tier, seed_templates_from_file
@@ -63,9 +63,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running here — any game, not only another
         # LegitLibs round, which is all the private guard this replaced saw.
-        refusal = await launch_refusal(
-            self.db, "legitlibs", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "legitlibs")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -128,9 +126,7 @@ class LegitLibsCog(commands.Cog, name="LegitLibsCog"):
 
     async def another_one(self, interaction: discord.Interaction, view: RecapView, options: dict) -> None:
         """The recap button: same tier, mode and tag, next template from the pool."""
-        refusal = await launch_refusal(
-            self.db, "legitlibs", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "legitlibs")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

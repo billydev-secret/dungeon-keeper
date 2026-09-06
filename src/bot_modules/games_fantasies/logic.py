@@ -29,8 +29,12 @@ of free-form text entries, then per-entry binary voting (✅ Same vs
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
+
+from bot_modules.games.utils.round_pacing import (  # noqa: F401  (re-exported)
+    active_voters,
+    everyone_has_voted,
+)
 
 # Seconds an entry stays open for votes when the dashboard dial is unset;
 # 0 on the dial means host-paced (Next only), as for WYR/NHIE/MLT.
@@ -223,40 +227,6 @@ def roster_from_results(results: list[dict[str, Any]]) -> list[int]:
             roster.add(int(r["author"]))
         roster.update(int(v) for v in r.get("voters") or [])
     return sorted(roster)
-
-
-def active_voters(
-    entries: list[dict[str, Any]],
-    results: list[dict[str, Any]],
-    *,
-    exclude: int | None = None,
-) -> set[int]:
-    """The room an entry is waiting on: everyone who submitted this round
-    plus everyone who has voted on an earlier entry this game, minus the
-    entry's own author (who may not vote on it).
-    """
-    room: set[int] = set()
-    for e in entries:
-        if isinstance(e, dict) and e.get("user_id") is not None:
-            room.add(int(e["user_id"]))
-    for r in results:
-        if isinstance(r, dict):
-            room.update(int(v) for v in r.get("voters") or [])
-    if exclude is not None:
-        room.discard(int(exclude))
-    return room
-
-
-def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
-    """True when every expected voter has voted — the vote-complete auto-advance.
-
-    An empty expected set never advances; the timer or Next handles that
-    entry.
-    """
-    expected_set = {int(u) for u in expected}
-    if not expected_set:
-        return False
-    return expected_set <= {int(u) for u in voted}
 
 
 def round_in_progress(active_submit: Any, active_vote: Any, *, running: bool = False) -> bool:

@@ -22,6 +22,12 @@ into the card (Play Again) or logs it (a headless launch). The checks, in order:
    at least one prompt the requested tags and the channel's age-gate allow —
    refused with the dashboard hint, as Clapback already did.
 
+:func:`refuse_launch` is the same guard for the doors that hold an
+``Interaction`` — every slash entry and every Play Again / Run Again button.
+It unpacks the interaction (channel, guild and the channel's own age gate) so
+no door has to remember to, which is how four of them passed ``allow_nsfw``
+and the rest did not.
+
 ``game_manager.relaunch_refusal`` (the Play Again buttons' door) delegates here,
 so the recap cards got the bank check and the jump link the day this landed;
 the slash entries, scheduler and rotation are wired through it by later waves
@@ -33,13 +39,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+from bot_modules.core.utils import jump_url
 from bot_modules.games.constants import GAME_NAMES
 from bot_modules.games.utils.game_manager import (
     check_allowed_channel,
     check_game_enabled,
     get_active_game,
 )
-from bot_modules.games.utils.question_source import has_matching_questions
+from bot_modules.games.utils.question_source import (
+    channel_allows_nsfw,
+    has_matching_questions,
+)
 
 # The games whose launch draws its first prompt from the question bank and
 # has nothing else to fall back on: an empty bank means no game — Clapback
@@ -66,11 +76,17 @@ def disabled_message(game_type: str, label: str | None = None) -> str:
     return f"{game_name(game_type, label)} is currently disabled on this server."
 
 
-def jump_url(guild_id: int, channel_id: int, message_id: int | None) -> str | None:
-    """Discord deep link to a game's anchor message, or None without one."""
+def board_link(guild_id: int, channel_id: int, message_id: int | None) -> str | None:
+    """Permalink to a game's anchor message, or None when any part is missing.
+
+    A None-guard over :func:`bot_modules.core.utils.jump_url`, which is the
+    owner of the URL shape. Named apart from it on purpose: a module that
+    re-exported ``jump_url`` would shadow the core helper for anyone importing
+    from here.
+    """
     if not message_id or not channel_id or not guild_id:
         return None
-    return f"https://discord.com/channels/{int(guild_id)}/{int(channel_id)}/{int(message_id)}"
+    return jump_url(int(guild_id), int(channel_id), int(message_id))
 
 
 def busy_message(
@@ -124,7 +140,7 @@ async def launch_refusal(
         return disabled_message(game_type, label)
     running = await get_active_game(db, channel_id)
     if running is not None:
-        link = jump_url(guild_id, int(running["channel_id"]), running["message_id"])
+        link = board_link(guild_id, int(running["channel_id"]), running["message_id"])
         return busy_message(running["game_type"], link=link)
     if game_type in BANK_ONLY_TYPES and not host_supplied:
         tag_list = [t for t in (tags or []) if t]
@@ -133,3 +149,37 @@ async def launch_refusal(
                 return no_tag_match_message(tag_list)
             return empty_bank_message(game_type, label)
     return None
+
+
+async def refuse_launch(
+    db,
+    interaction,
+    game_type: str,
+    *,
+    label: str | None = None,
+    tags: Sequence[str] | None = None,
+    host_supplied: bool = False,
+) -> str | None:
+    """:func:`launch_refusal` for the channel an *interaction* arrived in.
+
+    Every door a member can press — a ``/games play`` entry, a recap card's
+    Play Again, a lobby's Run Again — holds the same three things: the db,
+    the interaction and the game type. Each was unpacking the interaction
+    into the positional channel and guild by hand, and the channel's own
+    age gate was remembered at four of those twenty-odd sites and forgotten
+    at the rest. Reading it here means a bank-only game can never again be
+    launched against the wrong half of the bank because a door forgot to
+    pass ``allow_nsfw``.
+
+    Returns the refusal to show the presser, or ``None`` to go ahead.
+    """
+    return await launch_refusal(
+        db,
+        game_type,
+        getattr(interaction, "channel_id", None),
+        getattr(interaction, "guild_id", None) or 0,
+        label=label,
+        tags=tags,
+        allow_nsfw=channel_allows_nsfw(getattr(interaction, "channel", None)),
+        host_supplied=host_supplied,
+    )

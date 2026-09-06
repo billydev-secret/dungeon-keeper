@@ -459,3 +459,40 @@ async def test_a_touch_on_an_archived_game_is_a_no_op(db_path):
     db = GamesDb(db_path)
     assert await touch_session(db, "gone", {"players": [1]}) is None
     assert _sessions(db_path) == []
+
+
+# ── one guild resolver, shared ───────────────────────────────────────────────
+
+
+async def test_resolve_guild_id_copies_the_stamped_column(db_path):
+    db = GamesDb(db_path)
+    row = {"guild_id": GUILD, "channel_id": CH}
+    assert await game_manager.resolve_guild_id(db, row) == GUILD
+
+
+async def test_resolve_guild_id_falls_back_to_the_allowlist_without_a_bot(db_path):
+    """The lobby sweep has no bot for this call and kept its own copy of the
+    fallback until 2026-09-05; one resolver now answers for both."""
+    db = GamesDb(db_path)
+    await db.execute(
+        "INSERT INTO games_allowed_channels (channel_id, guild_id) VALUES (?, ?)",
+        (CH, GUILD),
+    )
+    assert await game_manager.resolve_guild_id(db, {"guild_id": 0, "channel_id": CH}) == GUILD
+    # A row for a channel nobody allowlisted resolves to 0 rather than raising.
+    assert await game_manager.resolve_guild_id(db, {"guild_id": None, "channel_id": OTHER_CH}) == 0
+
+
+async def test_resolve_guild_id_prefers_the_bots_channel_cache(db_path):
+    db = GamesDb(db_path)
+    bot = SimpleNamespace(
+        get_channel=lambda cid: SimpleNamespace(guild=SimpleNamespace(id=99)),
+    )
+    assert await game_manager.resolve_guild_id(db, {"guild_id": 0, "channel_id": CH}, bot) == 99
+
+
+def test_the_lobby_sweep_has_no_private_copy_of_it():
+    from bot_modules.services import game_start_ping_service
+
+    assert not hasattr(game_start_ping_service, "_guild_id_for")
+    assert game_start_ping_service.resolve_guild_id is game_manager.resolve_guild_id

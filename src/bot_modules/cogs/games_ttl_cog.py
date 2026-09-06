@@ -27,7 +27,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games_ttl.embeds import (
@@ -386,9 +386,7 @@ class TTLCog(commands.Cog):
         log.info("%s used /games play twotruths in #%s", interaction.user.display_name, channel_name(interaction.channel))
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "ttl", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "ttl")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

@@ -177,12 +177,13 @@ def stubs(monkeypatch):
     monkeypatch.setattr(game_rewards, "append_payout_footer", _footer)
 
 
-async def _live_game(db_path, *, mode="unfiltered", game_format="hot_seat", options=None):
+async def _live_game(db_path, *, mode="unfiltered", game_format="hot_seat", options=None, roles=None):
     host = _member(1, "Host")
     seat = _member(2, "Seat")
     asker = _member(3, "Asker")
     stranger = _member(4, "Stranger")
     guild = _Guild([host, seat, asker, stranger])
+    guild.roles = list(roles or [])
     channel = _Channel(guild)
     bot = _Bot(db_path, channel)
     cog = AMACog(bot)  # type: ignore[arg-type]
@@ -449,9 +450,32 @@ async def test_hot_seat_announcement_pings_the_dialled_role(sync_db_path, stubs)
     assert allowed.everyone is False and allowed.users is True
 
 
+async def test_the_dial_is_seeded_once_from_an_existing_ama_role(sync_db_path, stubs):
+    """The dial ships unset, so a guild that already had an @AMA role would
+    have gone quiet the day social-prompt-41 shipped. The first launch adopts
+    that role and stores it (ship review, 2026-09-05)."""
+    role = SimpleNamespace(name="AMA", id=987654321098765432)
+    g = await _live_game(sync_db_path, roles=[role])
+    assert g.view.ping_role_id == role.id
+
+    stored = await g.bot.games_db.fetchone(
+        "SELECT options FROM games_game_config WHERE guild_id = ? AND game_type = 'ama'",
+        (GUILD,),
+    )
+    assert stored is not None
+    assert __import__("json").loads(stored[0])["hot_seat_ping_role_id"] == str(role.id)
+
+    await g.view._set_hot_seat(g.seat, g.channel, announce=True)
+    content, _kwargs, _ = g.channel.sends[-1]
+    assert content.startswith(f"<@&{role.id}> ")
+
+
 async def test_no_dial_means_no_role_ping_even_if_a_role_is_named_ama(sync_db_path, stubs):
+    """A role created *after* the one-time seed is not adopted: the seed
+    recorded that this guild had no @AMA role, and the dial is an admin's to
+    set from the panel."""
     g = await _live_game(sync_db_path)
-    g.guild.roles = [SimpleNamespace(name="AMA", mention="<@&1>")]
+    g.guild.roles = [SimpleNamespace(name="AMA", mention="<@&1>", id=1)]
     await g.view._set_hot_seat(g.seat, g.channel, announce=True)
     content, kwargs, _ = g.channel.sends[-1]
     assert "<@&" not in content

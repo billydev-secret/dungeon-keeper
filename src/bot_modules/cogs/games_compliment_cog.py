@@ -9,7 +9,9 @@ nudge; at ten minutes a short **Wrap-Up** card says how many compliments
 landed, carries the payout footer, and pays the pool. The game row stays
 live (``state = 'wrapping'``) for that window, so the channel is busy and a
 restart re-arms the wrap from the epochs in the payload. ``/games end`` during
-the wrap finishes it on the spot (``end_with_recap``). The recap's
+the wrap finishes it on the spot (``end_with_recap``) — and whichever of the
+two gets there first claims the wrap in the payload, so the card is posted
+and the pool paid exactly once (``claim_wrap``). The recap's
 **🔁 Spin Again** relaunches under whoever pressed it, through the shared
 launch guard.
 """
@@ -44,7 +46,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
@@ -59,12 +61,14 @@ from bot_modules.games_compliment.embeds import (
 )
 from bot_modules.games_compliment.logic import (
     STATE_WRAPPING,
+    claim_wrap,
     delivered_givers,
     generate_pairings,
     join_participant,
     leave_participant,
     pairing_ids,
     parse_pairings,
+    release_wrap_claim,
     serialize_pairings,
     stragglers,
     wrap_schedule,
@@ -256,9 +260,7 @@ class ComplimentRecapView(discord.ui.View):
             return
         # Same gate as the slash entry: allowed channel, enabled dial, and no
         # game already running here.
-        refusal = await launch_refusal(
-            self.cog.db, "compliment", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.cog.db, interaction, "compliment")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -305,6 +307,15 @@ class ComplimentCog(commands.Cog):
                 # Nothing to wrap — a malformed row; archive it quietly.
                 await end_game(self.db, game_id, reason="crash")
                 return True
+            # Still live means the wrap that claimed it died before end_game
+            # archived and paid, so the claim is stale — drop it, or the
+            # re-armed wrap would refuse itself and the game would hang.
+            def _drop_claim(payload: dict) -> None:
+                # Returns None on purpose: modify_payload writes back any
+                # non-None return, and release_wrap_claim answers a bool.
+                release_wrap_claim(payload)
+
+            await modify_payload(self.db, game_id, _drop_claim)
             self.arm_wrap(channel, game_id)
             log.info("Recovered compliment game %s (wrap-up) in #%s", game_id, getattr(channel, "name", channel.id))
             return True
@@ -396,14 +407,27 @@ class ComplimentCog(commands.Cog):
     async def finish_wrap(self, channel, game_id: str) -> bool:
         """The closing beat: recap with the payout footer, then pay the pool.
         Also what ``/games end`` runs on a wrapping game (``end_with_recap``).
-        False when the game was already ended elsewhere."""
+        Runs **once**: False when the game was already ended elsewhere, or
+        when another caller has already claimed the wrap."""
         row = await get_active_game_by_id(self.db, game_id)
         if row is None:
             return False
         task = self._wrap_tasks.get(game_id)
         if task is not None and task is not asyncio.current_task() and not task.done():
             task.cancel()
-        payload = await get_game_payload(self.db, game_id)
+        # Claim the wrap under the payload lock before anything is sent or
+        # paid. The timer and the host's own /games end can arrive together,
+        # and the row is still live for both of them — without the claim the
+        # loser reposted the wrap-up card and paid the pool twice.
+        claimed = False
+
+        def _claim(payload: dict) -> None:
+            nonlocal claimed
+            claimed = claim_wrap(payload)
+
+        payload = await modify_payload(self.db, game_id, _claim)
+        if not claimed:
+            return False
         pairings = parse_pairings(payload.get("pairings"))
         participants = [int(uid) for uid in payload.get("participants", [])]
         guild = getattr(channel, "guild", None)
@@ -452,9 +476,7 @@ class ComplimentCog(commands.Cog):
         log.info("%s used /games play compliment in #%s", interaction.user.display_name, channel_name(interaction.channel))
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "compliment", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "compliment")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

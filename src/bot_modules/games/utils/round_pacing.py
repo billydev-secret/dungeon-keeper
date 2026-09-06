@@ -15,6 +15,9 @@ This module holds the rules the three cogs share so they cannot drift:
   per-server default, else the built-in defaults (host-paced, ten rounds).
   ``0`` seconds means the host paces; ``0`` rounds means the game runs until
   ended.
+* :func:`launch_pacing` — the whole read at launch time: the dashboard's
+  dials, :func:`resolve_pacing` over them, and the lobby countdown's epoch,
+  returned as a :class:`LaunchPacing` that stamps itself onto the payload.
 * :func:`round_cap_reached` — whether the round that just closed was the
   last one.
 * :func:`voter_may_advance` — the **scheduled-game unlock**: when the launch
@@ -39,6 +42,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass, field
 from typing import Any
 
 from bot_modules.core.utils import is_host_or_mod
@@ -114,6 +118,70 @@ def resolve_pacing(options: dict | None, game_opts: dict | None) -> tuple[int, i
     return clamp_round_seconds(seconds), clamp_max_rounds(rounds)
 
 
+@dataclass(frozen=True)
+class LaunchPacing:
+    """Everything one launch needs off the pacing dials, read in one go.
+
+    Five games' ``launch`` methods opened with the same three statements —
+    read the dashboard's per-server options, fold the launch's own options
+    over them with :func:`resolve_pacing`, and turn a ``start_in`` into the
+    lobby countdown's epoch — and then each stamped the epoch onto its own
+    payload shape by hand. :func:`launch_pacing` is that block; ``game_opts``
+    rides along because the games with a join phase read their roster dials
+    out of the same row and must not fetch it twice.
+    """
+
+    round_seconds: int
+    max_rounds: int
+    start_epoch: int | None = None
+    game_opts: dict = field(default_factory=dict)
+
+    def stamp(self, payload: dict) -> dict:
+        """Write the countdown onto *payload* and return it.
+
+        No countdown means no key: the ping sweep reads ``start_epoch``'s
+        absence as "this lobby never advertised a start", so a stamped ``0``
+        or ``None`` would be a different thing entirely.
+        """
+        if self.start_epoch:
+            payload["start_epoch"] = self.start_epoch
+        return payload
+
+
+async def launch_pacing(
+    db,
+    game_type: str,
+    guild_id: int,
+    options: dict | None,
+    *,
+    default_round_seconds: int | None = None,
+) -> LaunchPacing:
+    """The pacing a launch of *game_type* runs at.
+
+    *options* is the door's own bag (slash arguments or a schedule row);
+    the dashboard's per-server dials fill the gaps. A game whose built-in
+    pace isn't "host-paced" passes *default_round_seconds* — the dashboard
+    dial still wins over it, and an explicit launch option still wins over
+    both.
+    """
+    from bot_modules.games.utils.game_manager import get_game_options  # noqa: PLC0415
+    from bot_modules.services.game_start_ping_service import resolve_start_epoch  # noqa: PLC0415
+
+    options = options or {}
+    game_opts = await get_game_options(db, game_type, guild_id)
+    defaults = (
+        game_opts if default_round_seconds is None
+        else {"round_seconds": default_round_seconds, **game_opts}
+    )
+    round_seconds, max_rounds = resolve_pacing(options, defaults)
+    return LaunchPacing(
+        round_seconds=round_seconds,
+        max_rounds=max_rounds,
+        start_epoch=resolve_start_epoch(options),
+        game_opts=game_opts,
+    )
+
+
 def is_scheduled_launch(options: dict | None, host_id: int | None) -> bool:
     """A launch with nobody at the keyboard.
 
@@ -124,6 +192,45 @@ def is_scheduled_launch(options: dict | None, host_id: int | None) -> bool:
     if (options or {}).get("scheduled"):
         return True
     return not host_id
+
+
+def active_voters(
+    entries: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    exclude: int | None = None,
+) -> set[int]:
+    """The room an entry is waiting on: everyone who submitted this round plus
+    everyone who has voted on an earlier entry this game, minus the entry's own
+    author (who may not vote on their own).
+
+    A member who only ever votes joins the set from their first vote onward.
+    Hot Takes and Fantasies & Dealbreakers both pace on this: their payloads
+    use the same ``user_id`` and ``voters`` keys, and ``games_system_spec.md``
+    calls their pacing identical, so the rule lives here rather than twice.
+    """
+    room: set[int] = set()
+    for e in entries:
+        if isinstance(e, dict) and e.get("user_id") is not None:
+            room.add(int(e["user_id"]))
+    for r in results:
+        if isinstance(r, dict):
+            room.update(int(v) for v in r.get("voters") or [])
+    if exclude is not None:
+        room.discard(int(exclude))
+    return room
+
+
+def everyone_has_voted(expected: Iterable[int], voted: Iterable[int]) -> bool:
+    """True when every expected voter has voted — the vote-complete auto-advance.
+
+    An empty expected set never advances (nobody to wait for is not the same as
+    everyone having spoken); the timer or Next handles that entry.
+    """
+    expected_set = {int(u) for u in expected}
+    if not expected_set:
+        return False
+    return expected_set <= {int(u) for u in voted}
 
 
 def round_cap_reached(round_num: int, max_rounds: int) -> bool:

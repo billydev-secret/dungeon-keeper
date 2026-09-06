@@ -733,3 +733,30 @@ async def test_an_announcing_schedule_stands_in_for_the_game_night_ping(sync_db_
     active = await db.fetchone("SELECT game_id FROM games_active_games")
     assert active is not None
     assert (await get_game_payload(db, active["game_id"]))["game_night_pinged"] is True
+    # One call to the room: the schedule's announcement (the other send is
+    # the host's own start nudge, which mentions nobody else).
+    assert [line for line in bot._channels[CHAN].sends if "<@&555>" in line]
+
+
+async def test_a_schedule_stays_quiet_when_the_sweep_pinged_the_lobby_first(sync_db_path):
+    """The two loops can be mid-flight together: the platform sweep pings the
+    lobby the moment its board exists, which can land before the schedule gets
+    to its own announcement. One game opening, one ping — the loser stands
+    down instead of calling the room a second time."""
+    from bot_modules.games.utils.game_manager import create_game
+    from bot_modules.services.game_start_ping_service import claim_game_night_ping
+
+    db = GamesDb(sync_db_path)
+
+    async def fake_launch(*, channel, host_id, host_name, guild_id, options):
+        gid = await create_game(db, CHAN, 2001, "story", state="joining", message_id=555)
+        # The sweep tick that ran while this launcher was posting the board.
+        await claim_game_night_ping(db, gid)
+        return gid
+
+    bot = _Bot(db, {CHAN: _Chan(CHAN)}, {"story": fake_launch})
+    row = await _insert(db, game_type="story", announce=1, announce_role_id=555)
+
+    await svc._process_due(bot, db, row, NOW)
+
+    assert not [line for line in bot._channels[CHAN].sends if "<@&555>" in line]

@@ -28,7 +28,7 @@ from bot_modules.games.utils.game_manager import (
     end_game,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal, no_tag_match_message
+from bot_modules.games.utils.launch_guard import no_tag_match_message, refuse_launch
 from bot_modules.games.command_groups import play
 from bot_modules.games_ffa.logic import note_reply, recap_summary
 from bot_modules.games_ffa.prompts import label_for_kind
@@ -640,9 +640,7 @@ class FFACog(commands.Cog):
         log.info("%s used /games play %s in #%s", interaction.user.display_name, cmd, channel_name(interaction.channel))
         # The one launch guard every door shares: allowed channel, enabled
         # dial, and no game already running in this channel.
-        refusal = await launch_refusal(
-            self.db, "ffa", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "ffa")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

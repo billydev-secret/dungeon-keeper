@@ -17,7 +17,6 @@ from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     create_game,
     get_active_game_by_id,
-    get_game_options,
     update_game_message,
     update_game_payload,
     get_game_payload,
@@ -28,7 +27,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_name,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.question_source import (
     get_nhie_statement,
@@ -45,7 +44,7 @@ from bot_modules.games.utils.round_pacing import (
     advance_check,
     is_scheduled_launch,
     may_control,
-    resolve_pacing,
+    launch_pacing,
     round_cap_reached,
     seconds_left,
 )
@@ -326,10 +325,9 @@ class NHIECog(commands.Cog):
         # The one launch guard every door shares: allowed channel, enabled
         # dial, no game already running here, and a bank with something to
         # serve unless the host brought their own statement.
-        refusal = await launch_refusal(
-            self.db, "nhie", interaction.channel_id, interaction.guild_id or 0,
-            tags=tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel),
-            host_supplied=bool(question.strip()),
+        refusal = await refuse_launch(
+            self.db, interaction, "nhie",
+            tags=tag_list, host_supplied=bool(question.strip()),
         )
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
@@ -362,8 +360,7 @@ class NHIECog(commands.Cog):
         lives = max(0, min(int(options.get("lives", DEFAULT_LIVES)), 10))
         guild = getattr(channel, "guild", None)
 
-        game_opts = await get_game_options(self.db, "nhie", guild_id)
-        round_seconds, max_rounds = resolve_pacing(options, game_opts)
+        pacing = await launch_pacing(self.db, "nhie", guild_id, options)
         game_id = await create_game(
             self.db,
             channel.id,
@@ -373,7 +370,7 @@ class NHIECog(commands.Cog):
             payload={
                 "rounds": {}, "guilt_scores": {}, "lives": {}, "eliminated": [], "max_lives": lives,
                 "tags": options.get("tags") or [],
-                "round_seconds": round_seconds, "max_rounds": max_rounds,
+                "round_seconds": pacing.round_seconds, "max_rounds": pacing.max_rounds,
                 "scheduled": is_scheduled_launch(options, host_id),
             },
             guild_id=guild_id,

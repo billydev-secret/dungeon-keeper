@@ -15,6 +15,7 @@ import pytest
 from bot_modules.cogs.mahjong_cog import MahjongCog
 from bot_modules.games.mahjong import views as mj_views
 from bot_modules.games.mahjong.game_logic import AUTO_PASS, Phase
+from bot_modules.games.mahjong.mahjong_service import NudgeRecord
 
 
 class _StubCtx:
@@ -417,13 +418,17 @@ def test_rack_context_claim_window_copy_per_response(kind, copy):
 def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
     # mahjong-144: a plain content ping (never an embed) on each human turn
     # start, allowed_mentions restricted to that member, deleted on the next
-    # transition; the second strike gets its own warning line.
+    # transition; the second strike gets its own warning line. Every id is
+    # mirrored onto the table row so a restart can still sweep them.
     import asyncio
 
     from tests.test_mahjong_game_logic import play_state
 
     class _Msg:
+        _next = iter(range(9000, 9999))
+
         def __init__(self):
+            self.id = next(_Msg._next)
             self.deleted = False
 
         async def delete(self):
@@ -439,10 +444,28 @@ def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
             self.sent.append((content, allowed_mentions, msg))
             return msg
 
+        def get_partial_message(self, message_id):
+            for _, _, msg in self.sent:
+                if msg.id == message_id:
+                    return msg
+            raise AssertionError(f"deleted an unknown message {message_id}")
+
+    class _Service:
+        """Stands in for the row: what the cog last persisted."""
+
+        def __init__(self):
+            self.saved: NudgeRecord | None = None
+
+        async def set_nudges(self, table_id, record):
+            self.saved = NudgeRecord.from_json(
+                None if record.is_empty() else record.to_json())
+
+        async def get_nudges(self, table_id):
+            return self.saved or NudgeRecord()
+
     cog = _cog()
     cog.nudges = {}
-    cog.warnings = {}
-    cog._turn_keys = {}
+    cog.service = _Service()  # type: ignore[assignment]
     channel = _Channel()
     state = play_state(2, {0: "9c*13", 1: "8b*13"}, turn=0)
 
@@ -451,6 +474,9 @@ def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
     assert content == "<@100> — your draw."
     assert [u.id for u in mentions.users] == [100]  # type: ignore[union-attr]
     assert mentions.everyone is False and mentions.roles is False
+    # and it reached the row, not just the cog
+    assert cog.service.saved is not None  # type: ignore[attr-defined]
+    assert cog.service.saved.draws == [first.id]  # type: ignore[attr-defined]
 
     # same turn again (a redeem, an assist refresh) → nothing new, nothing gone
     asyncio.run(cog._post_nudges(channel, 7, state, []))
@@ -465,6 +491,7 @@ def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
         channel, 7, struck, [("strike", {"seat": 0, "strikes": 2})]))
     _, _, warning = channel.sent[-1]
     assert channel.sent[-1][0] == "<@100> — one more missed turn and your seat folds."
+    assert cog.service.saved.warnings == {100: warning.id}  # type: ignore[attr-defined]
 
     # next turn → the old draw line goes, the next seat gets its own — and
     # the warning STAYS: the member it names is the one not looking, and a
@@ -482,12 +509,56 @@ def test_turn_nudges_post_delete_and_never_reping_the_same_turn():
     asyncio.run(cog._post_nudges(channel, 7, acted, [("tile_drawn", {"seat": 1})]))
     assert warning.deleted
 
-    # the table closes → every nudge is swept
+    # the table closes → every nudge is swept, and the row goes back to empty
     asyncio.run(cog._post_nudges(
         channel, 7, struck, [("strike", {"seat": 0, "strikes": 2})]))
-    asyncio.run(cog._clear_nudges(7, warnings=True))
+    asyncio.run(cog._clear_nudges(channel, 7))
     assert all(m.deleted for _, _, m in channel.sent)
-    assert 7 not in cog.nudges and 7 not in cog.warnings and 7 not in cog._turn_keys
+    assert 7 not in cog.nudges
+    assert cog.service.saved.is_empty()  # type: ignore[attr-defined]
+
+
+def test_a_restart_mid_hand_still_sweeps_the_stale_turn_ping():
+    # ship review: the ids lived only on the cog, so a restart orphaned the
+    # "your draw" line — the resumed process re-armed the table but could no
+    # longer delete a ping for a turn that had already passed.
+    import asyncio
+
+    deleted: list[int] = []
+
+    class _Channel:
+        async def send(self, content, *, allowed_mentions, **kw):
+            raise AssertionError("this half of the test posts nothing")
+
+        def get_partial_message(self, message_id):
+            class _P:
+                async def delete(_self):
+                    deleted.append(message_id)
+            return _P()
+
+    class _Service:
+        def __init__(self, record):
+            self.record = record
+
+        async def get_nudges(self, table_id):
+            return self.record
+
+        async def set_nudges(self, table_id, record):
+            self.record = record
+
+    # what the pre-restart process left on the row: turn 0's ping
+    stored = NudgeRecord(turn_key=[1, 0, 0, "wall"], draws=[555])
+    cog = _cog()
+    cog.nudges = {}
+    cog.service = _Service(stored)  # type: ignore[assignment]
+    channel = _Channel()
+
+    # the resumed cog reads the row back …
+    cog.nudges[7] = asyncio.run(cog.service.get_nudges(7))  # type: ignore[attr-defined]
+    # … and the table closing sweeps the stale ping it never posted itself
+    asyncio.run(cog._clear_nudges(channel, 7))
+    assert deleted == [555]
+    assert cog.service.record.is_empty()  # type: ignore[attr-defined]
 
 
 def test_table_sticky_holds_its_restick_through_a_claim_window():

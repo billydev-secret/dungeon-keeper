@@ -25,6 +25,7 @@ from bot_modules.games.mahjong.mahjong_service import (
     LOBBY_LIFETIME,
     SETTLE_LIFETIME,
     MahjongService,
+    NudgeRecord,
     TableError,
     _hand_gid,
     activate_due_cards,
@@ -611,6 +612,53 @@ async def test_resume_refunds_an_unloadable_table(service, db):
     assert row["status"] == "closed" and row["closed_reason"] == "unloadable"
     assert balances(db, HOST, GUEST) == [1000, 1000]
     await fresh.shutdown()
+
+
+# ── Turn-ping persistence ────────────────────────────────────────────────────
+
+
+async def test_nudge_record_round_trips_through_the_row(service, db):
+    table_id = await make_duel(service, db)
+    assert (await service.get_nudges(table_id)).is_empty()
+    assert table_row(db, table_id)["nudges"] is None
+
+    await service.set_nudges(table_id, NudgeRecord(
+        turn_key=[1, 0, 4, "wall"], draws=[555], warnings={HOST: 777},
+    ))
+    stored = await service.get_nudges(table_id)
+    assert stored.turn_key == [1, 0, 4, "wall"]
+    assert stored.draws == [555]
+    assert stored.warnings == {HOST: 777}  # int keys back out of JSON
+
+
+async def test_a_resumed_service_reads_the_pings_back(service, db):
+    # the fix: the ids used to live only on the cog, so a restart mid-hand
+    # left the "your draw" line for a turn that had already passed with
+    # nothing able to delete it.
+    table_id = await make_duel(service, db)
+    await service.set_nudges(table_id, NudgeRecord(draws=[555], warnings={GUEST: 777}))
+
+    fresh = MahjongService(db)
+    assert await fresh.resume_tables() == [table_id]
+    resumed = await fresh.get_nudges(table_id)
+    assert resumed.draws == [555] and resumed.warnings == {GUEST: 777}
+    await fresh.shutdown()
+
+
+async def test_clearing_the_pings_writes_null(service, db):
+    table_id = await make_duel(service, db)
+    await service.set_nudges(table_id, NudgeRecord(draws=[555]))
+    assert table_row(db, table_id)["nudges"] is not None
+    await service.set_nudges(table_id, NudgeRecord())
+    assert table_row(db, table_id)["nudges"] is None
+    assert (await service.get_nudges(table_id)).is_empty()
+
+
+@pytest.mark.parametrize("raw", [None, "", "{not json", "[]", '{"warnings": {"x": 1}}'])
+def test_an_unreadable_record_reads_as_empty(raw):
+    # a corrupt cell must not stop a table resuming; the worst case is one
+    # stale ping nobody sweeps, which is where this started.
+    assert NudgeRecord.from_json(raw).is_empty()
 
 
 # ── Listener + timer arming ──────────────────────────────────────────────────

@@ -38,7 +38,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.services.name_resolver import NameFn, build_name_fn
 from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
@@ -651,11 +651,7 @@ class ClapbackRecapView(discord.ui.View):
         # dashboard mid-evening must not be overridden by the recap card. The
         # bank check honours the channel's age-gate the way the slash entry
         # does, or an NSFW-only bank would refuse a rematch in its own room.
-        refusal = await launch_refusal(
-            self.cog.db, "clapback", interaction.channel_id,
-            interaction.guild_id or 0,
-            allow_nsfw=channel_allows_nsfw(interaction.channel),
-        )
+        refusal = await refuse_launch(self.cog.db, interaction, "clapback")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -686,11 +682,7 @@ class ClapbackRecapView(discord.ui.View):
         if not is_host_or_mod(interaction, self.host_id):
             await interaction.response.send_message("❌ Only the host can start a rematch.", ephemeral=True)
             return
-        refusal = await launch_refusal(
-            self.cog.db, "clapback", interaction.channel_id,
-            interaction.guild_id or 0,
-            allow_nsfw=channel_allows_nsfw(interaction.channel),
-        )
+        refusal = await refuse_launch(self.cog.db, interaction, "clapback")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -808,10 +800,7 @@ class ClapbackCog(commands.Cog):
         # The one launch guard every door shares: allowed channel, enabled
         # dial, no game already running here, and — Clapback is bank-only —
         # a bank with a prompt this channel's age-gate lets it serve.
-        refusal = await launch_refusal(
-            self.db, "clapback", interaction.channel_id, interaction.guild_id or 0,
-            allow_nsfw=channel_allows_nsfw(interaction.channel),
-        )
+        refusal = await refuse_launch(self.db, interaction, "clapback")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return

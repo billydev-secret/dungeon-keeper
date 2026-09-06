@@ -12,7 +12,6 @@ from bot_modules.services.name_resolver import NameFn, build_name_fn
 from bot_modules.services.no_contact_service import is_no_contact
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
-    resolve_start_epoch,
 )
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
@@ -24,7 +23,6 @@ from bot_modules.games.utils.game_manager import (
     finish_launch_response,
     create_game,
     get_active_game_by_id,
-    get_game_options,
     update_game_message,
     update_game_payload,
     update_game_state,
@@ -37,7 +35,7 @@ from bot_modules.games.utils.game_manager import (
     resolve_names,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import (
     get_mlt_prompt,
     channel_allows_nsfw,
@@ -53,7 +51,7 @@ from bot_modules.games.utils.round_pacing import (
     advance_check,
     is_scheduled_launch,
     may_control,
-    resolve_pacing,
+    launch_pacing,
     round_cap_reached,
     seconds_left,
 )
@@ -482,10 +480,9 @@ class MLTCog(commands.Cog):
         # dial, no game already running here, and a bank with something to
         # serve unless the host brought their own prompt (platform-27: a bare
         # /mlt used to fill a lobby and die at Start on an empty bank).
-        refusal = await launch_refusal(
-            self.db, "mlt", interaction.channel_id, interaction.guild_id or 0,
-            tags=tag_list, allow_nsfw=channel_allows_nsfw(interaction.channel),
-            host_supplied=bool(question.strip()),
+        refusal = await refuse_launch(
+            self.db, interaction, "mlt",
+            tags=tag_list, host_supplied=bool(question.strip()),
         )
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
@@ -515,25 +512,24 @@ class MLTCog(commands.Cog):
     ) -> str | None:
         """Interaction-free launch (slash command + scheduler). Returns game_id, or None."""
         question = options.get("question", "")
+        # One read of the dial row covers the pacing and the roster limits.
+        pacing = await launch_pacing(self.db, "mlt", guild_id, options)
+        game_opts = pacing.game_opts
         # The two dials this game actually has somewhere to enforce: it is one
         # of only two with a join phase. Clamped on the way in so a value saved
         # before the dashboard bounded them cannot outgrow the vote Select.
-        game_opts = await get_game_options(self.db, "mlt", guild_id)
         min_players, max_players = clamp_player_limits(
             options.get("min_players", game_opts.get("min_players", MIN_PLAYERS)),
             options.get("max_players", game_opts.get("max_players", MAX_PLAYERS)),
         )
-        round_seconds, max_rounds = resolve_pacing(options, game_opts)
-        start_epoch = resolve_start_epoch(options)
-        payload = {
+        start_epoch = pacing.start_epoch
+        payload = pacing.stamp({
             "opening_prompt": question.strip() or None, "rounds": {}, "crowns": {}, "players": [],
             "tags": options.get("tags") or [],
             "min_players": min_players, "max_players": max_players,
-            "round_seconds": round_seconds, "max_rounds": max_rounds,
+            "round_seconds": pacing.round_seconds, "max_rounds": pacing.max_rounds,
             "scheduled": is_scheduled_launch(options, host_id),
-        }
-        if start_epoch:
-            payload["start_epoch"] = start_epoch
+        })
         game_id = await create_game(
             self.db,
             channel.id,

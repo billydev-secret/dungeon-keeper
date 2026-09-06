@@ -23,7 +23,6 @@ from bot_modules.games.utils.game_manager import (
     ConfirmCloseView,
     finish_launch_response,
     create_game,
-    get_game_options,
     update_game_message,
     update_game_state,
     get_game_payload,
@@ -32,12 +31,12 @@ from bot_modules.games.utils.game_manager import (
     modify_payload,
     channel_name,
 )
-from bot_modules.games.utils.launch_guard import launch_refusal
+from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.round_pacing import (
     MAX_ROUND_SECONDS,
     RoundPacing,
-    resolve_pacing,
+    launch_pacing,
 )
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.games_fantasies.embeds import (
@@ -60,7 +59,6 @@ from bot_modules.games_fantasies.logic import (
     roster_from_results,
     round_in_progress,
 )
-from bot_modules.services.game_start_ping_service import resolve_start_epoch
 
 log = logging.getLogger(__name__)
 
@@ -359,9 +357,7 @@ class FantasiesCog(commands.Cog):
         entry_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
     ):
         log.info("%s used /games play fantasies in #%s", interaction.user.display_name, channel_name(interaction.channel))
-        refusal = await launch_refusal(
-            self.db, "fantasies", interaction.channel_id, interaction.guild_id or 0,
-        )
+        refusal = await refuse_launch(self.db, interaction, "fantasies")
         if refusal:
             await interaction.response.send_message(refusal, ephemeral=True)
             return
@@ -395,12 +391,14 @@ class FantasiesCog(commands.Cog):
         ``start_epoch`` for the countdown and the host nudge, and the
         idle-lobby dials and Game Night ping apply until the first round.
         """
-        game_opts = await get_game_options(self.db, "fantasies", guild_id)
-        round_seconds, _ = resolve_pacing(options, {"round_seconds": DEFAULT_ENTRY_SECONDS, **game_opts})
-        start_epoch = resolve_start_epoch(options)
-        payload: dict = {"rounds": {}, "results": [], "round_seconds": round_seconds}
-        if start_epoch:
-            payload["start_epoch"] = start_epoch
+        pacing = await launch_pacing(
+            self.db, "fantasies", guild_id, options,
+            default_round_seconds=DEFAULT_ENTRY_SECONDS,
+        )
+        start_epoch = pacing.start_epoch
+        payload: dict = pacing.stamp(
+            {"rounds": {}, "results": [], "round_seconds": pacing.round_seconds},
+        )
         game_id = await create_game(
             self.db,
             channel.id,

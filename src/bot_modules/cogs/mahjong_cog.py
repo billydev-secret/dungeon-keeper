@@ -49,6 +49,7 @@ from bot_modules.games.mahjong.game_logic import (
 from bot_modules.games.mahjong.mahjong_service import (
     STALE_TABLE,
     MahjongService,
+    NudgeRecord,
     TableError,
     activate_due_cards,
     escrow_amount,
@@ -89,15 +90,14 @@ class MahjongCog(commands.Cog):
         #: table_id → its last-rendered phase, read by the sticky's ``hold``
         #: so chat during a claim window can't move the card mid-window.
         self.table_phase: dict[int, Phase] = {}
-        #: table_id → the plain "your draw" pings posted for the current
-        #: turn; swept on the next turn (mahjong-144).
-        self.nudges: dict[int, list[discord.Message]] = {}
-        #: table_id → member_id → its standing second-strike warning; kept
-        #: across turns (the member it names is the one not looking) and
-        #: deleted once the seat is no longer one miss from folding.
-        self.warnings: dict[int, dict[int, discord.Message]] = {}
-        #: table_id → embeds.turn_key of the turn last nudged.
-        self._turn_keys: dict[int, tuple | None] = {}
+        #: table_id → the pings that still owe a sweep (mahjong-144): the
+        #: plain "your draw" lines of the current turn, and every standing
+        #: second-strike warning, which is kept across turns (the member it
+        #: names is the one not looking) until the seat is no longer one
+        #: miss from folding. This is the fast path; the same record is
+        #: written to the table row after every change, so a restart
+        #: mid-hand can still delete a ping for a turn that has passed.
+        self.nudges: dict[int, NudgeRecord] = {}
 
     async def cog_load(self) -> None:
         self.card_scheduler.start()
@@ -118,6 +118,8 @@ class MahjongCog(commands.Cog):
             if meta is None or state is None or meta["status"] != "live":
                 continue  # a past-due timer already closed it (resume race)
             self.table_phase[table_id] = state.phase
+            # the pings the pre-restart process posted and never swept
+            self.nudges[table_id] = await self.service.get_nudges(table_id)
             self._track_table(table_id, meta["channel_id"])
             self.bot.add_view(
                 mj_views.TableView(self, table_id, register_all=True)
@@ -295,7 +297,7 @@ class MahjongCog(commands.Cog):
                     ))
             elif kind == "table_closed":
                 self._untrack_table(table_id, meta["channel_id"])
-                await self._clear_nudges(table_id, warnings=True)
+                await self._clear_nudges(channel, table_id)
 
         if meta["status"] == "live":
             self._track_table(table_id, meta["channel_id"])
@@ -348,16 +350,22 @@ class MahjongCog(commands.Cog):
         The previous turn's draw line is deleted first, so the channel
         carries at most one turn's worth; the warning stays up across turns
         — the member it names is the one not looking — until the seat is
-        no longer one miss from folding (``warning_live``)."""
-        await self._expire_warnings(table_id, state)
+        no longer one miss from folding (``warning_live``).
+
+        Every message id lands on the table row as well as in memory: the
+        deletes all happen on a *later* transition, so a restart in between
+        used to orphan them and leave a member pinged for a turn that had
+        already passed."""
+        record = self.nudges.setdefault(table_id, NudgeRecord())
+        dirty = await self._expire_warnings(channel, record, state)
         key = mj_embeds.turn_key(state)
-        changed = key != self._turn_keys.get(table_id)
+        wanted = list(key) if key is not None else None
+        changed = wanted != record.turn_key
         lines = mj_embeds.nudge_lines(state, events, turn_changed=changed)
-        if not changed and not lines:
-            return
         if changed:
-            await self._clear_nudges(table_id)
-            self._turn_keys[table_id] = key
+            await self._sweep_draws(channel, record)
+            record.turn_key = wanted
+            dirty = True
         for member_id, content, warning in lines:
             try:
                 msg = await channel.send(
@@ -370,38 +378,51 @@ class MahjongCog(commands.Cog):
             except discord.HTTPException:
                 log.warning("Mahjong: nudge failed in #%s", channel, exc_info=True)
                 continue
+            dirty = True
             if warning:
                 await self._delete_quietly(
-                    self.warnings.setdefault(table_id, {}).pop(member_id, None))
-                self.warnings[table_id][member_id] = msg
+                    channel, record.warnings.pop(member_id, None))
+                record.warnings[member_id] = msg.id
             else:
-                self.nudges.setdefault(table_id, []).append(msg)
+                record.draws.append(msg.id)
+        if dirty:
+            await self.service.set_nudges(table_id, record)
 
-    async def _expire_warnings(self, table_id: int, state: GameState) -> None:
-        standing = self.warnings.get(table_id, {})
-        for member_id in [
-            m for m in standing if not mj_embeds.warning_live(state, m)
-        ]:
-            await self._delete_quietly(standing.pop(member_id))
+    async def _expire_warnings(
+        self, channel, record: NudgeRecord, state: GameState
+    ) -> bool:
+        """Drop every warning whose seat is no longer one miss from folding.
+        Returns whether anything went, so the caller writes the row once."""
+        stale = [m for m in record.warnings if not mj_embeds.warning_live(state, m)]
+        for member_id in stale:
+            await self._delete_quietly(channel, record.warnings.pop(member_id))
+        return bool(stale)
 
-    async def _clear_nudges(
-        self, table_id: int, *, warnings: bool = False
-    ) -> None:
-        """Sweep the turn's draw lines; ``warnings`` too when the table is
-        going away (a closed table has nothing left to fold)."""
-        self._turn_keys.pop(table_id, None)
-        for msg in self.nudges.pop(table_id, []):
-            await self._delete_quietly(msg)
-        if warnings:
-            for msg in self.warnings.pop(table_id, {}).values():
-                await self._delete_quietly(msg)
+    async def _sweep_draws(self, channel, record: NudgeRecord) -> None:
+        """The turn moved on: its draw lines go, the warnings stay."""
+        for message_id in record.draws:
+            await self._delete_quietly(channel, message_id)
+        record.draws.clear()
+        record.turn_key = None
+
+    async def _clear_nudges(self, channel, table_id: int) -> None:
+        """Sweep everything, warnings included — the table is going away,
+        and a closed table has nothing left to fold."""
+        record = self.nudges.pop(table_id, None)
+        if record is None:
+            record = await self.service.get_nudges(table_id)
+        await self._sweep_draws(channel, record)
+        for message_id in list(record.warnings.values()):
+            await self._delete_quietly(channel, message_id)
+        record.warnings.clear()
+        await self.service.set_nudges(table_id, record)
 
     @staticmethod
-    async def _delete_quietly(msg: discord.Message | None) -> None:
-        if msg is None:
+    async def _delete_quietly(channel, message_id: int | None) -> None:
+        if message_id is None:
             return
         try:
-            await msg.delete()
+            await channel.get_partial_message(message_id).delete()
         except discord.HTTPException:
             pass  # already gone (a mod swept it) — nothing to keep
 
