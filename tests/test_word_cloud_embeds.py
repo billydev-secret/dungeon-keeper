@@ -70,13 +70,13 @@ def test_card_explains_the_colours_only_when_they_mean_something():
 
 
 def test_card_carries_the_notes_it_was_given():
-    field = next(f for f in _embed(notes=["one", "two"]).fields if f.name == "Worth knowing")
+    field = next(f for f in _embed(notes=["one", "two"]).fields if f.name == "Worth Knowing")
     assert "one" in field.value
     assert "two" in field.value
 
 
 def test_card_omits_the_notes_field_when_there_are_none():
-    assert not any(f.name == "Worth knowing" for f in _embed().fields)
+    assert not any(f.name == "Worth Knowing" for f in _embed().fields)
 
 
 def test_card_points_its_image_at_the_attachment():

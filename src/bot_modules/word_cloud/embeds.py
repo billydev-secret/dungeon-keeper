@@ -12,6 +12,8 @@ from datetime import timedelta
 
 import discord
 
+from bot_modules.core.branding import apply_section_spacing
+
 from .logic import span_label
 
 #: Filename the attachment is sent under; the embed's image points at it.
@@ -44,7 +46,7 @@ def build_cloud_embed(
         who = f" from {discord.utils.escape_markdown(member_name)}"
 
     embed = discord.Embed(
-        title="Word cloud",
+        title="Word Cloud",
         description=(
             f"**{message_count:,}** messages{who} in {scope_label}, "
             f"over the last {span_label(span)} — from {source_label}."
@@ -58,6 +60,7 @@ def build_cloud_embed(
             inline=False,
         )
     if notes:
-        embed.add_field(name="Worth knowing", value="\n".join(notes), inline=False)
+        embed.add_field(name="Worth Knowing", value="\n".join(notes), inline=False)
+    apply_section_spacing(embed)
     embed.set_image(url=f"attachment://{FILENAME}")
     return embed

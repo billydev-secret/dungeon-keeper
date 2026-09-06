@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import re
+from datetime import timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -51,6 +52,7 @@ from bot_modules.jail import embeds as jail_embeds
 from bot_modules.member_info import embeds as member_info_embeds
 from bot_modules.member_info import logic as member_info_logic
 from bot_modules.music_playlist import embeds as music_playlist_embeds
+from bot_modules.word_cloud import embeds as word_cloud_embeds
 from bot_modules.core import branding
 from bot_modules.services import branding_service
 from bot_modules.services import casino_service
@@ -894,6 +896,22 @@ CASES = [
         lambda **kw: mahjong_embeds.build_how_to_play(
             _mahjong_card(), MahjongSettings(), accent=kw.get("color")),
         branding.DEFAULT_ACCENT_COLOR,
+    ),
+    # Passthrough-only: the cog hands it whatever safe_resolve_accent returned,
+    # which is legitimately None on a guild with no accent set.
+    case(
+        "word_cloud.cloud",
+        lambda **kw: word_cloud_embeds.build_cloud_embed(
+            message_count=1_200,
+            member_name=None,
+            scope_label="#general",
+            span=timedelta(days=7),
+            source_label="stored history",
+            by_sentiment=True,
+            notes=["Capped at the most recent 5,000 messages."],
+            color=kw.get("color"),
+        ),
+        None,
     ),
 ]
 
