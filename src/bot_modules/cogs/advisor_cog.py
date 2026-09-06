@@ -433,7 +433,7 @@ class _PublicPostView(discord.ui.View):
 # custom_id on click and holds no reference to the cog that registered it.
 _REPLY_COOLDOWN = ReplyCooldown()
 
-_CHAT_NOT_YOURS = "That isn't your chat — press **Ask a question** on the panel to start your own."
+_CHAT_NOT_YOURS = "That isn't your chat — press **Ask a Question** on the panel to start your own."
 
 
 async def _cooldown_blocked(interaction: discord.Interaction, user_id: int) -> bool:
@@ -602,7 +602,7 @@ class AskPanelButton(
     def __init__(self) -> None:
         super().__init__(
             discord.ui.Button(
-                label="Ask a question",
+                label="Ask a Question",
                 emoji="💬",
                 style=discord.ButtonStyle.primary,
                 custom_id="advisor_panel:ask",
@@ -663,7 +663,7 @@ class AskChatReplyButton(
         if is_full(history):
             await interaction.response.send_message(
                 f"That chat has used all {MAX_EXCHANGES} of its questions — press "
-                "**Ask a question** on the panel to start a fresh one.",
+                "**Ask a Question** on the panel to start a fresh one.",
                 ephemeral=True,
             )
             return
@@ -683,7 +683,7 @@ class AskChatEndButton(
     def __init__(self, user_id: int) -> None:
         super().__init__(
             discord.ui.Button(
-                label="End chat",
+                label="End Chat",
                 emoji="✖️",
                 style=discord.ButtonStyle.secondary,
                 custom_id=f"advisor_chat:end:{user_id}",
@@ -705,7 +705,7 @@ class AskChatEndButton(
         # Wiping the embed is the whole point: the transcript only ever existed
         # in this message, so clearing it is what "end the chat" means here.
         await interaction.response.edit_message(
-            content="Chat closed. Press **Ask a question** on the panel any time.",
+            content="Chat closed. Press **Ask a Question** on the panel any time.",
             embed=None,
             view=None,
         )
@@ -730,7 +730,7 @@ class _AskModal(discord.ui.Modal):
 
     def __init__(self, *, history: list[dict] | None, generation: int = 0) -> None:
         first = history is None
-        super().__init__(title="Ask a question" if first else "Reply")
+        super().__init__(title="Ask a Question" if first else "Reply")
         #: None on the first turn — there is no window to update yet.
         self._history = history
         #: What ``_chat_gen`` read when the button was pressed. If it has moved
