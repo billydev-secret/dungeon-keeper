@@ -54,7 +54,6 @@ const SECTIONS = [
       // analytics read with a moderation eye, not an engagement metric.
       { heading: "Moderation", items: [
         { id: "health-sentiment",       label: "Flagged Messages",  module: "./panels/health-sentiment.js", keywords: "sentiment tone negative flagged triage" },
-        { id: "nsfw-gender",          label: "NSFW by Gender",       module: "./panels/nsfw-gender.js", keywords: "nsfw tags labels image guard tag mix nudity breakdown over time trend chart", related: ["nsfw-tags"] },
         { id: "mod-coverage",           label: "Mod Coverage",       module: "./panels/mod-coverage.js", keywords: "moderator presence coverage gaps overnight rota busy hours", related: ["activity"] },
         { id: "health-mod-workload",    label: "Mod Workload",       module: "./panels/health-mod-workload.js" },
         { id: "health-mod-engagement",  label: "Mod Engagement",     module: "./panels/health-mod-engagement.js" },
@@ -116,7 +115,7 @@ const SECTIONS = [
       ]},
       { heading: "Image Guard", items: [
         { id: "nsfw-blocks",       label: "Image Guard Blocks", module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "blocked images nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
-        { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler", "nsfw-gender"] },
+        { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler"] },
       ]},
       { heading: "Audit Logs", items: [
         { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },
@@ -173,7 +172,6 @@ const SECTIONS = [
         { id: "config-xp",         label: "XP & Leveling",     module: "./panels/xp-settings.js", adminOnly: true, keywords: "xp levels settings curve rewards", related: ["xp-leaderboard"], help: "help-community" },
         { id: "config-bios",       label: "Bios",              module: "./panels/config-bios.js", adminOnly: true, keywords: "profile introduction icebreaker" },
         { id: "config-birthday",   label: "Birthdays",         module: "./panels/birthday-settings.js", adminOnly: true, keywords: "birthday announcements channel message pin", related: ["birthday-calendar"] },
-        { id: "gender-admin",      label: "Gender Tagging",   module: "./panels/gender-admin.js", adminOnly: true },
         { id: "config-wellness",   label: "Wellness",          module: "./panels/wellness-admin.js", perms: ["manage_server"], keywords: "caps limits gambling blackouts", help: "help-wellness" },
         // The inactive pair reads as a parallel pair on purpose: same subject,
         // the differing verb is the distinction. Old labels stay as keywords.

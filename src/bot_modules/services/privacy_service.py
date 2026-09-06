@@ -136,7 +136,6 @@ def purge_user_data(
         "voice_sessions",
         "member_activity",
         "quality_score_leaves",
-        "member_gender",
         "member_events",
         # Slash-command and dashboard-panel usage telemetry. Retained
         # indefinitely for reporting (no routine pruning), so this hard-erasure

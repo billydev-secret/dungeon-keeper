@@ -29,7 +29,6 @@ from bot_modules.services.activity_graphs import (
     query_dropoff_profiles,
     query_message_activity,
     query_message_histogram,
-    query_nsfw_gender_activity,
     query_nsfw_tag_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram_with_breakdown,
@@ -92,13 +91,6 @@ _HOD_LABELS = [
     "10pm",
     "11pm",
 ]
-
-_GENDER_COLORS: dict[str, str] = {
-    "male": "#5865f2",
-    "female": "#eb459e",
-    "nonbinary": "#57f287",
-    "unknown": "#72767d",
-}
 
 _RESPONSE_BUCKETS: list[tuple[float, str]] = [
     (60, "< 1m"),
@@ -174,56 +166,6 @@ def get_join_times_data(
         "resolution": resolution,
         "labels": labels,
         "counts": counts,
-    }
-
-
-# ---------------------------------------------------------------------------
-# NSFW gender activity
-# ---------------------------------------------------------------------------
-
-
-class GenderSeries(TypedDict):
-    gender: str
-    counts: list[int]
-    color: str
-
-
-class NsfwGenderData(TypedDict):
-    resolution: str
-    window_label: str
-    media_only: bool
-    labels: list[str]
-    series: list[GenderSeries]
-
-
-def get_nsfw_gender_data(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    channel_ids: list[int],
-    utc_offset_hours: float,
-    media_only: bool,
-    include_bots: bool = False,
-) -> NsfwGenderData:
-    labels, gender_counts = query_nsfw_gender_activity(
-        conn,
-        guild_id,
-        resolution,
-        channel_ids,
-        utc_offset_hours=utc_offset_hours,
-        media_only=media_only,
-        include_bots=include_bots,
-    )
-    series: list[GenderSeries] = [
-        {"gender": g, "counts": c, "color": _GENDER_COLORS.get(g, "#72767d")}
-        for g, c in gender_counts.items()
-    ]
-    return {
-        "resolution": resolution,
-        "window_label": _WINDOW_LABELS.get(resolution, resolution),
-        "media_only": media_only,
-        "labels": labels,
-        "series": series,
     }
 
 

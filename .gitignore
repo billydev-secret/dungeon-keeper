@@ -46,3 +46,4 @@ econ_icon_catalog/
 
 # Remote test dispatch — records which lock hash the remote venv was built from
 .remote-test-stamp
+private/

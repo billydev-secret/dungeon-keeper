@@ -920,13 +920,12 @@ _TAG_MIX_STUB = {
 }
 
 
-def test_nsfw_by_tag_breakdown_fits_on_phone(dashboard, browser):
-    """The tag chart lives behind the Breakdown select, so a plain load never
-    draws it — the panel's default is the gender split.
+def test_nsfw_tagging_over_time_fits_on_phone(dashboard, browser):
+    """The tag chart on Image Guard Tags, at its widest.
 
-    Six stacked series is the widest this page ever gets: the legend carries
-    six named swatches and the table below it six columns, and neither exists
-    until the select changes. The sweep sees only the gender view.
+    Seven stacked series is the widest this chart ever gets: the legend carries
+    seven swatches and the table below it seven columns. It moved here in
+    2026-09 from the NSFW-by-Gender panel, which went with the gender store.
     """
     import json
 
@@ -941,19 +940,11 @@ def test_nsfw_by_tag_breakdown_fits_on_phone(dashboard, browser):
                 body=json.dumps(_TAG_MIX_STUB),
             ),
         )
-        _goto_panel(page, f"{dashboard.base}/#/nsfw-gender")
+        _goto_panel(page, f"{dashboard.base}/#/nsfw-tags")
         page.wait_for_timeout(400)
-        page.select_option('[data-control="breakdown"]', "tag")
         page.select_option('[data-control="display"]', "bar")
-        page.wait_for_function(
-            "() => document.querySelector('[data-heading]')"
-            "?.textContent.includes('Tag')"
-        )
+        page.wait_for_selector(".chart-legend__swatch")
         _settle(page)
-        heading = page.text_content("[data-heading]")
-        swatches = page.eval_on_selector_all(
-            "[data-legend] *", "els => els.length"
-        )
         # Colour is keyed off each label's vocabulary position, so the six
         # palette slots are all distinct and only the 7th repeats the neutral.
         colors = page.eval_on_selector_all(
@@ -963,36 +954,30 @@ def test_nsfw_by_tag_breakdown_fits_on_phone(dashboard, browser):
         # The unfiltered total spans spoiler-required channels the dropdown
         # cannot name, so it must not call itself NSFW-only.
         all_opt = page.text_content("[data-all-option]")
-        # media_only is not sent under By tag, but dropping it from the URL
-        # would silently re-tick the box on reload.
-        url = page.url
         res = page.evaluate(AUDIT_JS, CLIP_SLOP)
     finally:
         context.close()
     assert all_opt == "All tagged channels", (
         f"the channel control still claims an NSFW-only scope (got {all_opt!r})"
     )
-    assert "media_only=" in url, f"media_only fell out of the URL: {url}"
-    assert heading and "Tag" in heading, (
-        f"heading did not follow the breakdown select (got {heading!r})"
-    )
-    assert swatches, "the legend never rendered — stub shape drift?"
     # Seven series, seven distinguishable bands: the six validated hues plus
     # the overflow neutral, which is not itself one of them. A repeat here
     # would mean two labels had been given the same identity.
     assert len(colors) == 7 and len(set(colors)) == 7, (
         f"tag bands are not all distinguishable: {colors}"
     )
-    _assert_fits(res, "NSFW by Tag")
+    _assert_fits(res, "Image Guard Tags — over time")
 
 
-def test_nsfw_breakdown_chrome_never_outruns_its_chart(dashboard, browser):
-    """Switch away from By tag while its request is still in flight.
+def test_nsfw_tag_chart_never_renders_a_superseded_window(dashboard, browser):
+    """Change resolution while the previous request is still in flight.
 
-    The heading, subtitle and Media Only state change synchronously; the chart
-    arrives from an await. A late tag response painting body-part series under
-    the "NSFW by Gender" heading is a mislabelled chart over exactly the rows
-    that are admin-gated for being sensitive, so the render is sequenced.
+    The caption and controls change synchronously; the chart arrives from an
+    await. A late response painting one window's series under another window's
+    caption is a mislabelled chart over exactly the rows that are admin-gated
+    for being sensitive, so the render is sequenced. The pair that first forced
+    this was gender-vs-tag on the old panel; resolution-vs-resolution is the
+    same race with one endpoint.
     """
     import json
     import time as _time
@@ -1000,29 +985,35 @@ def test_nsfw_breakdown_chrome_never_outruns_its_chart(dashboard, browser):
     context = browser.new_context(viewport={"width": VIEWPORTS["desktop"], "height": 900})
     try:
         page = context.new_page()
+        calls = {"n": 0}
 
-        def _slow_tags(route):
-            _time.sleep(1.5)
+        def _slow_first(route):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                _time.sleep(1.5)
             route.fulfill(
                 status=200,
                 content_type="application/json",
                 body=json.dumps(_TAG_MIX_STUB),
             )
 
-        page.route("**/api/reports/nsfw-tag-mix*", _slow_tags)
-        _goto_panel(page, f"{dashboard.base}/#/nsfw-gender")
-        page.wait_for_timeout(400)
-        page.select_option('[data-control="breakdown"]', "tag")
-        # Back again well before the tag response can land.
-        page.select_option('[data-control="breakdown"]', "gender")
+        page.route("**/api/reports/nsfw-tag-mix*", _slow_first)
+        _goto_panel(page, f"{dashboard.base}/#/nsfw-tags")
+        # Switch well before the first response can land.
+        page.wait_for_selector('[data-control="resolution"]')
+        page.select_option('[data-control="resolution"]', "month")
         page.wait_for_timeout(2500)  # outlast the stubbed delay
-        heading = page.text_content("[data-heading]")
-        body = page.inner_text(".panel")
+        caption = page.text_content(".chart-caption")
+        legend_count = page.eval_on_selector_all(
+            ".chart-legend__swatch", "els => els.length"
+        )
     finally:
         context.close()
-    assert heading == "NSFW by Gender", f"heading drifted to {heading!r}"
-    assert "Female chest" not in body, (
-        "a superseded tag response rendered under the gender heading"
+    assert legend_count == 7, (
+        f"the later request did not render (got {legend_count} swatches)"
+    )
+    assert caption and "Tagged images" in caption, (
+        f"caption drifted to {caption!r} — a superseded response painted over it"
     )
 
 

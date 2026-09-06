@@ -8,9 +8,13 @@ module against itself and nothing else, which is the failure this file exists
 to prevent: a member opening ``/info`` while another refreshes the Pools panel
 puts two workers into the same global registry at once.
 
-Reentrant on purpose: ``render_nsfw_gender_line_chart`` delegates to
-``render_nsfw_gender_chart`` for its single-bucket case, so a plain ``Lock``
-would deadlock the worker the first time that path ran.
+Reentrant on purpose. The pair that first forced it —
+``render_nsfw_gender_line_chart`` delegating to ``render_nsfw_gender_chart``
+for its single-bucket case — went with the gender report in 2026-09, so no
+renderer currently nests. The ``RLock`` stays: it costs nothing, and the next
+renderer that delegates to another would otherwise deadlock its worker on the
+first call down that path, which is a bug that only appears under the exact
+conditions nobody tests by hand.
 
 Rendering is ~100ms, so the queue is not a bottleneck — and interleaved access
 to that registry is not a slow chart, it is the wrong chart or a crash.

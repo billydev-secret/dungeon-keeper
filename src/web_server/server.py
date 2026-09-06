@@ -369,9 +369,7 @@ def create_app(ctx, auth: AuthBackend | None = None) -> FastAPI:  # noqa: ANN001
     )
 
     # ── Gender classification ───────────────────────────────────────
-    from web_server.routes import gender as gender_routes
 
-    app.include_router(gender_routes.router, prefix="/api/gender", tags=["gender"])
 
     # ── Voice Control admin ──────────────────────────────────────────
     from web_server.routes import voice_master as voice_master_routes

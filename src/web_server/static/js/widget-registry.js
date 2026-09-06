@@ -4,7 +4,7 @@
 const WIDGETS = [
   // ── Home tiles ───────────────────────────────────────────────────
   { id: "home-messages",    label: "Messages (24h)",          category: "Home", perms: [], source: "home", wide: false, nav: "activity" },
-  { id: "home-nsfw",        label: "NSFW (24h)",              category: "Home", perms: ["moderator"], source: "home", wide: false, nav: "nsfw-gender" },
+  { id: "home-nsfw",        label: "NSFW (24h)",              category: "Home", perms: ["admin"], source: "home", wide: false, nav: "nsfw-tags" },
   { id: "home-presence",    label: "Presence",                category: "Home", perms: [], source: "home", wide: false, nav: "health-dau-mau" },
   { id: "home-xp",          label: "XP Today",                category: "Home", perms: [], source: "home", wide: false, nav: "xp-leaderboard" },
   { id: "home-joins",       label: "Recent Joins",            category: "Home", perms: [], source: "home", wide: false, nav: "join-times" },

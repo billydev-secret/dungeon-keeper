@@ -272,8 +272,13 @@ def test_every_chart_renderer_is_serialized():
 
 
 def test_the_render_lock_survives_a_nested_render():
-    """`render_nsfw_gender_line_chart` delegates to `render_nsfw_gender_chart`,
-    which a non-reentrant lock would deadlock on."""
+    """A renderer that delegates to another must not deadlock its own worker.
+
+    The pair that first required this went with the gender report; the property
+    is still worth pinning, because the deadlock it prevents would surface only
+    when some future renderer delegates, and only on the first call down that
+    path.
+    """
     import threading
 
     from bot_modules.services.pyplot_lock import RENDER_LOCK

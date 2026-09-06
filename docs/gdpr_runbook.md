@@ -28,6 +28,10 @@ requests if you tell the requester within the first month.
 
 # The actual export
 .venv/bin/python scripts/export_user_data.py --guild <gid> --user <uid> --out sar.json
+
+# The readable report to send with it (Art 12(1))
+.venv/bin/python scripts/gdpr_disclosure_report.py --guild <gid> --user <uid> \
+    --server-name "<server>" --with-export
 ```
 
 The database is opened `mode=ro`, so this is safe to run against the live bot.
@@ -36,6 +40,41 @@ The database is opened `mode=ro`, so this is safe to run against the live bot.
 keeps under Art 17(3) — the `econ_ledger` double-entry record, sanction
 history, consent audit, no-contact orders — is still the subject's personal
 data and still has to be disclosed. Retention is not an access exemption.
+
+### The report is what you send; the export is what you attach
+
+`export_user_data.py` answers Art 15 completely and unreadably — an active
+member produces roughly 280,000 rows of JSON across 150-odd tables. Art 12(1)
+asks for it *"in a concise, transparent, intelligible and easily accessible
+form, using clear and plain language"*, and nobody learns what the bot knows
+about them by reading 280,000 rows.
+
+`scripts/gdpr_disclosure_report.py` writes that plain-language layer: a Markdown
+document in ~15 categories giving, for each, what is held, why, how long, how
+much, and what survives an erasure request. It gets those facts by joining the
+export's row counts against `data_register.md`, and takes its *language* from
+`services/disclosure_copy.py` — the register's own cells carry commit hashes,
+table names and maintainer notes and must never be quoted to a member.
+
+Output defaults to `private/`, which is gitignored. **A report naming a real
+member is personal data in its own right — do not commit one.**
+
+Three things the report does that the raw export does not:
+
+- **It cannot name a second member.** Categories built from third-party tables
+  contribute a count and a note saying another member is involved, never an id.
+  Art 15(4) is satisfied by construction, so the file needs no redaction pass.
+- **It closes the list-column blind spot** rather than declaring it, scanning
+  the twelve known list columns by value. Check 2 below is therefore already
+  done for you — the terminal prints any hits.
+- **Operator warnings go to the terminal, never to the document.** Unmapped
+  tables, missing retention decisions and cross-guild scope are printed to
+  stderr for you, and stay out of the member's copy.
+
+Read the terminal output before sending. A table that is missing from the data
+register appears in *no* section of the report, and the script says so loudly —
+that is a register bug to fix before the document goes out, not a warning to
+wave through.
 
 ### Before you send it — three checks
 
@@ -46,8 +85,10 @@ data and still has to be disclosed. Retention is not an access exemption.
    affect others' rights. Decide per table whether to redact the counterparty
    id, and record what you decided.
 2. **The list-column blind spot.** A few columns store member ids as a JSON or
-   CSV *list*, which an equality match cannot find. The script names them in
-   its `notes`. Grep them by hand:
+   CSV *list*, which an equality match cannot find. `export_user_data.py` names
+   them in its `notes`; `gdpr_disclosure_report.py` actually scans them and
+   prints any hits, so this check is only manual if you skipped the report.
+   To grep them by hand:
    ```bash
    sqlite3 dungeonkeeper.db "SELECT * FROM risky_pending_questions WHERE participant_user_ids LIKE '%<uid>%';"
    ```

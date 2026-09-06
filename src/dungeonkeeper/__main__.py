@@ -609,9 +609,6 @@ def main() -> None:
                     gid = guild.id
                     with open_db(db_path) as conn:
                         tz = get_tz_offset_hours(conn, gid)
-                    nsfw_ids: list[int] = [
-                        ch.id for ch in guild.channels if getattr(ch, "nsfw", False)
-                    ]
                     member_snapshots = [
                         MemberSnapshot(
                             user_id=m.id,
@@ -626,7 +623,6 @@ def main() -> None:
                     def _warm(
                         gid: int = gid,
                         tz: float = tz,
-                        nsfw_ids: list[int] = nsfw_ids,
                         member_snapshots: list = member_snapshots,
                     ) -> None:
                         from bot_modules.services import reports_data
@@ -677,16 +673,6 @@ def main() -> None:
                                 )
                             except Exception:
                                 log.exception("Reports cache warming failed for join-times")
-
-                            if nsfw_ids:
-                                try:
-                                    _put(
-                                        "nsfw-gender",
-                                        {"resolution": "week", "media_only": False, "channel_id": None},
-                                        reports_data.get_nsfw_gender_data(conn, gid, "week", nsfw_ids, tz, False),
-                                    )
-                                except Exception:
-                                    log.exception("Reports cache warming failed for nsfw-gender")
 
                             try:
                                 from bot_modules.services.contributors_service import (

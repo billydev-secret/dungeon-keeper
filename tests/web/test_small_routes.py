@@ -1,4 +1,4 @@
-"""Tests for the smaller admin/mod web routes: quotes, todos, gender, admin backfill.
+"""Tests for the smaller admin/mod web routes: quotes, todos, admin backfill.
 
 These four route modules are small enough (29-65 stmts) to make a single test
 file the right shape. They share the standard ``authed_client`` / ``fake_ctx``
@@ -8,12 +8,10 @@ fixtures from ``tests/web/conftest.py``.
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
 
 import pytest
 
 from bot_modules.core.db_utils import open_db
-from bot_modules.services.gender_service import set_gender
 
 
 # ── /api/quotes/audit ─────────────────────────────────────────────────
@@ -185,124 +183,6 @@ def test_list_todos_filter_by_status(authed_client):
     assert completed_tasks == {"todo A"}
 
 
-# ── /api/gender/* ─────────────────────────────────────────────────────
-
-
-def _attach_mock_bot_with_guild(fake_ctx, members):
-    """Attach a mock bot to fake_ctx with a guild that returns *members*.
-
-    ``guild.get_member(uid)`` does a real lookup so ``resolve_names`` can
-    populate display_name fields instead of bare MagicMock objects. The
-    auth session user (uid=1) is auto-added with administrator perms so the
-    Discord-cache-backed authenticate() path doesn't reject the request.
-    """
-    # The authed_client fixture creates a session with uid=1 and
-    # permission_bits=0x8 (ADMINISTRATOR). DiscordOAuthAuth prefers the live
-    # bot cache when one is attached, so we must surface this user from the
-    # guild for the auth check to succeed.
-    auth_member = MagicMock()
-    auth_member.id = 1
-    auth_member.display_name = "tester"
-    auth_member.guild_permissions = MagicMock(value=0x8)
-    role = MagicMock()
-    role.id = 0
-    role.name = "@everyone"
-    role.is_default = MagicMock(return_value=True)
-    auth_member.roles = [role]
-
-    all_members = [auth_member, *members]
-    by_id = {m.id: m for m in all_members}
-    guild = MagicMock()
-    guild.id = fake_ctx.guild_id
-    guild.members = all_members
-    guild.get_member = MagicMock(side_effect=lambda uid: by_id.get(int(uid)))
-    bot = MagicMock()
-    bot.get_guild = MagicMock(return_value=guild)
-    fake_ctx.bot = bot
-    return guild
-
-
-def _mock_member(member_id: int, *, is_bot: bool = False, display_name: str = "") -> MagicMock:
-    m = MagicMock()
-    m.id = member_id
-    m.bot = is_bot
-    m.display_name = display_name or f"user-{member_id}"
-    return m
-
-
-def test_gender_list_returns_503_when_bot_unavailable(authed_client):
-    resp = authed_client.get("/api/gender/list")
-    assert resp.status_code == 503
-
-
-def test_gender_list_returns_classified_members(authed_client, fake_ctx):
-    members = [
-        _mock_member(101, display_name="alice"),
-        _mock_member(102, display_name="bob"),
-        _mock_member(999, is_bot=True),  # bot — excluded
-    ]
-    _attach_mock_bot_with_guild(fake_ctx, members)
-    with open_db(fake_ctx.db_path) as conn:
-        set_gender(conn, fake_ctx.guild_id, 101, "female", set_by=1)
-        set_gender(conn, fake_ctx.guild_id, 102, "male", set_by=1)
-        set_gender(conn, fake_ctx.guild_id, 999, "male", set_by=1)  # bot row, must not show
-
-    resp = authed_client.get("/api/gender/list")
-    assert resp.status_code == 200
-    classified = resp.json()["classified"]
-    ids = {c["user_id"] for c in classified}
-    assert ids == {"101", "102"}  # bot excluded
-
-
-def test_gender_unclassified_returns_members_without_a_gender(authed_client, fake_ctx):
-    members = [
-        _mock_member(101, display_name="alice"),
-        _mock_member(102, display_name="bob"),
-    ]
-    _attach_mock_bot_with_guild(fake_ctx, members)
-    with open_db(fake_ctx.db_path) as conn:
-        set_gender(conn, fake_ctx.guild_id, 101, "female", set_by=1)
-
-    resp = authed_client.get("/api/gender/unclassified")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["total"] == 1
-    assert body["members"][0]["user_id"] == "102"
-
-
-def test_gender_set_rejects_invalid_value(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [_mock_member(101)])
-    resp = authed_client.post(
-        "/api/gender/set", json={"user_id": "101", "gender": "alien"}
-    )
-    assert resp.status_code == 400
-
-
-def test_gender_set_persists_classification(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [_mock_member(101)])
-    resp = authed_client.post(
-        "/api/gender/set", json={"user_id": "101", "gender": "nonbinary"}
-    )
-    assert resp.status_code == 200
-    from bot_modules.services.gender_service import get_gender
-
-    with open_db(fake_ctx.db_path) as conn:
-        assert get_gender(conn, fake_ctx.guild_id, 101) == "nonbinary"
-
-
-def test_gender_set_overwrites_existing(authed_client, fake_ctx):
-    _attach_mock_bot_with_guild(fake_ctx, [_mock_member(101)])
-    with open_db(fake_ctx.db_path) as conn:
-        set_gender(conn, fake_ctx.guild_id, 101, "male", set_by=999)
-
-    authed_client.post("/api/gender/set", json={"user_id": "101", "gender": "female"})
-
-    from bot_modules.services.gender_service import get_gender
-
-    with open_db(fake_ctx.db_path) as conn:
-        assert get_gender(conn, fake_ctx.guild_id, 101) == "female"
-
-
 # ── Auth gates ────────────────────────────────────────────────────────
 
 
@@ -312,8 +192,6 @@ def test_gender_set_overwrites_existing(authed_client, fake_ctx):
         ("GET", "/api/quotes/audit", None),
         ("GET", "/api/todos", None),
         ("POST", "/api/todos", {"task": "x"}),
-        ("GET", "/api/gender/list", None),
-        ("POST", "/api/gender/set", {"user_id": "1", "gender": "male"}),
     ],
 )
 def test_small_routes_require_auth(fake_ctx, method, path, body):

@@ -1,0 +1,16 @@
+-- Drop the mod-assigned gender store.
+--
+-- `member_gender` held a gender label applied to a member by a moderator,
+-- without the subject's involvement, for "aggregate server demographics only"
+-- (owner decision 2026-08-06). On 2026-09-05 the owner decided to stop holding
+-- it at all rather than keep disclosing it on every access request.
+--
+-- 423 production rows go with it (269 male, 132 female, 22 nonbinary), along
+-- with the Gender Tagging panel, the NSFW by Gender report and their route.
+-- Nothing else reads the table: the only other consumers were the gender split
+-- in `query_nsfw_gender_activity` and that report's own channel-discovery
+-- fallback, both removed in the same commit.
+--
+-- Deliberately not archived anywhere. The point is that the data stops
+-- existing; moving it to a side table would defeat the decision.
+DROP TABLE IF EXISTS member_gender;

@@ -412,7 +412,6 @@ _IIFE_EXEMPT = {
     "grant-audit.js",      # try/catch → statusEl error text
     "inactive-report.js",  # loadChannels/loadRoles never reject; refresh() catches
     "nsfw-tags-report.js", # try/catch → .error, plus a cancelled flag
-    "nsfw-gender.js",      # loadChannels/refresh both catch
     "activity.js",         # loadDropdowns/refresh both catch
     "config-bump-tracker.js",  # try/catch → renderError
     "todo.js",             # documented in-file; owned by the mod-queue work
@@ -593,4 +592,36 @@ def test_every_data_f_field_a_panel_reads_is_one_it_renders():
     assert not bad, (
         "panels read data-f inputs their template no longer renders — the save "
         f"handler throws on a null querySelector before any request is sent: {bad}"
+    )
+
+
+def test_every_home_widget_navigates_to_a_panel_that_exists():
+    """A tile's `nav` must name a panel id `app.js` can actually load.
+
+    Removing a feature deletes its panel from `app.js`, and every referrer has
+    to be repointed or removed with it. When the NSFW-by-Gender panel went in
+    2026-09 the Home "NSFW (24h)" tile was missed, and its click silently
+    stopped working for every moderator — a dangling id is invisible to ruff,
+    to eslint, and to every other tier, because nothing joined the two files.
+    """
+    js = Path(__file__).resolve().parents[2] / "src" / "web_server" / "static" / "js"
+    app = (js / "app.js").read_text(encoding="utf-8")
+    registry = (js / "widget-registry.js").read_text(encoding="utf-8")
+
+    # An id is loadable when its own entry also names a panel module.
+    panels = set(re.findall(r'id:\s*"([a-z0-9-]+)"[^\n]*?module:\s*"\./panels/', app))
+    assert panels, "no panel ids parsed from app.js — the entry shape changed"
+
+    dangling = sorted(
+        {
+            (widget, target)
+            for widget, target in re.findall(
+                r'id:\s*"([a-z0-9-]+)"[^}]*?nav:\s*"([a-z0-9-]+)"', registry
+            )
+            if target not in panels
+        }
+    )
+    assert not dangling, (
+        "home widgets point at panels that no longer exist: "
+        + ", ".join(f"{w} -> {t}" for w, t in dangling)
     )

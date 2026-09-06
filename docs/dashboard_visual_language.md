@@ -40,7 +40,7 @@ template literals were simply out of scope — and that is where most of this
 dashboard's colour decisions are made. Fifteen sites were using the saturated
 tier as words: `config-moderation`'s Danger Zone eyebrow (11px uppercase, the
 worst case for the split), `live-log`'s ERROR and CRITICAL lines at 4.37:1,
-`gender-admin`'s save status, `system-stats`' backup rows, `table.js`, and
+`gender-admin`'s save status (that panel was removed in 2026-09), `system-stats`' backup rows, `table.js`, and
 four tiles.
 
 The JS half is **strict by default**: any saturated token written in JS is an

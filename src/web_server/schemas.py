@@ -69,20 +69,6 @@ class JoinTimesResponse(BaseModel):
 # ── NSFW gender activity ────────────────────────────────────────────────
 
 
-class GenderSeriesSchema(BaseModel):
-    gender: str
-    counts: list[int]
-    color: str
-
-
-class NsfwGenderResponse(BaseModel):
-    resolution: str
-    window_label: str
-    media_only: bool
-    labels: list[str]
-    series: list[GenderSeriesSchema]
-
-
 # ── NSFW tag mix ─────────────────────────────────────────────────────────
 
 
