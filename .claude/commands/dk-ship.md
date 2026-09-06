@@ -49,6 +49,13 @@ Steps:
    ordinary helpers; a per-spawn `model` overrides it, which is exactly what
    this is for.)
 
+   The agent inherits **this session's working directory**, which in a real ship
+   is the feature worktree — that is what makes `main...HEAD` resolve to this
+   branch. A `cd` inside a Bash call does not move it: the skill targets the
+   session's directory, not the shell's. So never drive this step from the prod
+   checkout on behalf of some other worktree; the review will silently read the
+   wrong diff and then thrash trying to correct itself.
+
    Do **not** give this agent `isolation: "worktree"`. A read-only reviewer
    should be isolated — see the standing rule about verifier agents mutating
    shared source — but this one's whole job is to apply `--fix` to *this* tree,
