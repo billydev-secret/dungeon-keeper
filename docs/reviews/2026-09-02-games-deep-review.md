@@ -564,7 +564,7 @@ P6 shipped. When they land, P6b is five Guess Who items (a round-lifetime dial s
 dark, an `on_member_remove` path matching the opt-out, self-exclusion from the picker,
 a legacy consent backfill, and one hint correction) plus one wiring line each side of
 the Risky Rolls cog's load and unload for the payoff chaser, which today starts lazily
-from the room's own traffic. The arguments are written down and ready to run.
+from the room's own traffic. Written up in full as `docs/plans/games-review-p6b.md`.
 
 **Known residuals in what shipped**
 
