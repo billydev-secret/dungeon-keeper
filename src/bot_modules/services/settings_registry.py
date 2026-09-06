@@ -484,9 +484,9 @@ FEATURES: tuple[Feature, ...] = (
     ),
     Feature(
         slug="needle",
-        label="Needle (unanswered threads)",
-        panel="Config → Needle",
-        blurb="Marks threads nobody has answered so they don't get lost.",
+        label="Auto-Thread",
+        panel="Config → Auto-Thread",
+        blurb="Spins off a thread from every message in a channel, so replies stay tidy.",
         settings=(
             _text("needle_default_reply", "Default reply", required=True),
         ),
