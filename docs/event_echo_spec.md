@@ -24,7 +24,7 @@ It is a signpost, not a notification system. It never pings.
 3. **Skipping beats queueing.** A game that arrives inside a cooldown is
    dropped, not held. Announcing it later means announcing something stale.
 4. **Rate limits are the design, not a setting.** The whole feature is
-   cooldown arithmetic wrapped around nine event sources — except for the
+   cooldown arithmetic wrapped around eleven event sources — except for the
    exempt ones, where the right rate limit turned out to be none at all.
 5. **One announcement per event, not two.** A source that already announced
    itself somewhere gives that up when it moves here (2026-07-29): the quest
@@ -66,6 +66,8 @@ nobody has to act. The distinction is not cosmetic; see Rate limiting.
 | `raffle_closing` | **deadline** | The guild's ISO week rolls within the hour (and the raffle is enabled) | ISO week (`2026-W31`) |
 | `quest_flip` | **happened** | A new quest period going live at the ISO-week roll | ISO week (`2026-W31`) |
 | `community_tier` | **happened** | A community goal crossing a 40% / 70% / 100% tier | `quest_id:tier` |
+| `risky_roll` | start | A Risky Rolls round opening, from `/risky start` or the scheduler (2026-09-02) | `game_id` |
+| `guess_round` | start | A `guess_rounds` row with a posted card, within the freshness window (2026-09-02) | round id |
 
 `echo_key` is the game type for party games, the sub-game for Gamebot, and
 the source name for everything else — those fire a handful of times a year,
@@ -91,6 +93,100 @@ owns its own voice. `tier_echo_line` is the "Suggested post" line the host's
 beat sheet used to carry, kept deliberately (see commit 723d2533), minus the
 goal title the headline already shows and minus the promise of a next tier
 when the crossing *is* the last one.
+
+### Risky Rolls and Guess Who (2026-09-02)
+
+Two game starts, added together because both routinely run in age-gated rooms
+while the echo destination is not.
+
+**They are not the first sources to cross that gate, and saying so was wrong.**
+`_echo_party_game` sweeps every `games_active_games` row with no channel
+filter, and party games run in adult rooms all the time — that is the whole
+premise of `channel_allows_nsfw` gating the NSFW Truth and NSFW Dare buttons.
+So a Truth or Dare lobby opened in an age-gated room has always echoed the
+game name, a link to the room and **the host's name** into the ungated echo
+channel. What changed on 2026-09-02 is not that crossings began; it is that
+they became frequent enough to decide about, and got said out loud.
+
+**Risky Rolls is pushed**, not swept — the only game source that is. It keeps
+its rounds in `rr_state.active_games` in memory and never writes
+`games_active_games`, so the party-game sweep cannot see them; `echo_risky_round`
+is called from both entry points (`_start_game` for `/risky start`, `launch`
+for the scheduler) once the lobby message has landed. A failed send keeps its
+claimed row, like the other push sources, because nothing would re-offer it.
+
+**Every start echoes**, including the daily scheduled and rotation launches —
+those are the rounds nobody is in the room to notice. The footer names the
+opener, and the two automated paths do **not** behave the same way:
+
+| Path | `host_id` | Footer |
+|---|---|---|
+| `/risky start` | the member who ran it | their name |
+| Feature rotation | `0` (hosted by nobody) | none |
+| Games scheduler | `created_by` — whoever set the schedule up | **their name**, though they may not be present |
+
+The bot's own id is excluded explicitly (by id, never by name — the account
+displays as "Poppy"). The scheduler case is left as-is rather than
+special-cased: it is exactly what every scheduled *party* game footer already
+does, and diverging here would make Risky Rolls the odd one out. It is called
+out because the footer reads as "this person is here", and for a scheduled
+round that is not what it means.
+
+**Guess Who is swept**, from `guess_rounds` via `guess_repo.fresh_rounds`, for
+the same reason party games are: the table records what actually got posted
+however it got there, so a third submission path added later is picked up for
+free rather than silently missed. Both submission shapes — a photo crop and a
+confession — echo, and they echo *identically*: naming the type would
+advertise that someone just confessed. The sweep refuses a round whose card
+hasn't sent yet, one already solved, one soft-deleted, and one whose answer
+has `answer_optout` set (consent withdrawn makes the round unsolvable, and
+advertising it would point a crowd at someone who opted out).
+
+**The Guess Who echo names nobody.** `guess_post` is in `quests.ANON_KINDS`
+(`economy/quests.py`) because in Guess Who *the submitter is the answer*, so a
+name anywhere in the echo would solve the round for everyone who read it. No
+`host_name` is passed, nothing about the submitter is even selected by the
+query, and both halves are covered by tests.
+
+#### The age gate
+
+Discord's `nsfw` flag is the only age gate that counts (CLAUDE.md), and **any**
+source can originate in a gated room — party games have since the beginning.
+The decision (Ben, 2026-09-02) was to **echo, and report the crossing** rather
+than block it. What crosses, per source:
+
+| Source | Names a member? |
+|---|---|
+| Party games (incl. Truth or Dare) | the host, as every party-game note has always done |
+| Risky Rolls | whoever opened the round |
+| Guess Who | **nobody**, and never will — the poster is the answer |
+| Everything else | no |
+
+
+* The copy that leaves the room is the game name and a jump link — plus, for
+  **Risky Rolls only**, the footer naming whoever opened the round. Ben was
+  asked specifically about that footer, given it announces a named member is
+  in the adult room, and kept it; the exclusion is the *bot*, not members. No
+  confession text, no image, no round type.
+* **Guess Who names nobody**, which is not the same kind of decision — see
+  above. It is a constraint, not a preference.
+* The link is still enforced by Discord's gate on the room it points at — a
+  member without access can read the line but cannot follow it.
+* Both sources pass `origin_channel_name`, so the room renders as a masked
+  link rather than a bare `<#id>`. That matters *because* the room is gated: a
+  mention of a channel the reader can't see renders as "#deleted-channel", so
+  the ungated majority would otherwise get a line that looks broken.
+* The mismatch is surfaced, not silenced. `warn_gate_crossing` logs a WARNING
+  **once per boot per guild** — not per echo, which would mean a warning
+  several times a day forever for behaviour that was chosen on purpose — and
+  Config → Event Echo shows a standing notice whenever the destination isn't
+  age-gated while the server has rooms that are.
+
+Nothing in `event_echo_logic` or `event_echo_service` calls `is_nsfw()` to
+skip a candidate. If a future change wants that rule (an age-gate audit was
+running in parallel when this shipped), check this decision first: a blanket
+skip would make both of these sources permanent no-ops on the main guild, and
+the failure mode is silence.
 
 **The four economy sources** are swept together by `econ_candidates`, on one
 shared read connection per tick, and each yields an `EchoCandidate` — so the
@@ -338,6 +434,16 @@ replaced it is silent like every other one.
   the leaderboard-panel gate, and `community_hourly_pulse` splitting crossings
   (echoed) from beats (DMed).
 - `tests/test_embed_accent_contract.py` — the `event_echo.game_starting` row.
+- Risky Rolls and Guess Who (2026-09-02), across both files: the two new
+  `SOURCE_SPECS` rows being non-exempt and non-retrying; the `guess_rounds`
+  window and each of its five exclusions; a burst of submissions echoing once;
+  who gets a Risky Rolls author line (a member yes, `host_id=0` no, the bot's
+  own id no, a member who left no); the room rendering as a masked link rather
+  than a bare mention; and the age gate — that a crossing warns once per boot
+  and stays silent when the destination is gated too. The anonymity guarantee
+  is pinned from both ends: `test_a_host_name_would_leak_through_the_footer`
+  shows *where* a name would surface, and `TestGuessEcho` shows the service
+  never passes one.
 
 ## Not yet built / Roadmap
 

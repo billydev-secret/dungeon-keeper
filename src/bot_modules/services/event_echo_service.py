@@ -1,6 +1,6 @@
 """Event Echo — the I/O half: cooldown store, the sender, and the poll loop.
 
-Nine sources feed one sender, in three shapes.
+Eleven sources feed one sender, in three shapes.
 
 **"This just started"** — echo it because someone might want to join:
 
@@ -11,6 +11,12 @@ Nine sources feed one sender, in three shapes.
   * **Discord's native scheduled events** — ``echo_discord_event``, called
     from ``events_cog`` when an event goes ``scheduled → active``.
   * **New bounties** — posted within the freshness window.
+  * **Risky Rolls** rounds opening — ``echo_risky_round``, pushed from both
+    entry points in ``risky_roll_cog`` because that game keeps its rounds in
+    memory and never writes ``games_active_games``, so there is nothing to
+    sweep. Every start echoes, scheduled and rotation launches included.
+  * **New Guess Who rounds** — swept from ``guess_rounds`` by ``_sweep_guess``.
+    The echo names **nobody**: in Guess Who the submitter is the answer.
 
 **"Last chance"** — echo it because a deadline is about to pass:
 
@@ -38,9 +44,28 @@ detects the crossing), so a suppressed echo is never re-offered and the news
 is gone for good rather than merely late. See ``SourceSpec.exempt``.
 
 Every one of them ends at :func:`echo_event`, which owns the destination, the
-cooldowns and the dedupe claim. A tenth source means a function returning
+cooldowns and the dedupe claim. A twelfth source means a function returning
 :class:`EchoCandidate` — or, for a push source, one thin wrapper like the two
 below — and a ``SOURCE_SPECS`` row, not another dispatch path.
+
+**Age-gated rooms.** Risky Rolls and Guess Who were the first sources that can
+start behind Discord's ``nsfw`` flag while the destination carries no such
+flag, and the decision (Ben, 2026-09-02) was to echo them the same as any
+other source, with the link still enforced by the gate on the room it points
+at. What crosses differs by source, and the difference is deliberate:
+
+* **Risky Rolls** carries the game, the room and **the name of whoever opened
+  the round** — the same footer every party game echo has always had. Ben was
+  asked specifically whether to keep it here, given that it announces a named
+  member is in the adult room, and kept it (the exclusion is the *bot*, not
+  members).
+* **Guess Who** names nobody, ever. Not a preference: the submitter is the
+  answer, so a name would solve the round.
+
+Nothing here consults ``is_nsfw()`` to *skip* — the mismatch is reported
+instead, once per boot by :func:`warn_gate_crossing` and standingly on
+Config → Event Echo, so an admin who would rather it stayed in the room can
+age-gate the destination. Read that decision before adding a skip rule.
 
 **Why a poll loop for party games.** Not because hooking would mean touching
 28 call sites — those funnel through one ``update_game_message``, and
@@ -67,7 +92,7 @@ import asyncio
 import logging
 import sqlite3
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -80,7 +105,11 @@ from bot_modules.core.db_utils import (
     open_db,
     open_db_immediate,
 )
-from bot_modules.core.utils import jump_url, resolve_bot_channel
+from bot_modules.core.utils import (
+    get_guild_channel_or_thread,
+    jump_url,
+    resolve_bot_channel,
+)
 from bot_modules.economy import logic as econ_logic
 from bot_modules.economy import quests
 from bot_modules.games.constants import GAME_NAMES
@@ -88,7 +117,9 @@ from bot_modules.games_external import parser
 from bot_modules.services import economy_auction_service as auction_svc
 from bot_modules.services import economy_bounty_service as bounty_svc
 from bot_modules.services import pools_metrics
+from bot_modules.services import guess_repo
 from bot_modules.services import pools_service as pools_svc
+from bot_modules.services.nsfw_classifier_service import is_age_gated_channel
 from bot_modules.services.economy_raffle_service import raffle_enabled
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.event_echo_logic import (
@@ -101,10 +132,12 @@ from bot_modules.services.event_echo_logic import (
     SOURCE_COMMUNITY_TIER,
     SOURCE_DISCORD_EVENT,
     SOURCE_GAMEBOT,
+    SOURCE_GUESS_ROUND,
     SOURCE_PARTY_GAME,
     SOURCE_POOLS_CLOSING,
     SOURCE_QUEST_FLIP,
     SOURCE_RAFFLE_CLOSING,
+    SOURCE_RISKY_ROLL,
     build_echo_embed,
     closing_due,
     decide,
@@ -284,6 +317,55 @@ def echo_channel_id(conn: sqlite3.Connection, guild_id: int) -> int | None:
 
 # ── The sender ──────────────────────────────────────────────────────────────
 
+#: Guilds already warned about an age-gated echo this boot. The warning is
+#: about a *configuration* — an echo channel that isn't age-gated while the
+#: rooms feeding it are — so it is worth saying once and then shutting up.
+#: Logging it per echo would mean a WARNING several times a day, forever, for
+#: behaviour that was chosen deliberately (2026-09-02), which is how a log
+#: stops being read. The dashboard notice on Config → Event Echo is the
+#: durable half; this is the breadcrumb for whoever is reading the log.
+_gate_warned: set[int] = set()
+
+#: The one age-gate verdict, shared with Image Guard, the games question source
+#: and the dashboard. A local copy here kept an attribute fallback that reads
+#: every thread under a gated channel as safe — the exact bug this branch
+#: already fixed once.
+_is_age_gated = is_age_gated_channel
+
+
+def warn_gate_crossing(guild: discord.Guild, origin, destination) -> None:
+    """Warn once per boot when an echo leaves an age-gated room for one that isn't.
+
+    Both sides are read off the live channel objects rather than any bot-side
+    setting — Discord's own gate is the only one that counts (CLAUDE.md). An
+    origin that can't be resolved at all reports ungated, which costs a
+    warning rather than causing a false one.
+
+    Nothing is blocked. The echo still goes out, and this only makes the
+    crossing visible. Note it is the *rooms* being compared, not the copy: a
+    Risky Rolls echo names whoever opened the round (Ben, 2026-09-02), so
+    there is a member name in what crosses, not only a game name.
+    """
+    if guild.id in _gate_warned:
+        return
+    if not _is_age_gated(origin) or _is_age_gated(destination):
+        return
+    _gate_warned.add(guild.id)
+    log.warning(
+        # Worded for every source, not just the one that prompted it: this
+        # fires for any crossing (party games, Gamebot, bounties, Guess Who),
+        # is deduped per *guild*, and so is often the only warning a server
+        # ever sees. Claiming a member is named would be false for Guess Who,
+        # whose whole guarantee is that it names nobody.
+        "event echo: #%s is age-gated but the echo channel #%s is not — "
+        "game names and jump links will be posted where everyone can see "
+        "them, and a Risky Rolls note also carries the name of whoever "
+        "opened the round (Config → Event Echo)",
+        getattr(origin, "name", "?"),
+        getattr(destination, "name", "?"),
+    )
+
+
 async def echo_event(
     bot,
     *,
@@ -387,6 +469,11 @@ async def echo_event(
             log.warning("event echo: destination channel %s unreachable", dest_id)
             await asyncio.to_thread(_release)
             return False
+
+        if origin_channel_id is not None:
+            warn_gate_crossing(
+                guild, get_guild_channel_or_thread(guild, origin_channel_id), channel
+            )
 
         color = await safe_resolve_accent(db_path, guild, log_label="event echo")
         embed = build_echo_embed(
@@ -580,6 +667,12 @@ class EchoCandidate:
     channel_id: int
     message_id: int
     deadline: float | None = None
+    #: Turns the ``<#id>`` mention in the copy into a masked link at ``url``.
+    #: Worth setting for a source whose room is **age-gated**: Discord renders
+    #: a bare mention of a channel the reader can't see as "#deleted-channel",
+    #: so the ungated majority would get a line that looks broken. A name
+    #: renders the same for everyone, and the link still hits the age gate.
+    channel_name: str | None = None
 
 
 def _pools_name(row) -> str:
@@ -807,7 +900,12 @@ async def _sweep_econ(bot, now: float) -> None:
         with open_db(db_path) as conn:
             return econ_candidates(conn, guild_ids, now)
 
-    for cand in await asyncio.to_thread(_read):
+    await _dispatch_candidates(bot, await asyncio.to_thread(_read), now)
+
+
+async def _dispatch_candidates(bot, cands, now: float) -> None:
+    """Hand every swept candidate to :func:`echo_event`, whatever swept it."""
+    for cand in cands:
         guild = bot.get_guild(cand.guild_id)
         if guild is None:
             continue
@@ -815,17 +913,161 @@ async def _sweep_econ(bot, now: float) -> None:
             bot,
             guild=guild,
             source=cand.source,
-            # One bucket per source: these fire a handful of times a year, so
-            # there is nothing finer to bucket by (and the deadline ones skip
-            # the windows anyway).
+            # One bucket per source. The economy sources fire a handful of
+            # times a year, so there is nothing finer to bucket by (and the
+            # deadline ones skip the windows anyway); Guess Who wants exactly
+            # this too, since every round is the same kind of news and the
+            # per-type hour is what stops a burst of submissions filling the
+            # channel.
             echo_key=cand.source,
             ref=cand.ref,
             name=cand.name,
             origin_channel_id=cand.channel_id,
+            origin_channel_name=cand.channel_name,
             url=jump_url(guild.id, cand.channel_id, cand.message_id),
             deadline_epoch=cand.deadline,
             now=now,
         )
+
+
+# ── Source 10: new Guess Who rounds ─────────────────────────────────────────
+#
+# Swept, not hooked, for the reason the module docstring gives about party
+# games: `guess_rounds` is the record of what actually got posted, however it
+# got there, so a third submission path added later is echoed for free rather
+# than silently missed. There are two today (a photo crop and a confession)
+# and both land in the same table.
+#
+# The echo names **nobody**. `guess_post` is in `quests.ANON_KINDS` because in
+# Guess Who the submitter is the answer, so a name here would solve the round
+# for every reader — which is the whole thing the round is for.
+
+
+def guess_candidates(
+    conn: sqlite3.Connection, guild_ids, now: float
+) -> list[EchoCandidate]:
+    """Guess Who rounds posted within the freshness window.
+
+    The query lives in ``guess_repo`` with the rest of that table's SQL, so a
+    column rename stays Guess Who's problem rather than silently breaking a
+    module its authors have no reason to grep.
+    """
+    return [
+        EchoCandidate(
+            source=SOURCE_GUESS_ROUND,
+            guild_id=int(row["guild_id"]),
+            ref=str(row["id"]),
+            # The game, never the submitter. Both round types echo, and they
+            # echo identically: saying "confession" would advertise that
+            # someone just confessed, which is more than the crossing is
+            # worth.
+            name="Guess Who",
+            channel_id=int(row["channel_id"]),
+            message_id=int(row["message_id"]),
+            channel_name=None,
+        )
+        for row in guess_repo.fresh_rounds(
+            conn, guild_ids, now - FRESHNESS_SECONDS
+        )
+    ]
+
+
+async def _sweep_guess(bot, now: float) -> None:
+    """One read connection for new Guess Who rounds."""
+    db_path: Path = bot.ctx.db_path
+    guild_ids = [g.id for g in bot.guilds]
+
+    def _read():
+        with open_db(db_path) as conn:
+            return guess_candidates(conn, guild_ids, now)
+
+    cands = await asyncio.to_thread(_read)
+
+    def _room_name(cand) -> str | None:
+        # Resolved here rather than in the query: the name is Discord state,
+        # not a column, and the room is age-gated (see
+        # EchoCandidate.channel_name). Thread-aware, because a Guess Who round
+        # can live in one (guess_cog: "the Guess prompt can live in a thread,
+        # and so can the rounds posted under it") and `Guild.get_channel`
+        # returns None for a thread — which would drop the name and fall the
+        # copy back to the bare mention this field exists to avoid.
+        guild = bot.get_guild(cand.guild_id)
+        if guild is None:
+            return None
+        return getattr(get_guild_channel_or_thread(guild, cand.channel_id), "name", None)
+
+    await _dispatch_candidates(
+        bot, [replace(c, channel_name=_room_name(c)) for c in cands], now
+    )
+
+
+# ── Source 11: Risky Rolls rounds opening ───────────────────────────────────
+
+
+async def echo_risky_round(
+    bot,
+    *,
+    guild: discord.Guild,
+    game_id: str,
+    channel,
+    message_id: int,
+    host_id: int,
+    now: float | None = None,
+) -> bool:
+    """Echo a Risky Rolls round the moment its lobby message lands.
+
+    A **push** source, unlike every other game: Risky Rolls keeps its rounds in
+    ``rr_state.active_games`` in memory and never writes ``games_active_games``,
+    so the party-game sweep cannot see them. There is nothing to poll, which is
+    also why a failed send keeps its claimed row (``retry=False``) — nothing
+    would re-offer it.
+
+    Every start echoes, scheduled ones included (Ben, 2026-09-02), and the
+    footer names the opener — see :func:`_round_host_name` for exactly who
+    that turns out to be on the two automated paths, which is not the same
+    answer for both.
+    """
+    return await echo_event(
+        bot,
+        guild=guild,
+        source=SOURCE_RISKY_ROLL,
+        echo_key=SOURCE_RISKY_ROLL,
+        ref=str(game_id),
+        name="Risky Rolls",
+        origin_channel_id=channel.id,
+        # Named, not left as a bare mention: this room is usually age-gated.
+        origin_channel_name=getattr(channel, "name", None),
+        url=jump_url(guild.id, channel.id, message_id),
+        host_name=_round_host_name(bot, guild, host_id),
+        now=now,
+    )
+
+
+def _round_host_name(bot, guild: discord.Guild, host_id) -> str | None:
+    """The opener's display name, or None when no member opened it.
+
+    ``host_id=0`` is the feature rotation's "hosted by nobody" sentinel and
+    resolves to no member anyway; the bot's own id is excluded explicitly, by
+    id rather than by name, because the account displays as "Poppy" and a
+    name check would be one rename away from wrong.
+
+    **The games scheduler is not covered by either.** It passes
+    ``created_by`` — the member who set the schedule up, possibly weeks ago
+    and not in the room — so a scheduled round is footed with their name.
+    That is the behaviour every scheduled party game already has
+    (``_host_name`` over ``games_active_games.host_id``), so it is left
+    consistent rather than special-cased here; only the rotation path is
+    genuinely authorless. Worth knowing before reading the footer as "this
+    person is here right now".
+    """
+    try:
+        host_id = int(host_id)
+    except (TypeError, ValueError):
+        return None
+    me = getattr(bot, "user", None)
+    if not host_id or (me is not None and host_id == me.id):
+        return None
+    return _host_name(guild, host_id)
 
 
 async def event_echo_loop(bot) -> None:
@@ -860,6 +1102,13 @@ async def event_echo_loop(bot) -> None:
                 raise
             except Exception:
                 log.exception("event echo: economy sweep failed")
+
+            try:
+                await _sweep_guess(bot, now)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("event echo: guess sweep failed")
 
             # Hourly, not every tick — the table is tiny and the prune is pure
             # housekeeping.

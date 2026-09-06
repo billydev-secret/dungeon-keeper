@@ -1017,3 +1017,324 @@ class TestDiscordEvent:
         assert await svc.echo_discord_event(bot, ev) is True
         assert await svc.echo_discord_event(bot, ev) is False
         assert bot.sent_channel.send.await_count == 1
+
+
+# ── Source 10: new Guess Who rounds ─────────────────────────────────────────
+
+def _guess_round(
+    conn,
+    rid,
+    *,
+    created_at=NOW,
+    message_id=900,
+    solved_at=None,
+    answer_optout=0,
+    deleted_at=None,
+    guild_id=GUILD_ID,
+    round_type="photo",
+):
+    """One row in `guess_rounds`, with every field the sweep filters on."""
+    conn.execute(
+        """
+        INSERT INTO guess_rounds
+            (id, guild_id, submitter_id, answer_id, channel_id, message_id,
+             created_at, solved_at, answer_optout, deleted_at, round_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (rid, guild_id, 5150, 5150, 777, message_id, created_at, solved_at,
+         answer_optout, deleted_at, round_type),
+    )
+
+
+class TestGuessCandidates:
+    """Which rounds the sweep offers, and what it refuses to carry out of the room."""
+
+    def _candidates(self, sync_db_path, now=NOW):
+        with open_db(sync_db_path) as conn:
+            return svc.guess_candidates(conn, [GUILD_ID], now)
+
+    @pytest.mark.parametrize(
+        "kwargs, found",
+        [
+            pytest.param({}, True, id="fresh-round"),
+            pytest.param({"created_at": NOW - 60}, True, id="inside-the-window"),
+            # The sweep only ever announces something still worth clicking —
+            # the same trade the party-game freshness bound makes.
+            pytest.param({"created_at": NOW - 7200}, False, id="stale"),
+            # create-then-send: the row exists a moment before the card does,
+            # so there is nothing to link to yet. Picked up on a later tick.
+            pytest.param({"message_id": 0}, False, id="card-not-posted-yet"),
+            pytest.param({"solved_at": NOW - 5}, False, id="already-solved"),
+            # Consent withdrawn: the round is unsolvable, and advertising it
+            # would point a crowd at someone who opted out.
+            pytest.param({"answer_optout": 1}, False, id="answer-opted-out"),
+            pytest.param({"deleted_at": NOW - 5}, False, id="deleted"),
+            pytest.param({"guild_id": 999}, False, id="other-guild"),
+        ],
+    )
+    def test_window(self, sync_db_path, kwargs, found):
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1, **kwargs)
+        assert bool(self._candidates(sync_db_path)) is found
+
+    def test_confession_rounds_echo_too(self, sync_db_path):
+        """Both submission shapes are one kind of news (Ben, 2026-09-02)."""
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1, round_type="confession")
+        assert len(self._candidates(sync_db_path)) == 1
+
+    def test_both_round_types_are_indistinguishable(self, sync_db_path):
+        """Saying "confession" would advertise that someone just confessed."""
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1, round_type="photo")
+            _guess_round(conn, 2, round_type="confession")
+        names = {c.name for c in self._candidates(sync_db_path)}
+        assert names == {"Guess Who"}
+
+    def test_candidate_carries_nobody(self, sync_db_path):
+        """The submitter IS the answer, so no member may reach the embed.
+
+        `guess_post` is in `quests.ANON_KINDS` for exactly this reason: a name
+        in the echo solves the round for everyone who reads it.
+        """
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1)
+        cand = self._candidates(sync_db_path)[0]
+        blob = repr(cand)
+        assert "5150" not in blob
+        assert cand.name == "Guess Who"
+
+
+@pytest.mark.asyncio
+class TestGuessEcho:
+    async def test_round_is_echoed_without_a_host_line(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1)
+        guild.get_channel = MagicMock(return_value=None)
+        bot.get_guild = MagicMock(return_value=guild)
+        await svc._sweep_guess(bot, NOW)
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Guess Who" in (embed.title or "")
+        # No footer at all: `host_name` is never passed for this source.
+        assert not (embed.footer.text or "")
+        assert "5150" not in (embed.description or "")
+
+    async def test_a_burst_of_submissions_echoes_once(self, bot, guild, sync_db_path):
+        """Every round is the same kind of news, so they share one hourly bucket."""
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1)
+            _guess_round(conn, 2)
+            _guess_round(conn, 3)
+        guild.get_channel = MagicMock(return_value=None)
+        bot.get_guild = MagicMock(return_value=guild)
+        await svc._sweep_guess(bot, NOW)
+        assert bot.sent_channel.send.await_count == 1
+
+
+# ── Source 11: Risky Rolls ──────────────────────────────────────────────────
+
+class TestRiskyHostName:
+    """Who gets an author line on a Risky Rolls echo, and who doesn't."""
+
+    def _bot(self, bot_user_id=1001):
+        return types.SimpleNamespace(user=types.SimpleNamespace(id=bot_user_id))
+
+    def _guild(self, member_id, name="Sam"):
+        g = MagicMock(spec=discord.Guild)
+        g.id = GUILD_ID
+        member = MagicMock()
+        member.display_name = name
+        g.get_member = MagicMock(
+            side_effect=lambda uid: member if uid == member_id else None
+        )
+        return g
+
+    def test_member_who_opened_it_is_named(self):
+        assert svc._round_host_name(self._bot(), self._guild(77), 77) == "Sam"
+
+    def test_rotation_sentinel_has_no_author(self):
+        """The feature rotation launches with host_id=0 — hosted by nobody."""
+        assert svc._round_host_name(self._bot(), self._guild(77), 0) is None
+
+    def test_the_bot_is_never_named(self):
+        """By id, not by name: the account displays as "Poppy" today."""
+        assert svc._round_host_name(self._bot(1001), self._guild(1001), 1001) is None
+
+    def test_member_who_left_has_no_author(self):
+        assert svc._round_host_name(self._bot(), self._guild(77), 88) is None
+
+
+@pytest.mark.asyncio
+class TestRiskyEcho:
+    def _channel(self, nsfw=False, name="risky-rolls"):
+        ch = MagicMock()
+        ch.id = 777
+        ch.name = name
+        ch.nsfw = nsfw
+        return ch
+
+    async def _echo(self, bot, guild, *, game_id="g1", host_id=0):
+        return await svc.echo_risky_round(
+            bot, guild=guild, game_id=game_id, channel=self._channel(),
+            message_id=900, host_id=host_id, now=NOW,
+        )
+
+    async def test_round_is_echoed(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        guild.get_channel = MagicMock(return_value=None)
+        assert await self._echo(bot, guild) is True
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "Risky Rolls" in (embed.title or "")
+
+    async def test_the_room_is_a_link_not_a_bare_mention(self, bot, guild, sync_db_path):
+        """A `<#id>` for a room the reader can't see renders as #deleted-channel."""
+        configure(sync_db_path)
+        guild.get_channel = MagicMock(return_value=None)
+        await self._echo(bot, guild)
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "[#risky-rolls]" in (embed.description or "")
+        assert "<#777>" not in (embed.description or "")
+
+    async def test_scheduled_round_echoes_with_no_author(self, bot, guild, sync_db_path):
+        """Every start echoes, scheduled ones included (Ben, 2026-09-02)."""
+        configure(sync_db_path)
+        guild.get_channel = MagicMock(return_value=None)
+        guild.get_member = MagicMock(return_value=None)
+        assert await self._echo(bot, guild, host_id=0) is True
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert not (embed.footer.text or "")
+
+    async def test_same_round_echoes_once(self, bot, guild, sync_db_path):
+        configure(sync_db_path)
+        guild.get_channel = MagicMock(return_value=None)
+        assert await self._echo(bot, guild, game_id="g1") is True
+        assert await self._echo(bot, guild, game_id="g1") is False
+        assert bot.sent_channel.send.await_count == 1
+
+    async def test_not_exempt_from_the_global_floor(self, bot, guild, sync_db_path):
+        """A game start is skip-don't-queue: another round comes along."""
+        configure(sync_db_path)
+        guild.get_channel = MagicMock(return_value=None)
+        assert await self._echo(bot, guild, game_id="g1") is True
+        assert await self._echo(bot, guild, game_id="g2") is False
+        assert bot.sent_channel.send.await_count == 1
+
+
+# ── The age gate ────────────────────────────────────────────────────────────
+
+class TestGateCrossingWarning:
+    """Warn about the *configuration*, once — never block, never spam.
+
+    Echoing out of an age-gated room is deliberate (Ben, 2026-09-02): the copy
+    is a game name and a link, and the link is still enforced by Discord's own
+    gate. What must not happen is that the crossing goes unnoticed.
+    """
+
+    def _ch(self, nsfw, name="room"):
+        # `is_nsfw()`, not an `nsfw` attribute: a Thread has no such attribute
+        # and only the method knows it inherited its parent's gate. Building
+        # the fake the other way is what let a local age-gate copy keep an
+        # attribute fallback nobody noticed was wrong.
+        return types.SimpleNamespace(is_nsfw=lambda: nsfw, name=name, category=None)
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        svc._gate_warned.clear()
+        yield
+        svc._gate_warned.clear()
+
+    def test_warns_leaving_a_gated_room_for_an_ungated_one(self, guild, caplog):
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, self._ch(True, "risky-rolls"),
+                                   self._ch(False, "the-meadow"))
+        assert "risky-rolls" in caplog.text
+        assert "the-meadow" in caplog.text
+
+    def test_the_warning_does_not_claim_a_name_crosses_for_every_source(self, guild, caplog):
+        """It fires for any crossing source and is deduped per guild.
+
+        Guess Who names nobody by design, so a warning that flatly says a
+        member's name will be posted is false for it — and being per-guild,
+        that wrong line can be the only warning a server ever gets.
+        """
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, self._ch(True), self._ch(False))
+        text = caplog.text
+        assert "game names and jump links" in text
+        # The name is attributed to Risky Rolls specifically, not to echoes at large.
+        head = text.split("Risky Rolls")[0]
+        assert "name of whoever" not in head
+
+    def test_silent_when_the_destination_is_gated_too(self, guild, caplog):
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, self._ch(True), self._ch(True))
+        assert caplog.text == ""
+
+    def test_silent_when_the_room_was_never_gated(self, guild, caplog):
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, self._ch(False), self._ch(False))
+        assert caplog.text == ""
+
+    def test_warns_once_per_boot(self, guild, caplog):
+        """Both rooms are gated permanently, so per-echo would mean forever."""
+        with caplog.at_level("WARNING"):
+            for _ in range(5):
+                svc.warn_gate_crossing(guild, self._ch(True), self._ch(False))
+        assert caplog.text.count("age-gated") == 1
+
+    def test_a_channel_that_cannot_be_resolved_warns_nothing(self, guild, caplog):
+        """`guild.get_channel` returns None for a thread or an uncached room."""
+        with caplog.at_level("WARNING"):
+            svc.warn_gate_crossing(guild, None, self._ch(False))
+        assert caplog.text == ""
+
+
+@pytest.mark.asyncio
+class TestGuessSweepResolvesThreads:
+    async def test_a_round_in_a_thread_still_names_its_room(
+        self, bot, guild, sync_db_path
+    ):
+        """`Guild.get_channel` returns None for a thread.
+
+        Left unresolved, `channel_name` is dropped and the copy falls back to
+        the bare `<#id>` — which renders as "#deleted-channel" for exactly the
+        readers who can't see the room. That is the failure this field exists
+        to prevent, so the sweep has to resolve threads too.
+        """
+        configure(sync_db_path)
+        with open_db(sync_db_path) as conn:
+            _guess_round(conn, 1)
+        thread = MagicMock(spec=discord.Thread)
+        thread.name = "guess-who-thread"
+        guild.get_channel = MagicMock(return_value=None)  # as Discord behaves
+        guild.get_channel_or_thread = MagicMock(return_value=thread)
+        bot.get_guild = MagicMock(return_value=guild)
+
+        await svc._sweep_guess(bot, NOW)
+
+        embed = bot.sent_channel.send.await_args.kwargs["embed"]
+        assert "[#guess-who-thread]" in (embed.description or "")
+        assert "<#777>" not in (embed.description or "")
+
+
+class TestScheduledRoundHostName:
+    """The games scheduler is covered by neither exclusion, deliberately.
+
+    It passes `created_by` — the member who set the schedule up, possibly
+    weeks ago and not in the room — so a scheduled round is footed with their
+    name. That is what every scheduled party game already does, so Risky Rolls
+    is left consistent with them rather than special-cased. Pinned here
+    because it reads as "this person is here right now" and isn't.
+    """
+
+    def test_the_schedule_creator_is_named(self):
+        bot = types.SimpleNamespace(user=types.SimpleNamespace(id=1001))
+        guild = MagicMock(spec=discord.Guild)
+        member = MagicMock()
+        member.display_name = "Ada"
+        guild.get_member = MagicMock(
+            side_effect=lambda uid: member if uid == 4242 else None
+        )
+        assert svc._round_host_name(bot, guild, 4242) == "Ada"

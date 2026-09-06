@@ -59,6 +59,20 @@ export function mount(container) {
       "Event Echo is off — pick a channel below and save to switch it on.";
     panel.appendChild(offBanner);
 
+    // Age-gate notice. Two sources — Risky Rolls and Guess Who — can start in
+    // a room carrying Discord's nsfw flag, and the echo destination usually
+    // isn't one. Echoing out of the gate is a deliberate choice, not a bug, so
+    // this reports the mismatch rather than blocking anything. Driven off the
+    // live channel list (/api/meta/channels returns each channel's nsfw flag),
+    // so it re-evaluates as the picker changes rather than only on load.
+    const gateBanner = document.createElement("div");
+    gateBanner.className = "field-hint";
+    gateBanner.setAttribute("role", "status");
+    gateBanner.style.cssText =
+      "border:1px solid var(--gold-solid); background:var(--gold-soft); " +
+      "border-radius:6px; padding:10px; margin-bottom:14px; line-height:1.5;";
+    panel.appendChild(gateBanner);
+
     const form = document.createElement("form");
     form.className = "form form-cards";
     panel.appendChild(form);
@@ -85,9 +99,31 @@ export function mount(container) {
       { emptyLabel: "(off)", label: "Echo channel" },
     );
 
+    const gatedRooms = channels.filter((c) => c.nsfw);
+
     function syncBanner() {
       const v = chanPicker.getValue();
-      offBanner.style.display = v && v !== "0" ? "none" : "";
+      const on = v && v !== "0";
+      offBanner.style.display = on ? "none" : "";
+
+      // Only worth saying when there is actually a gate to cross: a server
+      // with no age-gated rooms can never produce a crossing echo.
+      const dest = channels.find((c) => String(c.id) === String(v));
+      const crossing = on && gatedRooms.length > 0 && dest && !dest.nsfw;
+      gateBanner.style.display = crossing ? "" : "none";
+      if (!crossing) return;
+      const names = gatedRooms.slice(0, 3).map((c) => `#${c.name}`).join(", ");
+      const more = gatedRooms.length > 3 ? `, +${gatedRooms.length - 3} more` : "";
+      gateBanner.textContent =
+        `⚠️ #${dest.name} is not age-gated, but this server has rooms that are ` +
+        `(${names}${more}). Any game can start in one of them — Risky Rolls and ` +
+        "Guess Who most often, party games just as much — " +
+        "when they do, the game name and a link are echoed here, where everyone " +
+        "can see them. A Risky Rolls note also names whoever opened the round, " +
+        "and a party-game note names its host, as they always have. Guess Who " +
+        "notes never name anyone. The link itself still " +
+        "respects the room's age gate. Age-gate this channel if you'd rather " +
+        "none of that left the room.";
     }
     syncBanner();
     onPickerChange(chanPicker, syncBanner);
@@ -103,6 +139,10 @@ export function mount(container) {
         <li>A party game opening for players (<code>/games play …</code>), including
             games the scheduler launches on its own.</li>
         <li>A Cards Against Humanity game starting in the tracked Gamebot channel.</li>
+        <li>A Risky Rolls round opening — whether someone ran the command or the
+            scheduler opened it.</li>
+        <li>A new Guess Who round posted, photo or confession. The echo never
+            names the submitter: in Guess Who they are the answer.</li>
         <li>A Discord server event when it goes live.</li>
         <li>A new bounty posted.</li>
       </ul>

@@ -28,6 +28,8 @@ from bot_modules.services.event_echo_logic import (
     closing_due,
     decide,
     is_fresh,
+    SOURCE_GUESS_ROUND,
+    SOURCE_RISKY_ROLL,
     spec_for,
 )
 
@@ -306,6 +308,11 @@ class TestExemptSources:
             # (their value expires in minutes).
             pytest.param(SOURCE_PARTY_GAME, False, False, id="game-start"),
             pytest.param(SOURCE_BOUNTY, False, False, id="new-bounty"),
+            # Risky Rolls echoes every start, scheduled rounds included, so
+            # the floor it shares with everything else is the only thing
+            # between a busy evening and a stream of posts.
+            pytest.param(SOURCE_RISKY_ROLL, False, False, id="risky-roll"),
+            pytest.param(SOURCE_GUESS_ROUND, False, False, id="guess-round"),
             # Deadline sources: exempt *and* retried — they are re-offered by
             # the sweep on every tick inside the window.
             pytest.param(SOURCE_AUCTION_CLOSING, True, True, id="auction-closing"),
@@ -400,3 +407,77 @@ class TestExemptSources:
             name="G", channel_id=1, url="u", color=accent
         ).color == accent
         assert build_echo_embed(name="G", channel_id=1, url="u").color is not None
+
+
+class TestAgeGatedSourceCopy:
+    """The two sources that can start behind Discord's age gate.
+
+    Their copy leaves the room even when the click doesn't, so what it may
+    carry is a design constraint rather than a wording preference.
+    """
+
+    def test_a_host_name_would_leak_through_the_footer(self):
+        """Why the service must never pass one for Guess Who.
+
+        In Guess Who the submitter IS the answer (`quests.ANON_KINDS`), so a
+        name anywhere in the echo solves the round for everyone who reads it.
+        This pins down *where* the leak would be — `host_name` renders as the
+        footer, not the body, so a test that only checked the description
+        would pass while the name shipped. The guarantee that no name is ever
+        passed lives in test_event_echo_service's TestGuessEcho.
+        """
+        embed = build_echo_embed(
+            name="Guess Who",
+            source=SOURCE_GUESS_ROUND,
+            channel_id=777,
+            channel_name="guess-who",
+            url="https://discord.com/channels/1/2/3",
+            host_name="Sam",
+        )
+        assert "Sam" not in (embed.description or "")
+        assert "Sam" not in (embed.title or "")
+        assert "Sam" in (embed.footer.text or "")
+
+    def test_guess_spec_copy_is_person_free(self):
+        """The static copy itself has no slot a member could land in."""
+        spec = spec_for(SOURCE_GUESS_ROUND)
+        assert "{name}" in spec.headline  # the game, filled in by the caller
+        assert "{" not in spec.lead
+        assert "{" not in spec.cta
+
+    def test_guess_copy_says_nothing_about_the_submission(self):
+        """Neither the confession text nor the crop travels out of the room."""
+        embed = build_echo_embed(
+            name="Guess Who",
+            source=SOURCE_GUESS_ROUND,
+            channel_id=777,
+            channel_name="guess-who",
+            url="https://discord.com/channels/1/2/3",
+        )
+        body = f"{embed.title} {embed.description}"
+        assert "confession" not in body.lower()
+        assert "photo" not in body.lower()
+
+    @pytest.mark.parametrize(
+        "source, name",
+        [
+            pytest.param(SOURCE_RISKY_ROLL, "Risky Rolls", id="risky-roll"),
+            pytest.param(SOURCE_GUESS_ROUND, "Guess Who", id="guess-round"),
+        ],
+    )
+    def test_the_room_renders_as_a_link_for_everyone(self, source, name):
+        """A bare `<#id>` reads as "#deleted-channel" to a member without access.
+
+        Both rooms are usually age-gated, so most readers are that member.
+        Passing the name makes the line render identically for everyone; the
+        link still hits Discord's gate.
+        """
+        embed = build_echo_embed(
+            name=name,
+            source=source,
+            channel_id=777,
+            channel_name="the-room",
+            url="https://discord.com/channels/1/2/3",
+        )
+        assert "[#the-room]" in (embed.description or "")
+        assert "<#777>" not in (embed.description or "")

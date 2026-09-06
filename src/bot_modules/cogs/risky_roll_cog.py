@@ -33,12 +33,41 @@ from bot_modules.services.risky_roll.views import (
     disable_round_message,
     schedule_auto_close,
 )
+from bot_modules.services import event_echo_service
 from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
 
 log = logging.getLogger("dungeonkeeper.risky_roll")
+
+
+async def _echo_round(bot, guild, state, *, channel, host_id: int) -> None:
+    """Mirror a freshly opened round into the Event Echo channel, best effort.
+
+    Wrapped rather than called inline because both entry points reach it from
+    inside their channel lock, and a round that opened fine must not be undone
+    by an echo that didn't. ``echo_event`` already swallows its own send
+    failures; this catches the rest (an unreachable channel, a db hiccup) so
+    the caller never sees them.
+
+    Note the argument order this hands on: the *round's* channel, not the echo
+    destination — Event Echo resolves that itself from guild config, and is a
+    no-op when no destination is set.
+    """
+    if guild is None or channel is None or not state.message_id:
+        return
+    try:
+        await event_echo_service.echo_risky_round(
+            bot,
+            guild=guild,
+            game_id=state.game_id,
+            channel=channel,
+            message_id=state.message_id,
+            host_id=host_id,
+        )
+    except Exception:
+        log.exception("risky_roll: event echo failed for round %s", state.game_id)
 
 
 class RiskyRollCog(commands.Cog):
@@ -309,15 +338,28 @@ class RiskyRollCog(commands.Cog):
                             pass
                 raise
 
+        # Two best-effort side effects, both deliberately out here rather than
+        # beside the send: neither may hold the channel lock, and neither may
+        # sit inside the try whose handler tears a live round down.
+
+        # Event Echo. A push, not a sweep — Risky Rolls keeps its rounds in
+        # memory and never writes games_active_games, so nothing polls them.
+        # After the auto-close timer is armed on purpose: this writes to the
+        # database and sends to a *different* channel, so a rate limit on the
+        # echo destination would otherwise stall a concurrent /risky start and
+        # delay the round's own auto-close by however long the bucket slept.
+        # First of the two because it is the time-sensitive one — it says
+        # "come and join this", and a todo-board repaint must not delay it.
+        await _echo_round(
+            self.bot, interaction.guild, state,
+            channel=interaction.channel, host_id=interaction.user.id,
+        )
+
         # Risky Rolls does not go through the party games' shared
         # finish_launch_response, so it carries the seam itself — otherwise a
         # mod opening a round by hand would still be marked as not having run a
         # game. This is the interactive path only: the scheduler's daily rounds
         # come in through launch(), which deliberately reaches nothing here.
-        #
-        # Out here rather than beside the send: signing off can repaint the todo
-        # board, which must not hold the channel lock, and must not sit inside
-        # the try whose handler tears a live round down.
         if opened is not None:
             await sign_off_game_chore(self.bot, *opened)
 
@@ -433,6 +475,16 @@ class RiskyRollCog(commands.Cog):
                 rr_state.auto_close_tasks[state.game_id] = asyncio.create_task(
                     schedule_auto_close(self.bot, state.game_id, state.auto_close_minutes * 60)
                 )
+
+        # Scheduled and rotation rounds echo too (Ben, 2026-09-02) — they are
+        # exactly the ones nobody is in the room to notice. Rotation launches
+        # carry no author line (host_id=0); a *scheduled* one is footed with
+        # the member who set the schedule up, which is what every scheduled
+        # party game already does — see `_round_host_name`. Outside the lock
+        # for the reason `_start_game` gives.
+        await _echo_round(
+            self.bot, channel.guild, state, channel=channel, host_id=host_id,
+        )
 
         return state.game_id
 

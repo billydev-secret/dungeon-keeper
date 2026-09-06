@@ -359,6 +359,46 @@ def list_audit_events(
     ]
 
 
+def fresh_rounds(
+    conn: sqlite3.Connection, guild_ids, since: float
+) -> list[sqlite3.Row]:
+    """Rounds posted since *since* that are still worth pointing someone at.
+
+    Event Echo's sweep reads this rather than hooking the two submission
+    views, so a third way of posting a round is picked up for free. It is the
+    query, not the caller, that decides what "worth pointing at" means, since
+    every exclusion here is a Guess Who rule:
+
+    * ``message_id`` unset — the row exists but the card hasn't sent yet, so
+      there is nothing to link to. It will be picked up on a later tick.
+    * already solved — an echo landing on a finished round is worse than none.
+    * ``answer_optout`` — consent was withdrawn and the round is unsolvable;
+      advertising it would be pointing a crowd at someone who opted out.
+    * ``deleted_at`` — removed.
+
+    Nothing about the submitter or the answer is selected. Callers outside
+    Guess Who must not be handed either: the submitter *is* the answer.
+    """
+    ids = [int(g) for g in guild_ids]
+    if not ids:
+        return []
+    marks = ",".join("?" * len(ids))
+    return conn.execute(
+        f"""
+        SELECT id, guild_id, channel_id, message_id, created_at
+        FROM guess_rounds
+        WHERE guild_id IN ({marks})
+          AND created_at >= ?
+          AND message_id IS NOT NULL AND message_id > 0
+          AND solved_at IS NULL
+          AND answer_optout = 0
+          AND deleted_at IS NULL
+        ORDER BY created_at
+        """,
+        (*ids, since),
+    ).fetchall()
+
+
 def get_all_active_round_ids(conn: sqlite3.Connection) -> list[tuple[int, bool]]:
     rows = conn.execute(
         "SELECT id, solved_at IS NOT NULL AS solved FROM guess_rounds WHERE deleted_at IS NULL"
