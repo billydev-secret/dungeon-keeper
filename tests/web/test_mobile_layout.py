@@ -920,6 +920,45 @@ _TAG_MIX_STUB = {
 }
 
 
+# The panel's *inventory* call, which is separate from the over-time chart's.
+# mount() awaits this one first and, when nothing is classified, renders the
+# "Nothing recorded yet" empty state and returns — so without this stub the
+# chart under test is never built at all and its controls never appear. The
+# test dashboard has no tagged images, which is why the panel's own endpoint
+# has to be stubbed as well as the chart's.
+_TAG_INVENTORY_STUB = {
+    "days": 30,
+    "classified": 412,
+    "explicit": 96,
+    "tagged": 128,
+    "explicit_untagged": 11,
+    "tagged_not_explicit": 7,
+    "avg_inference_ms": 42.5,
+    "labels": [
+        {"label": "FEMALE_BREAST_EXPOSED", "count": 61, "avg_score": 0.82},
+        {"label": "BUTTOCKS_EXPOSED", "count": 37, "avg_score": 0.71},
+    ],
+    "scores": [
+        {"floor": 0.7, "count": 40, "explicit": 12},
+        {"floor": 0.8, "count": 56, "explicit": 44},
+    ],
+}
+
+
+def _stub_tag_endpoints(page):
+    """Both calls the Image Guard Tags panel makes, in mount order."""
+    import json
+
+    page.route(
+        "**/api/moderation/nsfw-tags*",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(_TAG_INVENTORY_STUB),
+        ),
+    )
+
+
 def test_nsfw_tagging_over_time_fits_on_phone(dashboard, browser):
     """The tag chart on Image Guard Tags, at its widest.
 
@@ -932,6 +971,7 @@ def test_nsfw_tagging_over_time_fits_on_phone(dashboard, browser):
     context = browser.new_context(viewport={"width": VIEWPORTS["phone"], "height": 844})
     try:
         page = context.new_page()
+        _stub_tag_endpoints(page)
         page.route(
             "**/api/reports/nsfw-tag-mix*",
             lambda route: route.fulfill(
@@ -997,6 +1037,7 @@ def test_nsfw_tag_chart_never_renders_a_superseded_window(dashboard, browser):
                 body=json.dumps(_TAG_MIX_STUB),
             )
 
+        _stub_tag_endpoints(page)
         page.route("**/api/reports/nsfw-tag-mix*", _slow_first)
         _goto_panel(page, f"{dashboard.base}/#/nsfw-tags")
         # Switch well before the first response can land.

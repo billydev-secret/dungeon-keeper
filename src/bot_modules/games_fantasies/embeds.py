@@ -48,6 +48,10 @@ def build_lobby_embed(
     embed.add_field(name="Host", value=host_name, inline=True)
     if start_at:
         embed.add_field(name="⏰ Starting", value=f"<t:{int(start_at)}:R>", inline=True)
+    # A no-op in practice — both fields are inline, and the helper skips those —
+    # but every stacked-field builder calls it, so the one that does not is the
+    # one nobody notices when its fields stop being inline.
+    apply_section_spacing(embed)
     embed.set_footer(text=f"{GAME_ICONS['fantasies']} Fantasies & Dealbreakers")
     return embed
 

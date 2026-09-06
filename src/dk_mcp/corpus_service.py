@@ -83,6 +83,10 @@ _SECTION_KINDS: tuple[tuple[str, Kind], ...] = (
     ("design specs", Kind.DESIGN),
     ("implementation plans", Kind.PLAN),
     ("aspirational specs", Kind.ASPIRATIONAL),
+    # Drafts of member-facing text awaiting a paste into Discord. INDEX labels
+    # each row "Design - ready to paste", and Design is the honest banner: the
+    # words are written but not yet posted, so the live doc may not say this.
+    ("drafts awaiting posting", Kind.DESIGN),
 )
 
 BANNERS: dict[Kind, str] = {

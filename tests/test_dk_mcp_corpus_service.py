@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from dk_mcp.corpus_service import UNSERVED_INDEX_SECTIONS, Catalogue, Kind
+from dk_mcp.corpus_service import (
+    UNSERVED_INDEX_SECTIONS,
+    Catalogue,
+    Kind,
+    _kind_for_section,
+)
 from dk_mcp.paths_service import PathDenied, PathGuard, Reason
 from dk_mcp.sections_service import strip_markdown_sections
 from tests.dk_mcp_fixture import make_repo, requires_real_corpus
@@ -197,3 +202,24 @@ def test_real_corpus_is_fully_classified() -> None:
         "src/web_server/static/manual.html",
     }
     assert not [d for d in docs if "/reviews/" in d.path or "/testing/" in d.path]
+
+
+@pytest.mark.parametrize(
+    ("heading", "expected"),
+    [
+        ("Reference specs (match current behavior)", Kind.REFERENCE),
+        ("Design specs (written to implement; may lag the code)", Kind.DESIGN),
+        ("Implementation plans (`docs/plans/`)", Kind.PLAN),
+        ("Aspirational specs (⚠️ read with care — not fully built)", Kind.ASPIRATIONAL),
+        # Added when this section appeared in INDEX and silently classified
+        # nothing: an unmapped heading does not fail, it just drops every row
+        # under it, so three real docs read as UNCLASSIFIED.
+        ("Drafts awaiting posting (`docs/proposals/`)", Kind.DESIGN),
+        # Deliberately unmapped — these two are not served at all.
+        ("Testing checklists (`docs/testing/`)", None),
+        ("Audits", None),
+    ],
+)
+def test_every_index_section_heading_maps_or_is_deliberately_unserved(heading, expected):
+    """A new INDEX section must be taught here or its rows classify nothing."""
+    assert _kind_for_section(heading) is expected

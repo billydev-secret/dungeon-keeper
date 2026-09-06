@@ -216,7 +216,10 @@ _REVIEW_TAG = re.compile(
 )
 _COMMIT = re.compile(r"\b[0-9a-f]{7,40}\b")
 _DURATION = re.compile(
-    r"\b\d+\s*-?\s*(d|days?|h|hours?|weeks?|months?|years?|mo|yr)\b"
+    # The count is captured rather than re-found inside the match: a second
+    # ``re.search`` for it returns an Optional the type checker has to be
+    # argued with, and the pattern already guarantees the digits are there.
+    r"\b(\d+)\s*-?\s*(d|days?|h|hours?|weeks?|months?|years?|mo|yr)\b"
 )
 _EVENT_RETENTION = re.compile(
     r"\buntil\b|\bon (approve|reject|round close|leave)\b|overwritten|"
@@ -658,8 +661,8 @@ def _humanise_duration(text: str) -> tuple[int, str] | None:
     m = _DURATION.search(text.lower())
     if not m:
         return None
-    n = int(re.search(r"\d+", m.group(0)).group(0))
-    unit = m.group(1)
+    n = int(m.group(1))
+    unit = m.group(2)
     if unit.startswith("h"):
         return max(1, n // 24), f"{n} hours"
     if unit.startswith("w"):
