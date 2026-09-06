@@ -29,7 +29,7 @@ Two things this page is not:
 | `games/utils/question_source.channel_allows_nsfw` | The single NSFW verdict, gated on Discord's own `is_nsfw()` with thread-parent inheritance and fail-safe-to-SFW. ~25 call sites; `advisor_context.can_view` delegates to the same decision |
 | `services/name_resolver.build_name_fn` | Turning a member id into a name a *reading* client can render. Builders take the `name_fn`; a repo test guards that every render site passes one. → `embed_style_guide.md` § Naming members in embeds |
 | `services/privacy_service` — `SUBJECT_ID_COLUMNS`, `purge_user_data` | Which column names mean "this row is about a member". A table whose subject column isn't listed is invisible to the subject-access export. → `privacy_spec.md`, `data_register.md` |
-| `AppContext.member_is_mod` | The mod check. An uncached member reads as not-a-mod — chosen, because an unearned tick is harder to undo than a missed one |
+| `AppContext.member_is_mod` | The mod check, for a `Member` already in hand — it reads roles and nothing else. The uncached-member-reads-as-not-a-mod behaviour belongs to its sibling `is_mod(interaction)`, where `get_interaction_member` returning `None` is what decides it — chosen, because an unearned tick is harder to undo than a missed one |
 
 ## Embeds, DMs and panels
 
@@ -37,7 +37,7 @@ Two things this page is not:
 |---|---|
 | `core/branding.safe_resolve_accent` | The accent colour, from a bot, an AppContext or a db_path. Never call `resolve_accent_color` directly — it raises, and a repo-wide test fails the suite if you do |
 | `services/dm_branding` — `send_branded_dm`, `brand_dm_embed` | Branded DM delivery. Four near-identical `_try_dm` helpers existed before it did |
-| `services/economy_service.notify_member` | Member notification with the DM → bank-channel fallback, and `require_game_role=True` for recurring economy DMs. Returns a `DmDelivery` naming the surface actually used |
+| `services/economy_service.notify_member` | Member notification with the DM → bank-channel fallback, and `require_game_role=True` for recurring economy DMs. Returns a bare `bool`; it is `deliver_econ_dm` underneath that returns the `DmDelivery` naming the surface actually used, so reach for that one when the surface matters |
 | `core/utils.jump_url` | Message permalinks. Never hand-roll the URL |
 | `economy/view_helpers` — `EphemeralCard`, `review_surface` | Repainting a review card that may live in a channel *or* behind the todo board's ephemeral detail message. An ephemeral message can't be edited through the channel-message endpoint; this is the one wrapper that hides the difference instead of branching at every repaint |
 | `web_server/routes/panel_posting` — `sticky_conflict`, `own_channel_id` | The guards every "post this panel into a channel" route needs. A panel already in the target channel is **warned, never blocked** — refusing doesn't undo a collision, it just locks the admin out of maintaining a panel that is sitting there |
