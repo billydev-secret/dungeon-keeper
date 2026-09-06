@@ -36,6 +36,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.utils import safe_ephemeral
 from bot_modules.core.db_utils import get_grant_roles, open_db
 from bot_modules.services.branding_service import (
     DEFAULT_ASSISTANT_NAME,
@@ -844,14 +845,11 @@ class _AskModal(discord.ui.Modal):
         self, interaction: discord.Interaction, error: Exception
     ) -> None:
         log.exception("Ask panel chat failed", exc_info=error)
-        msg = "❌ Something went wrong there — press Ask on the panel to try again."
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
-            else:
-                await interaction.response.send_message(msg, ephemeral=True)
-        except discord.HTTPException:
-            pass
+        await safe_ephemeral(
+            interaction,
+            "❌ Something went wrong there — press Ask on the panel to try again.",
+            log_label="advisor chat",
+        )
 
 
 class AdvisorCog(commands.Cog):
@@ -900,13 +898,18 @@ class AdvisorCog(commands.Cog):
         question="What do you want to know how to do?",
         public="Post the answer in this channel as a short tutorial (mods only)",
     )
-    @app_commands.checks.cooldown(1, 12.0, key=lambda i: i.user.id)
     async def ask(
         self,
         interaction: discord.Interaction,
         question: str,
         public: bool = False,
     ) -> None:
+        # The same bucket the panel and Reply use, not a decorator of its own:
+        # all three doors open onto one billed brain, and two separate limiters
+        # meant a member could interleave them for double the rate. Must run
+        # before the defer — the refusal needs the response slot.
+        if await _cooldown_blocked(interaction, interaction.user.id):
+            return
         log.info(
             "%s used /ask%s: %.80s",
             interaction.user.display_name,

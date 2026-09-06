@@ -20,8 +20,23 @@ import pytest
 from bot_modules.cogs import advisor_cog
 from bot_modules.services import advisor_chat_logic
 from bot_modules.cogs.advisor_cog import _proposal_fields
+
 from bot_modules.services.advisor_actions import ConfigProposal
 from bot_modules.services.advisor_service import AdvisorResult
+@pytest.fixture(autouse=True)
+def _fresh_cooldown():
+    """Every test starts with an empty rate-limit bucket.
+
+    /ask, the Ask panel and Reply now share one per-member bucket (three doors,
+    one billed brain), so without this the first /ask test cools the member down
+    for the next one — module state leaking between tests as a spurious refusal.
+    """
+    advisor_cog._REPLY_COOLDOWN._last.clear()
+    advisor_cog._chat_gen.clear()
+    yield
+    advisor_cog._REPLY_COOLDOWN._last.clear()
+    advisor_cog._chat_gen.clear()
+
 
 
 def _embed():
@@ -541,3 +556,44 @@ def test_an_untouched_chat_is_not_treated_as_superseded():
 
     advisor_cog._chat_gen.clear()
     assert advisor_cog._chat_gen.get(7, 0) == 0
+
+
+# ── Ask chat: the ownership gate proves it denies ─────────────────────
+#
+# design_guide.md Part 4: every gate has a test that proves it *denies*. Both
+# buttons carry the asker's id in their custom_id precisely so the check does
+# not rest on the message being ephemeral — which makes this the only thing
+# between a stray click and another member's private conversation.
+
+
+@pytest.mark.asyncio
+async def test_reply_refuses_a_clicker_who_is_not_the_asker():
+    button = advisor_cog.AskChatReplyButton(7)
+    someone_else = _member(administrator=True)
+    someone_else.id = 99
+    interaction = _interaction(someone_else)
+    interaction.response.send_message = AsyncMock()
+    interaction.response.send_modal = AsyncMock()
+
+    await button.callback(interaction)
+
+    assert interaction.response.send_modal.await_count == 0
+    assert advisor_cog._CHAT_NOT_YOURS in interaction.response.send_message.await_args.args
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_end_chat_refuses_a_clicker_who_is_not_the_asker():
+    button = advisor_cog.AskChatEndButton(7)
+    someone_else = _member(administrator=True)
+    someone_else.id = 99
+    interaction = _interaction(someone_else)
+    interaction.response.send_message = AsyncMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await button.callback(interaction)
+
+    # The window is untouched — a foreign click must not close someone's chat.
+    assert interaction.response.edit_message.await_count == 0
+    assert advisor_cog._CHAT_NOT_YOURS in interaction.response.send_message.await_args.args
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
