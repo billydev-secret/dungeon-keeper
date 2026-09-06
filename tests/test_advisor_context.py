@@ -33,10 +33,13 @@ class FakeRole:
 class FakeChannel:
     """`public` = visible to @everyone; `allowed` = extra member ids that can view."""
 
-    def __init__(self, cid, name, topic="", nsfw=False, public=True, allowed=()):
+    def __init__(
+        self, cid, name, topic="", nsfw=False, public=True, allowed=(), category=None
+    ):
         self.id = cid
         self.name = name
         self.topic = topic
+        self.category = category
         self._nsfw = nsfw
         self._public = public
         self._allowed = set(allowed)
@@ -117,12 +120,29 @@ def test_can_view_private_channel_hidden_then_granted():
     assert ac.can_view(ch, FakeRole()) is False
 
 
+def test_can_view_excludes_a_channel_in_an_age_restricted_category():
+    # Discord does not cascade the category flag onto channels already inside
+    # it, so a spicy room nobody ticked individually would otherwise have its
+    # name and topic handed to /ask for anyone who asked.
+    ch = FakeChannel(
+        1, "themes", public=True, nsfw=False, category=FakeChannel(9, "Spicy", nsfw=True)
+    )
+    assert ac.can_view(ch, FakeRole()) is False
+
+
 def test_can_view_fails_closed_on_error():
     class Boom:
         def is_nsfw(self):
             raise RuntimeError("boom")
 
     assert ac.can_view(Boom(), FakeRole()) is False
+
+
+def test_can_view_fails_closed_when_the_age_gate_cannot_be_read():
+    # Not an error path — an object with no age gate at all. The shared helper
+    # would call that "not age-gated"; an exclusion has to read it the other
+    # way, which is what default=True buys.
+    assert ac.can_view(object(), FakeRole()) is False
 
 
 # ── capability_summary (what they can do) ───────────────────────────────────

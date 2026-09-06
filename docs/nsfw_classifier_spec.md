@@ -33,7 +33,7 @@ Three-valued, and the third value is the point:
 
 | consumer | where it runs | threshold | on `UNKNOWN` |
 |---|---|---|---|
-| Reaction tipping | `is_nsfw()` channels with a tipping rule | standard | react anyway — a CDN hiccup must not cost a poster their tips |
+| Reaction tipping | age-gated channels (`is_nsfw()`, channel **or** category) with a tipping rule | standard | react anyway — a CDN hiccup must not cost a poster their tips |
 | Spoiler enforcement | `spoiler_required_channels` | standard, **plus the bare-chest rule** | delete — preserves the pre-classifier behavior; unreadable is treated as maybe-explicit, and so is a classifier that raises |
 | SFW nudity prevention | every other channel | **higher** | do nothing — never delete on a failed read |
 
@@ -108,6 +108,14 @@ Note the deliberate asymmetry with SFW prevention, which fails **open** on the s
 It is a named constant rather than an inline literal precisely so this can't be "fixed" by accident, and `test_spoiler_extensions_are_a_strict_subset` fails if the two lists converge or diverge further — a divergence recorded only here would be recorded only in the surface this project declares subordinate to the code.
 
 **That is not a way through.** Spoiler enforcement returns early only when it *deleted*, so a skipped `.bmp` falls through to SFW prevention, which has no exemption for spoiler-required channels — only age-gated and explicitly exempt ones. In a spoiler-required channel that isn't age-gated, with prevention enforcing, that `.bmp` is still removed: by the other gate, at the stricter threshold, recorded under `surface='sfw'`. Under the shipped defaults (prevention off, spoiler channels usually age-gated) it simply isn't checked.
+
+**One definition of "age-gated".** `is_age_gated_channel` is the single source of that verdict, and it reads **Discord's own flag on the channel or on its category** — nothing else, and nothing stored bot-side. The category half was added on 2026-09-02 because Discord does not cascade an age-restricted category onto the channels already inside it: `TextChannel.is_nsfw()` reports only the channel's own flag, so one channel nobody ticked individually reads as SFW inside a category of age-gated siblings. That is exactly what happened to `themes-and-challenges` on 2026-09-01 — SFW prevention was enforcing, and it deleted a member's upload in a spicy room.
+
+Two other readers used to answer the same question their own way and now delegate: `question_source.channel_allows_nsfw` (whether a game may serve NSFW prompts) was a second implementation reading only the channel flag, and `advisor_context.can_view` (which channels `/ask` may quote) called `is_nsfw()` raw. One verdict now, so a category cannot be age-gated for Image Guard and SFW for Truth or Dare.
+
+The exclusion direction differs, and that is deliberate. The gates here fall back to *not* age-gated when the flag can't be read — a partial channel object, a thread whose parent isn't cached — because that records no dataset and offers no tip. `can_view` is withholding rather than permitting, so it passes `default=True` and leaves an unreadable channel out of `/ask`.
+
+**A channel deliberately left open inside a gated category is now covered by it.** There is no per-channel opt-out, because Discord has no "explicitly not age-restricted" state to read — an unticked channel and a channel someone unticked on purpose are the same byte. `nsfw_prevention_exempt_channels` still exempts a channel from the SFW deletion rule, but not from tagging or recording.
 
 **Attachments only.** Embeds are never classified. The auto-react cog's `_has_image` matches `gifv`/`rich` embeds whose images live on arbitrary external hosts; fetching those would point the bot's outbound requests at member-supplied URLs — SSRF probing of the local network, IP-logging pixels, hostile payloads — so they are out of scope entirely. In a tipping-enabled channel this means embeds get no emoji at all, since a bot-placed emoji is a live tip and nothing may be tipped that wasn't classified.
 

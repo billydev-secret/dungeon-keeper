@@ -8,9 +8,10 @@ roles/permissions), so answers are tailored to them.
 Three hard rules, all enforced here and covered by tests:
 
 - **See:** a channel's topic is only ever included if the asker can view that
-  channel (``permissions_for(viewer).view_channel``), and NSFW channels
-  (``is_nsfw()``) are never included. ``/ask`` is open to everyone, so this is
-  the gate that stops a member extracting mod-only content.
+  channel (``permissions_for(viewer).view_channel``), and age-gated channels
+  are never included — the channel's own flag or its category's. ``/ask`` is
+  open to everyone, so this is the gate that stops a member extracting
+  mod-only content.
 - **Do:** the capability summary reflects the asker's real permissions, so
   the advisor only suggests actions they can actually perform.
 - **Nothing about a person:** no member-written message, no stored per-member
@@ -35,6 +36,7 @@ import discord
 from bot_modules.core.db_utils import get_config_value, open_db
 from bot_modules.docs.db import list_docs
 from bot_modules.services.announcements_service import list_announcements
+from bot_modules.services.nsfw_classifier_service import is_age_gated_channel
 from bot_modules.services.settings_registry import FEATURES as REGISTRY_FEATURES
 
 log = logging.getLogger(__name__)
@@ -91,10 +93,17 @@ def can_view(channel, viewer) -> bool:
     """True if ``viewer`` may see ``channel`` and it isn't an NSFW channel.
 
     ``viewer`` is a Member (the asker) or a Role (``guild.default_role`` as the
-    public fallback). Any error resolving permissions fails closed (excluded).
+    public fallback). Any error resolving permissions fails closed (excluded),
+    and so does an age gate we can't establish — hence ``default=True``, which
+    reads as "assume age-gated, leave it out". The shared helper's own default
+    is the opposite because its other callers permit content rather than
+    withhold it; this is an exclusion, so it wants the other direction.
+
+    An age-restricted **category** excludes the channels inside it, the same
+    as the channel's own flag.
     """
     try:
-        if channel.is_nsfw():
+        if is_age_gated_channel(channel, default=True):
             return False
         return bool(channel.permissions_for(viewer).view_channel)
     except Exception:

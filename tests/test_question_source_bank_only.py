@@ -198,3 +198,35 @@ def test_normalise_tags_is_the_one_rule(raw, expected):
     """Every tag reader and writer (bank draw, dashboard save/read/filter,
     the prod fix script) shares this rule, so it is pinned once here."""
     assert normalise_tags(raw) == expected
+
+# ── channel_allows_nsfw delegates to the one age-gate verdict ───────────────
+
+
+class _Chan:
+    def __init__(self, nsfw: bool, category=None) -> None:
+        self._nsfw = nsfw
+        self.category = category
+
+    def is_nsfw(self) -> bool:
+        return self._nsfw
+
+
+@pytest.mark.parametrize(
+    ("channel", "expected"),
+    [
+        pytest.param(_Chan(True), True, id="age-gated"),
+        pytest.param(_Chan(False), False, id="not-age-gated"),
+        # Was a second implementation of the age gate that read only the
+        # channel's own flag, so a spicy room in an age-restricted category
+        # served SFW prompts while Image Guard treated it as age-gated.
+        pytest.param(
+            _Chan(False, category=_Chan(True)), True, id="ungated-in-gated-category"
+        ),
+        pytest.param(
+            _Chan(False, category=_Chan(False)), False, id="ungated-in-ungated-category"
+        ),
+        pytest.param(object(), False, id="unresolvable-fails-safe"),
+    ],
+)
+def test_channel_allows_nsfw(channel, expected):
+    assert question_source.channel_allows_nsfw(channel) is expected
