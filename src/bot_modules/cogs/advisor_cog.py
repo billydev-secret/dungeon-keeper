@@ -531,6 +531,24 @@ async def _run_chat(
     return result.answer, result.ok, assistant_name
 
 
+#: Chat generation per asker. Bumped when a turn completes and when the chat is
+#: ended, so an answer that was still being written can tell it has been
+#: overtaken before it edits the window. Two races made this necessary: pressing
+#: End chat while a reply was in flight brought the "closed" chat back, transcript
+#: and live buttons and all; and two replies in flight meant the slower one wrote
+#: its pre-edit snapshot over the faster one's turn, dropping it silently.
+#:
+#: In memory on purpose. It is only meaningful for the seconds an answer takes,
+#: and a restart in that window loses nothing that matters — an absent entry
+#: reads as "not superseded", which is the behaviour this had before.
+_chat_gen: dict[int, int] = {}
+
+
+def _bump_chat_gen(user_id: int) -> int:
+    _chat_gen[user_id] = _chat_gen.get(user_id, 0) + 1
+    return _chat_gen[user_id]
+
+
 async def _show_chat(
     interaction: discord.Interaction,
     *,
@@ -650,7 +668,9 @@ class AskChatReplyButton(
             return
         if await _cooldown_blocked(interaction, self.user_id):
             return
-        await interaction.response.send_modal(_AskModal(history=history))
+        await interaction.response.send_modal(
+            _AskModal(history=history, generation=_chat_gen.get(self.user_id, 0))
+        )
 
 
 class AskChatEndButton(
@@ -678,6 +698,9 @@ class AskChatEndButton(
         if interaction.user.id != self.user_id:
             await interaction.response.send_message(_CHAT_NOT_YOURS, ephemeral=True)
             return
+        # Bump first: an answer already being written must not edit this window
+        # back into existence after it is cleared.
+        _bump_chat_gen(self.user_id)
         # Wiping the embed is the whole point: the transcript only ever existed
         # in this message, so clearing it is what "end the chat" means here.
         await interaction.response.edit_message(
@@ -704,11 +727,15 @@ class _ChatView(discord.ui.View):
 class _AskModal(discord.ui.Modal):
     """The question box, for both the first ask and every reply after it."""
 
-    def __init__(self, *, history: list[dict] | None) -> None:
+    def __init__(self, *, history: list[dict] | None, generation: int = 0) -> None:
         first = history is None
         super().__init__(title="Ask a question" if first else "Reply")
         #: None on the first turn — there is no window to update yet.
         self._history = history
+        #: What ``_chat_gen`` read when the button was pressed. If it has moved
+        #: by the time this answer is ready, the window belongs to someone
+        #: else's turn now — or to no chat at all.
+        self._generation = generation
         self.question: discord.ui.TextInput = discord.ui.TextInput(
             label="What would you like to know?" if first else "Your reply",
             style=discord.TextStyle.paragraph,
@@ -787,6 +814,23 @@ class _AskModal(discord.ui.Modal):
             exchange_count(new_history),
             question,
         )
+        if not first and _chat_gen.get(interaction.user.id, 0) != self._generation:
+            # Overtaken while the model was writing: the chat was ended, or a
+            # second reply already landed. Editing the window now would either
+            # resurrect a closed chat or paste this turn over a newer one. Hand
+            # the answer over as its own message instead — it was still asked
+            # and answered, and losing it silently is the worse failure.
+            await interaction.followup.send(
+                content=(
+                    "-# That chat moved on while this was being written, so here "
+                    "is the answer on its own."
+                ),
+                embed=_chat_embed(new_history, assistant_name, color),
+                ephemeral=True,
+            )
+            return
+        if not first:
+            _bump_chat_gen(interaction.user.id)
         await _show_chat(
             interaction,
             history=new_history,

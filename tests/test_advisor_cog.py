@@ -495,3 +495,49 @@ async def test_the_two_entry_points_share_one_budget(monkeypatch):
 
     reply.response.send_modal.assert_not_called()
     assert "sec" in reply.response.send_message.await_args.args[0]
+
+
+# ── Ask chat: two races on one window ─────────────────────────────────
+#
+# The chat's whole state is the message, so anything that writes the window
+# after a slow answer can undo work it never saw. Both of these were found in
+# review, and both are about the *seconds* an answer takes.
+
+
+def test_ending_a_chat_supersedes_an_answer_already_being_written():
+    """End chat must not be undone by a reply that was already in flight.
+
+    The reply's edit targets a message that still exists — clearing it did not
+    delete it — so without a guard the "closed" chat comes back with its
+    transcript and live buttons.
+    """
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    at_click = advisor_cog._chat_gen.get(7, 0)
+    advisor_cog._bump_chat_gen(7)  # the End press lands while the answer is written
+    assert advisor_cog._chat_gen.get(7, 0) != at_click
+
+
+def test_a_second_reply_supersedes_the_slower_first_one():
+    """Two replies in flight: the slower must not write over the faster.
+
+    Each carries the pre-edit transcript it read at click time, so the loser
+    would otherwise paste a history that is missing the winner's turn.
+    """
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    slow_click = advisor_cog._chat_gen.get(7, 0)
+    fast_click = advisor_cog._chat_gen.get(7, 0)
+    advisor_cog._bump_chat_gen(7)  # the fast reply completes first
+    assert advisor_cog._chat_gen.get(7, 0) == fast_click + 1
+    assert advisor_cog._chat_gen.get(7, 0) != slow_click
+
+
+def test_an_untouched_chat_is_not_treated_as_superseded():
+    """The common case, and what a restart looks like: no entry means proceed."""
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    assert advisor_cog._chat_gen.get(7, 0) == 0
