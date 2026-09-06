@@ -128,6 +128,22 @@ Two things about this gate are easy to get wrong and both matter:
   no single moment there that means "he tried". They are enforced just as
   strictly.
 
+And one that follows from the first, because the reflex is to reach for a
+blanket refusal:
+
+- **Suppress the reaching-out, not the member's own outcome.** Run the
+  ordinary path and drop only the part that arrives at the other person.
+  `/bank pay` and `/bank gift` between a no-contact pair *move the money* and
+  suppress the recipient's notification — refusing the transfer would leave the
+  sender's balance intact and let `/bank` tell him he's blocked. Risky Rolls
+  gates **the die**, not the pairing, because a number that was never generated
+  cannot be audited against the public roster. The same instinct applies past
+  no-contact: Event Echo **echoes out of an age-gated room and reports the
+  crossing** rather than skipping it, because a blanket "never echo out of an
+  NSFW channel" rule would have silently killed both of that feature's live
+  sources. Reach for the narrowest suppression that still ends in an ordinary
+  outcome, and where you can't, say which sources a blanket rule would kill.
+
 → `no_contact_spec.md` § Gated surfaces, § The disclosure rules
 
 ## 5. What data does it store?
@@ -162,6 +178,17 @@ merge conflict that only shows up when the chain runs.
 ---
 
 # Part 2 — Coding standards
+
+**Before you write a second one, check whether something already owns it.**
+The shared seams — the no-contact read, the NSFW verdict, the name resolver,
+branded DMs, the paid-submission ledger, the panel-posting guards, the question
+bank draw, the settings registry, the grounded-Claude stack — are catalogued
+with a line each saying which module docstring to open.
+→ `common_modules.md`
+
+And before proposing a de-duplication, read the LEAVE list: a repo-wide review
+already examined the obvious candidates and kept many of them apart on purpose.
+→ `plans/common-lib-round-2.md`
 
 Two layouts are live and both are fine: a per-feature package
 (`bot_modules/survivor/` with `logic.py`, `embeds.py`, `views.py`;
@@ -331,6 +358,20 @@ coverage percentage:
   the state that broke, not the surface it showed up on. At most one wiring
   assertion in the cog test, and only when the glue itself was wrong.
 
+**Chose the surprising branch? Pin it with a test that fails if someone
+reverts it**, and say why in the owning spec. This is the rule that keeps a
+deliberate decision from being "fixed" by the next session, which is the single
+most repeated way work here gets undone. The Guess solved-reveal prints a bare
+`User <id>` when the submitter and the answer are a no-contact pair — naming
+them together in the bot's own voice manufactures the very association the list
+exists to prevent — so resolving it is a regression, and two tests say so. The
+party games' turn pings stay **public** because an ephemeral message notifies
+nobody and would silently stall the game. `ama` stays in `VALID_GAME_TYPES`
+even though no new `ama` rows are accepted, because `import_bank` 400s a whole
+payload on one bad line. None of those reads as intentional from the code
+alone. A comment is not enough and a note somewhere else is not enough: the
+test is what a stranger's `/simplify` pass will actually run.
+
 **Prefer a `pytest.param` row over a new test function** when you're covering
 another value variant, and check whether a shared contract table already
 covers it — embed accents live in `tests/test_embed_accent_contract.py` and
@@ -373,7 +414,12 @@ Same commit, not a follow-up.
 - [ ] Every gate from Part 1 §4 has a test that proves it denies.
 - [ ] Member-to-member surface ⇒ no-contact consulted, and the refusal is
       indistinguishable from an ordinary outcome.
-- [ ] No preference or toggle that nothing reads.
+- [ ] No preference or toggle that nothing reads — including a **config key
+      staged into prod ahead of the branch that reads it**. Staging one is a
+      normal move here; leaving it unnamed is how `econ_cat_catch_daily_cap`
+      sat in prod for four days as a cap nothing enforced. Name the branch that
+      must land, in the commit that stages the value.
+- [ ] Deliberate anomaly ⇒ a test that fails if it is reverted (Part 3).
 - [ ] New logic-layer file ⇒ a mapped test file (the hook hard-fails otherwise).
 
 ## Gates
@@ -418,9 +464,47 @@ Same commit, not a follow-up.
 
 ---
 
-# Part 5 — Where the rules live
+# Part 5 — After it merges
 
-The eight documents this guide points at, and what each owns.
+⌂ A merge is not a launch, and this repo is unusual in how far apart those two
+are. The checkout **is** production, so merging puts the code where prod reads
+it — but the service is still running the old one, and the user restarts it.
+Between those moments a feature is on main and doing nothing at all.
+
+**Ship it dark.** A feature with a live blast radius lands inert and is turned
+on afterwards, deliberately, by someone looking at the server. Feature Rotation
+shipped with its rooms unhidden; `xp_events` retention shipped with deletion
+off per guild; the Guess inactivity nudge shipped at 0 hours; Flash Themes sits
+behind four prod steps; chore auto-sign-off ships `auto_complete` NULL for every
+existing row, so a restart alone changes no behaviour whatsoever. Prefer a dial
+that defaults to off, a NULL that means "not configured", or a table with no
+rows, over a flag day. State in the commit body what the feature does the
+instant it is live, and if the honest answer is "nothing until someone picks a
+channel", that is the good answer.
+
+The corollary is that **the switch is not yours to flip.** The restart, a
+Sync or Post press that publishes to members, a value written into the prod
+`config` or `todos` tables, a backfill against live data — each of those is an
+action the user takes, or explicitly asks for, even when you are certain it is
+right and even when you have already written the script. Prepare it, say
+exactly what pressing it will do, and stop. A feature that ships dark makes
+that easy; one that ships hot makes it impossible.
+
+Two consequences for how you *describe* the work:
+
+- The `Testing:` lines are written for someone testing the **live** server, so
+  they must not assume a state that only exists after a prod step nobody has
+  taken. If the feature needs a dial set first, that is a step in the card, not
+  an assumption behind it.
+- A note saying a branch is unmerged, a dial unset or a table empty records
+  what was true **when it was written**. Re-check anything that names a file,
+  flag, migration number or branch before you act on it.
+
+---
+
+# Part 6 — Where the rules live
+
+The nine documents this guide points at, and what each owns.
 
 | Document | Owns |
 |---|---|
@@ -432,6 +516,7 @@ The eight documents this guide points at, and what each owns.
 | `docs/privacy_spec.md` | Deletion and subject-access export, and `SUBJECT_ID_COLUMNS` |
 | `docs/web_testing.md` | The dashboard sweeps and the Playwright browser suite |
 | `docs/no_contact_spec.md` | The no-contact list: gated surfaces, disclosure rules, storage |
+| `docs/common_modules.md` | The shared seams: which module already owns a job, and which docstring to open. A map, not a rulebook |
 
 Plus the two surfaces that are not dev docs at all:
 `src/web_server/static/manual.html` is the user-facing guide rendered in the
@@ -440,7 +525,7 @@ evaluating the bot.
 
 ---
 
-# Part 6 — When this guide is wrong
+# Part 7 — When this guide is wrong
 
 - **Code beats specs.** If a spec and `src/` disagree, the code is what runs.
 - **The owner doc beats this guide.** Every `→` line is a summary; the target
