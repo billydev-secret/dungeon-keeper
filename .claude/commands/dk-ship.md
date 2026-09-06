@@ -35,9 +35,24 @@ Steps:
    If there are conflicts, help the user resolve them and `git rebase --continue`.
    Do NOT proceed until the rebase completes cleanly.
 4. **Code review, with fixes applied** (default; skip only if `--no-review` was
-   passed). Invoke the `code-review` skill through the Skill tool, with args
+   passed). **Run it on Opus, always** — launch it with the Agent tool,
+   `model: "opus"`, and have that agent invoke the `code-review` skill with args
    `<level> --fix main...HEAD`, where `<level>` is whatever `--review` named and
-   `high` otherwise.
+   `high` otherwise. Ask it to report back what it fixed and every finding it
+   left alone.
+
+   Why an agent rather than a bare `Skill` call: `/code-review` runs in whatever
+   loop invokes it, so a bare call reviews at the *session's* model, and a
+   session spawned with a cheaper default would silently review at that tier.
+   Pinning the model on the spawn is the only way "always Opus" is actually
+   true. (The Sonnet floor in `CLAUDE_CODE_SUBAGENT_MODEL` is a floor for
+   ordinary helpers; a per-spawn `model` overrides it, which is exactly what
+   this is for.)
+
+   Do **not** give this agent `isolation: "worktree"`. A read-only reviewer
+   should be isolated — see the standing rule about verifier agents mutating
+   shared source — but this one's whole job is to apply `--fix` to *this* tree,
+   and an isolated copy would throw every fix away with the worktree.
 
    The explicit `main...HEAD` target matters: step 2 left the tree clean, so "the
    current diff" is empty and a bare review would report a clean branch it never
@@ -70,7 +85,8 @@ Steps:
 5. **Standards scan** (default; skip only if `--no-standards` was passed). Launch the
    **`standards-review`** agent (Agent tool, `subagent_type: "standards-review"`) on
    the same `main...HEAD` range, asking it to review the delta against the repo's
-   written design and reuse principles.
+   written design and reuse principles. It pins its own model to Opus in its
+   definition, so pass no `model` here — the agent definition owns that choice.
 
    This is the half no test can express. The sweeps already fail the build on the
    mechanical rules — accent colour, denial wording, encoding, register coverage —

@@ -2,6 +2,10 @@
 name: standards-review
 description: Reviews a code delta against this repo's design and reuse principles — the judgment rules that static sweeps cannot express (where a surface lives, whether a helper already exists, whether controls collapsed). Read-only; reports findings, never edits.
 tools: Read, Grep, Glob, Bash
+# Pinned, not inherited. The spawning session sets a Sonnet floor for subagents
+# (CLAUDE_CODE_SUBAGENT_MODEL), and this is the one pass in a ship that no test
+# can replace — it is judgement about design, so it gets the stronger model.
+model: opus
 ---
 
 You review one code delta against **this repository's own written principles**.
