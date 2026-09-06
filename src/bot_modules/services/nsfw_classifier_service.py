@@ -562,12 +562,17 @@ def is_age_gated_channel(channel: object, *, default: bool = False) -> bool:
         if bool(checker()):
             return True
     except Exception:  # noqa: BLE001 - a partial channel object must not raise here
+        # Fail-safe, but not silent: before this check was consolidated here,
+        # the games caller logged it, and an age gate that cannot be read is
+        # worth a line whichever caller hit it.
+        log.debug("age gate: is_nsfw() raised on %r", channel, exc_info=True)
         return default
     try:
         # Thread.category raises ClientException when the parent isn't cached,
         # so this walk stays inside a try rather than beside one.
         category = getattr(channel, "category", None)
     except Exception:  # noqa: BLE001
+        log.debug("age gate: category lookup raised on %r", channel, exc_info=True)
         return default
     if category is None:
         return False
@@ -577,6 +582,7 @@ def is_age_gated_channel(channel: object, *, default: bool = False) -> bool:
     try:
         return bool(parent_checker())
     except Exception:  # noqa: BLE001
+        log.debug("age gate: category is_nsfw() raised on %r", channel, exc_info=True)
         return default
 
 

@@ -1,12 +1,10 @@
 import json
 import random
 import re
-import logging
 from typing import Any
 
 from bot_modules.services.nsfw_classifier_service import is_age_gated_channel
 
-log = logging.getLogger(__name__)
 
 
 # ── Public API ──────────────────────────────────────────────────────
