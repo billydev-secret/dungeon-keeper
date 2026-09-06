@@ -17,8 +17,6 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-import pytest
-
 from bot_modules.cogs import advisor_cog
 from bot_modules.services import advisor_chat_logic
 from bot_modules.cogs.advisor_cog import _proposal_fields
