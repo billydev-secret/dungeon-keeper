@@ -201,6 +201,18 @@ PANEL_SPECS: tuple[PanelSpec, ...] = (
         method="post_ticket_panel",
         host_page="mod-tickets",
     ),
+    PanelSpec(
+        key="ask-panel",
+        label="Ask the Assistant Panel",
+        description=(
+            "A button members press to open a private chat with the assistant — "
+            "grounded in the server guide, and only visible to them. Each post "
+            "creates a new panel; the old one keeps working until deleted."
+        ),
+        cog="AdvisorCog",
+        method="post_ask_panel",
+        host_page="config-advisor",
+    ),
 )
 
 _BY_KEY = {spec.key: spec for spec in PANEL_SPECS}

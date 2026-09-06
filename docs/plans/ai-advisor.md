@@ -168,6 +168,58 @@ when an admin asks") — before that it had no dashboard control at all, so the
 only ways to flip it were a raw DB write or the assistant's own Discord
 Apply flow via its `settings_registry` entry.
 
+## Stage 3 — the Ask panel (shipped 2026-09-02)
+
+A third surface on the same brain: a button in a channel that opens a private,
+multi-turn chat window. Posted from **Config → AI Assistant** through the
+existing `panel_registry` route (`ask-panel` → `AdvisorCog.post_ask_panel`), so
+it needed no new endpoint and no slash command.
+
+**The transcript lives in the message, not in a table.** An ephemeral message
+has no id anyone can look up later, so there is nowhere to hang conversation
+state a member's *next* click could find. Each turn is therefore one embed
+field, and pressing Reply reads the fields back off the message the button was
+attached to (`advisor_chat_logic.history_from_fields`) and passes them as the
+`history` `answer_advisor` already accepted for the dashboard. Consequences,
+all deliberate:
+
+- **The chat stores no personal data at all** — no table, no migration, no
+  `data_register.md` row, nothing for `purge_user_data` to clear. The
+  conversation exists only inside a message one member can see, and is gone
+  when they dismiss it.
+- **The round trip is the contract.** What the member sees is exactly what the
+  model is given, clipped to Discord's 1024-character field cap and no more.
+  `MAX_CHAT_TOKENS` (400) plus `CHAT_INSTRUCTIONS` keep an ordinary answer
+  inside that cap from both directions; the clip is a graceful edge, not the
+  normal path.
+- **Roles ride on a marker (💬/🤖), never on the assistant's name**, which is a
+  branding dial an admin can flip mid-conversation. Keying off the name would
+  reclass every earlier assistant turn as a user turn the moment it changed.
+- Buttons are `DynamicItem`s carrying the asker's id, so a chat **survives a
+  restart** — nothing needs a stored `message_id` — and ownership is re-checked
+  on click rather than resting on the message being ephemeral.
+
+**No config tools on this surface, by decision.** A `ConfigProposal` only
+exists in the memory of the view that rendered it, so mixing Apply buttons into
+a restart-surviving chat would either strand the chat's own buttons or leave
+Apply buttons that silently do nothing — and a public help panel is the wrong
+doorway for changing server settings. `include_config=False` follows for the
+same reason: with no tools to act on it, a settings dump would just be raw
+config text sitting in a member-facing chat. Admins keep `/ask`, where that
+machinery lives and is tested.
+
+**Budget guards**, since a reply loop invites far longer sessions than one-shot
+`/ask` and every turn re-sends the conversation: `MAX_EXCHANGES = 5` (then Reply
+is disabled and the member is sent back to the panel) and a 12s per-member
+cooldown mirroring `/ask`'s. The cooldown is in memory — it guards a budget,
+not a right, so a restart clearing it costs one extra question at worst.
+`app_commands`' own cooldown decorator only covers commands, hence
+`ReplyCooldown`.
+
+A failed model round-trip re-renders the chat unchanged with a warning: it does
+not spend one of the member's five questions, and does not drop the
+conversation they already have.
+
 ## Follow-ups (not yet built)
 
 - **Token streaming** on the dashboard via the `logs.py` SSE precedent

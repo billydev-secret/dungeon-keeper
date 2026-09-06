@@ -18,9 +18,25 @@ import discord
 import pytest
 
 from bot_modules.cogs import advisor_cog
+from bot_modules.services import advisor_chat_logic
 from bot_modules.cogs.advisor_cog import _proposal_fields
+
 from bot_modules.services.advisor_actions import ConfigProposal
 from bot_modules.services.advisor_service import AdvisorResult
+@pytest.fixture(autouse=True)
+def _fresh_cooldown():
+    """Every test starts with an empty rate-limit bucket.
+
+    /ask, the Ask panel and Reply now share one per-member bucket (three doors,
+    one billed brain), so without this the first /ask test cools the member down
+    for the next one — module state leaking between tests as a spurious refusal.
+    """
+    advisor_cog._REPLY_COOLDOWN._last.clear()
+    advisor_cog._chat_gen.clear()
+    yield
+    advisor_cog._REPLY_COOLDOWN._last.clear()
+    advisor_cog._chat_gen.clear()
+
 
 
 def _embed():
@@ -379,3 +395,205 @@ async def test_apply_click_dispatches_the_feature_config_change(
         bot.dispatch.assert_called_once_with("whisper_config_change", 123)
     else:
         bot.dispatch.assert_not_called()
+
+# ── Ask panel: the chat window's glue ────────────────────────────────
+#
+# The transcript logic itself is covered in tests/test_advisor_chat_logic.py.
+# What can only break *here* is the seam: the logic renders (name, value)
+# pairs, but what a Reply click actually reads back is a real
+# ``discord.Embed``'s fields. If those two ever stop lining up, the model
+# silently receives a different conversation from the one on screen.
+
+
+def test_the_chat_embed_reads_back_as_the_conversation_it_drew():
+    history = [
+        {"role": "user", "content": "how do I earn coins?"},
+        {"role": "assistant", "content": "Chatting earns XP, paid out daily."},
+        {"role": "user", "content": "and the casino?"},
+        {"role": "assistant", "content": "`/casino` has three games."},
+    ]
+
+    embed = advisor_cog._chat_embed(history, "Billy-bot", None)
+    read_back = advisor_chat_logic.history_from_fields(
+        [(f.name, f.value) for f in embed.fields]
+    )
+
+    assert read_back == history
+
+
+def test_the_chat_footer_never_loses_the_grounding_caveat():
+    """It is the only place the member is told the answer can be wrong."""
+    embed = advisor_cog._chat_embed(
+        [{"role": "user", "content": "hi"}], "Billy-bot", None
+    )
+
+    assert "not always perfect" in (embed.footer.text or "")
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_reply_is_disabled_exactly_when_the_chat_is_spent(full):
+    view = advisor_cog._ChatView(7, full=full)
+
+    reply = view.children[0]
+    assert reply.custom_id == "advisor_chat:reply:7"
+    assert reply.item.disabled is full  # DynamicItem wraps the button
+
+
+async def test_the_panel_posts_a_button_that_survives_a_restart(monkeypatch):
+    """A stateless custom_id is what lets an already-posted panel keep working
+    after a restart — nothing about the panel is stored anywhere."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    guild = MagicMock(spec=discord.Guild, id=123)
+    cog = advisor_cog.AdvisorCog.__new__(advisor_cog.AdvisorCog)
+    cog.bot = SimpleNamespace(ctx=MagicMock(db_path=":memory:"))
+    monkeypatch.setattr(
+        advisor_cog, "safe_resolve_accent", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(
+        advisor_cog, "open_db", lambda p: contextlib.nullcontext(object())
+    )
+    monkeypatch.setattr(
+        advisor_cog, "resolve_assistant_name_conn", lambda *a, **k: "Billy-bot"
+    )
+
+    await cog.post_ask_panel(guild, channel)
+
+    view = channel.send.await_args.kwargs["view"]
+    assert [c.custom_id for c in view.children] == ["advisor_panel:ask"]
+    assert "Billy-bot" in channel.send.await_args.kwargs["embed"].title
+
+
+async def test_opening_a_fresh_chat_is_rate_limited_like_replying(monkeypatch):
+    """Regression: the panel button used to go straight to the modal.
+
+    Guarding only Reply leaves the guard unarmed on the path members actually
+    use — MAX_EXCHANGES caps one window, and a new window is one click away, so
+    a member could open chat after chat as fast as they could type, each one a
+    billed call carrying the whole manual.
+    """
+    monkeypatch.setattr(
+        advisor_cog, "_REPLY_COOLDOWN", advisor_chat_logic.ReplyCooldown()
+    )
+    button = advisor_cog.AskPanelButton()
+    first, second = _interaction(_member()), _interaction(_member())
+    for i in (first, second):
+        i.response.send_modal = AsyncMock()
+        i.response.send_message = AsyncMock()
+
+    await button.callback(first)
+    await button.callback(second)
+
+    first.response.send_modal.assert_awaited_once()
+    second.response.send_modal.assert_not_called()
+    assert "sec" in second.response.send_message.await_args.args[0]
+
+
+async def test_the_two_entry_points_share_one_budget(monkeypatch):
+    """Opening a chat and replying inside one are both billed calls, so a
+    member cannot alternate between them to halve the wait."""
+    monkeypatch.setattr(
+        advisor_cog, "_REPLY_COOLDOWN", advisor_chat_logic.ReplyCooldown()
+    )
+    panel = _interaction(_member())
+    panel.response.send_modal = AsyncMock()
+    await advisor_cog.AskPanelButton().callback(panel)
+
+    reply = _interaction(_member())
+    reply.response.send_modal = AsyncMock()
+    reply.response.send_message = AsyncMock()
+    reply.message = MagicMock(embeds=[advisor_cog._chat_embed(
+        [{"role": "user", "content": "hi"}], "Billy-bot", None
+    )])
+
+    await advisor_cog.AskChatReplyButton(7).callback(reply)
+
+    reply.response.send_modal.assert_not_called()
+    assert "sec" in reply.response.send_message.await_args.args[0]
+
+
+# ── Ask chat: two races on one window ─────────────────────────────────
+#
+# The chat's whole state is the message, so anything that writes the window
+# after a slow answer can undo work it never saw. Both of these were found in
+# review, and both are about the *seconds* an answer takes.
+
+
+def test_ending_a_chat_supersedes_an_answer_already_being_written():
+    """End chat must not be undone by a reply that was already in flight.
+
+    The reply's edit targets a message that still exists — clearing it did not
+    delete it — so without a guard the "closed" chat comes back with its
+    transcript and live buttons.
+    """
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    at_click = advisor_cog._chat_gen.get(7, 0)
+    advisor_cog._bump_chat_gen(7)  # the End press lands while the answer is written
+    assert advisor_cog._chat_gen.get(7, 0) != at_click
+
+
+def test_a_second_reply_supersedes_the_slower_first_one():
+    """Two replies in flight: the slower must not write over the faster.
+
+    Each carries the pre-edit transcript it read at click time, so the loser
+    would otherwise paste a history that is missing the winner's turn.
+    """
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    slow_click = advisor_cog._chat_gen.get(7, 0)
+    fast_click = advisor_cog._chat_gen.get(7, 0)
+    advisor_cog._bump_chat_gen(7)  # the fast reply completes first
+    assert advisor_cog._chat_gen.get(7, 0) == fast_click + 1
+    assert advisor_cog._chat_gen.get(7, 0) != slow_click
+
+
+def test_an_untouched_chat_is_not_treated_as_superseded():
+    """The common case, and what a restart looks like: no entry means proceed."""
+    from bot_modules.cogs import advisor_cog
+
+    advisor_cog._chat_gen.clear()
+    assert advisor_cog._chat_gen.get(7, 0) == 0
+
+
+# ── Ask chat: the ownership gate proves it denies ─────────────────────
+#
+# design_guide.md Part 4: every gate has a test that proves it *denies*. Both
+# buttons carry the asker's id in their custom_id precisely so the check does
+# not rest on the message being ephemeral — which makes this the only thing
+# between a stray click and another member's private conversation.
+
+
+@pytest.mark.asyncio
+async def test_reply_refuses_a_clicker_who_is_not_the_asker():
+    button = advisor_cog.AskChatReplyButton(7)
+    someone_else = _member(administrator=True)
+    someone_else.id = 99
+    interaction = _interaction(someone_else)
+    interaction.response.send_message = AsyncMock()
+    interaction.response.send_modal = AsyncMock()
+
+    await button.callback(interaction)
+
+    assert interaction.response.send_modal.await_count == 0
+    assert advisor_cog._CHAT_NOT_YOURS in interaction.response.send_message.await_args.args
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True
+
+
+@pytest.mark.asyncio
+async def test_end_chat_refuses_a_clicker_who_is_not_the_asker():
+    button = advisor_cog.AskChatEndButton(7)
+    someone_else = _member(administrator=True)
+    someone_else.id = 99
+    interaction = _interaction(someone_else)
+    interaction.response.send_message = AsyncMock()
+    interaction.response.edit_message = AsyncMock()
+
+    await button.callback(interaction)
+
+    # The window is untouched — a foreign click must not close someone's chat.
+    assert interaction.response.edit_message.await_count == 0
+    assert advisor_cog._CHAT_NOT_YOURS in interaction.response.send_message.await_args.args
+    assert interaction.response.send_message.await_args.kwargs["ephemeral"] is True

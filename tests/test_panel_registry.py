@@ -35,6 +35,7 @@ _COG_MODULES = {
     "JailCog": "bot_modules.cogs.jail_cog",
     "RoleGrantCog": "bot_modules.cogs.role_grant_cog",
     "ModStatsCog": "bot_modules.cogs.mod_stats_cog",
+    "AdvisorCog": "bot_modules.cogs.advisor_cog",
 }
 
 
@@ -100,6 +101,9 @@ def test_registry_covers_the_commands_it_replaced():
         # Never had a command: the moderator stats panel was born on the
         # dashboard (2026-09-01), which is where CLAUDE.md says it belongs.
         "mod-stats",
+        # Likewise the Ask panel (2026-09-02) — it opens the assistant's chat
+        # window, and `/ask` was never the way to place it.
+        "ask-panel",
     }
 
 
