@@ -92,13 +92,6 @@ _HOD_LABELS = [
     "11pm",
 ]
 
-_GENDER_COLORS: dict[str, str] = {
-    "male": "#5865f2",
-    "female": "#eb459e",
-    "nonbinary": "#57f287",
-    "unknown": "#72767d",
-}
-
 _RESPONSE_BUCKETS: list[tuple[float, str]] = [
     (60, "< 1m"),
     (300, "1\u20135m"),
@@ -174,25 +167,6 @@ def get_join_times_data(
         "labels": labels,
         "counts": counts,
     }
-
-
-# ---------------------------------------------------------------------------
-# NSFW gender activity
-# ---------------------------------------------------------------------------
-
-
-class GenderSeries(TypedDict):
-    gender: str
-    counts: list[int]
-    color: str
-
-
-class NsfwGenderData(TypedDict):
-    resolution: str
-    window_label: str
-    media_only: bool
-    labels: list[str]
-    series: list[GenderSeries]
 
 
 # ---------------------------------------------------------------------------

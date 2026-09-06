@@ -359,11 +359,6 @@ class CategoryReport:
     purge_no: int = 0
     purge_partial: int = 0
     purge_unknown: int = 0
-
-    @property
-    def purge_partial_free(self) -> bool:
-        """True when every table here is erased outright on request."""
-        return self.purge_partial == 0 and self.purge_yes > 0
     preserved: str = ""
     preserved_reasons: list[str] = field(default_factory=list)
     values: list[tuple[str, str]] = field(default_factory=list)
@@ -734,6 +729,17 @@ def _retention_sentence(cat: CategoryReport) -> str:
 
 def _erasure_sentence(cat: CategoryReport) -> str:
     """What survives an erasure request, in the category's own authored words."""
+    if not (cat.purge_yes or cat.purge_no or cat.purge_partial) and cat.purge_unknown:
+        # No table in this category has a register Purge? cell that reads as a
+        # clear yes or no. Saying "most of this is erased" here would be a
+        # guess dressed up as a fact, and in the one direction this report must
+        # never guess in — a false promise of erasure is worse than admitting
+        # the register does not say yet.
+        return (
+            "**If you ask for your data to be deleted,** whether this is "
+            "erased has not been recorded yet. Ask, and it will be checked "
+            "rather than assumed."
+        )
     everything_goes = cat.purge_no == 0 and cat.purge_partial == 0 and cat.purge_yes > 0
     if everything_goes:
         return (

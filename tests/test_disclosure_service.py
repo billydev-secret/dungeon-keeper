@@ -153,6 +153,23 @@ def test_purge_verdict(cell, expected):
     assert ds.purge_verdict(cell) == expected
 
 
+def test_erasure_sentence_never_claims_erasure_when_the_register_never_said_so():
+    """A category built entirely from ambiguous Purge? cells must not read as
+
+    a clean deletion. Every real path into this state has a table whose
+    register cell reads as neither yes nor no (``games_external_messages``,
+    ``greeting_watch``, ``voice_transcription_config`` all do today) — a
+    member whose only rows in that category live there would otherwise be told
+    "most of this is erased" on the strength of nothing.
+    """
+    cat = ds.CategoryReport("k", "T", "b", "p", preserved="Some reason.")
+    cat.purge_unknown = 1
+    sentence = ds._erasure_sentence(cat)
+    assert "most of this is erased" not in sentence
+    assert "all of this is erased" not in sentence
+    assert "has not been recorded" in sentence
+
+
 def test_purge_verdict_is_case_sensitive_about_its_verdict():
     """"No Art 17(3) ground worth claiming" justifies a purge, it is not a refusal.
 
