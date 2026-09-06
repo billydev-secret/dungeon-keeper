@@ -6,10 +6,20 @@ was not that anything overruns a stated period — every bounded claim in
 register's 79 rows said "indefinite", and almost none of those recorded a
 decision. They recorded a default nobody had revisited.
 
-Two periods were chosen by the owner against a measured fact: **no report in
-the codebase reads further back than 90 days** (``contributors_service``'s
-``WINDOW_DAYS``; ``attention_report`` uses 30). Retention past roughly double
-that buys nothing any surface can currently show.
+Two periods were chosen by the owner against a measured fact: the longest
+*aggregate* consumer reads 90 days back (``contributors_service``'s
+``WINDOW_DAYS``; ``attention_report`` uses 30).
+
+.. warning::
+
+   That is not the longest consumer. The Connection Graph's replay
+   (``reports_data.get_interaction_series``) reads ``user_interactions_log``
+   and ``member_events`` over **30 weeks / 210 days** by default — the panel
+   hard-codes ``weeks: 30`` — and the route accepts up to **60 weeks / 420
+   days**. ``BEHAVIOURAL_RETENTION_DAYS`` below is *shorter* than that, so the
+   first sweep permanently blanks the replay's earliest weeks. Flagged by the
+   code review of 2026-09-05; the number is the owner's to re-decide (raise
+   the period, or narrow the replay) before this runs in prod.
 
 * **Message content — 365 days.** The row survives; only the text goes. That
   split is deliberate and matches the archive's own design: CLAUDE.md keeps
@@ -51,8 +61,10 @@ log = logging.getLogger(__name__)
 #: pattern, which is the use that genuinely wants depth.
 MESSAGE_CONTENT_RETENTION_DAYS = 365
 
-#: Behavioural rows older than this are deleted outright. Double the longest
-#: consuming report (90 days), so every existing surface keeps full headroom.
+#: Behavioural rows older than this are deleted outright. Chosen as double the
+#: longest *aggregate* consumer (90 days) — but see the module warning: the
+#: Connection Graph replay reads 210 days by default and up to 420, so this
+#: number does **not** currently leave every surface full headroom.
 BEHAVIOURAL_RETENTION_DAYS = 180
 
 #: Per-guild off switch. Absent means **on** — the inverse of
@@ -77,7 +89,9 @@ BEHAVIOURAL_TABLES: tuple[tuple[str, str], ...] = (
 
 #: Rows deleted per statement. The first pass on the busy guild clears ~26k
 #: rows from ``user_interactions_log``; nibbling keeps the write lock short
-#: enough that message ingest does not stall behind it.
+#: enough that message ingest does not stall behind it. That only holds
+#: because each chunk is committed — see :func:`sweep_behavioural`; chunking
+#: inside one open transaction would split the statements but not the lock.
 DELETE_CHUNK = 20_000
 
 
@@ -112,8 +126,9 @@ def prunable_behavioural_count(
 ) -> dict[str, int]:
     """How many rows each behavioural table would lose, without deleting any.
 
-    The dashboard shows this before an admin changes anything, so the count is
-    a first-class read rather than something only the sweep's log reveals.
+    A read-only counterpart to :func:`sweep_behavioural`, so the size of a
+    pass can be measured — from a console or an ops script — without waiting
+    for the sweep's own log line. Nothing on the dashboard calls it yet.
     """
     cutoff = behavioural_cutoff(older_than_days=older_than_days, now=now)
     counts: dict[str, int] = {}
@@ -138,6 +153,13 @@ def sweep_behavioural(
     Honours the guild's off switch — a disabled guild returns all-zero rather
     than raising, because "nothing to do" is the ordinary case here, not an
     error worth a caller's attention.
+
+    **Commits between chunks.** SQLite's write lock is held for a whole
+    transaction, so ``DELETE_CHUNK`` only bounds the stall if each chunk is
+    released; without the commit the caller's transaction would pin the lock
+    for the entire drain. The trade is that a mid-sweep failure leaves the
+    earlier chunks deleted — which is the right way round for retention: the
+    work is idempotent and the next pass simply resumes.
     """
     if not retention_enabled(conn, guild_id):
         return {table: 0 for table, _ in BEHAVIOURAL_TABLES}
@@ -156,6 +178,8 @@ def sweep_behavioural(
             )
             n = max(cur.rowcount, 0)
             total += n
+            # Release the write lock between chunks — see the docstring.
+            conn.commit()
             if n < DELETE_CHUNK:
                 break
         deleted[table] = total
@@ -179,7 +203,12 @@ def run_retention(
     from bot_modules.services import message_store
 
     if not retention_enabled(conn, guild_id):
-        return {"messages_redacted": 0}
+        # Same keys as the enabled path: a caller that reads ``result[table]``
+        # must not KeyError only for the guilds that opted out.
+        return {
+            "messages_redacted": 0,
+            **{table: 0 for table, _ in BEHAVIOURAL_TABLES},
+        }
 
     result = {
         "messages_redacted": message_store.redact_message_content_older_than(

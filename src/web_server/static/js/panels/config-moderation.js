@@ -107,7 +107,7 @@ export function mount(container) {
             <div class="section-label">Data Retention</div>
             <div class="field">
               <label><input type="checkbox" name="data_retention_enabled" id="mod-retention"${currentRetention === "1" ? " checked" : ""} /> Apply retention periods</label>
-              <div class="field-hint">Message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats, so nothing on the reports changes. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. Turning this off keeps everything for good; the member-facing privacy notice says which applies here.</div>
+              <div class="field-hint">Message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats, so nothing on the reports changes. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. Turning this off keeps everything for good &mdash; the member-facing privacy notice points members back to this page to find out which applies.</div>
             </div>
           </div>
 
@@ -195,14 +195,16 @@ export function mount(container) {
           ticket_notify_on_create: fd.has("ticket_notify_on_create") ? "1" : "0",
           warning_threshold: threshold,
         });
-        // Storage level uses a dedicated endpoint (switching to "none" purges
-        // existing content). Only call it when the value actually changed so a
-        // routine moderation save doesn't re-trigger the purge.
+        // Retention shares the privacy endpoint. Only call it on a real change
+        // so a routine moderation save doesn't rewrite the key every time.
         const newRetention = form.querySelector("#mod-retention").checked ? "1" : "0";
         if (newRetention !== currentRetention) {
           await apiPut("/api/config/privacy", { data_retention_enabled: newRetention });
           currentRetention = newRetention;
         }
+        // Storage level uses a dedicated endpoint (switching to "none" purges
+        // existing content). Only call it when the value actually changed so a
+        // routine moderation save doesn't re-trigger the purge.
         const newStorage = fd.get("message_storage_level");
         let note = "";
         if (newStorage !== currentStorage) {

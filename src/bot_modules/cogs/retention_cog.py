@@ -47,19 +47,26 @@ class RetentionCog(commands.Cog):
         try:
             def _sweep() -> dict[str, int]:
                 totals: dict[str, int] = {}
-                with self.bot.ctx.open_db() as conn:
-                    for guild in self.bot.guilds:
-                        try:
+                # One connection — and so one transaction — *per guild*, not
+                # one for the whole sweep. SQLite holds the single write lock
+                # from a transaction's first DELETE until its commit, so a
+                # shared connection would pin it for the length of the entire
+                # pass and make ``DELETE_CHUNK`` decorative. It also keeps the
+                # per-guild ``except`` honest: a guild that fails rolls back
+                # alone instead of taking its predecessors' work with it.
+                for guild in self.bot.guilds:
+                    try:
+                        with self.bot.ctx.open_db() as conn:
                             result = retention_service.run_retention(
                                 conn, guild.id
                             )
-                        except Exception:
-                            log.exception(
-                                "Retention sweep failed for guild %s", guild.id
-                            )
-                            continue
-                        for key, n in result.items():
-                            totals[key] = totals.get(key, 0) + n
+                    except Exception:
+                        log.exception(
+                            "Retention sweep failed for guild %s", guild.id
+                        )
+                        continue
+                    for key, n in result.items():
+                        totals[key] = totals.get(key, 0) + n
                 return totals
 
             totals = await asyncio.to_thread(_sweep)

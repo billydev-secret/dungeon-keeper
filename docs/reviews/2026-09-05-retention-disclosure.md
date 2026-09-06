@@ -280,6 +280,18 @@ Periods were the owner's decision, taken 2026-09-05 against the measured fact
 that **no report reads further back than 90 days**
 (`contributors_service.WINDOW_DAYS`; `attention_report` uses 30).
 
+> **Correction (code review, same day).** The premise above is wrong, and the
+> 180-day number rests on it. The Connection Graph's replay reads
+> `user_interactions_log` **and** `member_events` over a **30-week (210-day)**
+> window by default — `reports_data.get_interaction_series(weeks=30)`, and
+> `connection-graph.js` hard-codes `weeks: 30` — with the route accepting up to
+> **60 weeks (420 days)**. At 180 days the replay's earliest weeks go
+> permanently blank the first time the sweep runs, and the loss is
+> unrecoverable. `contributors_service.WINDOW_DAYS` (90) is the longest
+> *aggregate* consumer, not the longest consumer. **The period needs the
+> owner's re-decision before this ships** — either raise it above the replay's
+> window, or narrow the replay and say so here.
+
 | Store | Period | Day-one effect |
 |---|---|---|
 | `messages.content` (+ attachments, embeds) | **365 days**, redacted not deleted | **0 rows** — oldest text was 211d |

@@ -143,7 +143,12 @@ def test_disabled_guild_keeps_everything():
 
     result = retention_service.run_retention(conn, GUILD, now=NOW)
 
-    assert result == {"messages_redacted": 0}
+    # Same keys as an enabled pass, all zero — a caller reading result[table]
+    # must not KeyError only for the guilds that opted out.
+    assert result == {
+        "messages_redacted": 0,
+        **{table: 0 for table, _ in retention_service.BEHAVIOURAL_TABLES},
+    }
     assert _content(conn, 1) == "secret text"
     for table, _ in retention_service.BEHAVIOURAL_TABLES:
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1

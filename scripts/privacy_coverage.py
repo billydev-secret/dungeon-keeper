@@ -88,12 +88,19 @@ _NOT_MEMBER_COLUMNS = frozenset(
 #:
 #: Derived from ``privacy_service.LIST_VALUED_MEMBER_COLUMNS`` rather than
 #: restated. It was restated until 2026-09-05, and the copy had gone stale:
-#: it named two of the nine, so the sweep filed the other seven — including
+#: it named two of the twelve, so the sweep filed the rest — including
 #: ``risky_pending_questions.questioners_asked``, listed in the real tuple
 #: since ``ae7766b9`` — under "invisible to the access export". A sweep whose
 #: whole job is finding what a curated list missed must not keep a curated
 #: list of its own.
-_LIST_VALUED = frozenset(col for _table, col in LIST_VALUED_MEMBER_COLUMNS)
+#:
+#: Kept as ``(table, column)`` pairs, not bare column names: several of the
+#: real entries are generically named (``roster``, ``alive``, ``conditions``,
+#: ``pass_log``), and matching on the name alone would exempt any *other*
+#: table that happens to reuse one — filing a genuinely undisclosed store
+#: under "known blind spot", which is exactly the miss this sweep exists to
+#: catch.
+_LIST_VALUED = frozenset(LIST_VALUED_MEMBER_COLUMNS)
 
 #: A Discord snowflake is a 64-bit id whose timestamp epoch starts in 2015, so
 #: every real id comfortably exceeds this. Used to reject counters and prices
@@ -229,8 +236,8 @@ def main() -> int:
     unregistered: list[str] = []
     for table, columns in sorted(found.items()):
         missing = sorted(set(columns) - SUBJECT_ID_COLUMNS)
-        known_list = [c for c in missing if c in _LIST_VALUED]
-        missing = [c for c in missing if c not in _LIST_VALUED]
+        known_list = [c for c in missing if (table, c) in _LIST_VALUED]
+        missing = [c for c in missing if (table, c) not in _LIST_VALUED]
         if known_list:
             listed.append((table, known_list))
         if missing:
