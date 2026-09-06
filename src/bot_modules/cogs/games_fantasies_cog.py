@@ -347,8 +347,8 @@ class FantasiesCog(commands.Cog):
 
     @app_commands.command(name="fantasies", description=play_description("fantasies"))
     @app_commands.describe(
-        start_in="Show a countdown — the first round starts in this many minutes (host still clicks Start Round)",
-        entry_seconds="Seconds each entry stays open for votes (0 = you press Next; default from the dashboard)",
+        start_in="Countdown before the first round, in minutes",
+        entry_seconds="Seconds each entry is open (0 = you press Next)",
     )
     async def fantasies(
         self,

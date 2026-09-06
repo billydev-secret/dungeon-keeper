@@ -461,9 +461,9 @@ class MLTCog(commands.Cog):
     @app_commands.describe(
         question="Opening prompt (e.g. 'win a staring contest') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
-        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start)",
-        round_seconds="Seconds per round before it advances itself (0 = you press Next; default from the dashboard)",
-        rounds="How many rounds before the final standings (0 = until you end it; default from the dashboard)",
+        start_in="Countdown before the game starts, in minutes",
+        round_seconds="Seconds per round (0 = you press Next)",
+        rounds="Rounds before the standings (0 = until you end it)",
     )
     async def mlt(
         self,

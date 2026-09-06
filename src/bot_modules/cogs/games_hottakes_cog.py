@@ -373,7 +373,7 @@ class HotTakesCog(commands.Cog):
     @app_commands.command(name="hottakes", description=play_description("hottakes"))
     @app_commands.describe(
         start_in="Show a lobby countdown — voting starts in this many minutes (host still clicks Start Voting)",
-        take_seconds="Seconds each take stays open for votes (0 = you press Next; default from the dashboard)",
+        take_seconds="Seconds each take is open (0 = you press Next)",
     )
     async def hottakes(
         self,

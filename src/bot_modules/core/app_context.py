@@ -213,11 +213,30 @@ class Bot(commands.Bot):
                     )
         else:
             db_path = self.ctx.db_path
-            synced, did = await sync_if_changed(self.tree, db_path, guild=None)
-            if did:
-                print(f"Synced {len(synced)} commands globally.")
+            try:
+                synced, did = await sync_if_changed(self.tree, db_path, guild=None)
+            except discord.app_commands.CommandSyncFailure:
+                # A tree Discord refuses must not take the bot down with it.
+                # This crash-looped prod on 2026-09-06: /games grew past the
+                # 8000-byte per-command ceiling, sync raised, setup_hook let it
+                # escape, and the process exited — taking the dashboard, the
+                # games, the economy and every scheduled job with it, five
+                # times over, for a problem that only affects *updating* the
+                # command list. Discord keeps serving the previously synced
+                # commands, so staying up is strictly better than dying.
+                #
+                # The stored hash is deliberately not written, so the next boot
+                # retries rather than assuming the tree landed.
+                logging.getLogger("dungeonkeeper.startup").exception(
+                    "COMMAND SYNC REFUSED — the bot is running with its "
+                    "PREVIOUSLY synced commands. Anything added or renamed "
+                    "since then is not visible in Discord until this is fixed."
+                )
             else:
-                print("Command tree unchanged — skipping global sync.")
+                if did:
+                    print(f"Synced {len(synced)} commands globally.")
+                else:
+                    print("Command tree unchanged — skipping global sync.")
             # Clear any stale guild commands left from a previous debug-mode run.
             if self.guild_id > 0:
                 try:

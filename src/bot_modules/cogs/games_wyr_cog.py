@@ -399,8 +399,8 @@ class WYRCog(commands.Cog):
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
-        round_seconds="Seconds per round before it advances itself (0 = you press Next; default from the dashboard)",
-        rounds="How many rounds before the recap (0 = until you end it; default from the dashboard)",
+        round_seconds="Seconds per round (0 = you press Next)",
+        rounds="Rounds before the recap (0 = until you end it)",
     )
     async def wyr(
         self,

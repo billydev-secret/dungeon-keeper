@@ -292,7 +292,7 @@ class StoryCog(commands.Cog):
         max_sentences="Total sentences in the story (max 30)",
         visibility="blind = only see previous sentence, full = see whole story",
         starter="Opening sentence (blank = use default)",
-        start_in="Show a lobby countdown — game starts in this many minutes (host still clicks Start Story)",
+        start_in="Countdown before the game starts, in minutes",
     )
     @app_commands.choices(
         visibility=[

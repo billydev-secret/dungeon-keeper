@@ -308,8 +308,8 @@ class NHIECog(commands.Cog):
         question="Opening statement (e.g. 'gone skydiving') — defaults to question bank",
         lives="Number of lives per player (default 3, 0 = no elimination)",
         tags="Comma-separated tags to filter the question bank",
-        round_seconds="Seconds per round before it advances itself (0 = you press Next; default from the dashboard)",
-        rounds="How many rounds before the recap (0 = until you end it; default from the dashboard)",
+        round_seconds="Seconds per round (0 = you press Next)",
+        rounds="Rounds before the recap (0 = until you end it)",
     )
     async def nhie(
         self,
