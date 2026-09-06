@@ -282,6 +282,63 @@ def test_update_privacy_switch_to_none_purges_existing_content(ctx, make_client)
         assert row["sentiment"] == 0.4  # derivation kept
 
 
+def test_retention_dial_round_trips_and_arms_the_sweep(ctx, make_client):
+    """Ticking the box must be what actually arms the deletion, and untick disarm it.
+
+    The dial gates a destructive sweep, and its stored polarity has already been
+    inverted once during development (`data_retention_disabled`, absent meaning
+    on, became `data_retention_enabled`, absent meaning off). A flip that the
+    panel and the service disagreed about would silently either delete on a
+    guild that opted out or never run on one that opted in, and nothing else
+    proves which way round it is wired.
+    """
+    from bot_modules.services import retention_service
+
+    client = make_client()
+
+    # Default: nothing set, nothing sweeps.
+    with open_db(ctx.db_path) as conn:
+        assert retention_service.retention_enabled(conn, ctx.guild_id) is False
+
+    assert client.put(
+        "/api/config/privacy", json={"data_retention_enabled": "1"}
+    ).status_code == 200
+    with open_db(ctx.db_path) as conn:
+        assert (
+            get_config_value(
+                conn, retention_service.RETENTION_CONFIG_KEY, "", ctx.guild_id
+            )
+            == "1"
+        )
+        assert retention_service.retention_enabled(conn, ctx.guild_id) is True
+
+    assert client.put(
+        "/api/config/privacy", json={"data_retention_enabled": "0"}
+    ).status_code == 200
+    with open_db(ctx.db_path) as conn:
+        assert retention_service.retention_enabled(conn, ctx.guild_id) is False
+
+    # And the GET reports what the service reads, so the panel cannot render a
+    # ticked box over a disarmed sweep.
+    body = client.get("/api/config").json()
+    assert body["privacy"]["data_retention_enabled"] == "0"
+
+
+def test_retention_dial_does_not_disturb_the_storage_level(ctx, make_client):
+    """The two controls share one endpoint; neither may write the other's key."""
+    with open_db(ctx.db_path) as conn:
+        set_config_value(conn, "message_storage_level", "all", ctx.guild_id)
+
+    client = make_client()
+    client.put("/api/config/privacy", json={"data_retention_enabled": "1"})
+
+    with open_db(ctx.db_path) as conn:
+        assert (
+            get_config_value(conn, "message_storage_level", "", ctx.guild_id)
+            == "all"
+        )
+
+
 def test_update_privacy_to_all_persists_without_purge(ctx, make_client):
     _seed_message(ctx, 2, "keep me")
 
