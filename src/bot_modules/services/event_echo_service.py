@@ -119,6 +119,7 @@ from bot_modules.services import economy_bounty_service as bounty_svc
 from bot_modules.services import pools_metrics
 from bot_modules.services import guess_repo
 from bot_modules.services import pools_service as pools_svc
+from bot_modules.services.nsfw_classifier_service import is_age_gated_channel
 from bot_modules.services.economy_raffle_service import raffle_enabled
 from bot_modules.services.economy_service import load_econ_settings
 from bot_modules.services.event_echo_logic import (
@@ -325,20 +326,11 @@ def echo_channel_id(conn: sqlite3.Connection, guild_id: int) -> int | None:
 #: durable half; this is the breadcrumb for whoever is reading the log.
 _gate_warned: set[int] = set()
 
-
-def _is_age_gated(channel) -> bool:
-    """Whether Discord considers this room age-gated.
-
-    ``is_nsfw()`` rather than the ``nsfw`` attribute, per CLAUDE.md — and not
-    merely as house style. :class:`discord.Thread` has **no** ``nsfw``
-    attribute at all; it inherits its parent's gate and exposes it only
-    through the method, so an attribute read scores every thread under an
-    age-gated channel as safe. Guess Who rounds can live in a thread.
-    """
-    probe = getattr(channel, "is_nsfw", None)
-    if callable(probe):
-        return bool(probe())
-    return bool(getattr(channel, "nsfw", False))
+#: The one age-gate verdict, shared with Image Guard, the games question source
+#: and the dashboard. A local copy here kept an attribute fallback that reads
+#: every thread under a gated channel as safe — the exact bug this branch
+#: already fixed once.
+_is_age_gated = is_age_gated_channel
 
 
 def warn_gate_crossing(guild: discord.Guild, origin, destination) -> None:

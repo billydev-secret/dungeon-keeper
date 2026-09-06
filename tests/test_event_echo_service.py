@@ -1233,7 +1233,11 @@ class TestGateCrossingWarning:
     """
 
     def _ch(self, nsfw, name="room"):
-        return types.SimpleNamespace(nsfw=nsfw, name=name)
+        # `is_nsfw()`, not an `nsfw` attribute: a Thread has no such attribute
+        # and only the method knows it inherited its parent's gate. Building
+        # the fake the other way is what let a local age-gate copy keep an
+        # attribute fallback nobody noticed was wrong.
+        return types.SimpleNamespace(is_nsfw=lambda: nsfw, name=name, category=None)
 
     @pytest.fixture(autouse=True)
     def _clear(self):
@@ -1285,31 +1289,6 @@ class TestGateCrossingWarning:
         with caplog.at_level("WARNING"):
             svc.warn_gate_crossing(guild, None, self._ch(False))
         assert caplog.text == ""
-
-
-class TestAgeGateDetection:
-    """`is_nsfw()`, not the `nsfw` attribute — the difference is threads.
-
-    `discord.Thread` has no `nsfw` attribute at all; it inherits its parent's
-    gate and exposes it only through the method. An attribute read therefore
-    scores every thread under an age-gated channel as safe, and a Guess Who
-    round can live in a thread.
-    """
-
-    def test_a_channel_reports_its_own_flag(self):
-        ch = MagicMock(spec=discord.TextChannel)
-        ch.is_nsfw = MagicMock(return_value=True)
-        assert svc._is_age_gated(ch) is True
-
-    def test_a_thread_under_a_gated_parent_is_gated(self):
-        """The regression: no `.nsfw` to read, so only the method knows."""
-        thread = MagicMock(spec=discord.Thread)
-        thread.is_nsfw = MagicMock(return_value=True)
-        assert not hasattr(thread, "nsfw")
-        assert svc._is_age_gated(thread) is True
-
-    def test_an_unresolvable_room_is_not_gated(self):
-        assert svc._is_age_gated(None) is False
 
 
 @pytest.mark.asyncio

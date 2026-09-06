@@ -96,9 +96,17 @@ when the crossing *is* the last one.
 
 ### Risky Rolls and Guess Who (2026-09-02)
 
-Two game starts, added together because they share a property none of the
-earlier sources had: **both rooms are age-gated and the echo destination is
-not.**
+Two game starts, added together because both routinely run in age-gated rooms
+while the echo destination is not.
+
+**They are not the first sources to cross that gate, and saying so was wrong.**
+`_echo_party_game` sweeps every `games_active_games` row with no channel
+filter, and party games run in adult rooms all the time — that is the whole
+premise of `channel_allows_nsfw` gating the NSFW Truth and NSFW Dare buttons.
+So a Truth or Dare lobby opened in an age-gated room has always echoed the
+game name, a link to the room and **the host's name** into the ungated echo
+channel. What changed on 2026-09-02 is not that crossings began; it is that
+they became frequent enough to decide about, and got said out loud.
 
 **Risky Rolls is pushed**, not swept — the only game source that is. It keeps
 its rounds in `rr_state.active_games` in memory and never writes
@@ -142,9 +150,18 @@ query, and both halves are covered by tests.
 
 #### The age gate
 
-Discord's `nsfw` flag is the only age gate that counts (CLAUDE.md), and these
-two sources were the first that could cross it. The decision (Ben, 2026-09-02)
-was to **echo, and report the crossing** rather than block it:
+Discord's `nsfw` flag is the only age gate that counts (CLAUDE.md), and **any**
+source can originate in a gated room — party games have since the beginning.
+The decision (Ben, 2026-09-02) was to **echo, and report the crossing** rather
+than block it. What crosses, per source:
+
+| Source | Names a member? |
+|---|---|
+| Party games (incl. Truth or Dare) | the host, as every party-game note has always done |
+| Risky Rolls | whoever opened the round |
+| Guess Who | **nobody**, and never will — the poster is the answer |
+| Everything else | no |
+
 
 * The copy that leaves the room is the game name and a jump link — plus, for
   **Risky Rolls only**, the footer naming whoever opened the round. Ben was
