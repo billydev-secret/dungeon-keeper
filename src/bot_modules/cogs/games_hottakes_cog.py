@@ -38,7 +38,6 @@ from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
 from bot_modules.games.utils.round_pacing import (
-    MAX_ROUND_SECONDS,
     RoundPacing,
     launch_pacing,
 )
@@ -373,14 +372,15 @@ class HotTakesCog(commands.Cog):
     @app_commands.command(name="hottakes", description=play_description("hottakes"))
     @app_commands.describe(
         start_in="Show a lobby countdown — voting starts in this many minutes (host still clicks Start Voting)",
-        take_seconds="Seconds each take is open (0 = you press Next)",
     )
     async def hottakes(
         self,
         interaction: discord.Interaction,
         start_in: app_commands.Range[int, 1, 60] | None = None,
-        take_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
     ):
+        # These moved to the dashboard. Passing None is exactly what an
+        # omitted option always meant, so the per-guild dial applies.
+        take_seconds = None
         log.info("%s used /games play hottakes in #%s", interaction.user.display_name, channel_name(interaction.channel))
         refusal = await refuse_launch(self.db, interaction, "hottakes")
         if refusal:

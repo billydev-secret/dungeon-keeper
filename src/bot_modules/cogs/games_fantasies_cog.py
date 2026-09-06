@@ -34,7 +34,6 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.round_pacing import (
-    MAX_ROUND_SECONDS,
     RoundPacing,
     launch_pacing,
 )
@@ -348,14 +347,15 @@ class FantasiesCog(commands.Cog):
     @app_commands.command(name="fantasies", description=play_description("fantasies"))
     @app_commands.describe(
         start_in="Countdown before the first round, in minutes",
-        entry_seconds="Seconds each entry is open (0 = you press Next)",
     )
     async def fantasies(
         self,
         interaction: discord.Interaction,
         start_in: app_commands.Range[int, 1, 60] | None = None,
-        entry_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
     ):
+        # These moved to the dashboard. Passing None is exactly what an
+        # omitted option always meant, so the per-guild dial applies.
+        entry_seconds = None
         log.info("%s used /games play fantasies in #%s", interaction.user.display_name, channel_name(interaction.channel))
         refusal = await refuse_launch(self.db, interaction, "fantasies")
         if refusal:

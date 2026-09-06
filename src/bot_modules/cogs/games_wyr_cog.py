@@ -36,8 +36,6 @@ from bot_modules.games.utils.question_source import (
 )
 from bot_modules.games.utils.round_pacing import (
     END_DENIED,
-    MAX_ROUNDS_CAP,
-    MAX_ROUND_SECONDS,
     REASON_EXPIRED,
     REASON_HOST_ENDED,
     REASON_ROUND_CAP,
@@ -399,17 +397,16 @@ class WYRCog(commands.Cog):
     @app_commands.describe(
         question="Opening question (format: 'option A | option B') — defaults to question bank",
         tags="Comma-separated tags to filter the question bank",
-        round_seconds="Seconds per round (0 = you press Next)",
-        rounds="Rounds before the recap (0 = until you end it)",
     )
     async def wyr(
         self,
         interaction: discord.Interaction,
         question: str = "",
         tags: str = "",
-        round_seconds: app_commands.Range[int, 0, MAX_ROUND_SECONDS] | None = None,
-        rounds: app_commands.Range[int, 0, MAX_ROUNDS_CAP] | None = None,
     ):
+        # These moved to the dashboard. Passing None is exactly what an
+        # omitted option always meant, so the per-guild dial applies.
+        round_seconds = rounds = None
         log.info("%s used /wyr in #%s", interaction.user.display_name, channel_name(interaction.channel))
         tag_list = [t.strip() for t in tags.split(",") if t.strip()]
         # The one launch guard every door shares: allowed channel, enabled

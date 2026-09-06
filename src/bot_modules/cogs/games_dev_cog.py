@@ -241,6 +241,12 @@ async def setup(bot: Bot):
     await bot.add_cog(cog)
     bot.tree.remove_command("fill")
     bot.tree.remove_command("answer")
+    # Debug builds only. `/games` is capped at 8000 bytes by Discord and this
+    # subtree costs ~440 of them; spending that on tools no member can use is
+    # what pushed the group over the ceiling and crash-looped prod on
+    # 2026-09-06. The cog still loads, so the commands are one debug boot away.
+    if not getattr(bot, "debug", False):
+        return
     games.add_command(dev, override=True)
     dev.add_command(cog.dev_fill, override=True)
     dev.add_command(cog.dev_answer, override=True)

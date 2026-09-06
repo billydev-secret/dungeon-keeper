@@ -681,7 +681,7 @@ class RushmoreCog(commands.Cog):
         topic="The topic (leave blank for AI/bank/manual entry)",
         source="Where topics come from",
         mode="Snake draft (turns) or blitz (everyone picks at once)",
-        start_in="Countdown before the game starts, in minutes",
+        start_in="Countdown before the start, in minutes",
     )
     @app_commands.choices(
         source=[

@@ -199,7 +199,7 @@ class MFKCog(commands.Cog):
     @app_commands.command(name="mfk", description=play_description("mfk"))
     @app_commands.describe(
         options='Custom categories (comma-separated, exactly 3). e.g. "Cruise, Wedding, Vacation"',
-        start_in="Countdown before the game starts, in minutes",
+        start_in="Countdown before the start, in minutes",
     )
     async def mfk(
         self,

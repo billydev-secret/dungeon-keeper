@@ -466,7 +466,7 @@ class ComplimentCog(commands.Cog):
 
     @app_commands.command(name="compliment", description=play_description("compliment"))
     @app_commands.describe(
-        start_in="Countdown before the game starts, in minutes",
+        start_in="Countdown before the start, in minutes",
     )
     async def compliment(
         self,

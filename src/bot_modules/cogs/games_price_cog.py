@@ -775,7 +775,7 @@ class PriceCog(commands.Cog):
     @app_commands.command(name="price", description=play_description("price"))
     @app_commands.describe(
         source="Where scenarios come from (default: the question bank, or the host if it's empty)",
-        start_in="Lobby countdown in minutes — the game starts itself when it runs out (2+ joined)",
+        start_in="Countdown before the start, in minutes",
     )
     @app_commands.choices(
         source=[

@@ -784,7 +784,7 @@ class ClapbackCog(commands.Cog):
 
     @app_commands.command(name="clapback", description=play_description("clapback"))
     @app_commands.describe(
-        start_in="Lobby countdown in minutes — the game starts itself when it runs out (3+ joined)",
+        start_in="Countdown before the start, in minutes",
     )
     async def clapback(
         self,
