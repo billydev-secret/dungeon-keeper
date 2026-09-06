@@ -282,55 +282,72 @@ def test_update_privacy_switch_to_none_purges_existing_content(ctx, make_client)
         assert row["sentiment"] == 0.4  # derivation kept
 
 
-def test_retention_dial_round_trips_and_arms_the_sweep(ctx, make_client):
-    """Ticking the box must be what actually arms the deletion, and untick disarm it.
+@pytest.mark.parametrize("field,key,predicate", [
+    (
+        "message_retention_enabled",
+        "MESSAGE_RETENTION_CONFIG_KEY",
+        "message_retention_enabled",
+    ),
+    (
+        "behavioural_retention_enabled",
+        "BEHAVIOURAL_RETENTION_CONFIG_KEY",
+        "behavioural_retention_enabled",
+    ),
+])
+def test_retention_dial_round_trips_and_arms_the_sweep(
+    ctx, make_client, field, key, predicate
+):
+    """Ticking a box must be what arms that arm, and unticking must disarm it.
 
-    The dial gates a destructive sweep, and its stored polarity has already been
-    inverted once during development (`data_retention_disabled`, absent meaning
-    on, became `data_retention_enabled`, absent meaning off). A flip that the
-    panel and the service disagreed about would silently either delete on a
-    guild that opted out or never run on one that opted in, and nothing else
-    proves which way round it is wired.
+    Each dial gates a destructive sweep, and the stored polarity has already
+    been inverted once during development (a single ``data_retention_disabled``
+    where absent meant *on*). A flip the panel and the service disagreed about
+    would either delete for a guild that opted out or never run for one that
+    opted in, and nothing else proves which way round it is wired.
     """
     from bot_modules.services import retention_service
 
+    config_key = getattr(retention_service, key)
+    is_on = getattr(retention_service, predicate)
     client = make_client()
 
-    # Default: nothing set, nothing sweeps.
     with open_db(ctx.db_path) as conn:
-        assert retention_service.retention_enabled(conn, ctx.guild_id) is False
+        assert is_on(conn, ctx.guild_id) is False
 
-    assert client.put(
-        "/api/config/privacy", json={"data_retention_enabled": "1"}
-    ).status_code == 200
+    assert client.put("/api/config/privacy", json={field: "1"}).status_code == 200
     with open_db(ctx.db_path) as conn:
+        assert get_config_value(conn, config_key, "", ctx.guild_id) == "1"
+        assert is_on(conn, ctx.guild_id) is True
+
+    assert client.put("/api/config/privacy", json={field: "0"}).status_code == 200
+    with open_db(ctx.db_path) as conn:
+        assert is_on(conn, ctx.guild_id) is False
+
+    assert client.get("/api/config").json()["privacy"][field] == "0"
+
+
+def test_retention_arms_are_independent(ctx, make_client):
+    """The reason there are two dials: one must not arm or disarm the other."""
+    from bot_modules.services import retention_service
+
+    client = make_client()
+    client.put("/api/config/privacy", json={"message_retention_enabled": "1"})
+
+    with open_db(ctx.db_path) as conn:
+        assert retention_service.message_retention_enabled(conn, ctx.guild_id) is True
         assert (
-            get_config_value(
-                conn, retention_service.RETENTION_CONFIG_KEY, "", ctx.guild_id
-            )
-            == "1"
+            retention_service.behavioural_retention_enabled(conn, ctx.guild_id)
+            is False
         )
-        assert retention_service.retention_enabled(conn, ctx.guild_id) is True
-
-    assert client.put(
-        "/api/config/privacy", json={"data_retention_enabled": "0"}
-    ).status_code == 200
-    with open_db(ctx.db_path) as conn:
-        assert retention_service.retention_enabled(conn, ctx.guild_id) is False
-
-    # And the GET reports what the service reads, so the panel cannot render a
-    # ticked box over a disarmed sweep.
-    body = client.get("/api/config").json()
-    assert body["privacy"]["data_retention_enabled"] == "0"
 
 
 def test_retention_dial_does_not_disturb_the_storage_level(ctx, make_client):
-    """The two controls share one endpoint; neither may write the other's key."""
+    """The controls share one endpoint; none may write another's key."""
     with open_db(ctx.db_path) as conn:
         set_config_value(conn, "message_storage_level", "all", ctx.guild_id)
 
     client = make_client()
-    client.put("/api/config/privacy", json={"data_retention_enabled": "1"})
+    client.put("/api/config/privacy", json={"message_retention_enabled": "1"})
 
     with open_db(ctx.db_path) as conn:
         assert (

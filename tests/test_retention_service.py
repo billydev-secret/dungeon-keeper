@@ -60,7 +60,11 @@ def _conn(*, enabled: bool = True) -> sqlite3.Connection:
             f"{ts_col} REAL NOT NULL)"
         )
     if enabled:
-        set_config_value(conn, retention_service.RETENTION_CONFIG_KEY, "1", GUILD)
+        for key in (
+            retention_service.MESSAGE_RETENTION_CONFIG_KEY,
+            retention_service.BEHAVIOURAL_RETENTION_CONFIG_KEY,
+        ):
+            set_config_value(conn, key, "1", GUILD)
     return conn
 
 
@@ -123,22 +127,62 @@ def _content(conn, message_id: int):
 # ── the switch ────────────────────────────────────────────────────────
 
 
-def test_absent_config_row_means_retention_is_off():
-    """Ships dark: nothing sweeps until a guild opts in. Assert it directly."""
+@pytest.mark.parametrize("predicate", [
+    retention_service.message_retention_enabled,
+    retention_service.behavioural_retention_enabled,
+])
+def test_absent_config_row_means_retention_is_off(predicate):
+    """Ships dark: nothing sweeps until a guild opts in. Both arms."""
     conn = _conn(enabled=False)
-    assert retention_service.retention_enabled(conn, GUILD) is False
+    assert predicate(conn, GUILD) is False
 
 
+@pytest.mark.parametrize("key,predicate", [
+    (retention_service.MESSAGE_RETENTION_CONFIG_KEY,
+     retention_service.message_retention_enabled),
+    (retention_service.BEHAVIOURAL_RETENTION_CONFIG_KEY,
+     retention_service.behavioural_retention_enabled),
+])
 @pytest.mark.parametrize("stored,expected", [
     ("1", True), ("true", True), ("on", True), ("yes", True),
     ("0", False), ("", False), ("no", False),
 ])
-def test_switch_reads_truthy_values_as_enabled(stored, expected):
+def test_switch_reads_truthy_values_as_enabled(key, predicate, stored, expected):
+    conn = _conn(enabled=False)
+    set_config_value(conn, key, stored, GUILD)
+    assert predicate(conn, GUILD) is expected
+
+
+def test_each_arm_runs_without_the_other():
+    """The whole point of two dials: the settled arm is not held hostage.
+
+    Message retention on, behavioural off — the text goes and the interaction
+    rows stay — and then the reverse.
+    """
     conn = _conn(enabled=False)
     set_config_value(
-        conn, retention_service.RETENTION_CONFIG_KEY, stored, GUILD
+        conn, retention_service.MESSAGE_RETENTION_CONFIG_KEY, "1", GUILD
     )
-    assert retention_service.retention_enabled(conn, GUILD) is expected
+    _msg(conn, message_id=1, age_days=400)
+    table, ts_col = retention_service.BEHAVIOURAL_TABLES[0]
+    _behav(conn, table, ts_col, age_days=200)
+
+    result = retention_service.run_retention(conn, GUILD, now=NOW)
+    assert result["messages_redacted"] == 1
+    assert result[table] == 0
+    assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 1
+
+    conn2 = _conn(enabled=False)
+    set_config_value(
+        conn2, retention_service.BEHAVIOURAL_RETENTION_CONFIG_KEY, "1", GUILD
+    )
+    _msg(conn2, message_id=1, age_days=400)
+    _behav(conn2, table, ts_col, age_days=200)
+
+    result2 = retention_service.run_retention(conn2, GUILD, now=NOW)
+    assert result2["messages_redacted"] == 0
+    assert result2[table] == 1
+    assert _content(conn2, 1) == "secret text"
 
 
 def test_member_events_is_not_swept():
@@ -174,9 +218,11 @@ def test_disabled_guild_keeps_everything():
 
 def test_one_guild_opting_out_does_not_shield_another():
     conn = _conn()
-    set_config_value(
-        conn, retention_service.RETENTION_CONFIG_KEY, "0", OTHER_GUILD
-    )
+    for key in (
+        retention_service.MESSAGE_RETENTION_CONFIG_KEY,
+        retention_service.BEHAVIOURAL_RETENTION_CONFIG_KEY,
+    ):
+        set_config_value(conn, key, "0", OTHER_GUILD)
     _msg(conn, message_id=1, age_days=900, guild_id=GUILD)
     _msg(conn, message_id=2, age_days=900, guild_id=OTHER_GUILD)
 

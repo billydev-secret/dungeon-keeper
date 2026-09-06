@@ -1258,12 +1258,18 @@ def _privacy_section(conn, guild_id: int) -> dict:
                 STORAGE_LEVEL_NONE,
                 guild_id=guild_id,
             ),
-            # Stored and presented the same way round: absent means off, as
-            # with ``xp_retention_enabled``. An earlier draft inverted the
-            # stored key; that went when the behavioural period turned out to
-            # be provisional.
-            "data_retention_enabled": (
-                "1" if retention_service.retention_enabled(conn, guild_id) else "0"
+            # Two switches, one per arm: the message period is settled and the
+            # behavioural one is provisional, so they cannot share a control.
+            # Absent means off for both, as with ``xp_retention_enabled``.
+            "message_retention_enabled": (
+                "1"
+                if retention_service.message_retention_enabled(conn, guild_id)
+                else "0"
+            ),
+            "behavioural_retention_enabled": (
+                "1"
+                if retention_service.behavioural_retention_enabled(conn, guild_id)
+                else "0"
             ),
             "message_content_retention_days": str(
                 retention_service.MESSAGE_CONTENT_RETENTION_DAYS
@@ -1655,7 +1661,8 @@ async def update_support_access(
 
 class PrivacyConfigUpdate(BaseModel):
     message_storage_level: str | None = None
-    data_retention_enabled: str | None = None
+    message_retention_enabled: str | None = None
+    behavioural_retention_enabled: str | None = None
 
 
 @router.put("/config/privacy")
@@ -1675,20 +1682,24 @@ async def update_privacy(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    if body.data_retention_enabled is not None:
+    switches = (
+        (body.message_retention_enabled,
+         retention_service.MESSAGE_RETENTION_CONFIG_KEY),
+        (body.behavioural_retention_enabled,
+         retention_service.BEHAVIOURAL_RETENTION_CONFIG_KEY),
+    )
+    if any(value is not None for value, _ in switches):
         # Written whichever way it goes, so switching back off leaves an
         # explicit "0" rather than relying on the row's absence and looking
         # like it was never set.
-        enabled = body.data_retention_enabled.strip() == "1"
-
         def _set_retention():
             with ctx.open_db() as conn:
-                set_config_value(
-                    conn,
-                    retention_service.RETENTION_CONFIG_KEY,
-                    "1" if enabled else "0",
-                    guild_id,
-                )
+                for value, key in switches:
+                    if value is None:
+                        continue
+                    set_config_value(
+                        conn, key, "1" if value.strip() == "1" else "0", guild_id
+                    )
 
         await run_query(_set_retention)
 

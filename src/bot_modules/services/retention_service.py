@@ -6,8 +6,8 @@ was not that anything overruns a stated period — every bounded claim in
 register's 78 rows said "indefinite", and almost none of those recorded a
 decision. They recorded a default nobody had revisited.
 
-**This ships disabled.** ``retention_enabled`` is false until a guild turns it
-on, and no guild has. That is not the original intent — the first draft shipped
+**Both arms ship disabled**, behind a switch each — see the two config keys
+below. Neither is on in any guild. That is not the original intent — the first draft shipped
 it enabled, on the argument that a rule nobody switches on is not a rule — but
 the period below rests on a premise that turned out to be wrong, and a sweep
 that deletes on a wrong number is worse than one that waits:
@@ -70,12 +70,18 @@ MESSAGE_CONTENT_RETENTION_DAYS = 365
 #: number does **not** currently leave every surface full headroom.
 BEHAVIOURAL_RETENTION_DAYS = 180
 
-#: Per-guild switch. Absent means **off**, matching ``xp_retention_enabled``:
-#: an admin turns retention on deliberately, per guild, after deciding the
-#: period is right for that guild. An earlier draft inverted this so that
-#: absence meant *on*; that only made sense while the periods were settled,
-#: and one of them is not.
-RETENTION_CONFIG_KEY = "data_retention_enabled"
+#: Per-guild switches, one per arm. Absent means **off** for both, matching
+#: ``xp_retention_enabled``.
+#:
+#: Two keys rather than one because the arms are on different clocks and only
+#: one of them is settled. Message-text retention has no premise left to be
+#: wrong about — nothing reads message text on a window — while the behavioural
+#: period is provisional pending a re-decision. A single switch would have held
+#: the settled arm hostage to the unsettled one: an admin could not turn on
+#: message retention without also arming a sweep the panel tells them to leave
+#: alone. (Standards scan, 2026-09-05.)
+MESSAGE_RETENTION_CONFIG_KEY = "message_retention_enabled"
+BEHAVIOURAL_RETENTION_CONFIG_KEY = "behavioural_retention_enabled"
 
 #: ``(table, timestamp column)``. Every one of these carries ``guild_id``, so
 #: the sweep is per-guild and a guild that opts out is genuinely untouched.
@@ -98,18 +104,30 @@ BEHAVIOURAL_TABLES: tuple[tuple[str, str], ...] = (
 DELETE_CHUNK = 20_000
 
 
-def retention_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
-    """True only where a guild has explicitly switched retention on.
-
-    Absent means off. Nothing is deleted anywhere until an admin ticks the box,
-    which is the correct posture while ``BEHAVIOURAL_RETENTION_DAYS`` is still
-    provisional — see the module docstring.
-    """
+def _switch(conn: sqlite3.Connection, key: str, guild_id: int) -> bool:
     row = conn.execute(
         "SELECT value FROM config WHERE key = ? AND guild_id = ?",
-        (RETENTION_CONFIG_KEY, guild_id),
+        (key, guild_id),
     ).fetchone()
     return bool(row) and str(row[0]).strip() in ("1", "true", "True", "on", "yes")
+
+
+def message_retention_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
+    """True only where a guild has switched message-text retention on.
+
+    Absent means off. This arm's period is settled; it is off only because
+    nothing has been turned on yet, not because the number is in question.
+    """
+    return _switch(conn, MESSAGE_RETENTION_CONFIG_KEY, guild_id)
+
+
+def behavioural_retention_enabled(conn: sqlite3.Connection, guild_id: int) -> bool:
+    """True only where a guild has switched the behavioural sweep on.
+
+    Absent means off, and it should stay off: ``BEHAVIOURAL_RETENTION_DAYS`` is
+    provisional — see the module docstring.
+    """
+    return _switch(conn, BEHAVIOURAL_RETENTION_CONFIG_KEY, guild_id)
 
 
 def behavioural_cutoff(*, older_than_days: int, now: float | None = None) -> float:
@@ -161,7 +179,7 @@ def sweep_behavioural(
     earlier chunks deleted — which is the right way round for retention: the
     work is idempotent and the next pass simply resumes.
     """
-    if not retention_enabled(conn, guild_id):
+    if not behavioural_retention_enabled(conn, guild_id):
         return {table: 0 for table, _ in BEHAVIOURAL_TABLES}
 
     cutoff = behavioural_cutoff(older_than_days=older_than_days, now=now)
@@ -196,25 +214,24 @@ def run_retention(
 ) -> dict[str, int]:
     """Run both arms for one guild. Returns ``{"messages_redacted": n, ...}``.
 
-    Imported lazily to keep ``message_store`` off this module's import path at
+    Each arm gates itself, so a guild may have either on alone. The returned
+    shape is the same whichever are enabled — a caller reading a table key
+    never has to know which switches a guild set.
+
+    ``message_store`` is imported lazily to keep ``message_store`` off this module's import path at
     definition time — the two are peers and a top-level import would make the
     retention service part of every message write's import graph.
     """
     from bot_modules.services import message_store
 
-    if not retention_enabled(conn, guild_id):
-        # Same keys as the enabled path: a caller that reads ``result[table]``
-        # must not KeyError only for the guilds that opted out.
-        return {
-            "messages_redacted": 0,
-            **{table: 0 for table, _ in BEHAVIOURAL_TABLES},
-        }
-
-    result = {
-        "messages_redacted": message_store.redact_message_content_older_than(
+    redacted = 0
+    if message_retention_enabled(conn, guild_id):
+        redacted = message_store.redact_message_content_older_than(
             conn, guild_id, older_than_days=message_days, now=now
         )
-    }
+    result = {"messages_redacted": redacted}
+    # sweep_behavioural applies its own gate and returns an all-zero map when
+    # off, so the shape is the same whichever arms are enabled.
     result.update(
         sweep_behavioural(
             conn, guild_id, older_than_days=behavioural_days, now=now

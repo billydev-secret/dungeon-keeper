@@ -24,7 +24,8 @@ export function mount(container) {
     const m = config.moderation;
     let currentStorage = (config.privacy && config.privacy.message_storage_level) || "none";
     const priv = config.privacy || {};
-    let currentRetention = priv.data_retention_enabled === "1" ? "1" : "0";
+    let currentMsgRetention = priv.message_retention_enabled === "1" ? "1" : "0";
+    let currentBehRetention = priv.behavioural_retention_enabled === "1" ? "1" : "0";
     const msgDays = priv.message_content_retention_days || "365";
     const behDays = priv.behavioural_retention_days || "180";
 
@@ -106,8 +107,12 @@ export function mount(container) {
           <div class="card">
             <div class="section-label">Data Retention</div>
             <div class="field">
-              <label><input type="checkbox" name="data_retention_enabled" id="mod-retention"${currentRetention === "1" ? " checked" : ""} /> Apply retention periods</label>
-              <div class="field-hint">Off by default, and off everywhere right now. With it on: message <strong>text</strong> is cleared after ${esc(msgDays)} days &mdash; the message itself stays, along with XP, sentiment and activity stats. Records of who reacted to, replied to, followed or pinged whom are deleted after ${esc(behDays)} days. <strong>Leave this off for now:</strong> the ${esc(behDays)}-day figure is still being reviewed, because the Connection Graph’s replay reads further back than that and would lose its earliest weeks. Whichever way this is set, the member-facing privacy notice describes it.</div>
+              <label><input type="checkbox" name="message_retention_enabled" id="mod-msg-retention"${currentMsgRetention === "1" ? " checked" : ""} /> Clear message text after ${esc(msgDays)} days</label>
+              <div class="field-hint">Only applies where message content is archived at all. The message itself stays &mdash; who posted, where, when, its sentiment score and who it mentioned &mdash; so nothing on the reports changes; it is the words and any attachments that go.</div>
+            </div>
+            <div class="field">
+              <label><input type="checkbox" name="behavioural_retention_enabled" id="mod-beh-retention"${currentBehRetention === "1" ? " checked" : ""} /> Delete interaction records after ${esc(behDays)} days</label>
+              <div class="field-hint">Who reacted to, replied to, followed or pinged whom. Joins and leaves are never deleted &mdash; they are how tenure is worked out. <strong>Leave this off for now:</strong> the ${esc(behDays)}-day figure is still under review, because the Connection Graph&rsquo;s replay reads further back than that and would lose its earliest weeks.</div>
             </div>
           </div>
 
@@ -197,10 +202,15 @@ export function mount(container) {
         });
         // Retention shares the privacy endpoint. Only call it on a real change
         // so a routine moderation save doesn't rewrite the key every time.
-        const newRetention = form.querySelector("#mod-retention").checked ? "1" : "0";
-        if (newRetention !== currentRetention) {
-          await apiPut("/api/config/privacy", { data_retention_enabled: newRetention });
-          currentRetention = newRetention;
+        const newMsgRetention = form.querySelector("#mod-msg-retention").checked ? "1" : "0";
+        const newBehRetention = form.querySelector("#mod-beh-retention").checked ? "1" : "0";
+        if (newMsgRetention !== currentMsgRetention || newBehRetention !== currentBehRetention) {
+          await apiPut("/api/config/privacy", {
+            message_retention_enabled: newMsgRetention,
+            behavioural_retention_enabled: newBehRetention,
+          });
+          currentMsgRetention = newMsgRetention;
+          currentBehRetention = newBehRetention;
         }
         // Storage level uses a dedicated endpoint (switching to "none" purges
         // existing content). Only call it when the value actually changed so a
