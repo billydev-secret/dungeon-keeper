@@ -1,0 +1,18 @@
+# Pages the owner when CI on main turns red, and again when it recovers.
+# Install (no sudo — a user unit, like dk-snapshot):
+#   cp deploy/dk-ci-watch.* ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now dk-ci-watch.timer
+[Unit]
+Description=Check whether CI on main is red, and DM the owner when that changes
+Documentation=file:%h/discord-bots/dungeon-keeper/scripts/ci_watch.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/discord-bots/dungeon-keeper
+# System python on purpose, the way the watchdog does it: a broken venv must not
+# be able to silence the alarm. Naming the interpreter also keeps SELinux out of
+# it — executing a script in the repo directly fails 203/EXEC with no AVC.
+ExecStart=/usr/bin/python3 %h/discord-bots/dungeon-keeper/scripts/ci_watch.py

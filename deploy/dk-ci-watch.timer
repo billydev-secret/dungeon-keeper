@@ -1,0 +1,15 @@
+[Unit]
+Description=Check CI on main every half hour
+
+# Half-hourly is not about catching a red fast — it is about never letting one
+# sit for 25 days again, which is what happened when nothing watched at all.
+# The state file means a standing red pages once, so a tighter interval would
+# buy nothing but API calls.
+[Timer]
+OnStartupSec=2min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
