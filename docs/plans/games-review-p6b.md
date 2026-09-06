@@ -31,13 +31,27 @@ open. A new column on an already-registered table is fine with a
 **A round-lifetime dial** (finding rotation-rooms-158). Days, on the Guess Who
 panel, default 0 meaning never, enforced by the nudge/sweep loop that already
 runs. At expiry the card is edited to "Nobody got it — it was {name}" with the
-original spoilered, `solved_at` is marked with a NULL `solver_id`, and the
-original is deleted then. A submitter-only **Reveal now** button on their own
-card does the same thing early. The no-contact reveal rule still applies: a
-pair-holder sees `User <id>`, and that degrade is deliberate — see
-`docs/no_contact_spec.md` and the memory note on embed names. Tests at the
-repo/logic layer for expiry selection and the resolve write, and the dial pinned
-in the guess equivalent of `tests/web/test_game_dials_are_enforced.py`.
+original spoilered, and the original is deleted then. A submitter-only
+**Reveal now** button on their own card does the same thing early.
+
+**Do not mark the round `solved_at`.** The obvious shape — stamp `solved_at`
+with a NULL `solver_id` — would corrupt a documented public stat:
+`guess_repo.get_top_posters` counts a submitter's `rounds_solved` as
+`SUM(CASE WHEN solved_at IS NOT NULL ...)`, so an expired-unsolved round would
+read as solved on the leaderboard. The existing 90-day age-out
+(`list_stale_open_originals` / `clear_round_original_path`) already avoids this
+deliberately: it leaves `solved_at` NULL and only clears `original_path`.
+Follow it — add a new `expired_at` column to `guess_rounds` and select on that,
+or, if `solved_at` really must carry the expiry, update every
+`solved_at IS NOT NULL` reader to require `solver_id IS NOT NULL` too. A new
+column on `guess_rounds` is fine: the table is already in the data register and
+`expired_at` names no member.
+
+The no-contact reveal rule still applies to the card: a pair-holder sees
+`User <id>`, and that degrade is deliberate — see `docs/no_contact_spec.md` and
+the embed style guide. Tests at the repo/logic layer for expiry selection and
+the resolve write, and the dial pinned in the guess equivalent of
+`tests/web/test_game_dials_are_enforced.py`.
 
 **A departing member's rounds** (rotation-rooms-164). An `on_member_remove`
 listener runs the same path the opt-out flag does — `_do_flag_user_open_rounds_optout`
