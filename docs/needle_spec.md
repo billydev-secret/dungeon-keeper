@@ -1,6 +1,6 @@
 # Needle (Auto-Thread) — Feature Spec
 
-Automatically spawns a thread from each new message in designated text channels (inspired by [discord-needle](https://github.com/MarcusOtter/discord-needle)). Each thread gets a configurable name, an optional pinned welcome message with **Archive thread** / **Edit title** buttons, and optional status reactions on the starter message showing whether the thread is unanswered, archived, or locked. Keeps Q&A and discussion channels tidy at a glance.
+Automatically spawns a thread from each new message in designated text channels (inspired by [discord-needle](https://github.com/MarcusOtter/discord-needle)). Each thread gets a configurable name and an optional pinned welcome message with **Archive thread** / **Edit title** buttons, and the starter message can be given a fixed set of decorative reactions. Keeps Q&A and discussion channels tidy at a glance.
 
 ## Commands
 
@@ -28,15 +28,20 @@ Names are clamped to 100 characters; an empty result becomes "New Thread". If th
 ### Welcome message
 Unless the channel's reply type is `none`, the bot posts the reply template (`custom` → per-channel text, `default` → the guild-wide template) into the new thread with the persistent Archive/Edit-title buttons. Templates support `$USER`, `$CHANNEL`, and `$THREAD`. An empty template posts nothing. With Manage Messages the bot pins the welcome message and deletes its own "pinned a message" system notice.
 
-### Status reactions
-When *status reactions* is on for the channel:
+### Auto-reactions
 
-- The starter message gets the **unanswered** emoji when the thread is created.
-- When the thread is archived or locked, all bot status reactions are cleared and the **archived** or **locked** emoji is added (locked wins if both changed). Unarchiving just clears them.
-- If *archive immediately* is also on, the unanswered emoji is removed as soon as someone other than the message author replies in the thread. Despite the name, nothing is archived — this flag only gates the reaction removal.
-  - The stored key keeps the misleading name (`archive_immediately`), but the dashboard no longer repeats it: the control is labelled **Clear the Open Marker on the First Reply** and its hint says outright that the thread is not closed. Renaming the key would be a migration for no behavioural gain, so the honesty lives in the label.
+Channels can list **default reactions** (comma-separated emoji) that the bot
+adds to every new message it threads. They are a **cue and nothing more** — a
+nudge to vote, or just something to react to. The bot adds them once and never
+looks at them again: it does not read them back, swap them, or take them off,
+and no bot behaviour anywhere depends on which of them are present.
 
-Channels can also list **default reactions** (comma-separated emojis) added to every new message regardless of status reactions.
+That is the whole of Needle's reaction surface. Until 2026-09-06 there was also
+a three-marker **status** machine (🔵 open / ✅ archived / 🔒 locked, swapped on
+`on_thread_update`, with an option to clear the open marker on the first reply),
+which made a reaction something the bot asserted and maintained. It was removed
+deliberately — see migration 215. A reaction on a Needle-threaded post now
+carries no meaning the bot put there.
 
 ### Deleted starter messages
 When a message that owns a thread is deleted, the channel's `delete_behavior` decides the thread's fate:
@@ -62,7 +67,7 @@ Thread-creation and welcome-message failures are logged as warnings; most reacti
 ## Non-goals
 
 - No forum, voice, or announcement channel support — only regular text channels.
-- No automatic archiving on reply; *archive immediately* only removes the unanswered reaction.
+- No thread-status markers. Reactions Needle adds are decoration; nothing reads them.
 - No slash-command configuration; setup is dashboard-only.
 - No retroactive threading of messages sent before a channel was configured.
 
@@ -70,12 +75,13 @@ Thread-creation and welcome-message failures are logged as warnings; most reacti
 
 All configuration is per-guild via the web dashboard (admin permission required):
 
-- **Per channel** (`PUT /config/needle/{channel_id}`, `DELETE` to remove): title style + custom title, include bots, slowmode (0–21600 s), delete behavior, reply type + custom reply, status reactions, archive immediately, default reactions.
-- **Guild-wide** (`PUT /config/needle/settings`): the three status emojis — unanswered (default 🔵), archived (default ✅), locked (default 🔒), shown on the dashboard as **Thread Open** / **Thread Archived** / **Thread Locked** under a *Thread Status Markers* heading (they were "Waiting for an Answer" / "Answered or Archived" until 2026-09, which only read correctly in a help channel — auto-threading also runs on showcase and intro channels, where nothing is being asked) — and the default reply template (default "Thread created by $USER in $CHANNEL").
+- **Per channel** (`PUT /config/needle/{channel_id}`, `DELETE` to remove): title style + custom title, include bots, slowmode (0–21600 s), delete behavior, reply type + custom reply, default reactions.
+- **Guild-wide** (`PUT /config/needle/settings`): the default reply template (default "Thread created by $USER in $CHANNEL"), used by any channel whose reply type is `default`.
 
 ## Stored data
 
 - `needle_channels` table — one row per configured channel: `(guild_id, channel_id)` primary key plus the per-channel settings above.
-- Guild config keys `needle_emoji_unanswered`, `needle_emoji_archived`, `needle_emoji_locked`, `needle_default_reply` in the shared config store.
+- Guild config key `needle_default_reply` in the shared config store.
 
-No per-thread state is stored; thread status lives entirely in Discord (reactions and thread flags).
+No per-thread state is stored, and nothing in Discord is treated as state either
+— since the status markers were removed there is no reaction the bot reads back.

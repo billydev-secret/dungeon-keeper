@@ -489,9 +489,6 @@ FEATURES: tuple[Feature, ...] = (
         blurb="Marks threads nobody has answered so they don't get lost.",
         settings=(
             _text("needle_default_reply", "Default reply", required=True),
-            _text("needle_emoji_unanswered", "Thread open marker"),
-            _text("needle_emoji_locked", "Thread locked marker"),
-            _text("needle_emoji_archived", "Thread archived marker"),
         ),
     ),
     Feature(

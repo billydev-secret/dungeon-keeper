@@ -77,7 +77,7 @@ DK's column is from the code (`needle_cog.py`, `config-needle.js`,
 | Delete-behaviour on starter deletion | 4 modes | 4 modes (identical enum) | `threadautodelete` | — |
 | Slowmode inside the thread | ✅ 0–21600 s | ✅ | ✅ | — |
 | Include bots | ✅ | ✅ | ✅ | — |
-| Status reactions | ✅ 3-state, **emoji configurable** | ✅ toggle | ? | — |
+| Status reactions | ✗ **removed 2026-09-06** (was 3-state, emoji configurable) | ✅ toggle | ? | — |
 | **Extra reactions on every new message** | ✅ **DK only** | ✗ | ? | — |
 | Welcome message + Archive/Edit-title buttons | ✅ | ✅ | ✅ | — |
 | Custom button text / colour | ✗ | ✅ (4 styles) | ✅ | — |
@@ -88,9 +88,17 @@ DK's column is from the code (`needle_cog.py`, `config-needle.js`,
 | Keep threads alive indefinitely | ✗ | ✗ | ✗ | ✅ |
 | Customise every bot string | ✗ | ✅ `/setting` | ✗ | ✗ |
 
-**Where DK is already ahead:** dashboard configuration (nobody else has it),
-configurable status emoji, and per-channel default reactions. The port did not
-merely copy upstream — it improved on it in three places.
+**Where DK is already ahead:** dashboard configuration (nobody else has it) and
+per-channel default reactions. The port did not merely copy upstream — it
+improved on it.
+
+> **Amended 2026-09-06.** DK's third advantage used to be configurable status
+> emoji. The whole status machine has since been **removed** (migration 215) on
+> Billy's call that an auto-reaction should cue people and nothing more, never
+> assert a state the bot maintains. DK is now deliberately *behind* upstream on
+> that row and intends to stay there; `default_reactions` — the decorative
+> half — is untouched and remains a DK-only feature. Read the matrix row
+> accordingly: it is a choice, not a gap.
 
 **Open review findings: none.** The S2 in `docs/reviews/2026-07-23-novel-hunt.md`
 (#11 / §G) — a member-controlled nickname interpolated into the pinned welcome

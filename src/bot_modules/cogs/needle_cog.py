@@ -23,9 +23,6 @@ log = logging.getLogger("dungeonkeeper.needle")
 
 TitleType = Literal["first_fifty", "first_line", "user_date", "custom"]
 
-_DEFAULT_EMOJI_UNANSWERED = "🔵"
-_DEFAULT_EMOJI_ARCHIVED = "✅"
-_DEFAULT_EMOJI_LOCKED = "🔒"
 _DEFAULT_REPLY = "Thread created by $USER in $CHANNEL"
 
 
@@ -44,8 +41,6 @@ def _ensure_tables(conn: sqlite3.Connection) -> None:
             delete_behavior     TEXT    NOT NULL DEFAULT 'archive_if_empty',
             reply_type          TEXT    NOT NULL DEFAULT 'default',
             custom_reply        TEXT    NOT NULL DEFAULT '',
-            status_reactions    INTEGER NOT NULL DEFAULT 0,
-            archive_immediately INTEGER NOT NULL DEFAULT 0,
             default_reactions   TEXT    NOT NULL DEFAULT '',
             PRIMARY KEY (guild_id, channel_id)
         )
@@ -63,16 +58,11 @@ class NeedleChannelConfig:
     delete_behavior: str
     reply_type: str
     custom_reply: str
-    status_reactions: bool
-    archive_immediately: bool
     default_reactions: str
 
 
 @dataclass
 class NeedleGlobalConfig:
-    emoji_unanswered: str
-    emoji_archived: str
-    emoji_locked: str
     default_reply: str
 
 
@@ -87,17 +77,12 @@ def _row_to_config(row: sqlite3.Row) -> NeedleChannelConfig:
         delete_behavior=row["delete_behavior"],
         reply_type=row["reply_type"],
         custom_reply=row["custom_reply"],
-        status_reactions=bool(row["status_reactions"]),
-        archive_immediately=bool(row["archive_immediately"]),
         default_reactions=row["default_reactions"] or "",
     )
 
 
 def _get_global_config(conn: sqlite3.Connection, guild_id: int) -> NeedleGlobalConfig:
     return NeedleGlobalConfig(
-        emoji_unanswered=get_config_value(conn, "needle_emoji_unanswered", _DEFAULT_EMOJI_UNANSWERED, guild_id),
-        emoji_archived=get_config_value(conn, "needle_emoji_archived", _DEFAULT_EMOJI_ARCHIVED, guild_id),
-        emoji_locked=get_config_value(conn, "needle_emoji_locked", _DEFAULT_EMOJI_LOCKED, guild_id),
         default_reply=get_config_value(conn, "needle_default_reply", _DEFAULT_REPLY, guild_id),
     )
 
@@ -124,17 +109,14 @@ def _upsert_channel(
     delete_behavior: str,
     reply_type: str,
     custom_reply: str,
-    status_reactions: bool,
-    archive_immediately: bool,
     default_reactions: str,
 ) -> None:
     conn.execute(
         """
         INSERT INTO needle_channels
             (guild_id, channel_id, title_type, custom_title, include_bots, slowmode,
-             delete_behavior, reply_type, custom_reply, status_reactions,
-             archive_immediately, default_reactions)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             delete_behavior, reply_type, custom_reply, default_reactions)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (guild_id, channel_id) DO UPDATE SET
             title_type          = excluded.title_type,
             custom_title        = excluded.custom_title,
@@ -143,14 +125,11 @@ def _upsert_channel(
             delete_behavior     = excluded.delete_behavior,
             reply_type          = excluded.reply_type,
             custom_reply        = excluded.custom_reply,
-            status_reactions    = excluded.status_reactions,
-            archive_immediately = excluded.archive_immediately,
             default_reactions   = excluded.default_reactions
         """,
         (
             guild_id, channel_id, title_type, custom_title, int(include_bots), slowmode,
             delete_behavior, reply_type, custom_reply,
-            int(status_reactions), int(archive_immediately),
             ",".join(e.strip() for e in default_reactions.split(",") if e.strip()),
         ),
     )
@@ -328,11 +307,6 @@ class NeedleCog(commands.Cog):
         if message.is_system():
             return
 
-        # Messages inside threads: handle archive_immediately
-        if isinstance(message.channel, discord.Thread):
-            await self._handle_thread_reply(message)
-            return
-
         if not isinstance(message.channel, discord.TextChannel):
             return
         if self.bot.user and message.author.id == self.bot.user.id:
@@ -369,14 +343,8 @@ class NeedleCog(commands.Cog):
         # Welcome message with action buttons
         await self._post_welcome(message, thread, cfg, gcfg)
 
-        # Status reaction: mark original message as unanswered
-        if cfg.status_reactions and gcfg.emoji_unanswered:
-            try:
-                await message.add_reaction(gcfg.emoji_unanswered)
-            except discord.HTTPException:
-                pass
-
-        # Default emoji reactions
+        # Default emoji reactions — a cue for readers (quick voting, "seen"),
+        # never a status the bot later reads back or swaps out.
         if cfg.default_reactions:
             for emoji in cfg.default_reactions.split(","):
                 try:
@@ -421,42 +389,6 @@ class NeedleCog(commands.Cog):
                         break
         except discord.HTTPException as exc:
             log.warning("Needle: failed to post welcome message: %s", exc)
-
-    async def _handle_thread_reply(self, message: discord.Message) -> None:
-        """Remove the unanswered reaction when a non-OP replies (archive_immediately mode)."""
-        if message.author.bot or not message.guild:
-            return
-        thread = message.channel
-        if not isinstance(thread, discord.Thread) or thread.parent_id is None:
-            return
-
-        cfg = await asyncio.to_thread(
-            self._load_channel_config, message.guild.id, thread.parent_id
-        )
-        if cfg is None or not cfg.status_reactions or not cfg.archive_immediately:
-            return
-
-        # Get the starter message (thread ID == starter message ID in Discord)
-        parent = thread.parent
-        if not isinstance(parent, discord.TextChannel):
-            return
-        try:
-            starter, gcfg = await asyncio.gather(
-                parent.fetch_message(thread.id),
-                asyncio.to_thread(self._load_global_config, message.guild.id),
-            )
-        except discord.HTTPException:
-            return
-
-        # Only act when a non-OP replies
-        if starter.author.id == message.author.id:
-            return
-
-        if gcfg.emoji_unanswered and self.bot.user:
-            try:
-                await starter.remove_reaction(gcfg.emoji_unanswered, self.bot.user)
-            except discord.HTTPException:
-                pass
 
     # ── on_message_delete ─────────────────────────────────────────────────
 
@@ -522,60 +454,6 @@ class NeedleCog(commands.Cog):
             await thread.edit(archived=True)
         except discord.HTTPException:
             pass
-
-    # ── on_thread_update ─────────────────────────────────────────────────
-
-    @commands.Cog.listener("on_thread_update")
-    async def _on_thread_update(
-        self, before: discord.Thread, after: discord.Thread
-    ) -> None:
-        if not after.guild or after.parent_id is None:
-            return
-
-        cfg = await asyncio.to_thread(
-            self._load_channel_config, after.guild.id, after.parent_id
-        )
-        if cfg is None or not cfg.status_reactions:
-            return
-
-        was_archived = not before.archived and after.archived
-        was_unarchived = before.archived and not after.archived
-        was_locked = not before.locked and after.locked
-
-        if not (was_archived or was_unarchived or was_locked):
-            return
-
-        parent = after.parent
-        if not isinstance(parent, discord.TextChannel):
-            return
-
-        try:
-            starter, gcfg = await asyncio.gather(
-                parent.fetch_message(after.id),
-                asyncio.to_thread(self._load_global_config, after.guild.id),
-            )
-        except discord.HTTPException:
-            return
-
-        # Clear all bot status reactions concurrently
-        if self.bot.user:
-            emojis = [e for e in [gcfg.emoji_unanswered, gcfg.emoji_archived, gcfg.emoji_locked] if e]
-            await asyncio.gather(
-                *(starter.remove_reaction(emoji, self.bot.user) for emoji in emojis),
-                return_exceptions=True,
-            )
-
-        if was_locked and gcfg.emoji_locked:
-            try:
-                await starter.add_reaction(gcfg.emoji_locked)
-            except discord.HTTPException:
-                pass
-        elif was_archived and gcfg.emoji_archived:
-            try:
-                await starter.add_reaction(gcfg.emoji_archived)
-            except discord.HTTPException:
-                pass
-        # was_unarchived: reactions cleared above — user reopened, state is unknown
 
     # ── /close ────────────────────────────────────────────────────────────
 
