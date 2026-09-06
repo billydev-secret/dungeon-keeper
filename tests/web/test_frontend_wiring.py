@@ -412,7 +412,6 @@ _IIFE_EXEMPT = {
     "grant-audit.js",      # try/catch → statusEl error text
     "inactive-report.js",  # loadChannels/loadRoles never reject; refresh() catches
     "nsfw-tags-report.js", # try/catch → .error, plus a cancelled flag
-    "nsfw-gender.js",      # loadChannels/refresh both catch
     "activity.js",         # loadDropdowns/refresh both catch
     "config-bump-tracker.js",  # try/catch → renderError
     "todo.js",             # documented in-file; owned by the mod-queue work

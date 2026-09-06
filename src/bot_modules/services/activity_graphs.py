@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from bot_modules.core.bot_exclusion import bot_filter_clause, bot_ids_subquery
+from bot_modules.core.bot_exclusion import bot_ids_subquery
 from bot_modules.services import xp_rollup_service
 
 # The unit runs with ProtectHome=read-only, so matplotlib cannot write its
@@ -2732,96 +2732,8 @@ def render_join_histogram(
 
 
 # ---------------------------------------------------------------------------
-# NSFW posting by gender
+# NSFW tag mix
 # ---------------------------------------------------------------------------
-
-_GENDER_COLORS = {
-    "male": "#5865f2",  # blurple
-    "female": "#eb459e",  # pink
-    "nonbinary": "#57f287",  # green
-    "unknown": "#72767d",  # gray
-}
-
-_GENDER_ORDER = ["male", "female", "nonbinary", "unknown"]
-
-
-def query_nsfw_gender_activity(
-    conn: sqlite3.Connection,
-    guild_id: int,
-    resolution: Resolution,
-    channel_ids: list[int],
-    *,
-    utc_offset_hours: float = 0,
-    media_only: bool = False,
-    include_bots: bool = False,
-) -> tuple[list[str], dict[str, list[int]]]:
-    """
-    Query channel message counts per time bucket, grouped by gender.
-
-    Returns (labels, {gender: [count_per_bucket]}).
-    Members without a gender classification are bucketed as 'unknown'.
-
-    When *media_only* is True, only messages with image/video attachments
-    (excluding GIFs) are counted.  This joins the ``messages`` and
-    ``message_attachments`` tables instead of ``processed_messages``.
-    """
-    if not channel_ids:
-        return [], {}
-
-    now = datetime.now(timezone.utc)
-    bucket_sequence, since_ts = _BUCKET_BUILDERS[resolution](now, utc_offset_hours)
-    offset_secs = int(utc_offset_hours * 3600)
-
-    ch_placeholders = ", ".join("?" for _ in channel_ids)
-    params: list[object] = [guild_id, since_ts, *channel_ids]
-
-    bucket_expr = _strftime_expr(
-        resolution, col="m.ts", since_ts=since_ts, utc_offset_secs=offset_secs
-    )
-    # ``media_kind`` is recorded at ingest as lightweight metadata (an attachment
-    # classification, not a URL), so the media split works even at storage level
-    # "none". 'media' = non-gif image/video — exactly what this metric counts.
-    media_filter = "AND m.media_kind = 'media'" if media_only else ""
-    # LEFT JOIN, so bot authors are not dropped by the gender join — they fall
-    # into the 'unknown' bucket and inflate it. Filter them explicitly.
-    bot_clause, bot_params = bot_filter_clause(
-        guild_id, column="m.author_id", include_bots=include_bots
-    )
-    params.extend(bot_params)
-    rows = conn.execute(
-        f"""
-        SELECT
-            {bucket_expr} AS bucket,
-            COALESCE(mg.gender, 'unknown') AS gender,
-            COUNT(*) AS cnt
-        FROM messages m
-        LEFT JOIN member_gender mg
-            ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
-        WHERE m.guild_id = ? AND m.ts >= ?
-            AND m.channel_id IN ({ch_placeholders})
-            {media_filter}{bot_clause}
-        GROUP BY bucket, gender
-        """,
-        params,
-    ).fetchall()
-
-    # Build per-gender counts aligned to bucket sequence
-    counts_by_gender: dict[str, dict[str, int]] = {}
-    for r in rows:
-        g = str(r["gender"])
-        counts_by_gender.setdefault(g, {})[str(r["bucket"])] = int(r["cnt"])
-
-    labels = [label for _, label in bucket_sequence]
-    gender_counts: dict[str, list[int]] = {}
-    for g in _GENDER_ORDER:
-        if g not in counts_by_gender:
-            continue
-        gender_counts[g] = [
-            counts_by_gender[g].get(key, 0) for key, _ in bucket_sequence
-        ]
-
-    return labels, gender_counts
-
 
 #: Display order for the tagger's vocabulary, and — via each label's *position
 #: in this list* — the palette slot it is drawn in.  Taxonomic rather than by
@@ -2874,7 +2786,7 @@ def query_nsfw_tag_activity(
 
     Returns (labels, {top_label: [count_per_bucket]}).
 
-    Unlike :func:`query_nsfw_gender_activity` this does **not** discover NSFW
+    Unlike the removed gender report this does **not** discover NSFW
     channels and filter to them.  ``nsfw_classifications`` only holds rows for
     channels the tagger actually ran in — age-gated ones *and* spoiler-required
     ones, which Discord need not age-gate — so the table is already scoped and
@@ -2941,158 +2853,6 @@ def query_nsfw_tag_activity(
         for t in ordered
     }
     return labels, tag_counts
-
-
-@_serialized_render
-def render_nsfw_gender_chart(
-    labels: list[str],
-    gender_counts: dict[str, list[int]],
-    title: str,
-) -> bytes:
-    """Render a stacked bar chart of NSFW posting by gender as PNG bytes."""
-    import numpy as np
-
-    n = len(labels)
-    fig_width = max(9, n * 0.42)
-
-    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    x = np.arange(n)
-    bar_width = 0.7
-    bottom = np.zeros(n)
-
-    for gender in _GENDER_ORDER:
-        if gender not in gender_counts:
-            continue
-        values = np.array(gender_counts[gender], dtype=float)
-        color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
-        ax.bar(
-            x,
-            values,
-            bar_width,
-            bottom=bottom,
-            color=color,
-            label=gender.capitalize(),
-            zorder=2,
-        )
-        bottom += values
-
-    # Smart x-axis labeling
-    max_visible = 20
-    if n > max_visible:
-        step = max(1, n // max_visible)
-        tick_positions = list(range(0, n, step))
-        tick_labels_visible = [labels[i] for i in tick_positions]
-    else:
-        tick_positions = list(range(n))
-        tick_labels_visible = labels
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(
-        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
-    )
-    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
-    ax.tick_params(length=0)
-
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("Messages", color=_TEXT, fontsize=9)
-    ax.yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    if gender_counts:
-        ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
-
-
-@_serialized_render
-def render_nsfw_gender_line_chart(
-    labels: list[str],
-    gender_counts: dict[str, list[int]],
-    title: str,
-) -> bytes:
-    """Render a line chart showing gender ratio over time as PNG bytes."""
-    import numpy as np
-
-    n = len(labels)
-    fig_width = max(9, n * 0.42)
-
-    fig, ax = plt.subplots(figsize=(fig_width, 4.5))
-    fig.patch.set_facecolor(_BG)
-    ax.set_facecolor(_BG)
-
-    x = np.arange(n)
-
-    all_genders = [g for g in _GENDER_ORDER if g in gender_counts]
-    if not all_genders:
-        plt.close(fig)
-        return render_nsfw_gender_chart(labels, gender_counts, title)
-
-    stacked = np.array([gender_counts[g] for g in all_genders], dtype=float)
-    totals = stacked.sum(axis=0)
-    totals[totals == 0] = 1  # avoid division by zero
-
-    for gender in _GENDER_ORDER:
-        if gender not in gender_counts:
-            continue
-        values = np.array(gender_counts[gender], dtype=float)
-        pct = values / totals * 100
-        color = _GENDER_COLORS.get(gender, _GENDER_COLORS["unknown"])
-        ax.plot(
-            x,
-            pct,
-            color=color,
-            linewidth=2,
-            marker="o",
-            markersize=4,
-            label=gender.capitalize(),
-            zorder=2,
-        )
-
-    max_visible = 20
-    if n > max_visible:
-        step = max(1, n // max_visible)
-        tick_positions = list(range(0, n, step))
-        tick_labels_visible = [labels[i] for i in tick_positions]
-    else:
-        tick_positions = list(range(n))
-        tick_labels_visible = labels
-
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(
-        tick_labels_visible, rotation=45, ha="right", color=_TEXT, fontsize=8
-    )
-    ax.tick_params(axis="y", colors=_TEXT, labelsize=8)
-    ax.tick_params(length=0)
-
-    ax.yaxis.grid(True, color=_GRID, linewidth=0.7, zorder=1)
-    ax.set_axisbelow(True)
-    ax.set_title(title, color=_TEXT, fontsize=13, pad=10)
-    ax.set_ylabel("% of Posts", color=_TEXT, fontsize=9)
-    ax.set_ylim(0, 100)
-
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-
-    ax.legend(facecolor=_BG, edgecolor=_GRID, labelcolor=_TEXT, fontsize=9)
-
-    plt.tight_layout(pad=1.2)
-    buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=130, bbox_inches="tight", facecolor=_BG)
-    plt.close(fig)
-    buf.seek(0)
-    return buf.read()
 
 
 # ---------------------------------------------------------------------------

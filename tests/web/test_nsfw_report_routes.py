@@ -257,10 +257,9 @@ def test_image_guard_metrics_excludes_pre_swap_rows(open_client, fake_ctx):
 
 # ── /api/reports/nsfw-tag-mix ────────────────────────────────────────────
 #
-# The tag series behind the NSFW report's "By tag" breakdown. It shares a panel
-# with the gender split, which is moderator-gated — so the gate on this one is
-# the thing most worth pinning down: sharing a page must not widen who can read
-# a body-part inventory of members' uploads.
+# The tag series behind the NSFW report's "By tag" breakdown. It is admin-gated,
+# and that gate is the thing most worth pinning down: nothing about sharing a
+# page may widen who can read a body-part inventory of members' uploads.
 
 TAG_MIX = "/api/reports/nsfw-tag-mix"
 
@@ -327,12 +326,15 @@ def test_tag_mix_rejects_an_unknown_resolution(open_client):
     assert open_client.get(f"{TAG_MIX}?resolution=fortnight").status_code == 422
 
 
-def test_tag_mix_is_admin_gated_where_its_panel_is_only_moderator_gated(fake_ctx):
-    """The gender half of the same panel loads for a moderator; this half must not.
+def test_tag_mix_is_admin_gated(fake_ctx):
+    """A moderator must not be able to read a body-part inventory of uploads.
 
     /api/moderation/nsfw-tags is admin-only because these rows describe members'
-    uploads. Putting a second reader of the same table on a moderator-visible
-    page is exactly how that gate would get lost.
+    uploads, and this route is a second reader of the same table. The gate was
+    originally written because a moderator-readable gender breakdown shared the
+    panel; that breakdown went with the gender report in 2026-09, and the gate
+    matters just as much without it — the risk was never the neighbour, it was
+    this route.
     """
     auth = DiscordOAuthAuth("test-secret", fake_ctx.guild_id)
     client = TestClient(create_app(fake_ctx, auth=auth))
@@ -347,7 +349,5 @@ def test_tag_mix_is_admin_gated_where_its_panel_is_only_moderator_gated(fake_ctx
     client.cookies.set(SESSION_COOKIE, cookie)
     try:
         assert client.get(TAG_MIX).status_code == 403
-        # The sibling breakdown on the same panel stays readable.
-        assert client.get("/api/reports/nsfw-gender").status_code == 200
     finally:
         client.close()

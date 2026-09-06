@@ -561,9 +561,9 @@ def build_contributors_payload(
     exceeds 2^53 and would lose precision as a JSON number.
 
     Unlike the quality score this replaces, no gender tag is attached.  Nothing
-    in these five views is per-gender, and ``member_gender`` is mod-assigned
-    without the subject's involvement, so not reading it here is one less place
-    that data travels.
+    in these five views is per-gender, and the mod-assigned gender store this
+    deliberately declined to read was removed outright in 2026-09 — the
+    restraint here predated the decision and is now simply the only option.
     """
     report = build_contributors_report(
         conn,

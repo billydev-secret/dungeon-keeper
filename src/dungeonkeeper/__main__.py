@@ -678,16 +678,6 @@ def main() -> None:
                             except Exception:
                                 log.exception("Reports cache warming failed for join-times")
 
-                            if nsfw_ids:
-                                try:
-                                    _put(
-                                        "nsfw-gender",
-                                        {"resolution": "week", "media_only": False, "channel_id": None},
-                                        reports_data.get_nsfw_gender_data(conn, gid, "week", nsfw_ids, tz, False),
-                                    )
-                                except Exception:
-                                    log.exception("Reports cache warming failed for nsfw-gender")
-
                             try:
                                 from bot_modules.services.contributors_service import (
                                     WINDOW_DAYS,

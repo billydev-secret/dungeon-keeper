@@ -41,7 +41,6 @@ from web_server.schemas import (
     InteractionSeriesResponse,
     InviteEffectivenessResponse,
     JoinTimesResponse,
-    NsfwGenderResponse,
     NsfwTagMixResponse,
     OneSidedAttentionResponse,
     PingResponseResponse,
@@ -145,83 +144,6 @@ async def join_times(
         "join-times",
         guild_id,
         {"resolution": resolution},
-        _q,
-    )
-
-
-# ── NSFW gender activity ────────────────────────────────────────────────
-
-
-@router.get("/nsfw-gender", response_model=NsfwGenderResponse)
-async def nsfw_gender(
-    request: Request,
-    resolution: Literal["day", "week", "month"] = "week",
-    media_only: bool = False,
-    channel_id: str | None = None,
-    include_bots: bool = False,
-    _: AuthenticatedUser = Depends(require_perms({"moderator"})),
-):
-    ctx = get_ctx(request)
-    guild_id = get_active_guild_id(request)
-
-    if channel_id:
-        target_ids = [int(channel_id)]
-    else:
-        # Auto-discover NSFW channels from live guild cache
-        bot = getattr(ctx, "bot", None)
-        guild = bot.get_guild(guild_id) if bot is not None else None
-        if guild is not None:
-            target_ids = [ch.id for ch in guild.channels if getattr(ch, "nsfw", False)]
-        else:
-            # Standalone fallback: use all channels that have gender-tagged
-            # posts — these are the channels the query would return data for.
-            def _discover():
-                with ctx.open_db() as conn:
-                    rows = conn.execute(
-                        """
-                        SELECT DISTINCT m.channel_id
-                        FROM messages m
-                        INNER JOIN member_gender mg
-                            ON mg.guild_id = m.guild_id AND mg.user_id = m.author_id
-                        WHERE m.guild_id = ?
-                        """,
-                        (guild_id,),
-                    ).fetchall()
-                    return [int(r[0]) for r in rows]
-
-            target_ids = await run_query(_discover)
-
-    if not target_ids:
-        return NsfwGenderResponse(
-            resolution=resolution,
-            window_label="",
-            media_only=media_only,
-            labels=[],
-            series=[],
-        )
-
-    def _q():
-        with ctx.open_db() as conn:
-            tz = get_tz_offset_hours(conn, guild_id)
-            return reports_data.get_nsfw_gender_data(
-                conn,
-                guild_id,
-                resolution,
-                target_ids,
-                tz,
-                media_only,
-                include_bots=include_bots,
-            )
-
-    return await cached_run_query(
-        "nsfw-gender",
-        guild_id,
-        {
-            "resolution": resolution,
-            "media_only": media_only,
-            "channel_id": channel_id,
-            "include_bots": include_bots,
-        },
         _q,
     )
 

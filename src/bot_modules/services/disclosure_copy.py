@@ -221,7 +221,6 @@ FEATURE_TO_CATEGORY: dict[str, str] = {
     "Voice transcription": "voice",
     "Bios": "profile",
     "Birthday": "profile",
-    "Gender service": "profile",
     "Music Playlist": "profile",
     "Whisper": "anonymous",
     "Confessions": "anonymous",

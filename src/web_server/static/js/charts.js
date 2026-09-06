@@ -292,7 +292,7 @@ export function makeBarChart(
 }
 
 
-// ── Stacked bar (nsfw-gender bar mode) ──────────────────────────────────
+// ── Stacked bar (Image Guard tag mix, bar mode) ─────────────────────────
 
 // `title` kept in the signature — panels still pass it for their own HTML
 // caption — but charts.js no longer draws it, hence the underscore.

@@ -41,7 +41,6 @@ from bot_modules.services.activity_graphs import (
     query_message_activity,
     query_message_histogram,
     query_message_rate_drops,
-    query_nsfw_gender_activity,
     query_nsfw_tag_activity,
     query_xp_activity,
     query_xp_activity_with_breakdown,
@@ -51,8 +50,6 @@ from bot_modules.services.activity_graphs import (
     render_greeter_response_chart,
     render_join_histogram,
     render_level_histogram,
-    render_nsfw_gender_chart,
-    render_nsfw_gender_line_chart,
     render_overlay_panel,
     render_mod_stats_panel,
     query_xp_all_time_with_breakdown,
@@ -569,69 +566,6 @@ def test_query_dropoff_profiles_returns_rich_metadata(db_conn):
 # ── query_message_cadence ────────────────────────────────────────────
 
 
-# ── query_nsfw_gender_activity ───────────────────────────────────────
-
-
-def test_query_nsfw_gender_activity_empty_channels(db_conn):
-    labels, counts = query_nsfw_gender_activity(
-        db_conn, guild_id=10, resolution="day", channel_ids=[]
-    )
-    assert labels == []
-    assert counts == {}
-
-
-def test_query_nsfw_gender_activity_buckets_by_gender(db_conn):
-    now_ts = int(datetime.now(timezone.utc).timestamp() - 60)
-    _seed_messages(
-        db_conn,
-        rows=[
-            (1, 999, 7, now_ts, None, "hi"),
-            (2, 999, 8, now_ts, None, "hi"),
-        ],
-    )
-    db_conn.execute(
-        "INSERT INTO member_gender (guild_id, user_id, gender, set_by, set_at)"
-        " VALUES (?,?,?,?,?)",
-        (10, 7, "male", 0, now_ts),
-    )
-    db_conn.commit()
-    labels, by_gender = query_nsfw_gender_activity(
-        db_conn, guild_id=10, resolution="day", channel_ids=[999]
-    )
-    assert len(labels) == 30
-    assert "male" in by_gender
-    assert "unknown" in by_gender  # user 8 has no gender entry
-    assert sum(by_gender["male"]) == 1
-    assert sum(by_gender["unknown"]) == 1
-
-
-def test_query_nsfw_gender_activity_media_only_filters_by_media_kind(db_conn):
-    now_ts = int(datetime.now(timezone.utc).timestamp() - 60)
-    _seed_messages(
-        db_conn,
-        rows=[
-            (1, 999, 7, now_ts, None, "hi"),
-            (2, 999, 7, now_ts + 1, None, "pic"),
-            (3, 999, 7, now_ts + 2, None, "gif"),
-        ],
-    )
-    # media_kind is the lightweight metadata that drives the media split — it is
-    # recorded even when raw attachment URLs are not retained (storage "none").
-    db_conn.execute("UPDATE messages SET media_kind = 'media' WHERE message_id = 2")
-    db_conn.execute("UPDATE messages SET media_kind = 'gif' WHERE message_id = 3")
-    db_conn.commit()
-    _, by_gender = query_nsfw_gender_activity(
-        db_conn,
-        guild_id=10,
-        resolution="day",
-        channel_ids=[999],
-        media_only=True,
-    )
-    # Only message 2 counts: 'media' is included, 'gif' and text are excluded.
-    total = sum(sum(v) for v in by_gender.values())
-    assert total == 1
-
-
 # ── query_nsfw_tag_activity ──────────────────────────────────────────
 
 
@@ -878,43 +812,10 @@ def test_render_join_histogram_many_labels_thins_ticks():
     assert out[:8] == PNG_MAGIC
 
 
-def test_render_nsfw_gender_chart_returns_png():
-    labels = ["a", "b"]
-    counts = {"male": [1, 2], "female": [3, 4]}
-    out = render_nsfw_gender_chart(labels, counts, "NSFW")
-    assert out[:8] == PNG_MAGIC
 
 
-def test_render_nsfw_gender_chart_empty_counts_still_returns_png():
-    out = render_nsfw_gender_chart(["a", "b"], {}, "NSFW")
-    assert out[:8] == PNG_MAGIC
 
 
-def test_render_nsfw_gender_chart_many_labels_thins_ticks():
-    labels = [f"d{i}" for i in range(40)]
-    counts = {"male": [1] * 40}
-    out = render_nsfw_gender_chart(labels, counts, "NSFW")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_nsfw_gender_line_chart_returns_png():
-    out = render_nsfw_gender_line_chart(
-        ["a", "b"], {"male": [1, 2], "female": [1, 1]}, "ratio"
-    )
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_nsfw_gender_line_chart_empty_falls_back_to_bar():
-    """No genders → falls through to render_nsfw_gender_chart."""
-    out = render_nsfw_gender_line_chart(["a", "b"], {}, "ratio")
-    assert out[:8] == PNG_MAGIC
-
-
-def test_render_nsfw_gender_line_chart_many_labels_thins_ticks():
-    labels = [f"d{i}" for i in range(40)]
-    counts = {"male": [1] * 40, "female": [2] * 40}
-    out = render_nsfw_gender_line_chart(labels, counts, "ratio")
-    assert out[:8] == PNG_MAGIC
 
 
 def test_render_greeter_response_chart_returns_png():
