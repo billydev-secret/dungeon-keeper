@@ -268,7 +268,7 @@ def validate_grant_role_change(
         known = ", ".join(sorted(grants)) or "none"
         raise ValueError(
             f"this server has no '{grant_name}' role grant. Existing grants: "
-            f"{known}. New ones are created from Config → Roles."
+            f"{known}. New ones are created from Moderation → Role Management."
         )
 
     kind, field_label = GRANT_FIELDS[field]
@@ -286,7 +286,7 @@ def validate_grant_role_change(
             raise ValueError(
                 "I can't put @everyone, @here, or a role mention in a grant "
                 "message — it would ping on every future grant. Write it "
-                "without one, or set it from Config → Roles."
+                "without one, or set it from Moderation → Role Management."
             )
         value = shown = raw
 

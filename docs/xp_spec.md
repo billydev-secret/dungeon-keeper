@@ -77,18 +77,19 @@ Crossing level 5 (the configured role-grant level) grants the level-5 role and p
 
 ## Configuration
 
-Per-guild settings, all editable from the dashboard XP panel:
+Per-guild settings, editable from the dashboard XP & Leveling panel except
+where noted:
 
 - **Algorithm coefficients** — per-word XP, reply bonus, image-reaction stipend, reaction-given stipend, the three cooldown thresholds and their multipliers, duplicate-message multiplier, pair-streak threshold and multiplier, voice-award amount, voice-interval seconds, voice-minimum-humans, manual-grant amount, level-curve factor. (Quest-reward XP is not tuned here — each quest's `reward_xp` is set on the economy dashboard and credited flat, no multipliers.)
 - **Level-5 role** — the role granted on reaching level 5.
 - **Level-up log channel** — where per-level-up embeds post.
-- **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates).
+- **Level-5 log channel** — where the level-5 milestone embed posts (can match the level-up channel; the role-grant level then de-duplicates). Set on **Moderation → Role Management → Promotion Reviews**, labelled *Promotion Reviews Channel* — the same channel carries the promotion-review cards.
 - **Grant-allowlist** — extra user ids (beyond mods) allowed to invoke `/xp_give`.
 - **Channel exclusion list** — channels (and threads whose parent is in the list) where text and image-reaction XP are suppressed. An excluded **voice** channel likewise never qualifies for a tick, so it pays neither voice XP nor the daily voice login. The AFK voice channel is implicitly excluded.
 - **Event retention** — an opt-in, off-by-default toggle. Once on, a nightly rollup summarizes each complete day's `xp_events` rows into a per-(member, source, day) `xp_daily` table and then prunes the raw rows older than 90 days; every leaderboard/reporting reader unions the two so the switch changes nothing member-visible.
-- **Promotion Review Grant Role / Ping Role** — the role the level-5 card's Grant button hands out, and the role pinged when a promotion-review card posts. See `promotion_review_spec.md`.
+- **Promotion Review Grant Role / Ping Role** — the role the level-5 card's Grant button hands out, and the role pinged when a promotion-review card posts. Both live on **Moderation → Role Management → Promotion Reviews**, not on the XP panel. See `promotion_review_spec.md`.
 
-One internal knob — the voice-tick poll period — is pinned in code and not exposed. The role-grant level itself and the level-5 promotion post's 2-day tenure minimum are likewise pinned. The "Spicy access" field's grant role is the dashboard's Promotion Review Grant Role above when set, falling back to the grant whose internal key is literally `nsfw` (see `role_grant_spec.md`) when it isn't.
+One internal knob — the voice-tick poll period — is pinned in code and not exposed. The role-grant level itself and the level-5 promotion post's 2-day tenure minimum are likewise pinned. The "Spicy access" field's grant role is the Promotion Review Grant Role named above when set, falling back to the grant whose internal key is literally `nsfw` (see `role_grant_spec.md`) when it isn't.
 
 ## Stored data
 

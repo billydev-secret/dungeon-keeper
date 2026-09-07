@@ -34,11 +34,15 @@ The `pruned_return` and `sleeper` cards also carry a **Dismiss** button.
 
 ## Gating / config (dashboard, not Discord)
 
-- Ships **dark**: the return/sleeper triggers do nothing until the Level 5 Log
-  Channel is set. `pruned_return` additionally requires
-  `promotion_review_grant_role_id` (else its button would no-op).
-- These settings live on the XP config panel (`xp-settings.js`,
-  `PUT /api/config/xp`).
+- Ships **dark**: the return/sleeper triggers do nothing until the Promotion
+  Reviews Channel is set (`xp_level_5_log_channel_id`). `pruned_return`
+  additionally requires `promotion_review_grant_role_id` (else its button would
+  no-op).
+- These settings live on **Moderation → Role Management → Promotion Reviews**
+  (`promotion-reviews.js`), which submits only its own three keys to
+  `PUT /api/config/xp`. They rode the XP & Leveling form until 2026-09-07,
+  where saving any XP dial rewrote all three — which is how the ping role
+  reached prod as 0 and cards fell back to pinging the mod roles.
 - Buttons are limited to admins/mods or Manage Roles.
 
 ### The two roles are different settings
@@ -89,8 +93,8 @@ renders but never notifies) and allow-lists exactly those roles by id via
   role is added or removed — so the card tracks access granted by `/grant` or by
   a hand-added role, neither of which it could see before. **Which role that
   is** (`xp_service.nsfw_grant_role_id`, 2026-08-30): the dashboard's
-  **Promotion Review Grant Role** (`promotion_review_grant_role_id`, XP &
-  Leveling panel) when set — the role the button hands out is by definition the
+  **Promotion Review Grant Role** (`promotion_review_grant_role_id`, on the
+  Promotion Reviews panel) when set — the role the button hands out is by definition the
   access being reviewed, so button and field now move together — falling back to
   the grant whose internal key is literally `nsfw`, and 0 (field omitted) when
   neither exists. Before that the field read `grant_roles["nsfw"]` *only*: no
