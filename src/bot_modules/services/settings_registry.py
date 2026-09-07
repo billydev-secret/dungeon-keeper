@@ -96,6 +96,12 @@ _LEGACY_GRANT_KEYS: frozenset[str] = frozenset(
 )
 
 DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
+    # The Guess inactivity nudge was removed in full: the ping was noise on
+    # a game people find on their own, so the loop, the dial and its stored
+    # round id all went. Dead here so the Config Advisor cannot offer the
+    # dial back for a reader that no longer exists.
+    "guess_inactivity_ping_hours",
+    "guess_last_nudged_round_id",
     "veil_role_id",
     "veil_channel_id",
     "ticket_panel_channel_id",
@@ -455,8 +461,6 @@ FEATURES: tuple[Feature, ...] = (
             _role("guess_role_id", "Role pinged for new rounds"),
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
-            _num("guess_inactivity_ping_hours", "Hours of silence before a nudge",
-                 minimum=0, maximum=168),
         ),
     ),
     Feature(

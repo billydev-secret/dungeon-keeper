@@ -119,8 +119,6 @@ Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather 
 | `guess_channel_id` | unset | Where crops post and modals launch from |
 | `guess_guess_cooldown_seconds` | `60` | Per-user, per-round cooldown between guesses (`0` disables it) |
 | `guess_max_guesses_per_round` | `5` | Per-user, per-round total guess cap |
-| `guess_inactivity_ping_hours` | `0` | Hours a round may sit with no guesses before the Guess role is pinged once about it (`0` disables the nudge). Bounded at `168` (one week) — the same ceiling the nudge itself applies, so the dial can't be set into a range that would never fire. See "Inactivity nudge" below |
-| `guess_last_nudged_round_id` | unset | Internal state, not an admin dial: the round this guild was last nudged about, so a long-unsolved round is only ever pinged once |
 | `guess_submit_max_per_window` | `5` | Per-user submission rate limit — max submissions per rolling window (in-memory, resets on restart) |
 | `guess_submit_window_seconds` | `3600` | Length of the submission rate-limit window |
 | `guess_crop_difficulty` | `medium` | `easy` / `medium` / `hard` — controls crop editor padding, not a per-round choice |
@@ -129,52 +127,21 @@ Since 2026-08-06 the prompt runs on the shared `core.sticky.StickyPanel` rather 
 | `guess_prompt_message_id` | unset | Persistent prompt message at the bottom of the channel |
 | `guess_prompt_channel_id` | unset | Where that message actually **is**. Added 2026-08-06 with the `core.sticky` migration: the placer deletes the old prompt through this channel, so pairing a stale message id with a repointed `guess_channel_id` would aim the delete at the wrong channel and strand the old prompt with its buttons live. Repointing the Guess channel therefore leaves the prompt where it is until the next round (or an explicit repost) moves it. **Legacy rows fall back to `guess_channel_id`**: guilds that already had a prompt when this key was added have a message id and no channel id, and before the key existed the prompt was always posted into `guess_channel_id` |
 
-## Inactivity nudge
+## Inactivity nudge (removed)
 
-`guess_inactivity_ping_hours` was offered by the Config Advisor from the start
-with no reader behind it — the dial stored a number and nothing ever nudged. It
-now has one (`services/guess_nudge_service.py`, driven by a 15-minute loop in
-the cog), and a control on **Config → Guess Who** ("Nudge After Silence").
+Between 2026-08-30 and 2026-09-07 a 15-minute loop pinged the Guess role about
+an open round that had gone quiet, behind a `guess_inactivity_ping_hours` dial
+on **Config → Guess Who**. It is gone: the loop, the service, the dial and the
+`guess_last_nudged_round_id` state it kept. A game people find on their own
+does not need a recurring role ping to chase them back to it, and the nudge's
+short life was mostly spent fixing the ways it picked the wrong round — it
+pinged about a round abandoned in May ("quiet for 2704 hours") until a one-week
+ceiling was added.
 
-The nudge fires for an **open round that has gone quiet**, never for an empty
-channel: a ping saying "come play" when nothing is posted to guess is noise,
-and the dial's wording is about silence on something already running.
-
-Each tick, per guild:
-
-* off unless the hour count is positive **and** both `guess_channel_id` and
-  `guess_role_id` are set — with no role there is nobody to ping, so the nudge
-  would be a bare bump;
-* the candidate is the **oldest** round that is unsolved, not soft-deleted, and
-  not `answer_optout`, whose last activity — the round going up, or its newest
-  guess — falls inside a window: at least the dial's hours old, and **no more
-  than `MAX_QUIET_HOURS` (168, one week) old**;
-* a round is nudged **at most once**, however long it stays unsolved. The last
-  nudged round id is stored per guild in `guess_last_nudged_round_id` and
-  excluded from the next search;
-* the id is recorded only **after** the message posts, so a send that fails
-  (missing permissions, deleted channel) retries on the next tick rather than
-  silently burning the round.
-
-The **one-week ceiling** (`MAX_QUIET_HOURS`) is what makes "oldest first" safe,
-and it was added on 2026-08-30 after the nudge pinged the role about a round
-abandoned in May: "quiet for **2704 hours**". The dial is a *minimum* silence,
-so with no maximum the search handed the ping to the most ancient unsolved round
-in the guild's history and kept it there. Worse, only one nudged id is
-remembered (`guess_last_nudged_round_id`), so each tick burned exactly one
-ancient round — production had 31 unsolved rounds from May queued ahead of
-everything recent, roughly a month of nudges before the loop would have reached
-a round anyone was still playing. Past the ceiling a round is not stale, it is
-over: it drops out of consideration permanently, which fixes both the ancient
-ping and the backlog walk in one clause. Those old rounds are otherwise left
-alone — they stay in the table, unsolved and unreachable by the nudge.
-
-A dial set above the ceiling would leave the window empty and nudge nothing; the
-panel, the config route and `settings_registry` all cap it at 168 so that state
-can only arise from a value stored under the old 720-hour bound.
-
-The message is plain content, not an embed — a role mention plus a jump link to
-the round, so the link previews. Mentions are allow-listed to that one role.
+Both config keys are deleted from existing guilds by migration 216, and both
+sit in `settings_registry.DEAD_KEYS` so the Config Advisor cannot offer the
+dial back for a reader that no longer exists. New rounds still ping the Guess
+role when they post — that ping is unrelated and stays.
 
 ## Stored data
 
