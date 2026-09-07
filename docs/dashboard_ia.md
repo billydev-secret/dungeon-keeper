@@ -15,6 +15,16 @@ is narrower, and until 2026-08 it was written nowhere a user could see it:
 > report or a queue keeps its dials at the bottom of that page, one pane. A
 > feature with no such page keeps them under **Config**.
 
+**Amended 2026-09-07 — a moderator *job* may take a heading, and the settings
+that job needs live under it.** Role Management is the first: five pages that
+were scattered over three places, ordered the way the job runs. Promotion
+Reviews is settings-only and still sits there rather than under Config,
+because the question "who can hand out what, and who is up for more" is one
+someone answers in one sitting, and sending them to Config mid-task is the
+same split IA3 undid for new members. The rule's spirit is intact — nothing
+is *duplicated*, and if a promotion-review queue is ever built it lands on
+that same page, not beside it.
+
 One feature remains on the first side of that line: **Policy Tickets**, whose
 settings half is a single field (the voting deadline) that never justified a
 page of its own — it renders read-only for non-admins (`lockUnlessAdmin`) at
@@ -33,7 +43,7 @@ defense in depth. The accepted cost: moderators no longer get the read-only
 settings view the merges provided.
 
 Roughly thirty other features keep their settings under **Config**, grouped by
-theme (Server, Roles, New Members, Members, Moderation & Safety, Channels &
+theme (Server, New Members, Members, Moderation & Safety, Channels &
 Messages, Voice, AI & Maintenance).
 
 The user-facing statement of the same rule is the **Where a Setting Lives**
@@ -46,8 +56,8 @@ subsection of `manual.html` §29 Configuration Reference (help page
 |---|---|---|
 | Dashboard | everyone | Home, Everyday Commands |
 | Reports | moderator | Moderation / Activity / Engagement / Social Graph / Greeter / Member Lists |
-| Moderation | moderator | Queues & Workflows / Image Guard / Audit Logs |
-| Config | moderator (most pages admin-only, shown locked) | Server / Roles / New Members / Members / Moderation & Safety / Channels & Messages / Voice / AI & Maintenance |
+| Moderation | moderator | Queues & Workflows / Role Management / Image Guard / Audit Logs |
+| Config | moderator (most pages admin-only, shown locked) | Server / New Members / Members / Moderation & Safety / Channels & Messages / Voice / AI & Maintenance |
 | Economy | admin **or** the economy-manager role | Operations / Earning / Spending / Wagering |
 | Wellness | opted-in members, plus manage-server/admin | Member-facing wellness surface |
 | Games | admin **or** the game-host role | One alphabetical list of the 22 game pages, then Operations |
@@ -106,6 +116,38 @@ narrower (getting roles to members) and can only see the seven opt-in ones.
 This page is the only surface that can list all sixteen, including the nine no
 page has a dropdown for. It is an audit surface rather than a form, which is why
 it opens with a sentence instead of a settings grid.
+
+**Role Management (2026-09-07)** — a new Moderation heading, second after
+Queues & Workflows, holding five pages in the order the job runs: **Role
+Grants** (decide what can be handed out) → **Reaction Roles** (let members
+self-serve) → **Bot-Managed Roles** (provision the roles the bot needs) →
+**Promotion Reviews** (review who is up for more) → **Grant Audit** (read back
+who granted what). Three came wholesale from Config → Roles, which is now
+empty and gone; Grant Audit left Audit Logs, where it had led since IA3, to
+sit beside the page whose grants it records. No id was renamed, so no
+`MOVED_PAGES` entry was needed and every existing deep link still lands.
+
+Two role-adjacent pages stayed where they were, deliberately. **Auto-Role**
+and **Discord Onboarding** are steps in Config → New Members, the ordered
+narrative IA3 assembled for the whole newcomer job; pulling them out would
+break a sequence to fix a category. **Inactive Role Removal** stays paired
+with Inactive Kick Sweep under Config → Members — it is an inactivity policy
+that happens to act on a role, and it is cross-linked to its report.
+
+`promotion-reviews` is a **new id**, minted for three dials that had no page:
+Promotion Reviews Channel, Ping Role and Grant Role rode the XP & Leveling
+form. That was not only a filing error. Two of the three things that post a
+review card — a pruned member returning, a sleeper waking — have nothing to do
+with XP, and because the XP page saves as one payload, changing any XP dial
+rewrote all three. That is how `promotion_review_ping_role_id` reached
+production as 0, sending every card's ping to the fallback (@moderator) for
+months. Its own page means its own PUT: the panel sends exactly its three
+fields, and `PUT /api/config/xp` leaves every field it is not sent alone. The
+config keys themselves are unchanged — only the page they are edited on moved
+— so no stored value needed migrating. `level_5_role_id` and the Level-Up Log
+Channel stayed on XP & Leveling, the latter with a hint pointing here, since
+pointing both channels at one place is what suppresses the duplicate level-5
+notice.
 
 ## Naming: label-vs-id drift
 

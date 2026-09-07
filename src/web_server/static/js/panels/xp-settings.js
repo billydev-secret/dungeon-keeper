@@ -1,5 +1,4 @@
 import { esc } from "../api.js";
-import { mountRoleDialStates } from "../role-dial-state.js";
 import {
   loadConfig, loadChannels, loadRoles, loadMembers,
   mountChannelPicker, mountRolePicker, mountChannelMultiPicker, mountMemberMultiPicker,
@@ -35,6 +34,10 @@ const LIST_FIELDS = [
  * XP & Leveling — the curve and reward settings (Config → Members,
  * id config-xp, adminOnly). The leaderboard they shape lives on
  * Reports → Engagement → XP Leaderboard, cross-linked via `related:`.
+ * The promotion-review dials left this form on 2026-09-07 for
+ * Moderation → Role Management → Promotion Reviews: they are a role job, and
+ * riding one shared payload with the XP dials is what let a save here write a
+ * 0 over the ping role.
  * lockUnlessAdmin stays as defense in depth; writes are refused server-side
  * regardless.
  */
@@ -76,26 +79,10 @@ export function mountSettings(container) {
               <div class="field-hint">Given automatically the first time a member reaches level 5. Choose "(none)" to hand out no role.</div>
             </div>
             <div class="field">
-              <label>Promotion Review Grant Role</label>
-              <div data-picker="promotion_review_grant_role_id"></div>
-              <div class="field-hint">Handed <em>to</em> the member when someone presses Grant on a promotion review card — typically your NSFW-access role. Also what the Level 5 card's <strong>Spicy access</strong> line reports on.</div>
-              <div class="field-hint">Choose "(none)" and Grant has nothing to give — the Spicy access line then falls back to a role named <code>nsfw</code>, or drops off the card if there isn't one. Pressing Grant itself is open to admins, mods, and anyone with Manage Roles.</div>
-            </div>
-            <div class="field">
-              <label>Promotion Review Ping Role</label>
-              <div data-picker="promotion_review_ping_role_id"></div>
-              <div class="field-hint">Pinged when a promotion review card posts, so your role managers know someone is up for review. Choose "(none)" to post the cards silently — I won't make one.</div>
-              <div data-role-state="promotion_review_ping_role_id"></div>
-            </div>
-            <div class="field">
-              <label>Level 5 Log Channel</label>
-              <div data-picker="level_5_log_channel_id"></div>
-              <div class="field-hint">Posts a note here whenever someone earns the Level 5 role, so your team can welcome them. "(disabled)" posts nothing.</div>
-            </div>
-            <div class="field">
               <label>Level-Up Log Channel</label>
               <div data-picker="level_up_log_channel_id"></div>
               <div class="field-hint">Posts a note here for every level-up, at every level. "(disabled)" posts nothing.</div>
+              <div class="field-hint">Level 5 itself is announced on the promotion reviews channel instead, set under Moderation → Role Management → <a href="#/promotion-reviews">Promotion Reviews</a>. Point both at the same channel and level 5 gets one notice, not two.</div>
             </div>
           </div>
 
@@ -237,9 +224,6 @@ export function mountSettings(container) {
     const status = container.querySelector("[data-status]");
 
     const level5Role = mountRolePicker(form.querySelector('[data-picker="level_5_role_id"]'), roles, xp.level_5_role_id, { label: "Level 5 Role" });
-    const promotionReviewGrantRole = mountRolePicker(form.querySelector('[data-picker="promotion_review_grant_role_id"]'), roles, xp.promotion_review_grant_role_id, { label: "Promotion Review Grant Role" });
-    const promotionReviewPingRole = mountRolePicker(form.querySelector('[data-picker="promotion_review_ping_role_id"]'), roles, xp.promotion_review_ping_role_id, { label: "Promotion Review Ping Role" });
-    const level5Log = mountChannelPicker(form.querySelector('[data-picker="level_5_log_channel_id"]'), channels, xp.level_5_log_channel_id, { label: "Level 5 Log Channel" });
     const levelUpLog = mountChannelPicker(form.querySelector('[data-picker="level_up_log_channel_id"]'), channels, xp.level_up_log_channel_id, { label: "Level-Up Log Channel" });
     const grantUsers = mountMemberMultiPicker(form.querySelector('[data-picker="xp_grant_allowed_user_ids"]'), members, xp.xp_grant_allowed_user_ids, { label: "Members Who Can Grant XP" });
     const excludedChannels = mountChannelMultiPicker(form.querySelector('[data-picker="xp_excluded_channel_ids"]'), channels, xp.xp_excluded_channel_ids, { label: "Channels That Earn No XP" });
@@ -251,7 +235,6 @@ export function mountSettings(container) {
     if (lockUnlessAdmin(container)) return;
 
     guardForm(form);
-    mountRoleDialStates(container);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -288,9 +271,6 @@ export function mountSettings(container) {
       try {
         await apiPut("/api/config/xp", {
           level_5_role_id: level5Role.getValue(),
-          promotion_review_grant_role_id: promotionReviewGrantRole.getValue(),
-          promotion_review_ping_role_id: promotionReviewPingRole.getValue(),
-          level_5_log_channel_id: level5Log.getValue(),
           level_up_log_channel_id: levelUpLog.getValue(),
           xp_grant_allowed_user_ids: grantUsers.getValues(),
           xp_excluded_channel_ids: excludedChannels.getValues(),

@@ -100,8 +100,9 @@ const SECTIONS = [
     // heading dashboard_ia.md already used for them, making the section
     // groups-only like its siblings. Image Guard's two diagnostic reports
     // left Audit Logs (they're classifier diagnostics, not records of mod
-    // actions), and Grant Audit leads Audit Logs — it is the one entry a
-    // moderator can open, and it sat below nine locked rows.
+    // actions), and Grant Audit led Audit Logs — it was the one entry a
+    // moderator could open, and it sat below nine locked rows. It has since
+    // moved on again, into Role Management below.
     groups: [
       { heading: "Queues & Workflows", items: [
         { id: "mod-todo",       label: "Todo List",      module: "./panels/todo.js", keywords: "tasks board recurring chores qotd reminders", help: "help-todo" },
@@ -113,12 +114,36 @@ const SECTIONS = [
         { id: "message-search", label: "Message Search",  module: "./panels/message-search.js", keywords: "messages logs find" },
         { id: "no-contact",     label: "No-Contact List", module: "./panels/no-contact.js", help: "help-no-contact", keywords: "block harassment separate pair safety whisper ama confession stalking" },
       ]},
+      // 2026-09-07: role work was scattered across three places — Role Grants,
+      // Reaction Roles and Bot-Managed Roles sat under Config → Roles, Grant
+      // Audit led Moderation's Audit Logs, and the promotion-review dials were
+      // buried in the XP settings form. They are one moderator job, so they
+      // get one heading, ordered the way that job runs: decide what can be
+      // handed out, let members self-serve, provision the roles the bot needs
+      // itself, review the members who are up for one, then read back who
+      // granted what. Config → Roles is empty as a result and gone. No id is
+      // renamed, so every existing deep link still lands.
+      { heading: "Role Management", items: [
+        { id: "config-roles",      label: "Role Grants",       module: "./panels/config-roles.js", adminOnly: true, help: "help-setup", related: ["grant-audit", "promotion-reviews"] },
+        // Renamed 2026-08-31: "Reaction Roles" is what people actually call
+        // this feature. "Role Menus" stays as a search keyword.
+        { id: "role-menus",        label: "Reaction Roles",    module: "./panels/role-menus.js", help: "help-role-menus", keywords: "role menus" },
+        // New id 2026-09-03 (round 2 of role autocreate). The freeze is on
+        // renaming ids, not on minting them; "bot-roles" is the bare feature
+        // name with no section prefix, per dashboard_ia.md § Naming.
+        { id: "bot-roles",         label: "Bot-Managed Roles", module: "./panels/bot-roles.js", adminOnly: true, keywords: "auto create roles provision jailed inactive dm modes survivor wellness ping roles missing deleted role audit", related: ["onboarding", "config-roles"] },
+        // New id 2026-09-07. These three dials used to ride the XP settings
+        // form, where saving any XP dial rewrote all of them — which is how the
+        // ping role reached prod as 0 and review cards fell back to pinging the
+        // mod roles. Own page, own PUT, only its own fields.
+        { id: "promotion-reviews", label: "Promotion Reviews", module: "./panels/promotion-reviews.js", adminOnly: true, keywords: "promotion review cards grant access spicy nsfw level 5 sleeper returning member ping role reviews channel", related: ["config-xp", "config-prune", "grant-audit"] },
+        { id: "grant-audit",       label: "Grant Audit",       module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },
+      ]},
       { heading: "Image Guard", items: [
         { id: "nsfw-blocks",       label: "Image Guard Blocks", module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "blocked images nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },
         { id: "nsfw-tags",         label: "Image Guard Tags",   module: "./panels/nsfw-tags-report.js", adminOnly: true, keywords: "image tags nsfw nudity labels detections classifier metrics score distribution", related: ["config-spoiler"] },
       ]},
       { heading: "Audit Logs", items: [
-        { id: "grant-audit",       label: "Grant Audit",      module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },
         { id: "mod-audit",         label: "Audit Log",        module: "./panels/mod-audit.js", adminOnly: true },
         { id: "mod-dm-audit",      label: "DM Audit",         module: "./panels/mod-dm-audit.js", adminOnly: true },
         { id: "quotes-audit",      label: "Quotes Audit",     module: "./panels/quotes-audit.js", adminOnly: true, related: ["config-quote-border"] },
@@ -142,16 +167,10 @@ const SECTIONS = [
         { id: "announcements",     label: "Announcements",     module: "./panels/announcements.js", adminOnly: true, help: "help-announcements" },
         { id: "config-bump-tracker", label: "Bump Tracker",    module: "./panels/config-bump-tracker.js", adminOnly: true, keywords: "bump disboard listing sites reminders" },
       ]},
-      { heading: "Roles", items: [
-        { id: "config-roles",         label: "Role Grants",      module: "./panels/config-roles.js", adminOnly: true, help: "help-setup", related: ["grant-audit"] },
-        // Renamed 2026-08-31: "Reaction Roles" is what people actually call
-        // this feature. "Role Menus" stays as a search keyword.
-        { id: "role-menus",        label: "Reaction Roles",        module: "./panels/role-menus.js", help: "help-role-menus", keywords: "role menus" },
-        // New id 2026-09-03 (round 2 of role autocreate). The freeze is on
-        // renaming ids, not on minting them; "bot-roles" is the bare feature
-        // name with no section prefix, per dashboard_ia.md § Naming.
-        { id: "bot-roles",         label: "Bot-Managed Roles",     module: "./panels/bot-roles.js", adminOnly: true, keywords: "auto create roles provision jailed inactive dm modes survivor wellness ping roles missing deleted role audit", related: ["onboarding", "config-roles"] },
-      ]},
+      // 2026-09-07: the "Roles" heading that stood here moved wholesale to
+      // Moderation → Role Management, alongside Grant Audit and the new
+      // Promotion Reviews page. Auto-Role and Discord Onboarding stayed put:
+      // they are steps in the New Members narrative below, not role admin.
       // IA3 (2026-08-29): the set-up-the-newcomer-experience job spanned three
       // headings (Welcome under Members, Auto-Role/Onboarding under Roles,
       // Greeting Watch under Moderation & Safety). One heading now carries it
