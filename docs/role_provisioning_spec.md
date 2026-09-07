@@ -157,7 +157,7 @@ Wired into: Welcome & Leave, Economy Settings, QOTD, Risky Rolls, XP & Leveling
 
 ### Bot-Managed Roles (`bot-roles`)
 
-Config → Roles, admin-only. The only surface that can show all sixteen. An
+Moderation → Role Management, admin-only. The only surface that can show all sixteen. An
 audit page, not a form: an opening sentence rather than stat tiles, two groups
 (*Roles I hand out* — where hierarchy matters — and *Roles I only point at*),
 and one card per role carrying a state badge, a sentence saying what happens

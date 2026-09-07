@@ -220,8 +220,8 @@ PROMOTION_REVIEW_PING = _ping(
     blurb="For role managers: be told when someone needs reviewing.",
     emoji="📋",
     made_when="the next time somebody comes up for a promotion review",
-    panel="config-xp", panel_label="XP & Leveling",
-    dial_label="Promotion Review Ping Role",
+    panel="promotion-reviews", panel_label="Promotion Reviews",
+    dial_label="Ping Role",
 )
 ECONOMY_NOTIFY = _ping(
     "econ_game_role_id", "economy notifications", "Economy Notifications",

@@ -137,7 +137,7 @@ const SECTIONS = [
         // ping role reached prod as 0 and review cards fell back to pinging the
         // mod roles. Own page, own PUT, only its own fields.
         { id: "promotion-reviews", label: "Promotion Reviews", module: "./panels/promotion-reviews.js", adminOnly: true, keywords: "promotion review cards grant access spicy nsfw level 5 sleeper returning member ping role reviews channel", related: ["config-xp", "config-prune", "grant-audit"] },
-        { id: "grant-audit",       label: "Grant Audit",       module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles"] },
+        { id: "grant-audit",       label: "Grant Audit",       module: "./panels/grant-audit.js", keywords: "role grants audit post panel audit card", related: ["config-roles", "promotion-reviews"] },
       ]},
       { heading: "Image Guard", items: [
         { id: "nsfw-blocks",       label: "Image Guard Blocks", module: "./panels/nsfw-blocks-report.js", adminOnly: true, keywords: "blocked images nsfw explicit removed deleted spoiler sfw prevention false positive image guard", related: ["config-spoiler"] },

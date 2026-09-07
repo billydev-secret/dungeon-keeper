@@ -129,3 +129,15 @@ def test_xp_settings_keeps_the_dials_that_are_still_its_own():
     assert 'data-picker="level_5_role_id"' in src
     assert 'data-picker="level_up_log_channel_id"' in src
     assert "#/promotion-reviews" in src
+
+
+def test_promotion_reviews_and_grant_audit_point_at_each_other():
+    """``dashboard_ia.md`` requires audit↔config ``related:`` links to be
+    bidirectional across sibling pairs. Grant Audit is where you read back what
+    a Promotion Reviews Grant press did, so the cross-link has to survive in
+    both directions or the reader only ever finds one of them."""
+    group = _group_src(_section_src("moderation", "config"), "Role Management")
+    for a, b in (("promotion-reviews", "grant-audit"), ("grant-audit", "promotion-reviews")):
+        entry = group[group.index(f'id: "{a}",') :]
+        entry = entry[: entry.index("},")]
+        assert f'"{b}"' in entry, f"{a} does not link back to {b}"

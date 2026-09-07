@@ -58,7 +58,9 @@ ask** rather than building it.
 **Settings live with the data they produce.** A feature that already has a
 report or a queue keeps its dials at the bottom of that page, one pane, with
 the settings half read-only for non-admins (`lockUnlessAdmin`). A feature with
-no such page keeps them under **Config**.
+no such page keeps them under **Config** — unless it belongs to a moderator
+*job* that already has a heading of its own (Moderation → Role Management),
+in which case its dials live under that heading with the pages they serve.
 → `dashboard_ia.md` § Where settings live
 
 **The route id is frozen the moment it ships.** Deep links, bookmarks, the

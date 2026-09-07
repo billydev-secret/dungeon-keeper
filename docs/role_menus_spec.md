@@ -90,8 +90,8 @@ A sortable list of rows, each defining one choice:
 - Drag to reorder; order controls layout.
 
 **Grant prerequisites apply here too** (2026-08-29). If a chosen role is also a
-configured grant role with a *Role Required First* (Config → Roles → Role
-Grants), the click path refuses the member until they hold that role — same
+configured grant role with a *Role Required First* (Moderation → Role
+Management → Role Grants), the click path refuses the member until they hold that role — same
 gate, same admin-only bypass, and fail-closed when the required role is gone;
 see `role_grant_spec.md`. Otherwise a menu button would be a way around a gate
 `/grant` holds even moderators to. The check happens on the click, not at

@@ -108,7 +108,8 @@ Consolidating the three remains open. If it happens, Mod Workload is the one
 to fold in; Mod Engagement measures something genuinely separate.
 
 **Bot-Managed Roles (2026-09-03)** — `bot-roles`, third under Config → Roles
-after Role Grants and Reaction Roles. A new id rather than a section on an
+after Role Grants and Reaction Roles (that heading moved wholesale to
+Moderation → Role Management on 2026-09-07; the page kept its place in the run). A new id rather than a section on an
 existing page, and the reasoning is an IA one worth keeping: `config-roles`
 *means* Role Grants (`/grant` allowlists) — hanging the bot's own roles off it
 would be a naming coincidence, not a decision — and Discord Onboarding's job is
