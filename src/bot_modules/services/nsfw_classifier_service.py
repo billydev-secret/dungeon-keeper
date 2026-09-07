@@ -137,8 +137,11 @@ DEFAULT_CHEST_FLOOR = 0.4
 DEFAULT_THRESHOLD = 0.5
 
 #: SFW nudity prevention deletes a member's upload on a positive, so it demands
-#: more certainty than merely qualifying a post for coins.
-DEFAULT_SFW_THRESHOLD = 0.75
+#: more certainty than merely qualifying a post for coins. Raised from 0.75
+#: after the removals were labelled by hand: at 0.75 every one of the eleven
+#: wrong deletions still went through, and 0.85 spares six of them for four
+#: points of recall. docs/nsfw_classifier_spec.md carries the frontier.
+DEFAULT_SFW_THRESHOLD = 0.85
 
 CONFIG_KEY_THRESHOLD = "nsfw_classifier_threshold"
 CONFIG_KEY_SFW_THRESHOLD = "nsfw_classifier_sfw_threshold"

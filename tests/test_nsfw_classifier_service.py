@@ -197,6 +197,16 @@ def test_evaluate_honors_a_stricter_threshold():
     assert evaluate(0.6, threshold=DEFAULT_SFW_THRESHOLD) is False
 
 
+@pytest.mark.parametrize("score", [0.764, 0.79, 0.80, 0.84])
+def test_sfw_default_spares_the_measured_false_positives(score):
+    # Hand-labelling the recoverable removals found eleven of thirteen were
+    # wrong, scoring 0.764–0.955; the old 0.75 bar deleted every one. These are
+    # the ones the shipped 0.85 default was chosen to spare, so a default that
+    # drifts back below them fails here rather than in someone's DMs.
+    # docs/nsfw_classifier_spec.md § Configuration carries the frontier.
+    assert evaluate(score, threshold=DEFAULT_SFW_THRESHOLD) is False
+
+
 # --------------------------------------------------------------------------
 # top_detection() — descriptive tags, never a gate
 # --------------------------------------------------------------------------

@@ -215,11 +215,40 @@ Stored in the shared `config` table, per guild:
 | key | default | what it does |
 |---|---|---|
 | `nsfw_classifier_threshold` | `0.5` | probability at which an image counts as explicit |
-| `nsfw_classifier_sfw_threshold` | `0.75` | stricter bar used by SFW nudity prevention |
+| `nsfw_classifier_sfw_threshold` | `0.85` | stricter bar used by SFW nudity prevention |
 | `nsfw_chest_label_floor` | `0.4` | NudeNet confidence at which a bare chest forces a spoiler. **Not** a Marqo probability — a detector confidence on one box, a different scale from the two above, which is why it is a separate dial |
 | `nsfw_observe_age_gated` | `0` | classify and record *every* image in age-gated channels, not only the ones a gate had to judge. Changes nothing about what happens to an image |
 
-Both defaults are unchanged across the engine swap, and that is not laziness: the old values were detector confidences and the new ones are whole-image probabilities, but both live on the same 0–1 scale and 0.5/0.75 sit in a wide empty gap between the measured control scores (0.04–0.08) and the measured true positive (0.91).
+`nsfw_classifier_threshold` is unchanged across the engine swap, and that is not
+laziness: the old value was a detector confidence and the new one is a whole-image
+probability, but both live on the same 0–1 scale and 0.5 sits in a wide empty gap
+between the measured control scores (0.04–0.08) and the measured true positive (0.91).
+
+The SFW bar was carried over at 0.75 on the same reasoning and has since been
+**measured rather than reasoned about**, because it is the one dial that destroys a
+member's post. The thirteen removals recoverable from the return-DMs were labelled by
+hand: **eleven of the thirteen were wrong**. They score 0.764–0.955, so they are not a
+tail the old bar was close to catching — it caught none of them. Against a labelled
+sample of 346 images drawn from ordinary channels and age-gated ones:
+
+| bar | of the 11 wrong removals, spared | false positives left in the sample | share of real explicit images still caught |
+|---|---|---|---|
+| 0.75 | 0 | 2 | 78.5% |
+| 0.80 | 2 | 1 | 78.5% |
+| **0.85** | **6** | **1** | **74.7%** |
+| 0.90 | 8 | 1 | 63.3% |
+| 0.93 | 10 | 0 | 49.4% |
+| 0.96 | 11 | 0 | 0.0% |
+
+**0.85 is the shipped value.** No bar below 0.96 clears all eleven, and 0.96 catches
+nothing at all — there is no threshold that both stops the wrong removals and keeps the
+gate useful, so 0.85 buys the largest reduction in wrong deletions for the smallest
+loss of recall and the rest is accepted. Requiring the body-part tagger to corroborate
+the score was measured too and is **not** shipped: it reaches the same place on the same
+curve, and it would have to run the tagger in ordinary channels, which is a wider
+recording surface than the guard has today for no gain. Don't re-propose it without new
+data. This is a per-guild `config` row, so raising the default does not move a guild
+that has ever saved the panel — that dial has to be set on Image Guard as well.
 
 All three are validated on read *and* on write, through the same `is_valid_threshold` predicate: a value outside `(0, 1]` is rejected, because such a value answers the same way for every image and would silently disable the gate — or, for the chest floor, universalise it — rather than tune it.
 
