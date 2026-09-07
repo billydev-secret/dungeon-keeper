@@ -102,6 +102,10 @@ DEAD_KEYS: frozenset[str] = _LEGACY_GRANT_KEYS | frozenset({
     # dial back for a reader that no longer exists.
     "guess_inactivity_ping_hours",
     "guess_last_nudged_round_id",
+    # The loop's clock, and the one key of the three that had to be found by
+    # reading the live table rather than by grepping for a reader — migration
+    # 216 deleted the other two by name and left this behind (217 takes it).
+    "guess_last_nudge_at",
     "veil_role_id",
     "veil_channel_id",
     "ticket_panel_channel_id",
@@ -458,7 +462,7 @@ FEATURES: tuple[Feature, ...] = (
         blurb="A rolling image-guessing game members can play in one channel.",
         settings=(
             _ch("guess_channel_id", "Guess channel", required=True),
-            _role("guess_role_id", "Role pinged for new rounds"),
+            _role("guess_role_id", "Role that may play"),
             _num("guess_guess_cooldown_seconds", "Seconds between guesses",
                  minimum=0, maximum=3600),
         ),

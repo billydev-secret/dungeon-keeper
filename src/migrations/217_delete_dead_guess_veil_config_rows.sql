@@ -1,0 +1,31 @@
+-- Migration 217: delete two dead config rows the Guess cleanup left behind
+-- (2026-09-07, follow-on to 216).
+--
+-- Same reasoning as 191, 195 and 216: a stale key is a key someone later
+-- mistakes for a setting. Both rows were read back read-only from the live
+-- database first, and both exist only in the home guild.
+--
+-- 1. `veil_role_id` = 1502766814315282553. Veil was renamed to Guess long ago
+--    and the key has had no reader since; it has sat in
+--    `settings_registry.DEAD_KEYS` on that basis. It survived as a duplicate
+--    pointer at the same role `guess_role_id` held, which is how it stayed
+--    invisible. The Guess role merge deletes that role, so from here the row
+--    is not merely unread but dangling — an id resolving to nothing.
+--
+-- 2. `guess_last_nudge_at` = 1781702388.710964. Never a setting: the removed
+--    inactivity loop's own clock, kept in `config` for want of anywhere
+--    better, and a sibling of the `guess_last_nudged_round_id` that 216 took.
+--    216 missed it because it deleted by the two key names the dial and the
+--    loop used in code, and this third key is only reachable by reading the
+--    live table. Nothing writes or reads it now.
+--
+-- `veil_role_id` was already in DEAD_KEYS; `guess_last_nudge_at` is added
+-- there in the same commit, so the Config Advisor cannot offer either back.
+--
+-- Deliberately NOT deleted: `veil_channel_id`, the third row of the same dead
+-- Veil generation. It is dead by the same argument, but it was not part of
+-- what was asked for here and it points at a live channel, so it goes in its
+-- own pass rather than riding along in a migration about Guess.
+
+DELETE FROM config
+ WHERE key IN ('veil_role_id', 'guess_last_nudge_at');

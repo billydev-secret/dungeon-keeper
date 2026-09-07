@@ -235,6 +235,10 @@ def test_the_whole_legacy_grant_config_block_is_documented_dead(key):
 @pytest.mark.parametrize("key", [
     "guess_inactivity_ping_hours",
     "guess_last_nudged_round_id",
+    # The loop's own clock. Migration 216 deleted its two siblings by the
+    # names the code used; this one had no reader to grep for and only turned
+    # up in the live table, so migration 217 took it separately.
+    "guess_last_nudge_at",
 ])
 def test_guess_nudge_keys_are_dead(key):
     """The nudge was removed on 2026-09-07 — loop, service and dial together.
@@ -265,6 +269,11 @@ def test_guess_nudge_keys_are_dead(key):
     "birthday_channel_id_2",
     "birthday_message_2",
     "birthday_pin_2",
+    # Veil was renamed to Guess; both keys have been readerless ever since.
+    # veil_role_id held a duplicate pointer at the same role guess_role_id
+    # did, which is how it stayed invisible until the two Guess roles were
+    # merged and it was left dangling. Migration 217 deleted the row.
+    "veil_role_id",
 ])
 def test_superseded_key_is_guarded_as_dead(key):
     assert key in sr.DEAD_KEYS

@@ -140,8 +140,16 @@ ceiling was added.
 
 Both config keys are deleted from existing guilds by migration 216, and both
 sit in `settings_registry.DEAD_KEYS` so the Config Advisor cannot offer the
-dial back for a reader that no longer exists. New rounds still ping the Guess
-role when they post — that ping is unrelated and stays.
+dial back for a reader that no longer exists. A third row, the loop's own
+`guess_last_nudge_at` clock, had no reader to grep for and only turned up by
+reading the live table afterwards; migration 217 takes it, along with the
+long-dead `veil_role_id` from before the Veil → Guess rename.
+
+With the nudge gone **nothing pings the Guess role at all.** `guess_role_id`
+is a gate, not an audience: it decides who may submit and who is pickable as an
+answer (`_has_guess_role`), and new rounds post without a `content=` mention.
+The role is self-serve — members add and drop it themselves — so the only thing
+that should ever change because of it is eligibility.
 
 ## Stored data
 
