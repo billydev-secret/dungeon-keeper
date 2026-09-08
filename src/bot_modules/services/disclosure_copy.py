@@ -249,6 +249,9 @@ FEATURE_TO_CATEGORY: dict[str, str] = {
     "Small per-member stores": "admin",
     "LegitLibs": "admin",
     "Orphaned": "admin",
+    # departed_guilds names no member, so it can only ever contribute zero rows
+    # to a member's report; the mapping exists so the register gate stays honest.
+    "Guild removal erasure": "admin",
 }
 
 # Values the member supplied or chose themselves, safe to print back to them.

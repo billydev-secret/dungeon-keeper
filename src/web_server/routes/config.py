@@ -1731,9 +1731,10 @@ async def update_privacy(
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
-    if body.guild_removal_purge_days is not None:
+    purge_days = body.guild_removal_purge_days
+    if purge_days is not None:
         await run_query(
-            lambda: _set_guild_removal_purge(ctx, guild_id, body.guild_removal_purge_days)
+            lambda: _set_guild_removal_purge(ctx, guild_id, purge_days)
         )
 
     switches = (
