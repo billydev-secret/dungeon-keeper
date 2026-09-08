@@ -147,8 +147,53 @@ exempts deletion, not disclosure.
 | promotion_review_cards | Promotion | `user_id` of the member under review, the review `kind`, `resolved_by` and the `resolution` a mod recorded | **undecided** — kept indefinitely by default, not by choice (4 prod rows) | **YES — purge as the subject, anonymise as the actor** (decided by the owner 2026-09-02). A promotion review is a positive personnel-style record rather than a sanction, so the mod-record ground does not reach it. Same split as `inactive_members`: the reviewed member's card is deleted, and a card the erased member merely **resolved** keeps standing with `resolved_by` set to NULL. This also brings it into line with its sibling `pending_promotion_posts`, which was already purged | — | `resolved_by` was added to `SUBJECT_ID_COLUMNS` 2026-09-02, so a mod who only ever *resolved* cards now appears in their own export; before that they matched nothing and the rows were silently absent |
 | qa_tests, qa_verdicts | QA tracker | `qa_tests.verified_by` names the volunteer who signed a test off; `qa_verdicts` holds one member's pass/fail `verdict`, a free-text `note` they wrote, and `paid_amount` — coins actually paid for testing | **permanent — sign-off record**: a verdict someone relied on cannot vanish (481 tests, 308 verdicts). An erasure strips the name and keeps the test | **SPLIT — purge the verdict, unsign the test** (decided by the owner 2026-09-02). `qa_verdicts` rows are the member's own: their pass/fail call, the note they wrote, what they were paid — deleted outright. `qa_tests.verified_by` is **blanked to NULL** on the `todos` precedent: the test is the project's work product, and deleting it would take a recorded sign-off off the board because the tester left. `qa_verdicts.voided_by` names a different mod on someone else's verdict and is blanked for the same reason. No Art 17(3) ground is claimed for the verdicts — the coins already paid live on in the preserved `econ_ledger` | — | This is internal development tooling that nonetheless names real members and pays them real coins, so it is personal data on the same footing as anything else here. `verified_by` was invisible to the access export until 2026-09-02 |
 | voice_master_blocked | Voice Master | `owner_id` and `target_id` — the per-room block list a member keeps for their own temporary voice channel | until removed | **ASYMMETRIC — purge the owner's side, preserve the target's** (decided by the owner 2026-09-02). The member's own list is their preference about their own room and has no ground to outlive them, so `owner_id` rows are deleted. Rows where they are the `target_id` are **kept**: that entry is somebody else's protection, and erasing it at the request of the person it excludes is precisely what Art 17(3)'s rights-of-others carve-out exists to prevent — the `no_contact_pairs` ground. Deliberately unlike `voice_master_trusted`, which is purged from both sides: a trust list confers something and can be dropped freely, a block list withholds something and cannot | — | Not the no-contact list, which is separate and already preserved. A member erased as a `target_id` currently keeps a bare id on someone else's block list |
+| departed_guilds | Guild removal erasure | **no member data** — one row per guild the bot has been removed from: the guild id, when it left, the deadline its data is erased on, a snapshot of its channel ids (the two channel-keyed tables carry no `guild_id`, and the cache is gone by the time the purge runs), and whether the row came from the removal event or from a reconciliation at startup. Migration 218 | until the purge runs — the row is deleted in the same transaction as the guild's data, and a re-invite deletes it immediately with nothing erased | **n/a for `purge_user_data`** — it names no member, so a member erasure has nothing to clear here. It is itself part of the *guild* erasure path | — | Ships dark: with no grace period set on the dashboard's privacy panel, nothing is ever written to this table and no guild is ever purged. See the note below |
 | _(bundles append below)_ | | | | | | |
 
+### Note — erasure when the bot is removed from a server, 2026-09-08
+
+Every row above answers "what happens when a **member** asks to be erased". This
+note answers the other one: what happens when the **server** leaves.
+
+**Before this, nothing happened.** A guild that removed the bot kept every row it
+had ever generated, forever, in all 258 guild-scoped tables — economy balances,
+message metadata, XP history, no-contact orders, moderation records. The only
+cleanup anywhere in the codebase was `whisper_cog` deleting five config keys.
+That is a storage-limitation failure (Art 5(1)(e)): the purpose the data was
+collected for ended the moment the bot was kicked, and the controller
+relationship with it ended too.
+
+**What now happens.** `guild_purge_service` classifies the whole schema —
+**258 tables carrying `guild_id`**, **33 child tables** reached by their foreign
+key (deepest first, so a grandchild goes before its parent), **2 channel-keyed
+tables** reached through the channel snapshot, and **10 global tables** that hold
+no guild data and are never touched. `tests/test_guild_purge_coverage.py`
+**hard-fails if a new table falls in none of those four buckets**, so a feature
+that lands a table without thinking about guild removal cannot ship quietly —
+the same gate the member-erasure register row is.
+
+`no_contact_pairs` and `no_contact_events` **go with the guild**, which is the
+one deletion here that runs against the instinct in the preserved-categories
+table above. They are preserved against a *member's* erasure because the order
+protects the other party. A guild removal is different: both parties' whole
+relationship with this deployment ends at once, and there is no surface left
+that could ever consult the order. Keeping it would retain a protective record
+about two people in a server the bot cannot see, serving nobody.
+`econ_ledger` goes for the same reason — the double-entry integrity it is
+preserved for is integrity of *that guild's* books, which no longer exist.
+
+**Guild 0 is refused outright.** It is the instance-wide config slot, the shared
+LegitLibs template pool and the bot-global AI prompt store; it is the one id a
+purge must never be handed, so the service raises rather than trusting callers
+to filter it.
+
+**It ships dark and it is reversible until it isn't.** The grace period
+(instance-wide, Moderation → Privacy) is unset out of the box, and unset means
+*never purge* — a removal is logged and nothing is deleted. Set to `0` the purge
+runs immediately; set to `N` the guild's data survives `N` days and a re-invite
+inside the window cancels it completely. The deadline is stamped into the
+`departed_guilds` row at removal time and never recomputed, because the guild's
+own config rows are among the things being deleted.
 ### Note — `nsfw_detections` scope widening, 2026-08-15
 
 The tagger's scope changed from "Discord-age-gated channels" to "age-gated **or** spoiler-required channels". No new table and no new column; the same rows now cover more channels.

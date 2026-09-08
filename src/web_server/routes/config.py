@@ -1240,10 +1240,23 @@ def _global_section(conn, guild_id: int) -> dict:
         }
 
 
-def _privacy_section(conn, guild_id: int) -> dict:
-    from bot_modules.services import retention_service
+def _privacy_section(conn, guild_id: int, is_primary: bool = True) -> dict:
+    from bot_modules.services import guild_purge_service, retention_service
 
+    purge_days = guild_purge_service.purge_delay_days(conn)
     return {
+            # Shown everywhere but editable only from the primary guild, which
+            # is where the write refuses from too. A second guild's admin who
+            # cannot see the value would have no way to tell that the erasure
+            # applying to their own server is armed.
+            "guild_removal_purge_editable": is_primary,
+            # Instance-wide, not per-guild: it governs what happens to a
+            # guild's data *after* the bot is gone from it, and the guild's own
+            # config rows are part of what gets deleted. Empty string means
+            # unset, which means nothing is ever purged.
+            "guild_removal_purge_days": (
+                "" if purge_days is None else str(purge_days)
+            ),
             # "none" (default) keeps only derivations (XP/sentiment/
             # interactions); "all" archives raw message content.
             "message_storage_level": _str_val(
@@ -1479,7 +1492,9 @@ async def get_config(
 
             return {
                 "global": _global_section(conn, guild_id),
-                "privacy": _privacy_section(conn, guild_id),
+                "privacy": _privacy_section(
+                    conn, guild_id, int(guild_id) == int(ctx.guild_id)
+                ),
                 "welcome": _welcome_section(conn, guild_id),
                 "intake": _intake_section(conn, guild_id),
                 "xp": _xp_section(conn, guild_id),
@@ -1653,10 +1668,50 @@ async def update_support_access(
     return await run_query(_q)
 
 
+def _set_guild_removal_purge(ctx, guild_id: int, raw: str) -> None:
+    """Store the instance-wide grace period before a departed guild is erased.
+
+    ``require_perms({"admin"})`` only proves the caller administers whichever
+    guild they currently have selected, and this dial governs every guild the
+    bot is in — so it is restricted to the primary guild the same way the
+    bot-global AI prompts are. Without that, a second guild's admin could arm
+    the erasure of a server they have nothing to do with.
+
+    An empty value clears the row rather than storing ``""``: absence is what
+    the service reads as "off", and a blank string sitting in ``config`` looks
+    like a setting someone chose.
+    """
+    from bot_modules.services import guild_purge_service
+
+    if int(guild_id) != int(ctx.guild_id):
+        raise HTTPException(
+            403,
+            "Server-removal erasure is bot-wide — set it from the primary guild",
+        )
+
+    value = raw.strip()
+    key = guild_purge_service.PURGE_DELAY_CONFIG_KEY
+    with ctx.open_db() as conn:
+        if not value:
+            conn.execute(
+                "DELETE FROM config WHERE guild_id = ? AND key = ?",
+                (guild_purge_service.GLOBAL_GUILD_ID, key),
+            )
+            return
+        try:
+            days = int(value)
+        except ValueError:
+            raise HTTPException(400, "Erasure delay must be a whole number of days") from None
+        if days < 0 or days > 365:
+            raise HTTPException(400, "Erasure delay must be between 0 and 365 days")
+        set_config_value(conn, key, str(days), guild_purge_service.GLOBAL_GUILD_ID)
+
+
 class PrivacyConfigUpdate(BaseModel):
     message_storage_level: str | None = None
     message_retention_enabled: str | None = None
     behavioural_retention_enabled: str | None = None
+    guild_removal_purge_days: str | None = None
 
 
 @router.put("/config/privacy")
@@ -1675,6 +1730,11 @@ async def update_privacy(
 
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
+
+    if body.guild_removal_purge_days is not None:
+        await run_query(
+            lambda: _set_guild_removal_purge(ctx, guild_id, body.guild_removal_purge_days)
+        )
 
     switches = (
         (body.message_retention_enabled,

@@ -26,6 +26,8 @@ export function mount(container) {
     const priv = config.privacy || {};
     let currentMsgRetention = priv.message_retention_enabled === "1" ? "1" : "0";
     let currentBehRetention = priv.behavioural_retention_enabled === "1" ? "1" : "0";
+    let currentRemovalPurge = priv.guild_removal_purge_days || "";
+    const removalPurgeEditable = priv.guild_removal_purge_editable !== false;
     const msgDays = priv.message_content_retention_days || "365";
     const behDays = priv.behavioural_retention_days || "180";
 
@@ -113,6 +115,21 @@ export function mount(container) {
             <div class="field">
               <label><input type="checkbox" name="behavioural_retention_enabled" id="mod-beh-retention"${currentBehRetention === "1" ? " checked" : ""} /> Delete interaction records after ${esc(behDays)} days</label>
               <div class="field-hint">Who reacted to, replied to, followed or pinged whom. Joins and leaves are never deleted &mdash; they are how tenure is worked out. <strong>Leave this off for now:</strong> the ${esc(behDays)}-day figure is still under review, because the Connection Graph&rsquo;s replay reads further back than that and would lose its earliest weeks.</div>
+            </div>
+          </div>
+
+          <div class="card" style="border-color: var(--red);">
+            <div class="section-label" style="color: var(--red-text);">Danger Zone — When the bot is removed from a server</div>
+            <div class="field">
+              <label for="mod-removal-purge">Erase that server's data after</label>
+              <select name="guild_removal_purge_days" id="mod-removal-purge"${removalPurgeEditable ? "" : " disabled"}>
+                <option value="" ${currentRemovalPurge === "" ? "selected" : ""}>Never — keep everything (default)</option>
+                <option value="0" ${currentRemovalPurge === "0" ? "selected" : ""}>Immediately</option>
+                <option value="7" ${currentRemovalPurge === "7" ? "selected" : ""}>7 days</option>
+                <option value="30" ${currentRemovalPurge === "30" ? "selected" : ""}>30 days</option>
+                <option value="90" ${currentRemovalPurge === "90" ? "selected" : ""}>90 days</option>
+              </select>
+              <div class="field-hint">Applies to <strong>every server</strong> the bot is in, including this one &mdash; it decides what happens to a server's data once the bot is no longer there to show it to anyone. Everything goes: balances, inventories, warnings, quest progress, game history, the no-contact list, settings. There is no undo and no export afterwards. A delay is a safety net &mdash; if the bot is added back before it runs out, nothing is erased.${removalPurgeEditable ? "" : " Set this from the primary server."}</div>
             </div>
           </div>
 
@@ -211,6 +228,16 @@ export function mount(container) {
           });
           currentMsgRetention = newMsgRetention;
           currentBehRetention = newBehRetention;
+        }
+        // Same endpoint again, and again only on a real change: this one arms
+        // the erasure of a whole server, so a routine moderation save must
+        // never touch it.
+        const newRemovalPurge = removalPurgeEditable
+          ? form.querySelector("#mod-removal-purge").value
+          : currentRemovalPurge;
+        if (newRemovalPurge !== currentRemovalPurge) {
+          await apiPut("/api/config/privacy", { guild_removal_purge_days: newRemovalPurge });
+          currentRemovalPurge = newRemovalPurge;
         }
         // Storage level uses a dedicated endpoint (switching to "none" purges
         // existing content). Only call it when the value actually changed so a

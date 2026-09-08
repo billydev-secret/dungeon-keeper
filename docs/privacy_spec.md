@@ -8,6 +8,8 @@ Both commands take an optional `mode` that narrows the scope to just images/file
 
 The channel-walking scanner is shared with [[events-spec]]'s backfill so both features cover the same channel set.
 
+Privacy also owns the other erasure direction — what happens to a **guild's** data when the bot is removed from it. That is not a command; it is a dashboard-set grace period that ships unset (never purge). See [Guild removal erasure](#guild-removal-erasure).
+
 ## Commands
 
 | Command | Type | Permission | Purpose |
@@ -125,6 +127,69 @@ Art 15(4) says an access request must not adversely affect others' rights, so
 the counterparty decision is surfaced for a human rather than resolved by
 redacting (which corrupts the record) or dropping (which hides the tension).
 
+## Guild removal erasure
+
+The two commands above erase a **member**. This section is the other direction:
+what happens to a guild's data when the bot is removed from that guild.
+
+Until 2026-09-08 the answer was *nothing* — every row a departed guild had ever
+generated stayed in the database forever, in all 258 tables carrying a
+`guild_id`. The only cleanup anywhere was [[whisper-spec]] dropping five config
+keys. `guild_purge_service` closes that.
+
+**Classification.** The service reads the live schema rather than a hand-written
+list, so a table added next year is covered without anyone remembering to add
+it. Every table falls in exactly one of four buckets: **guild-scoped** (has a
+`guild_id` column — deleted by it), **child** (reached through its foreign key
+to a guild-scoped parent, deleted deepest-first so a grandchild goes before the
+row it points at), **channel-keyed** (`games_session_tracker`,
+`legitlibs_channel_config` — no `guild_id`, reached through the channel-id
+snapshot taken at removal), and **global** (holds no guild data; never touched).
+`tests/test_guild_purge_coverage.py` **hard-fails on a table in none of them**,
+which makes this a gate rather than an honour system — the same standing the
+data register has for member data.
+
+**The dial.** One instance-wide grace period, on the dashboard's Moderation →
+Privacy panel, with states rather than several toggles:
+
+| Value | Meaning |
+| --- | --- |
+| unset (default) | **Never purge.** A removal is queued and logged; nothing is deleted. This is what every deployment starts as |
+| `0` | Purge on the next daily sweep after removal |
+| `N` (1–365) | Purge `N` days after removal; a re-invite inside the window cancels it entirely |
+
+It is stored at `guild_id = 0` and writable only from the primary guild, because
+the departing guild's own config rows are among the things being deleted — a
+per-guild setting would erase itself. Reads are unrestricted so every guild's
+panel can show the operator's policy.
+
+**Timing.** `on_guild_remove` writes one `departed_guilds` row: the guild id,
+the timestamp, the deadline **baked in** (never recomputed later — the config it
+came from will be gone), a snapshot of the guild's channel ids, and whether the
+row came from the event or from reconciliation. A daily loop purges what is due.
+`on_guild_join` deletes the row, so a re-invite before the deadline loses
+nothing.
+
+**Downtime.** A removal that happens while the bot is offline fires no event, so
+the daily loop also reconciles: any guild the database knows but the bot is not
+in gets **queued**, never purged on the spot, and any queued guild the bot
+plainly *is* in is un-queued — the latter even with the dial off, since
+cancelling a purge is always safe. Reconciliation refuses to run against an
+empty guild list, so a failed Discord connection cannot queue the whole
+instance.
+
+**Guild 0 is refused.** It is the instance-wide config slot, the shared
+LegitLibs template pool and the bot-global AI prompt store. The service raises
+rather than trusting a caller to filter it.
+
+**What goes that a member erasure keeps.** `no_contact_pairs`,
+`no_contact_events` and `econ_ledger` are all preserved against `purge_user_data`
+under Art 17(3) — the first two because the order protects the *other* party,
+the third for double-entry integrity. A guild removal deletes them anyway. Both
+grounds are about a surface that still exists: once the bot is gone there is
+nothing that could consult a protective order, and the books whose integrity is
+being kept are that guild's. See the note in `docs/data_register.md`.
+
 ## Permissions
 
 - The bot needs **Manage Messages** to delete messages, **Read Message History** + **View Channel** on every channel it scans, **Manage Threads** to surface unjoined private archived threads, and **Send Messages** in forum threads where it has to post the `[deleted]` tombstone.
@@ -150,7 +215,7 @@ redacting (which corrupts the record) or dropping (which hides the tension).
 
 - **No undo.** The confirm view is the only safety net; deletion is permanent.
 - **No partial selectors.** Users can't say "delete only my XP" or "delete only my messages in #channel". The only switches are which command (self vs other) and the `mode` (all / media / text).
-- **No web dashboard.** Mods must run the slash command — the destructive scope and confirm-view UX don't translate cleanly.
+- **No web dashboard for member erasure.** Mods must run the slash command — the destructive scope and confirm-view UX don't translate cleanly. The one privacy control that *is* on the dashboard is the guild-removal grace period above, which erases no member on request and has no confirm-view to translate.
 - **No cross-guild delete.** `/delete_me` clears one guild only; a user in three servers must run it in each.
 - **No DB deletion from the commands.** Neither command touches any server-side row — [[dm-perms-spec]] audit / consent rows included. DB erasure is the manual, out-of-band `purge_user_data` run (Phase 3 above), and even that deliberately preserves the consent/audit forensic record.
 - ~~**No export.** Right-to-portability is intentionally deferred.~~ **Shipped
@@ -161,13 +226,13 @@ redacting (which corrupts the record) or dropping (which hides the tension).
 
 ## Configuration
 
-Privacy has no per-guild configuration. The behavioral constants — 60-second confirm timeout, the 14-day cutoff between bulk and one-at-a-time delete, the throttle cadences — mirror Discord's own constraints and are not exposed.
+Privacy has no **per-guild** configuration, and one **instance-wide** setting: the guild-removal grace period described above, stored at `guild_id = 0` and editable only from the primary guild. It ships unset, which means never purge. The behavioral constants — 60-second confirm timeout, the 14-day cutoff between bulk and one-at-a-time delete, the throttle cadences — mirror Discord's own constraints and are not exposed.
 
 The only per-call switches are the `mode` (which slice of Discord messages is targeted) and whether the channel walker tries to surface unjoined private archived threads (on for privacy, off for the [[events-spec]] backfill caller).
 
 ## Stored data
 
-Privacy is a **pure deleter of Discord messages** — it owns no tables of its own, and the commands purge none. Deletion enumerates the target's messages by walking Discord itself (a live `channel.history` scan across every readable channel, as Phase 1 describes) — **not** by reading the local `messages` archive, so gaps in the archive don't limit what gets deleted.
+The two commands are **pure deleters of Discord messages** — they purge no table. Privacy owns exactly one table of its own, `departed_guilds`, and it belongs to the guild-removal path rather than to either command: one row per departed guild holding the id, the timestamps, the channel snapshot and how the row was created, deleted in the same transaction as that guild's data. It names no member, so `purge_user_data` has nothing to clear in it. Deletion enumerates the target's messages by walking Discord itself (a live `channel.history` scan across every readable channel, as Phase 1 describes) — **not** by reading the local `messages` archive, so gaps in the archive don't limit what gets deleted.
 
 The `messages` archive itself holds less than the name suggests: `message_storage_level` defaults to `"none"`, under which message content and attachments are dropped at ingest and only metadata derived at ingest time (author, channel, timestamps, media kind, sentiment) is kept. The "server keeps its own records" disclosure is about that metadata unless a guild has opted into `"all"`.
 
