@@ -64,7 +64,7 @@ Welcome! This folder holds the specs, deployment notes, and audits for Dungeon K
 | [pen_pals_spec.md](pen_pals_spec.md) | Pen Pals pooling + private channels |
 | [photo_challenge_spec.md](photo_challenge_spec.md) | Photo Challenge — standalone scheduled photo prompt (own channel/schedule, `/api/photo-challenge`, card via quote renderer) + post-gated economy payout (flat `reward_photo_post` + stacking `photo_post` quest) |
 | [pressure_cooker_spec.md](pressure_cooker_spec.md) | Pressure Cooker duel |
-| [privacy_spec.md](privacy_spec.md) | Data deletion (`/delete_me`, `/delete_user`) |
+| [privacy_spec.md](privacy_spec.md) | Data deletion — `/delete_me` / `/delete_user` (Discord messages only), the out-of-band `purge_user_data` run, the subject access export, and since 2026-09-08 **guild removal erasure**: schema-discovered deletion of everything a departed guild owns, behind an instance-wide grace period that ships unset |
 | [promotion_review_spec.md](promotion_review_spec.md) | Promotion-review cards in the Level 5 Log Channel: Level 5 / pruned-return / sleeper triggers, each with a Grant-access button (dashboard-configured, no commands). Cards ping the configured review role, falling back to the guild's mod roles since 2026-09-02 so an unset dial no longer posts to nobody |
 | [quote_renderer_spec.md](quote_renderer_spec.md) | Quote/banner card renderer (shared service: themes, fonts, slim/custom borders) |
 | [rename_spec.md](rename_spec.md) | `/rename` (moderator nickname change/reset) |
