@@ -26,7 +26,7 @@ Both routes go through `apply_inactive`. Preconditions (same policy as jail): ne
 1. `@Inactive` role is fetched or created (`ensure_inactive_role`, which since 2026-08-22 runs on the shared provisioner in `core/role_provision.py`). If the configured id is unset or stale but a role named exactly `Inactive` already exists, that role is **adopted** and its id stored, rather than a second `@Inactive` being created. Only a genuinely new role is denied view+send on every channel and then granted view/send/history on the configured inactive channel — an adopted role is one the guild already set up, and re-denying every channel on it would be destructive. If the id was previously set and now resolves to nothing, an admin deleted the role: it is remade, and that fact is posted to the mod channel and written to the audit log, because the new role is empty and everyone who held the old one has lost it.
 2. The member's roles are snapshotted (excluding `@everyone`, the `@Inactive` role, and managed/integration roles) and removed; `@Inactive` is added. A Forbidden here aborts with a role-hierarchy hint.
 3. A row is written to `inactive_members` and an `inactive_apply` entry to the moderation audit log.
-4. The member is DMed ("your roles are saved", link to the inactive channel, optional reason note); DM failure is ignored.
+4. **The member is not DMed** (removed 2026-09-09). They find out by landing in the inactive channel, whose standing panel already says their roles are safe and how to open a ticket. A DM out of the blue read as an eviction notice, and the auto-sweep sent it unprompted. `tests/test_inactive_apply.py::test_apply_does_not_dm_the_member` fails if it comes back.
 5. A "Member Moved to Inactive" embed is posted to the guild's `log_channel_id` (if set).
 
 ### Sweep candidate selection
@@ -53,7 +53,7 @@ It also reports two things the sweep never says out loud:
 A background loop starts with the bot and wakes every **6 hours**. It acts only on the home guild, and only when the web dashboard's Inactive Sweep panel has "Enable automatic sweep" checked **and** an inactive channel is configured. It uses the same candidate selection and cap, marks with actor `guild.me` and `source="auto"`, and logs the moved count.
 
 ### Release (`/inactive release`)
-Restores whichever snapshotted roles still exist (deleted roles are counted and reported), then removes `@Inactive` — in that order, so a partial failure never strands the member with neither. Marks the DB row `reactivated`, writes an `inactive_reactivate` audit entry, DMs the member, and posts a "Member Reactivated" embed to the log channel. Any ticket the member opened is deliberately left for a moderator to close.
+Restores whichever snapshotted roles still exist (deleted roles are counted and reported), then removes `@Inactive` — in that order, so a partial failure never strands the member with neither. Marks the DB row `reactivated`, writes an `inactive_reactivate` audit entry, and posts a "Member Reactivated" embed to the log channel. **No DM** — the restored roles are the notification, and the member is standing in the ticket they opened to ask for them back (`test_reactivate_does_not_dm_the_member`). Any ticket the member opened is deliberately left for a moderator to close.
 
 ### The info panel
 Persists the channel choice, ensures the `@Inactive` role exists and can see the channel, then posts an accent-colored embed with the ticket system's persistent "Open Ticket" button (registered by the jail cog, so it survives restarts).

@@ -296,23 +296,10 @@ async def apply_inactive(
 
     await asyncio.to_thread(note_inactive, ctx.db_path, guild_id, target_id)
 
-    # DM the member so they know where they went and how to get back.
-    chan_id = await asyncio.to_thread(_read_channel_id, ctx, guild_id)
-    channel_line = f"\nHead to <#{chan_id}> and open a ticket to restore your access." if chan_id else ""
-    dm_embed = discord.Embed(
-        title="You've Been Moved to the Inactive Channel",
-        description=(
-            f"You've been moved to the inactive area of **{guild.name}** due to "
-            f"inactivity. **Your roles are saved** and will be restored when you're "
-            f"reactivated." + channel_line
-            + (f"\n\n**Note:** {reason}" if reason else "")
-        ),
-        color=MOD_INFO,
-    )
-    try:
-        await target.send(embed=dm_embed)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    # No DM. The member finds out by landing in the inactive channel, whose
+    # standing panel already explains that their roles are safe and how to open
+    # a ticket. A DM out of the blue reads as an eviction notice, and the
+    # auto-sweep would have sent it unprompted.
 
     await _post_inactive_audit(
         ctx,
@@ -394,18 +381,8 @@ async def reactivate_member(
 
     await asyncio.to_thread(_release)
 
-    dm_embed = discord.Embed(
-        title="You've Been Reactivated",
-        description=(
-            f"Your access to **{guild.name}** has been restored and your roles "
-            f"are back." + (f"\n**Note:** {reason}" if reason else "")
-        ),
-        color=MOD_SUCCESS,
-    )
-    try:
-        await target.send(embed=dm_embed)
-    except (discord.Forbidden, discord.HTTPException):
-        pass
+    # No DM here either — the restored roles are the notification, and the
+    # member is standing in the ticket they opened to ask for them back.
 
     await _post_inactive_audit(
         ctx,
@@ -426,15 +403,6 @@ async def reactivate_member(
 
 
 # ── Small config / audit helpers ─────────────────────────────────────
-
-
-def _read_channel_id(ctx: AppContext, guild_id: int) -> int:
-    with ctx.open_db() as conn:
-        raw = get_config_value(conn, "inactive_channel_id", "0", guild_id)
-    try:
-        return int(raw or "0")
-    except ValueError:
-        return 0
 
 
 def _read_role_id(ctx: AppContext, guild_id: int) -> int:

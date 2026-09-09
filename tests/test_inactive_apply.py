@@ -223,6 +223,42 @@ async def test_apply_snapshots_and_strips_roles(tmp_path):
     assert json.loads(row["stored_roles"]) == [11, 12, 13]
 
 
+async def test_apply_does_not_dm_the_member(tmp_path):
+    """Being swept is deliberately silent — no DM on the way in.
+
+    The DM was removed 2026-09-09: it read as an eviction notice, and the
+    auto-sweep sent it unprompted. The inactive channel's standing panel is the
+    explanation. This test fails if the DM is ever put back.
+    """
+    ctx = _make_ctx(tmp_path / "nodm.db")
+    _configure_inactive_role(ctx, 100)
+    ctx.set_config_value("inactive_channel_id", "777", 100)
+    guild = _guild()
+    target = _member(5, role_ids=(11, 12))
+    mod = _member(2)
+
+    outcome = await apply_inactive(ctx, guild, target, mod, reason="idle")
+    assert outcome.ok
+    target.send.assert_not_awaited()
+
+
+async def test_reactivate_does_not_dm_the_member(tmp_path):
+    """Nor on the way out — the restored roles are the notification."""
+    ctx = _make_ctx(tmp_path / "nodm2.db")
+    _configure_inactive_role(ctx, 100)
+    ctx.set_config_value("inactive_channel_id", "777", 100)
+    guild = _guild()
+    target = _member(5, role_ids=(11, 12))
+    mod = _member(2)
+
+    await apply_inactive(ctx, guild, target, mod)
+    target.roles = [guild.default_role, guild.get_role(INACTIVE_ROLE_ID)]
+
+    msg = await reactivate_member(ctx, guild, target, reason="back", actor=mod)
+    assert msg.startswith("✅")
+    target.send.assert_not_awaited()
+
+
 async def test_apply_survives_transient_role_create_error(tmp_path):
     """A 5xx/rate-limit while creating @Inactive must not escape as an exception.
 

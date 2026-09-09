@@ -2310,6 +2310,7 @@
 
     <h3 id="inactive">Inactive Members</h3>
     <p>A softer sibling of the jail system for idle members: instead of a per-user cell, everyone held inactive shares one channel. Roles are snapshotted and stripped, the member gets an <code>@Inactive</code> role that can only see that channel, and a persistent panel there lets them open a ticket to be reactivated. Members enter manually or via a sweep; the only way out is <code>/inactive release</code>.</p>
+    <p class="note">Nobody is DMed — not when they are moved, and not when they are restored. The panel waiting in the inactive channel is the whole explanation, so a sweep never lands unannounced in a member’s inbox.</p>
 
     <p class="note">One-time setup lives on the dashboard under
       <strong>Config → Inactive Sweep → Inactive Channel</strong>: pick a channel and press
