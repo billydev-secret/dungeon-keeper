@@ -64,26 +64,25 @@ def _format_names(
     name_fn: "NameFn | None" = None,
     *,
     budget: int = DEFAULT_BALLOT_NAMES_BUDGET,
-    with_ids: bool = False,
 ) -> str:
     """Render ids as a comma-separated list of resolved names, or ``"—"``.
 
     Truncates on accumulated *characters* and appends ``"+N more"``, so the
     field fits whatever mix of short and long display names turns up.
 
-    ``with_ids`` renders ``Name (`id`)``, which is the house rule for a
-    **mod-facing** embed: a moderator keeps something copyable to paste into
-    another command. Member-facing cards — the community ballot — get the name
-    alone, because an id there is noise to everyone who reads it. See
-    docs/embed_style_guide.md, "Naming members in embeds".
+    Names alone, on both cards. The mod vote used to append ``(`id`)`` under
+    the copyable-id rule, on the premise that only mods would ever read it.
+    Neither half holds: nothing in the policy flow takes a user id (the vote
+    buttons carry a *policy* id), and a policy ticket is run privately among
+    mods **or** opened to the general public, proposal by proposal — so this
+    builder cannot know whether a member is reading, and renders as if one
+    is. See docs/embed_style_guide.md, "Naming members in embeds".
     """
     resolve = name_fn or mention
     shown: list[str] = []
     used = 0
     for index, uid in enumerate(ids):
         name = resolve(uid)
-        if with_ids:
-            name = f"{name} (`{uid}`)"
         cost = len(name) + (2 if shown else 0)
         if used + cost > budget:
             return f"{', '.join(shown) or '—'} *+{len(ids) - index} more*"
@@ -126,7 +125,7 @@ def build_policy_vote_initial_embed(
     embed.add_field(name="➖ Abstain", value="—", inline=False)
     embed.add_field(
         name="⏳ Awaiting",
-        value=_format_names(eligible_ids, name_fn, with_ids=True),
+        value=_format_names(eligible_ids, name_fn),
         inline=False,
     )
     apply_section_spacing(embed)
@@ -178,22 +177,22 @@ def build_policy_vote_update_embed(
     embed.add_field(name="Status", value=status, inline=True)
     embed.add_field(
         name="✅ Yes",
-        value=_format_names(yes_ids, name_fn, with_ids=True),
+        value=_format_names(yes_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="❌ No",
-        value=_format_names(no_ids, name_fn, with_ids=True),
+        value=_format_names(no_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="➖ Abstain",
-        value=_format_names(abstain_ids, name_fn, with_ids=True),
+        value=_format_names(abstain_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="⏳ Awaiting",
-        value=_format_names(awaiting_ids, name_fn, with_ids=True),
+        value=_format_names(awaiting_ids, name_fn),
         inline=False,
     )
     apply_section_spacing(embed)

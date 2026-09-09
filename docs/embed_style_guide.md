@@ -437,8 +437,26 @@ deliberate ping belongs.
   `tests/test_embed_name_render_sites.py` is the shared table for games whose
   guard has no logic file of its own; a new builder adds a `pytest.param`
   row, not a new file).
-- **Mod-facing embeds keep the id *alongside* the name** — `Name (`id`)` — so a
-  moderator retains something copyable. Member-facing cards get the name alone.
+- **Keep the id *alongside* the name — `Name (`id`)` — only where a mod is
+  expected to paste it somewhere** (ruling 2026-09-09). The affordance is for
+  dispute resolution and hand-off, and it survives where that is real:
+  `/guess round`, the whisper mod-log embeds, the games-config host line. Two
+  things disqualify a card, and the policy vote hit both:
+  - **A roster you only read.** Nothing in the policy flow takes a user id —
+    the vote buttons carry a *policy* id, and no `/policy` subcommand accepts
+    a member — so eighteen digits per voter bought a moderator nothing across
+    the four busiest fields on the card.
+  - **An audience that isn't fixed.** A policy ticket is run privately among
+    mods **or** opened to the general public, ticket by ticket (Billy,
+    2026-09-09). `/policy open` starts the channel with `@everyone` denied
+    view, but the overwrites get relaxed by hand when a proposal wants member
+    eyes on it. "Mod-facing" is a property of the moment, not of the builder,
+    and the builder cannot know which moment it is rendering into.
+  So: **"mod-facing" alone no longer justifies an id — a fixed mod-only
+  audience does.** Where the audience can widen later, names alone. Member-
+  facing cards get the name alone, always. Before appending an id, name the
+  command a mod would paste it into and satisfy yourself no member will read
+  the card; if either fails, don't.
 - **The one exception: a no-contact pair.** Where a surface would name two
   people the no-contact list keeps apart, degrade to a plain `User <id>` for
   both. The bot naming them together in its own voice manufactures exactly the
