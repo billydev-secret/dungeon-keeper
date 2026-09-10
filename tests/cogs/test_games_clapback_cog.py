@@ -13,6 +13,7 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import discord
 import pytest
 
 import bot_modules.cogs.games_clapback_cog as cog_module
@@ -576,6 +577,15 @@ async def _lobby_row(db, gid):
     return await db.fetchone("SELECT * FROM games_active_games WHERE game_id = ?", (gid,))
 
 
+async def _archived(db, gid):
+    """The ``games_game_history`` row ``end_game`` writes, or None. ``reason``
+    lives inside its archived payload."""
+    row = await db.fetchone(
+        "SELECT * FROM games_game_history WHERE game_id = ?", (gid,)
+    )
+    return json.loads(row["payload"]) if row else None
+
+
 async def test_auto_start_takes_the_lobby_into_play_without_a_press(sync_db_path, monkeypatch):
     bot = _bot(sync_db_path)
     cog = ClapbackCog(bot)  # type: ignore[arg-type]
@@ -670,3 +680,204 @@ async def test_auto_start_refuses_a_lobby_with_no_live_view(sync_db_path):
 def test_setup_registers_the_auto_starter():
     src = open(cog_module.__file__, encoding="utf-8").read()
     assert 'bot.lobby_auto_starters["clapback"] = cog.auto_start' in src
+
+
+# ── Crash classification (2026-09-10) ────────────────────────────────────
+#
+# Game 959cd749 was four full rounds into a five-round game with four players
+# when ``channel.send`` raised a 503 on the next vote card. ``_play``'s blanket
+# ``except Exception`` archived it as a crash — which calls ``end_game`` and so
+# *deletes the row ``recover_game`` would have resumed from*, and does it
+# without the ``bot=``/``player_ids=`` that pay a roster. Four played rounds,
+# nothing paid, nothing resumable.
+#
+# The payload here carries the checkpoint keys ``_run_game`` resumes on, so
+# these rows are the real shape a mid-game crash leaves behind.
+
+IN_PLAY_PAYLOAD = {
+    "config": {"rounds": 5, "timer": 60, "vote_timer": 30},
+    "players": [HOST, A, B, C],
+    "host_id": HOST,
+    "scores": {str(HOST): 300, str(A): 210, str(B): 175, str(C): 90},
+    "scores_checkpoint": {str(HOST): 300, str(A): 210, str(B): 175, str(C): 90},
+    "clapbacks": {str(HOST): 1},
+    "clapbacks_checkpoint": {str(HOST): 1},
+    "round_history": [{"round": n, "prompt": "p", "matchups": []} for n in range(1, 5)],
+}
+
+
+def _server_error() -> discord.DiscordServerError:
+    """The 503 prod raised, built the way discord.py builds it."""
+    return discord.DiscordServerError(
+        SimpleNamespace(status=503, reason="Service Unavailable"),
+        {"code": 0, "message": "upstream connect error"},
+    )
+
+
+async def _in_play_game(cog):
+    return await create_game(
+        cog.db, CHAN, HOST, "clapback", state="playing",
+        payload=IN_PLAY_PAYLOAD, guild_id=GUILD,
+    )
+
+
+def _raiser(exc, calls, *, stop_after=None):
+    """A ``_run_game`` stand-in that raises *exc* — or stops raising once it
+    has been entered *stop_after* times, standing in for an edge that comes
+    back."""
+
+    async def _run(game_id, channel, payload):
+        calls.append(game_id)
+        if stop_after is not None and len(calls) > stop_after:
+            return
+        raise exc
+
+    return _run
+
+
+async def test_a_transient_server_error_leaves_the_game_row_alive(
+    sync_db_path, monkeypatch
+):
+    """The whole point: the row survives, so ``recover_game`` can pick the
+    game up at round 5 — and the 24h sweep pays the roster if it doesn't."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    channel = _channel()
+    calls: list[str] = []
+    monkeypatch.setattr(cog, "_run_game", _raiser(_server_error(), calls))
+
+    await cog._play(gid, channel, dict(IN_PLAY_PAYLOAD))
+
+    row = await _lobby_row(cog.db, gid)
+    assert row is not None, "a transient 503 must not archive the game"
+    # Its four completed rounds are still there for the resume to stand on.
+    assert len(json.loads(row["payload"])["round_history"]) == 4
+    assert await _archived(cog.db, gid) is None, "nothing should be archived"
+    # And the members are not told the game ended, because it hasn't.
+    said = " ".join(str(c.args[0]) for c in channel.send.await_args_list if c.args)
+    assert "Game ended" not in said
+
+
+async def test_a_transient_server_error_re_drives_the_game_once(
+    sync_db_path, monkeypatch
+):
+    """One in-process re-drive: ``_run_game`` re-reads the payload and resumes
+    at ``len(round_history) + 1``, so the game just carries on."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    calls: list[str] = []
+    # Fails once, then the edge comes back.
+    monkeypatch.setattr(cog, "_run_game", _raiser(_server_error(), calls, stop_after=1))
+
+    await cog._play(gid, _channel(), dict(IN_PLAY_PAYLOAD))
+
+    assert len(calls) == 2, "the game should have been re-driven exactly once"
+    assert await _lobby_row(cog.db, gid) is not None
+    assert await _archived(cog.db, gid) is None
+
+
+async def test_the_re_drive_is_not_an_endless_loop(sync_db_path, monkeypatch):
+    """A Discord outage that outlasts the pause must stop at one re-drive and
+    leave the game frozen — not re-post phase cards forever."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    calls: list[str] = []
+    monkeypatch.setattr(cog, "_run_game", _raiser(_server_error(), calls))
+
+    await cog._play(gid, _channel(), dict(IN_PLAY_PAYLOAD))
+
+    assert len(calls) == 2
+    assert await _lobby_row(cog.db, gid) is not None
+
+
+async def test_a_real_bug_still_cancels_the_game(sync_db_path, monkeypatch):
+    """Don't make every exception sticky: a genuinely broken game must still
+    archive, or it becomes an immortal row nothing can clear."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    channel = _channel()
+    calls: list[str] = []
+    monkeypatch.setattr(cog, "_run_game", _raiser(KeyError("scores"), calls))
+
+    await cog._play(gid, channel, dict(IN_PLAY_PAYLOAD))
+
+    assert len(calls) == 1, "a logic bug must not be retried"
+    assert await _lobby_row(cog.db, gid) is None
+    assert (await _archived(cog.db, gid))["reason"] == "crash"
+    said = " ".join(str(c.args[0]) for c in channel.send.await_args_list if c.args)
+    assert "Something went wrong" in said
+
+
+async def test_a_permission_failure_still_cancels_the_game(
+    sync_db_path, monkeypatch
+):
+    """403 is not a hiccup — the bot cannot post in that channel, and no
+    number of restarts will change that."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    forbidden = discord.Forbidden(
+        SimpleNamespace(status=403, reason="Forbidden"), {"code": 50013, "message": "no"}
+    )
+    monkeypatch.setattr(cog, "_run_game", _raiser(forbidden, []))
+
+    await cog._play(gid, _channel(), dict(IN_PLAY_PAYLOAD))
+
+    assert await _lobby_row(cog.db, gid) is None
+
+
+async def test_a_game_ended_during_the_pause_is_not_resumed(sync_db_path, monkeypatch):
+    """A mod running `/games end` while the game waits out the wobble deletes
+    the row. Re-driving then would have ``_run_game`` read an empty payload
+    and replay the whole game from round 1, into a channel that has moved on."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    calls: list[str] = []
+    error = _server_error()
+
+    async def _run(game_id, channel, payload):
+        calls.append(game_id)
+        # Stand in for `/games end` landing between the failure and the resume.
+        await cog.db.execute(
+            "DELETE FROM games_active_games WHERE game_id = ?", (game_id,)
+        )
+        raise error
+
+    monkeypatch.setattr(cog, "_run_game", _run)
+
+    await cog._play(gid, _channel(), dict(IN_PLAY_PAYLOAD))
+
+    assert len(calls) == 1, "a game that has been ended must not be re-driven"
+
+
+async def test_the_redrive_counter_is_cleared_with_the_rest_of_the_game(sync_db_path):
+    """Otherwise a channel that hiccuped once would never re-drive again —
+    _redrives is keyed by game_id, and game ids are not reused, but the dict
+    would grow for the life of the process."""
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    cog._redrives["gid"] = 1
+    cog._cleanup("gid")
+    assert "gid" not in cog._redrives
+
+
+def test_every_phase_card_goes_out_through_the_retry():
+    """The 503 landed on a phase card's send. A new phase card added without
+    the retry would be the same bug again, so no bare ``channel.send`` may
+    hold a message the game loop goes on to use."""
+    src = open(cog_module.__file__, encoding="utf-8").read()
+    for bare in ("msg = await channel.send(", "view.message = await channel.send("):
+        assert bare not in src, f"a phase card still sends without retry_transient: {bare}"
+    # And the card that actually died is wrapped, by name.
+    assert "clapback round {round_num} matchup {matchup_index + 1}" in src
