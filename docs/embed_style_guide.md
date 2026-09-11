@@ -437,8 +437,51 @@ deliberate ping belongs.
   `tests/test_embed_name_render_sites.py` is the shared table for games whose
   guard has no logic file of its own; a new builder adds a `pytest.param`
   row, not a new file).
-- **Mod-facing embeds keep the id *alongside* the name** — `Name (`id`)` — so a
-  moderator retains something copyable. Member-facing cards get the name alone.
+- **Keep the id *alongside* the name — `Name (`id`)` — only where a mod is
+  expected to paste it somewhere** (ruling 2026-09-09). The affordance is for
+  dispute resolution and hand-off, and it survives where that is real:
+  `/guess round`, the whisper mod-log embeds, the games-config host line. Two
+  things disqualify a card, and the policy vote hit both:
+  - **A roster you only read.** Nothing in the policy flow takes a user id —
+    the vote buttons carry a *policy* id, and no `/policy` subcommand accepts
+    a member — so eighteen digits per voter bought a moderator nothing across
+    the four busiest fields on the card.
+  - **An audience that isn't fixed.** A policy ticket is run privately among
+    mods **or** opened to the general public, ticket by ticket (Billy,
+    2026-09-09). `/policy open` starts the channel with `@everyone` denied
+    view, but the overwrites get relaxed by hand when a proposal wants member
+    eyes on it. "Mod-facing" is a property of the moment, not of the builder,
+    and the builder cannot know which moment it is rendering into.
+  So: **"mod-facing" alone no longer justifies an id — a fixed mod-only
+  audience does.** Where the audience can widen later, names alone. Member-
+  facing cards get the name alone, always. Before appending an id, name the
+  command a mod would paste it into and satisfy yourself no member will read
+  the card; if either fails, don't.
+
+  **The sites that keep theirs.** The three named above are examples, not the
+  whole list — measure a new card against both prongs rather than against this
+  enumeration, and if you are *removing* ids, check the site is not one of
+  these first:
+  - `confessions_service.log_confession` / `log_reply`
+    (`services/confessions_service.py`) — the strongest case in the repo. A
+    confession's author is anonymous to members **by design**, so in the
+    private log the id is the only handle a mod has; there is no name to fall
+    back on and no other way to answer "who posted this". Fixed audience
+    (a log channel), real destination (`/warn`, `/jail`, an erasure request).
+    Do not strip this one.
+  - `games/utils/audit.py` — the games content-audit embed, posted to the same
+    mod log for a flagged submission. Fixed audience, and the paste
+    destination is a moderation command on the author.
+  - `intake_views.py` / `promotion_review_views.py` — these render
+    `Name (`handle`)`, the account handle rather than a snowflake, so the id
+    rule does not reach them at all. The one exception is a **departed**
+    member in the intake card, where the handle is unavailable and the raw id
+    is the fallback — which is the same reasoning as the no-contact
+    degradation below: a number beats nothing when there is no name to show.
+
+  A guide/code disagreement here is a pointer to repair, not a choice
+  (`design_guide.md` Part 7) — so if you find a fifth site, either add it here
+  with the prong that keeps it, or take the id out.
 - **The one exception: a no-contact pair.** Where a surface would name two
   people the no-contact list keeps apart, degrade to a plain `User <id>` for
   both. The bot naming them together in its own voice manufactures exactly the

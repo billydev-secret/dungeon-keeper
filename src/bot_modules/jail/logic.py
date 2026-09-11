@@ -207,3 +207,116 @@ def vote_outcome(
     if len(tally["yes"]) == len(eligible):
         return "adopted"
     return "pending"
+
+
+# ── Policy channel visibility ──────────────────────────────────────────
+#
+# A policy proposal is discussed by mods **or** opened to the general public,
+# proposal by proposal (Billy, 2026-09-09). `/policy open` always starts it
+# private; a mod opens it from the proposal card when a proposal wants member
+# eyes on it. Opening grants @everyone view + history + send, so members can
+# read the discussion that led here and join it — the point of opening is
+# member input, and `/policy ballot` already covers a silent public vote.
+#
+# Opening is therefore not reversible in the way a permission change usually
+# is: what members have read, they have read. Hence the confirm step, and
+# hence the message count that makes the exposure concrete before the press.
+
+POLICY_VISIBILITY_MODS = "mods"
+POLICY_VISIBILITY_PUBLIC = "public"
+
+#: Stop counting a channel's backlog here. A policy channel holding more
+#: messages than this is unusual, and the exact figure stops mattering once
+#: it is this large — "500+ messages" lands the same warning as "512".
+POLICY_EXPOSURE_COUNT_CAP = 500
+
+
+def normalize_policy_visibility(value: object) -> str:
+    """Coerce a stored visibility to one of the two known states.
+
+    Anything unrecognised — NULL from a row written before migration 219, a
+    typo, a future state this build doesn't know — reads as mods-only. The
+    private reading is the safe one: it under-reports what members can see,
+    so the worst case is a button offering to open a channel that is already
+    open, never a card claiming privacy it doesn't have.
+    """
+    return (
+        POLICY_VISIBILITY_PUBLIC
+        if value == POLICY_VISIBILITY_PUBLIC
+        else POLICY_VISIBILITY_MODS
+    )
+
+
+def is_policy_public(value: object) -> bool:
+    """True when members can see the policy channel."""
+    return normalize_policy_visibility(value) == POLICY_VISIBILITY_PUBLIC
+
+
+def toggle_policy_visibility(value: object) -> str:
+    """The state the visibility button moves to from ``value``."""
+    return (
+        POLICY_VISIBILITY_MODS
+        if is_policy_public(value)
+        else POLICY_VISIBILITY_PUBLIC
+    )
+
+
+def policy_visibility_label(value: object) -> str:
+    """Label for the toggle button, naming what pressing it *does*.
+
+    Buttons here are named for the action, not the state: a card reading
+    "Mods Only" would leave a mod guessing whether that is the situation or
+    the offer.
+    """
+    return (
+        "Make Mods-Only"
+        if is_policy_public(value)
+        else "Open to Members"
+    )
+
+
+def policy_visibility_status(value: object) -> str:
+    """The proposal card's visibility line — the state, for a reader."""
+    return (
+        "🌐 Open to members"
+        if is_policy_public(value)
+        else "🔒 Mods only"
+    )
+
+
+def format_exposure_count(count: int | None, *, capped: bool = False) -> str:
+    """Render a backlog size for the confirm prompt.
+
+    ``capped`` means counting stopped at ``POLICY_EXPOSURE_COUNT_CAP`` rather
+    than reaching the end of the channel, so the figure is a floor.
+
+    ``count is None`` means the backlog could not be counted at all — most
+    often because the bot cannot read history here. That must not render as
+    a number: "0 messages" is the single most reassuring thing this prompt
+    could say, and it would be saying it at the exact moment nobody knows
+    what is about to be exposed. An unknown backlog says so in words.
+    """
+    if count is None:
+        return "everything already posted in this channel"
+    if capped:
+        return f"{count}+ messages"
+    if count == 1:
+        return "1 message"
+    return f"{count} messages"
+
+
+def policy_exposure_warning(count: int | None, *, capped: bool = False) -> str:
+    """The ephemeral confirm text shown before a channel is opened.
+
+    Names the backlog explicitly. The failure this guards against is a mod
+    opening a channel while thinking only of the proposal, forgetting the
+    candid discussion above it — so the count leads, and "including anything
+    said before now" is spelled out rather than implied.
+    """
+    return (
+        f"⚠️ Opening this channel makes "
+        f"{format_exposure_count(count, capped=capped)} readable by every "
+        "member — including anything said before now. Members will also be "
+        "able to post here.\n\n"
+        "Opening cannot un-read what they see. Continue?"
+    )

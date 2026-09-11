@@ -20,7 +20,8 @@ Two of the most emotionally charged moderator workflows — disciplining a membe
 | `/ticket delete` | Slash | Mod | Permanently delete a closed ticket (generates transcript) |
 | `/ticket claim` | Slash | Mod | Subscribe to DM alerts on new activity in this ticket |
 | `/ticket escalate [reason]` | Slash | Mod | Bring admin roles into the ticket |
-| `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis) |
+| `/policy open title:<title> [description]` | Slash | Admin | Open a policy proposal channel; title is required and capped at 200 chars (longer titles are trimmed with an ellipsis). Always starts **mods-only** |
+| Open to Members / Make Mods-Only | Button (proposal card) | Admin | Toggle whether members can see this proposal channel. Opening confirms first, naming how many messages become readable. See **Proposal visibility** |
 | `/policy vote` | Slash | Mod / Admin | Start the formal vote on the current policy proposal (opens a modal). Cannot reach a community ballot's ticket — those carry status `ballot`, which `get_policy_ticket_by_channel` deliberately does not match |
 | `/policy ballot` | Slash | Admin | Open a **community ballot**: a thread in the current channel with Yes/No/Abstain buttons, voted on by anyone who can see it. A modal takes the question. Admin-gated at **runtime** — the `default_permissions` decorator on a subcommand is inert (see Permissions) |
 | `/policy close [reason]` | Slash | Admin | Close a policy proposal without voting. Run inside a ballot thread it **cancels that ballot** instead: the counts are frozen but no result is declared |
@@ -140,9 +141,69 @@ Transcripts are delivered as Markdown (`.md`) files. They're readable in any tex
 
 **Naming voters (both cards, 2026-09-03).** Neither the mod vote nor the ballot renders `<@id>` any more. An embed mention is resolved by the *reading* client from its own cache, so it degrades to a bare number for anyone who has not seen that member — including a voter who has since left the guild. Both cards route every id through `build_name_fn`.
 
-The two differ in one way, per `docs/embed_style_guide.md`: the **mod vote is mod-facing**, so it renders ``Name (`id`)`` and a moderator keeps something copyable; the **ballot is member-facing**, so it shows the name alone, because an id there is noise to every reader. A test pins the distinction.
+Both show the **name alone** (2026-09-09). The mod vote used to render ``Name (`id`)`` under the copyable-id rule in `docs/embed_style_guide.md`, on the reasoning that a card only mods can see should leave a moderator something to paste. Two things undo that reasoning here. Nothing in the policy flow takes a user id — the Yes / No / Abstain buttons carry the *policy* id, and no `/policy` subcommand accepts a member — so the eighteen digits per voter were noise across the four busiest fields on the card. And **a policy ticket is not reliably mod-only**: it is run privately among mods or opened to the general public, proposal by proposal (Billy, 2026-09-09). `/policy open` creates the channel with `@everyone` denied `view_channel` and grants only the mod and admin roles, so the *default* is private; opening one up is a manual change to the overwrites, invisible to the embed builder. The card therefore has to render as if a member is reading it, because sometimes one is. The guide's rule now narrows accordingly. A test pins the name-only form on both cards.
 
 Both truncate their voter lists on accumulated **characters**, not on a fixed entry count. The mod vote used to cap at 25 mentions, which worked only because `<@id>` has a predictable width — with real display names, 25 long nicknames blow past Discord's 1024-character field ceiling and the whole field is dropped. That entry cap (`cap_mentions`) is gone, and the awaiting roster is sorted at the call site, since it comes off a set difference and the cap used to sort on the way past.
+
+### Proposal visibility
+
+`/policy open` always creates the channel private: `@everyone` is denied
+`view_channel` and the mod and admin roles are granted. A proposal is
+sometimes meant for the general public, though — it is a mod-or-public
+surface, proposal by proposal (Billy, 2026-09-09) — so the proposal card
+carries an admin-gated **Open to Members** / **Make Mods-Only** toggle, and
+`policy_tickets.visibility` (migration 219, `'mods'` | `'public'`) remembers
+which it is.
+
+Opening grants `@everyone` `view_channel`, `read_message_history` **and**
+`send_messages`: the reason to open a proposal is member input, and a
+read-only version would duplicate `/policy ballot`, which already exists for
+a silent public vote.
+
+**Opening asks first, closing doesn't.** The overwrites come back off on a
+second press, but what members read while it was open, they have read — so
+the button counts the channel's backlog (capped at 500, rendered `500+`) and
+shows an ephemeral confirm naming the figure and spelling out "including
+anything said before now". The mistake being guarded is a mod opening a
+channel while thinking about the proposal and forgetting the candid
+discussion above it. Closing needs no confirm: nothing is exposed by it.
+A confirm nobody answers expires after a minute and says so — cancel and
+timeout are the same outcome, so an unanswered prompt opens nothing.
+
+Three things fall out of this being a permission change rather than a
+cosmetic one:
+
+- **The gate is a runtime check.** Once the channel is open a member can see
+  the card, so the button refuses non-admins on press rather than relying on
+  being hidden — the same reasoning as the ballot's Close button.
+- **Jailed members stay out either way, and opening re-asserts it.** A role
+  deny beats an `@everyone` allow, so the explicit
+  `@Jailed → view_channel=False` overwrite is what keeps them out — but the
+  create listener that stamps it is best-effort by design (a channel the bot
+  lacked Manage Roles on at creation is logged and skipped), which left this
+  guarantee resting on something that can silently not have happened. So the
+  press that widens the audience re-stamps the deny *before* granting
+  `@everyone` view, and **refuses to open at all** if it can't write it,
+  telling the mod to check Manage Roles. Failing the other way would expose
+  the channel to jailed members while the admin guide promises it cannot.
+- **The proposal card names its proposer, never mentions them.** It rendered
+  `user.mention` until 2026-09-11, which was survivable only while the
+  channel was mod-only; an embed mention resolves from the *reading*
+  client's cache, so a public card would show digits to anyone who hadn't
+  seen the proposer. The card now resolves through `build_name_fn`, like the
+  vote and ballot cards.
+
+The state is stated on the card ("🔒 Mods only" / "🌐 Open to members") and
+the button is labelled for the action ("Open to Members"), so a reader is
+never left guessing whether a label is describing the situation or offering
+to change it. A change also posts a line in the channel — everyone already
+in the room needs to know the audience changed under them — and an entry to
+the mod audit log.
+
+Visibility is per proposal: opening one never opens another. Nothing is
+retroactive — the toggle appears on proposal cards posted from migration 219
+onward, and an older open proposal is still changed by editing the channel
+overwrites by hand, exactly as before.
 
 ### Community ballots
 
@@ -182,7 +243,7 @@ After a restart, persistent ticket panel buttons and per-ticket Close / Reopen /
 
 **User needs:**
 - Mod role (configured on the dashboard): `/jail`, `/unjail`, `/ticket close|reopen|delete|claim|escalate`, `/pull`, `/remove`, `/warn`, `/revokewarn`, `/modinfo`, `/policy vote`, `/policy list`, and the dashboard moderation routes.
-- Admin role: `/policy open`, `/policy ballot`, `/policy close`, dashboard config writes, and deleting a warning outright (`DELETE /api/moderation/warnings/{id}`). Admin roles are also the ones pinged on warning threshold and ticket escalation.
+- Admin role: `/policy open`, `/policy ballot`, `/policy close`, the proposal card's visibility toggle, dashboard config writes, and deleting a warning outright (`DELETE /api/moderation/warnings/{id}`). Admin roles are also the ones pinged on warning threshold and ticket escalation.
 - Everyone: `/ticket open`, the panel button, and the "Open Ticket About This Message" menu.
 
 ## User-visible errors
@@ -241,6 +302,8 @@ Setup wizard sets most keys; the rest live on the web dashboard.
 ## Stored data
 
 A community ballot keeps two rows of its own: the ballot (question, opener, window, and the yes/no/abstain counts + outcome frozen at close — naming no voter) and one row per member per ballot recording their choice. Both carry `guild_id` directly. The frozen counts are what make the individual votes safely erasable; see `docs/data_register.md`.
+
+A policy ticket also records its `visibility` (migration 219) — whether the proposal channel is mods-only or open to members. It describes a channel rather than a person and names no member; `policy_tickets` is already registered in `docs/data_register.md` and preserved as part of the mod record.
 
 The system keeps per-guild records of every jail, ticket, warning, audit action, and transcript. Jail records carry the snapshotted role list so an unjail can restore the member exactly as they were. Tickets track creator, opener source, current state, claim assignment, and (after escalation) the escalating mod and admin claimer. Warnings store the issuing mod, reason, and active/revoked status; revocation is soft so history stays intact for `/modinfo`. Transcripts are stored as JSON for the dashboard and also written as files in the transcript channel and the member's DMs.
 

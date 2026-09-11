@@ -36,7 +36,7 @@ from bot_modules.jail.embeds import (
     warning_threshold_ping,
 )
 from bot_modules.services.name_resolver import build_name_fn
-from bot_modules.jail.logic import sanitize_channel_name
+from bot_modules.jail.logic import POLICY_VISIBILITY_MODS, sanitize_channel_name
 
 from bot_modules.commands.jail_commands import (
     CLR_JAIL,
@@ -45,11 +45,13 @@ from bot_modules.commands.jail_commands import (
     PolicyBallotCloseButton,
     PolicyBallotNoButton,
     PolicyBallotYesButton,
+    PolicyVisibilityButton,
     PolicyVoteAbstainButton,
     PolicyVoteNoButton,
     PolicyVoteYesButton,
     BALLOT_THREAD_AUTO_ARCHIVE_MINUTES,
     _ballot_view,
+    _policy_visibility_view,
     _policy_vote_timeout_seconds,
     finalize_ballot,
     TICKET_STATUS_CLOSED,
@@ -420,6 +422,11 @@ class JailCog(commands.Cog):
         bot.add_dynamic_items(PolicyVoteYesButton)
         bot.add_dynamic_items(PolicyVoteNoButton)
         bot.add_dynamic_items(PolicyVoteAbstainButton)
+        # The visibility toggle sits on a proposal card that lives for the
+        # length of a discussion, so it has to survive restarts too. Its
+        # prefix is `policy_visibility:`, distinct from both `policy_vote:`
+        # and `policy_ballot:`.
+        bot.add_dynamic_items(PolicyVisibilityButton)
         # A ballot runs for days in a public thread and has to survive every
         # restart in between. Its custom-id prefix is `policy_ballot:`, which
         # cannot collide with `policy_vote:` above.
@@ -1234,13 +1241,24 @@ class JailCog(commands.Cog):
 
         policy_id = await asyncio.to_thread(_create_policy)
 
+        # A resolved name, not a mention: this card starts mod-only but can be
+        # opened to every member from its own button, and an embed mention
+        # renders as a bare number to any client that hasn't cached the user.
+        name_fn = await build_name_fn(
+            guild=guild, db_path=ctx.db_path, guild_id=guild.id, user_ids=[user.id]
+        )
         embed = build_policy_proposal_embed(
             policy_id=policy_id,
             title=title,
             description=desc_text,
-            proposer_mention=user.mention,
+            proposer=name_fn(user.id),
+            visibility=POLICY_VISIBILITY_MODS,
         )
-        await channel.send(embed=embed)
+        # The toggle rides on the card, so the decision to open a proposal
+        # lives where the proposal is being discussed.
+        await channel.send(
+            embed=embed, view=_policy_visibility_view(policy_id, POLICY_VISIBILITY_MODS)
+        )
 
         role_mentions = []
         for rid in all_role_ids:

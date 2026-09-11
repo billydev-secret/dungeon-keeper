@@ -54,6 +54,7 @@ from bot_modules.services.moderation import (
     release_jail,
     reopen_ticket,
     resolve_policy_vote,
+    set_policy_visibility,
     store_transcript,
     ticket_notify_on_create_enabled,
     write_audit,
@@ -77,12 +78,20 @@ from bot_modules.services.policy_ballot_service import (
 from bot_modules.jail.apply import create_jail_channel
 from bot_modules.jail.embeds import (
     build_policy_ballot_embed,
+    build_policy_proposal_embed,
     build_policy_vote_update_embed,
 )
 from bot_modules.jail.logic import (
+    POLICY_EXPOSURE_COUNT_CAP,
+    POLICY_VISIBILITY_MODS,
+    POLICY_VISIBILITY_PUBLIC,
     channel_needs_jail_deny,
     channels_needing_jail_deny,
     eligible_voters,
+    is_policy_public,
+    policy_exposure_warning,
+    policy_visibility_label,
+    toggle_policy_visibility,
     vote_outcome as _vote_outcome,
 )
 
@@ -586,6 +595,114 @@ class TicketReopenButton(
             )
 
 
+# ---------------------------------------------------------------------------
+# Yes/no confirmation
+# ---------------------------------------------------------------------------
+
+
+class _ConfirmView(discord.ui.View):
+    """A two-button yes/no prompt that reports what the presser chose.
+
+    ``result`` is True only when Confirm was pressed. A Cancel press and a
+    timeout both leave it False, so a caller that treats the two the same
+    fails closed — which is the behaviour every guard in this module wants.
+
+    ``on_timeout`` is the reason this exists as a class rather than a
+    locally-assembled view: the hand-rolled copies of this shape had none, so
+    a minute-old prompt sat there showing live buttons that answered with
+    Discord's generic "interaction failed". Now the prompt says it expired.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        cancel_text: str,
+        confirm_text: str | None = None,
+        emoji: str | None = None,
+        style: discord.ButtonStyle = discord.ButtonStyle.danger,
+        timeout: float = 60.0,
+    ) -> None:
+        super().__init__(timeout=timeout)
+        self.result = False
+        self.message: discord.Message | None = None
+        self._cancel_text = cancel_text
+        self._confirm_text = confirm_text
+        btn_yes: discord.ui.Button = discord.ui.Button(
+            label=label, emoji=emoji, style=style
+        )  # type: ignore[assignment]
+        btn_no: discord.ui.Button = discord.ui.Button(
+            label="Cancel", style=discord.ButtonStyle.secondary
+        )  # type: ignore[assignment]
+        btn_yes.callback = self._on_yes  # type: ignore[method-assign,assignment]
+        btn_no.callback = self._on_no  # type: ignore[method-assign,assignment]
+        self.add_item(btn_yes)
+        self.add_item(btn_no)
+
+    async def _on_yes(self, interaction: discord.Interaction) -> None:
+        self.result = True
+        if self._confirm_text is not None:
+            await interaction.response.edit_message(
+                content=self._confirm_text, view=None
+            )
+        else:
+            # No copy to show: the caller is about to edit or replace this
+            # message itself, so just satisfy the interaction.
+            await interaction.response.defer()
+        self.stop()
+
+    async def _on_no(self, interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(content=self._cancel_text, view=None)
+        self.stop()
+
+    async def on_timeout(self) -> None:
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(
+                content="Timed out — nothing was changed.", view=None
+            )
+        except discord.HTTPException:
+            pass
+
+
+async def _confirm(
+    interaction: discord.Interaction,
+    prompt: str,
+    *,
+    label: str,
+    cancel_text: str,
+    confirm_text: str | None = None,
+    emoji: str | None = None,
+    style: discord.ButtonStyle = discord.ButtonStyle.danger,
+    timeout: float = 60.0,
+    followup: bool = False,
+) -> bool:
+    """Ask *prompt* and wait. True only if Confirm was pressed.
+
+    Pass ``followup=True`` when the interaction has already been deferred or
+    answered — the prompt then goes out as an ephemeral followup instead of
+    editing the message the component hangs on.
+    """
+    view = _ConfirmView(
+        label=label,
+        cancel_text=cancel_text,
+        confirm_text=confirm_text,
+        emoji=emoji,
+        style=style,
+        timeout=timeout,
+    )
+    if followup:
+        view.message = await interaction.followup.send(
+            prompt, view=view, ephemeral=True, wait=True
+        )
+    else:
+        await interaction.response.edit_message(content=prompt, view=view)
+        view.message = interaction.message
+    await view.wait()
+    return view.result
+
+
 class TicketDeleteButton(
     discord.ui.DynamicItem[discord.ui.Button],
     template=r"ticket_action:delete:(?P<tid>\d+)",
@@ -618,37 +735,14 @@ class TicketDeleteButton(
             )
             return
 
-        # Confirm
-        confirm_view = discord.ui.View(timeout=30)
-        confirmed = False
-
-        async def do_confirm(inter: discord.Interaction):
-            nonlocal confirmed
-            confirmed = True
-            await inter.response.defer()
-            confirm_view.stop()
-
-        async def do_cancel(inter: discord.Interaction):
-            await inter.response.edit_message(content="Deletion cancelled.", view=None)
-            confirm_view.stop()
-
-        btn_yes: discord.ui.Button = discord.ui.Button(
-            label="Confirm Delete", style=discord.ButtonStyle.danger
-        )  # type: ignore[assignment]
-        btn_no: discord.ui.Button = discord.ui.Button(
-            label="Cancel", style=discord.ButtonStyle.secondary
-        )  # type: ignore[assignment]
-        btn_yes.callback = do_confirm  # type: ignore[method-assign,assignment]
-        btn_no.callback = do_cancel  # type: ignore[method-assign,assignment]
-        confirm_view.add_item(btn_yes)
-        confirm_view.add_item(btn_no)
-        await interaction.response.edit_message(
-            content="⚠️ This will permanently delete this ticket and generate a transcript. Continue?",
-            view=confirm_view,
-        )
-        await confirm_view.wait()
-
-        if not confirmed:
+        if not await _confirm(
+            interaction,
+            "⚠️ This will permanently delete this ticket and generate a "
+            "transcript. Continue?",
+            label="Confirm Delete",
+            cancel_text="Deletion cancelled.",
+            timeout=30,
+        ):
             return
 
         channel = interaction.channel
@@ -1047,6 +1141,347 @@ class PolicyVoteAbstainButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _handle_policy_vote(interaction, self.policy_id, "abstain")
+
+
+# ---------------------------------------------------------------------------
+# Policy channel visibility
+# ---------------------------------------------------------------------------
+#
+# A proposal starts private (`/policy open` denies @everyone view_channel and
+# grants the mod and admin roles) and a mod may open it to the general public
+# from the proposal card. Notes that matter here:
+#
+#  * **Opening is one-way in the only sense that counts.** The overwrites come
+#    back off on a second press, but what members read while it was open, they
+#    have read. That is why opening confirms and closing doesn't.
+#  * **The gate is a runtime check**, like every other button in this module —
+#    a member can see the card the moment the channel is open, so the button
+#    has to refuse them on press rather than be hidden.
+#  * **Jailed members stay out either way**, and opening re-asserts it rather
+#    than trusting it. A role deny beats an @everyone allow, so the explicit
+#    `@Jailed → view_channel=False` overwrite is what keeps them out — but the
+#    create listener that stamps it is best-effort, so the press that widens
+#    the audience re-stamps first and refuses to open if it can't.
+
+
+def _policy_visibility_view(policy_id: int, visibility: object) -> discord.ui.View:
+    """The proposal card's one button, labelled for what pressing it does."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(PolicyVisibilityButton(policy_id, visibility))
+    return view
+
+
+class PolicyVisibilityButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_visibility:(?P<pid>\d+)",
+):
+    """Persistent 'Open to Members' / 'Make Mods-Only' toggle.
+
+    The custom id carries only the policy id, never the visibility: a card
+    that sat through a restart, or through someone else pressing the same
+    button first, would otherwise act on a stale state. **The press re-reads
+    the row** and toggles from that, which is the part that has to be right —
+    the label Discord shows comes from the component it stored when the card
+    was last rendered, so a card whose channel was opened by hand can be
+    showing the wrong verb until the next re-render. Pressing it still does
+    the correct thing.
+    """
+
+    def __init__(self, policy_id: int, visibility: object = None) -> None:
+        public = is_policy_public(visibility)
+        super().__init__(
+            discord.ui.Button(
+                label=policy_visibility_label(visibility),
+                emoji="🌐" if not public else "🔒",
+                style=(
+                    discord.ButtonStyle.secondary
+                    if public
+                    else discord.ButtonStyle.primary
+                ),
+                custom_id=f"policy_visibility:{policy_id}",
+            )
+        )
+        self.policy_id = policy_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        pid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
+        bot = interaction.client
+        ctx: AppContext = cast("Bot", bot).ctx
+
+        def _read():
+            with ctx.open_db() as conn:
+                row = get_policy_ticket(conn, pid)
+            return row["visibility"] if row else None
+
+        return cls(pid, await asyncio.to_thread(_read))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        ctx: AppContext = cast("Bot", bot).ctx
+        member = interaction.user
+        guild = interaction.guild
+        if not isinstance(member, discord.Member) or guild is None:
+            return
+        # Admin, matching `/policy open`: deciding a proposal goes public is
+        # the same call as deciding to open one.
+        if not _is_admin(member, ctx):
+            await interaction.response.send_message(
+                "❌ Only admins can change who can see a policy proposal.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ This only works in a policy channel.", ephemeral=True
+            )
+            return
+
+        # Defer before any I/O: reading the row and counting the backlog is
+        # up to five REST pages, which does not fit in Discord's 3-second
+        # first-response window.
+        await interaction.response.defer(ephemeral=True)
+
+        policy_id = self.policy_id
+
+        def _read():
+            with ctx.open_db() as conn:
+                return get_policy_ticket(conn, policy_id)
+
+        policy = await asyncio.to_thread(_read)
+        if policy is None:
+            await interaction.followup.send(
+                "❌ That policy proposal no longer exists.", ephemeral=True
+            )
+            return
+
+        # Re-read rather than trust the card: someone may have pressed this
+        # between the render and the press.
+        target = toggle_policy_visibility(policy["visibility"])
+
+        if target == POLICY_VISIBILITY_MODS:
+            await self._apply(interaction, ctx, policy, target)
+            return
+
+        count, capped = await _count_channel_messages(channel)
+        if not await _confirm(
+            interaction,
+            policy_exposure_warning(count, capped=capped),
+            label="Open It",
+            emoji="🌐",
+            confirm_text="Opening the channel…",
+            cancel_text="Left mods-only. Nothing changed.",
+            followup=True,
+        ):
+            return
+        await self._apply(interaction, ctx, policy, target)
+
+    async def _apply(
+        self,
+        interaction: discord.Interaction,
+        ctx: AppContext,
+        policy: "PolicyTicketRow",
+        target: str,
+    ) -> None:
+        """Move the overwrites, persist, and re-render the card."""
+        guild = interaction.guild
+        channel = interaction.channel
+        member = interaction.user
+        if guild is None or not isinstance(channel, discord.TextChannel):
+            return
+
+        public = target == POLICY_VISIBILITY_PUBLIC
+        if public and not await _policy_jail_deny_in_place(ctx, guild, channel):
+            await interaction.followup.send(
+                "❌ I couldn't shut jailed members out of this channel, so "
+                "I've left it mods-only. Check I have Manage Roles here, then "
+                "try again.",
+                ephemeral=True,
+            )
+            return
+        try:
+            if public:
+                await channel.set_permissions(
+                    guild.default_role,
+                    view_channel=True,
+                    read_message_history=True,
+                    send_messages=True,
+                    reason=f"Policy #{policy['id']} opened to members by {member}",
+                )
+            else:
+                # Back to the state `/policy open` creates: an explicit deny,
+                # not a cleared overwrite, so the channel does not start
+                # inheriting whatever the category says.
+                await channel.set_permissions(
+                    guild.default_role,
+                    view_channel=False,
+                    read_message_history=None,
+                    send_messages=None,
+                    reason=f"Policy #{policy['id']} returned to mods-only by {member}",
+                )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I can't edit this channel's permissions — check I have "
+                "Manage Roles here.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException:
+            # Not a permissions problem (that's Forbidden, above) — the
+            # channel may have been deleted or renamed out from under this
+            # press (e.g. `/policy close` ran while the confirm prompt was
+            # sitting there). Either way the deferred interaction needs a
+            # followup or it just hangs from the mod's side, and the DB/card
+            # must not claim a change that never landed.
+            log.exception(
+                "Could not change permissions for policy %s", policy["id"]
+            )
+            await interaction.followup.send(
+                "❌ Something went wrong changing this channel's permissions. "
+                "Nothing was changed — try again.",
+                ephemeral=True,
+            )
+            return
+
+        policy_id = policy["id"]
+        guild_id = guild.id
+        actor_id = member.id
+
+        def _persist():
+            with ctx.open_db() as conn:
+                set_policy_visibility(conn, policy_id, visibility=target)
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="policy_visibility",
+                    actor_id=actor_id,
+                    extra={"policy_id": policy_id, "visibility": target},
+                )
+
+        await asyncio.to_thread(_persist)
+
+        # One resolver for both the card (the proposer) and the mod-log embed
+        # (the mod who pressed). Resolved names, never `<@id>`: an embed
+        # mention is resolved by the *reading* client's cache, which is the
+        # defect this branch just removed from the vote rosters — new code
+        # doesn't get to reintroduce it one card over. The proposer is
+        # re-resolved rather than read off the old card because the card is
+        # being re-rendered precisely because its audience may have widened.
+        name_fn = await build_name_fn(
+            guild=guild,
+            db_path=ctx.db_path,
+            guild_id=guild_id,
+            user_ids=[policy["creator_id"], actor_id],
+        )
+
+        message = interaction.message
+        if message is not None:
+            embed = build_policy_proposal_embed(
+                policy_id=policy_id,
+                title=policy["title"],
+                description=policy["description"],
+                proposer=name_fn(policy["creator_id"]),
+                visibility=target,
+                now=datetime.fromtimestamp(policy["created_at"], timezone.utc),
+            )
+            try:
+                await message.edit(
+                    embed=embed,
+                    view=_policy_visibility_view(policy_id, target),
+                )
+            except discord.HTTPException:
+                log.exception("Could not re-render policy card %s", policy_id)
+
+        # Said in the channel, not ephemerally: everyone already in the room
+        # needs to know the audience changed under them. Guarded for the same
+        # reason the permission call is — the change has already landed, so a
+        # failed notice must not take the mod's confirmation down with it.
+        try:
+            await channel.send(
+                f"🌐 {member.mention} opened this proposal to all members — "
+                "anything above this line is now public."
+                if public
+                else f"🔒 {member.mention} made this proposal mods-only again.",
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+        except discord.HTTPException:
+            log.exception("Could not announce visibility change in %s", channel.id)
+        await interaction.followup.send(
+            "Opened to members." if public else "Back to mods-only.",
+            ephemeral=True,
+        )
+
+        audit_embed = discord.Embed(
+            title="📋 Policy Visibility Changed",
+            description=(
+                f"**{policy['title']}** in {channel.mention} is now "
+                + ("**open to all members**" if public else "**mods-only**")
+                + f" (by {name_fn(actor_id)})."
+            ),
+            color=CLR_POLICY,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+
+async def _policy_jail_deny_in_place(
+    ctx: AppContext, guild: discord.Guild, channel: discord.TextChannel
+) -> bool:
+    """True once ``@Jailed → view_channel=False`` is on *channel*.
+
+    Opening a policy channel is the first place in the repo that grants
+    ``@everyone view_channel=True`` inside the ticket category, and both the
+    spec and the admin guide promise jailed members never see a policy
+    channel, open or not. That promise rested entirely on the create-time
+    listener, which is **best-effort by design** — a channel the bot lacked
+    Manage Roles on when it was created is logged and skipped. So the one
+    moment that widens the audience is the moment to make the promise true
+    rather than assume it; a role deny beats an ``@everyone`` allow, but only
+    if the deny is actually there.
+
+    Returns False only when a jail role is configured, the channel does not
+    already deny it, and writing the deny failed — in which case the caller
+    must leave the channel mods-only.
+    """
+    jailed_role_id = await asyncio.to_thread(
+        _get_config, ctx, "jailed_role_id", guild_id=guild.id
+    )
+    if not jailed_role_id:
+        return True  # no jail role configured: nobody to keep out
+    role = guild.get_role(jailed_role_id)
+    if role is None:
+        return True  # the dial points at a deleted role
+    if not channel_needs_jail_deny(channel.overwrites_for(role).view_channel):
+        return True  # already denied, usually by the create listener
+    return await stamp_channel_jail_deny(channel, role)
+
+
+async def _count_channel_messages(
+    channel: discord.TextChannel,
+) -> tuple[int | None, bool]:
+    """Count the channel's backlog, stopping at the cap.
+
+    Returns ``(count, capped)``; ``capped`` means the channel holds at least
+    that many and counting stopped early, so the confirm prompt says "N+".
+
+    A count we could not finish returns ``None``, not the partial tally.
+    ``discord.Forbidden`` is a ``discord.HTTPException``, so the bot simply
+    lacking Read Message History here lands in this handler — and returning
+    the running total would then put "0 messages" in front of a mod about to
+    expose a channel whose contents nobody has measured. Unknown has to read
+    as unknown; ``format_exposure_count`` renders it in words.
+    """
+    count = 0
+    try:
+        async for _ in channel.history(limit=POLICY_EXPOSURE_COUNT_CAP + 1):
+            count += 1
+            if count > POLICY_EXPOSURE_COUNT_CAP:
+                return POLICY_EXPOSURE_COUNT_CAP, True
+    except discord.HTTPException:
+        log.exception("Could not count backlog in %s", channel.id)
+        return None, False
+    return count, False
 
 
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from bot_modules.services.embeds import (
     xp_breakdown_parts,
 )
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.jail.logic import policy_visibility_status
 
 
 
@@ -64,26 +65,25 @@ def _format_names(
     name_fn: "NameFn | None" = None,
     *,
     budget: int = DEFAULT_BALLOT_NAMES_BUDGET,
-    with_ids: bool = False,
 ) -> str:
     """Render ids as a comma-separated list of resolved names, or ``"—"``.
 
     Truncates on accumulated *characters* and appends ``"+N more"``, so the
     field fits whatever mix of short and long display names turns up.
 
-    ``with_ids`` renders ``Name (`id`)``, which is the house rule for a
-    **mod-facing** embed: a moderator keeps something copyable to paste into
-    another command. Member-facing cards — the community ballot — get the name
-    alone, because an id there is noise to everyone who reads it. See
-    docs/embed_style_guide.md, "Naming members in embeds".
+    Names alone, on both cards. The mod vote used to append ``(`id`)`` under
+    the copyable-id rule, on the premise that only mods would ever read it.
+    Neither half holds: nothing in the policy flow takes a user id (the vote
+    buttons carry a *policy* id), and a policy ticket is run privately among
+    mods **or** opened to the general public, proposal by proposal — so this
+    builder cannot know whether a member is reading, and renders as if one
+    is. See docs/embed_style_guide.md, "Naming members in embeds".
     """
     resolve = name_fn or mention
     shown: list[str] = []
     used = 0
     for index, uid in enumerate(ids):
         name = resolve(uid)
-        if with_ids:
-            name = f"{name} (`{uid}`)"
         cost = len(name) + (2 if shown else 0)
         if used + cost > budget:
             return f"{', '.join(shown) or '—'} *+{len(ids) - index} more*"
@@ -126,7 +126,7 @@ def build_policy_vote_initial_embed(
     embed.add_field(name="➖ Abstain", value="—", inline=False)
     embed.add_field(
         name="⏳ Awaiting",
-        value=_format_names(eligible_ids, name_fn, with_ids=True),
+        value=_format_names(eligible_ids, name_fn),
         inline=False,
     )
     apply_section_spacing(embed)
@@ -178,22 +178,22 @@ def build_policy_vote_update_embed(
     embed.add_field(name="Status", value=status, inline=True)
     embed.add_field(
         name="✅ Yes",
-        value=_format_names(yes_ids, name_fn, with_ids=True),
+        value=_format_names(yes_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="❌ No",
-        value=_format_names(no_ids, name_fn, with_ids=True),
+        value=_format_names(no_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="➖ Abstain",
-        value=_format_names(abstain_ids, name_fn, with_ids=True),
+        value=_format_names(abstain_ids, name_fn),
         inline=False,
     )
     embed.add_field(
         name="⏳ Awaiting",
-        value=_format_names(awaiting_ids, name_fn, with_ids=True),
+        value=_format_names(awaiting_ids, name_fn),
         inline=False,
     )
     apply_section_spacing(embed)
@@ -597,18 +597,35 @@ def build_policy_proposal_embed(
     policy_id: int,
     title: str,
     description: str,
-    proposer_mention: str,
+    proposer: str,
+    visibility: object = None,
     now: datetime | None = None,
 ) -> discord.Embed:
-    """Build the policy-proposal embed posted when ``/policy open`` runs."""
+    """Build the policy-proposal embed posted when ``/policy open`` runs.
+
+    The Visibility field states who can see the channel, because the card's
+    own toggle can change it mid-discussion and a mod scrolling back needs
+    the answer without checking the channel settings. It reads as the state
+    ("🔒 Mods only"); the button next to it reads as the action ("Open to
+    Members"), so the two are never mistaken for each other.
+
+    ``proposer`` is a **resolved display name**, not a ``<@id>``. It used to
+    be a mention, which was survivable while only mods read this card — and
+    stopped being survivable the moment that same card could be opened to
+    every member, since an embed mention is resolved by the *reading* client
+    from its own cache. Callers pass ``build_name_fn(...)(creator_id)``.
+    """
     embed = discord.Embed(
         title=f"📋 Policy Proposal #{policy_id}: {title}",
         description=description,
         color=MOD_POLICY,
         timestamp=now or datetime.now(timezone.utc),
     )
-    embed.add_field(name="Proposed by", value=proposer_mention, inline=True)
+    embed.add_field(name="Proposed by", value=proposer, inline=True)
     embed.add_field(name="Status", value="💬 Open for Discussion", inline=True)
+    embed.add_field(
+        name="Visibility", value=policy_visibility_status(visibility), inline=True
+    )
     embed.set_footer(text="Use /policy vote to start the formal vote when ready.")
     apply_section_spacing(embed)
     return embed

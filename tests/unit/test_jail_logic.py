@@ -6,15 +6,25 @@ import pytest
 from freezegun import freeze_time
 
 from bot_modules.jail.logic import (
+    POLICY_EXPOSURE_COUNT_CAP,
+    POLICY_VISIBILITY_MODS,
+    POLICY_VISIBILITY_PUBLIC,
     channel_needs_jail_deny,
     channels_needing_jail_deny,
     eligible_voters,
+    format_exposure_count,
     is_jail_expired,
+    is_policy_public,
     jail_duration_seconds,
+    normalize_policy_visibility,
+    policy_exposure_warning,
+    policy_visibility_label,
+    policy_visibility_status,
     resolve_policy_vote,
     restore_roles,
     snapshot_roles,
     tally_votes,
+    toggle_policy_visibility,
     vote_outcome,
 )
 from bot_modules.services.moderation import fmt_duration, parse_duration
@@ -248,3 +258,107 @@ def test_vote_outcome_expired_no_quorum():
     eligible = {1, 2, 3}
     tally = {"yes": [], "no": [], "abstain": [], "awaiting": [1, 2, 3]}
     assert vote_outcome(tally, eligible, expired=True) == "rejected_no_quorum"
+
+
+# ── Policy channel visibility ─────────────────────────────────────────
+#
+# A proposal starts mods-only and a mod may open it to the general public.
+# Opening grants history, so it cannot be taken back in the sense that
+# matters — these tests pin the two guards that stand between a press and
+# that: an unknown state reading as private, and a warning that names the
+# backlog.
+
+
+@pytest.mark.parametrize("stored,expected", [
+    ("public", POLICY_VISIBILITY_PUBLIC),
+    ("mods", POLICY_VISIBILITY_MODS),
+    # Everything below is an unknown state, and every one reads as PRIVATE.
+    # The asymmetry is deliberate: mis-reading private-as-public would have
+    # the card claim an openness it doesn't have, while this direction only
+    # ever offers to open a channel that is already open.
+    (None, POLICY_VISIBILITY_MODS),
+    ("", POLICY_VISIBILITY_MODS),
+    ("Public", POLICY_VISIBILITY_MODS),
+    ("everyone", POLICY_VISIBILITY_MODS),
+    (1, POLICY_VISIBILITY_MODS),
+])
+def test_normalize_policy_visibility(stored, expected):
+    assert normalize_policy_visibility(stored) == expected
+    assert is_policy_public(stored) is (expected == POLICY_VISIBILITY_PUBLIC)
+
+
+@pytest.mark.parametrize("stored,nxt", [
+    ("mods", POLICY_VISIBILITY_PUBLIC),
+    ("public", POLICY_VISIBILITY_MODS),
+    (None, POLICY_VISIBILITY_PUBLIC),
+])
+def test_toggle_policy_visibility(stored, nxt):
+    assert toggle_policy_visibility(stored) == nxt
+
+
+def test_toggle_is_its_own_inverse():
+    assert toggle_policy_visibility(toggle_policy_visibility("mods")) == "mods"
+    assert toggle_policy_visibility(toggle_policy_visibility("public")) == "public"
+
+
+@pytest.mark.parametrize("stored,label,status", [
+    ("mods", "Open to Members", "🔒 Mods only"),
+    ("public", "Make Mods-Only", "🌐 Open to members"),
+])
+def test_label_names_the_action_and_status_names_the_state(stored, label, status):
+    """The two must not drift into saying the same thing.
+
+    A button reading "Mods Only" on a mods-only card is ambiguous — is that
+    the situation or the offer? So the button is always the verb and the
+    field is always the state.
+    """
+    assert policy_visibility_label(stored) == label
+    assert policy_visibility_status(stored) == status
+    assert policy_visibility_label(stored) != policy_visibility_status(stored)
+
+
+@pytest.mark.parametrize("count,capped,expected", [
+    (0, False, "0 messages"),
+    (1, False, "1 message"),      # not "1 messages"
+    (2, False, "2 messages"),
+    (47, False, "47 messages"),
+    (POLICY_EXPOSURE_COUNT_CAP, True, "500+ messages"),
+])
+def test_format_exposure_count(count, capped, expected):
+    assert format_exposure_count(count, capped=capped) == expected
+
+
+def test_exposure_warning_names_the_backlog_and_the_irreversibility():
+    """The whole point of the confirm is that it is specific.
+
+    A generic "are you sure?" would not stop the mistake this guards: opening
+    a channel while thinking about the proposal and forgetting the candid
+    discussion sitting above it.
+    """
+    text = policy_exposure_warning(47)
+    assert "47 messages" in text
+    assert "before now" in text          # the backlog, not just from here on
+    assert "cannot un-read" in text      # opening is not really reversible
+    assert "post here" in text           # members get to talk, not just read
+
+
+def test_exposure_warning_is_a_floor_when_counting_stopped():
+    text = policy_exposure_warning(POLICY_EXPOSURE_COUNT_CAP, capped=True)
+    assert "500+ messages" in text
+
+
+def test_an_uncountable_backlog_never_renders_as_a_number():
+    """``None`` means the count failed — usually the bot cannot read history
+    in this channel at all.
+
+    Rendering that as "0 messages" would put the most reassuring sentence
+    this prompt can produce in front of a mod at the exact moment nobody
+    knows how much is about to be exposed. It has to read as unknown.
+    """
+    assert format_exposure_count(None) == "everything already posted in this channel"
+    text = policy_exposure_warning(None)
+    assert "0 messages" not in text
+    assert "everything already posted in this channel" in text
+    # The rest of the warning still has to land.
+    assert "before now" in text
+    assert "cannot un-read" in text

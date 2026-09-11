@@ -8,6 +8,7 @@ backtrace when the cog's expected format drifts.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -170,25 +171,61 @@ def test_update_embed_running_tally():
     assert embed.color is not None and embed.color.value == MOD_POLICY
     assert _fv(embed, "Status") == "🗳️ Voting"
     assert _fv(embed, "Votes Cast") == "2/3"  # 1 yes + 1 abstain
-    # Mod-facing, so the id rides alongside the name and stays copyable —
-    # the ballot card, which members read, deliberately shows the name alone.
-    assert _fv(embed, "✅ Yes") == "Ada (`1`)"
+    # Names alone: the roster is read, never pasted out of.
+    assert _fv(embed, "✅ Yes") == "Ada"
     assert _fv(embed, "❌ No") == "—"
-    assert _fv(embed, "➖ Abstain") == "Grace (`2`)"
+    assert _fv(embed, "➖ Abstain") == "Grace"
 
 
-def test_a_mod_facing_vote_keeps_the_id_but_a_member_facing_ballot_does_not():
-    """docs/embed_style_guide.md: a moderator keeps something copyable; an id
-    on a card ordinary members read is noise to every one of them."""
-    vote = build_policy_vote_update_embed(
-        policy_title="t", vote_text="t",
-        yes_ids=[1], no_ids=[], abstain_ids=[], awaiting_ids=[],
-        name_fn=_names,
-    )
-    ballot = build_policy_ballot_embed(question="q", yes_ids=[1], name_fn=_names)
+#: Four real-width snowflakes, so a leaked id is unmistakable in the render.
+_SNOWFLAKES = [111111111111111111, 222222222222222222,
+               333333333333333333, 444444444444444444]
 
-    assert "`1`" in _fv(vote, "✅ Yes")
-    assert "`1`" not in "\n".join(f.value or "" for f in ballot.fields)
+
+def _snowflake_names(uid: int) -> str:
+    """Digit-free display names, so any digits found came from an id."""
+    return dict(zip(_SNOWFLAKES, ["Ada", "Grace", "Alan", "Bea"]))[uid]
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        pytest.param(
+            lambda: build_policy_vote_initial_embed(
+                channel_name="p", vote_text="t", eligible_ids=_SNOWFLAKES,
+                name_fn=_snowflake_names,
+            ),
+            id="initial",
+        ),
+        pytest.param(
+            lambda: build_policy_vote_update_embed(
+                policy_title="t", vote_text="t",
+                yes_ids=_SNOWFLAKES[:1], no_ids=_SNOWFLAKES[1:2],
+                abstain_ids=_SNOWFLAKES[2:3], awaiting_ids=_SNOWFLAKES[3:],
+                name_fn=_snowflake_names,
+            ),
+            id="update",
+        ),
+    ],
+)
+def test_vote_cards_print_names_alone_never_a_raw_user_id(build):
+    """Ruling 2026-09-09: the mod vote shows names alone, like the ballot.
+
+    It used to append ``Name (`id`)`` under the copyable-id rule in
+    docs/embed_style_guide.md. Nothing in the policy flow takes a user id
+    (the vote buttons carry a *policy* id), and a policy ticket is run
+    privately among mods **or** opened to the general public proposal by
+    proposal — so the builder cannot know a member isn't reading. This is
+    the test that fails if a later "mod-facing embeds keep the id" pass
+    puts them back; `/policy open` denying @everyone by default is not
+    evidence the card is mod-only.
+    """
+    rendered = "\n".join(f"{f.name}: {f.value or ''}" for f in build().fields)
+
+    # "Votes Cast" is a short tally like 1/4; a snowflake is a long digit run.
+    assert re.search(r"\d{5,}", rendered) is None, rendered
+    for name in ("Ada", "Grace", "Alan", "Bea"):
+        assert name in rendered
 
 
 def test_update_embed_adopted():
@@ -549,7 +586,7 @@ def test_policy_proposal_embed_basic():
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     embed = build_policy_proposal_embed(
         policy_id=1, title="Foo", description="Bar",
-        proposer_mention="<@1>", now=now,
+        proposer="Ada", now=now,
     )
     assert embed.title == "📋 Policy Proposal #1: Foo"
     assert embed.description == "Bar"
@@ -560,9 +597,40 @@ def test_policy_proposal_embed_basic():
 
 def test_policy_proposal_embed_defaults_timestamp():
     embed = build_policy_proposal_embed(
-        policy_id=1, title="Foo", description="Bar", proposer_mention="<@1>",
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
     )
     assert embed.timestamp is not None
+
+
+def test_policy_proposal_embed_names_the_proposer_never_mentions_them():
+    """The card can be opened to every member from its own button.
+
+    It used to render the proposer as ``user.mention``, which was survivable
+    while the channel was mod-only and stopped being survivable the moment
+    the same card could go public — an embed mention is resolved by the
+    reading client's own cache.
+    """
+    embed = build_policy_proposal_embed(
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
+    )
+    assert _fv(embed, "Proposed by") == "Ada"
+    assert "<@" not in "\n".join(
+        f"{f.name} {f.value}" for f in embed.fields
+    )
+
+
+@pytest.mark.parametrize("visibility,shown", [
+    (None, "🔒 Mods only"),          # a row written before migration 219
+    ("mods", "🔒 Mods only"),
+    ("public", "🌐 Open to members"),
+    ("nonsense", "🔒 Mods only"),    # unknown reads as private, never public
+])
+def test_policy_proposal_embed_states_who_can_see_the_channel(visibility, shown):
+    embed = build_policy_proposal_embed(
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
+        visibility=visibility,
+    )
+    assert _fv(embed, "Visibility") == shown
 
 
 def test_policy_close_embed_with_reason():
