@@ -28,7 +28,12 @@ import sqlite3
 
 from bot_modules.services.economy_service import apply_credit
 from bot_modules.services.survivor_service import SeasonError, set_season_status
-from bot_modules.survivor.logic import KIND_PAYOUT, ghost_streaks, pot_totals
+from bot_modules.survivor.logic import (
+    KIND_GHOST_PAYOUT,
+    KIND_PAYOUT,
+    ghost_streaks,
+    pot_totals,
+)
 
 # Why the wipeout split ended the season, for the ledger meta and the
 # Reckoning's ceremony copy. More arrive with 6d (the Accord) and 6e.
@@ -129,10 +134,13 @@ def settle_season_end(
         "main": even_shares(main_pot, finishers),
         "ghost": even_shares(ghost_pot, ghosts),
     }
-    for pot_name in ("main", "ghost"):
+    # One kind per pot (spec §5), not one kind with a discriminator: the two
+    # purses are separate games, the metrics are meant to separate them, and
+    # reading them back by kind beats parsing it out of the meta.
+    for pot_name, kind in (("main", KIND_PAYOUT), ("ghost", KIND_GHOST_PAYOUT)):
         for user_id, amount in receipt[pot_name]:
             apply_credit(
-                conn, season["guild_id"], user_id, amount, KIND_PAYOUT,
+                conn, season["guild_id"], user_id, amount, kind,
                 meta={
                     "season_id": season["id"],
                     "week": week,
@@ -148,25 +156,27 @@ def payout_receipt(conn: sqlite3.Connection, season: dict) -> list[dict]:
     """What a settled season actually paid, read back from the ledger.
 
     Read back rather than stored, so the ceremony can only ever report money
-    that really moved. The ``json_extract`` season scoping is ``pot_totals``'
-    pattern verbatim, for its reason: ``'"season_id": 1'`` is a substring of
-    ``'"season_id": 12'``, so a LIKE would hand season 1 the payouts of
-    seasons 10-19.
+    that really moved. Which pot a row came from is the row's **kind**, not a
+    string found inside its meta: a substring match is the very thing the
+    season scoping below avoids, and it would misfile every ghost share the
+    day the meta is serialised with different spacing. The ``json_extract``
+    scoping is ``pot_totals``' pattern verbatim, for its reason:
+    ``'"season_id": 1'`` is a substring of ``'"season_id": 12'``, so a LIKE
+    would hand season 1 the payouts of seasons 10-19.
     """
     rows = conn.execute(
-        "SELECT user_id, amount, meta FROM econ_ledger "
-        "WHERE guild_id = ? AND kind = ? AND amount > 0 "
+        "SELECT user_id, amount, kind FROM econ_ledger "
+        "WHERE guild_id = ? AND kind IN (?, ?) AND amount > 0 "
         "AND COALESCE(json_extract("
         "CASE WHEN json_valid(meta) THEN meta ELSE '{}' END, "
         "'$.season_id'), 0) = ? ORDER BY amount DESC, user_id",
-        (season["guild_id"], KIND_PAYOUT, season["id"]),
+        (season["guild_id"], KIND_PAYOUT, KIND_GHOST_PAYOUT, season["id"]),
     ).fetchall()
     return [
         {
             "user_id": int(r["user_id"]),
             "amount": int(r["amount"]),
-            "pot": "ghost" if (r["meta"] and '"pot": "ghost"' in r["meta"])
-                   else "main",
+            "pot": "ghost" if r["kind"] == KIND_GHOST_PAYOUT else "main",
         }
         for r in rows
     ]

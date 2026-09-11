@@ -38,6 +38,7 @@ from bot_modules.survivor.logic import (
     place_pick,
     player_status,
     present_member_ids,
+    panel_roster,
     pot_totals,
     satchel,
 )
@@ -709,3 +710,37 @@ def test_a_rejoined_member_comes_back(db):
 
         assert departed_players(conn, season, None) == {1}
         assert departed_players(conn, season, {1}) == set()
+
+
+def test_panel_roster_counts_what_it_renders():
+    """The panel's four counts come from the filtered list, not from SQL —
+    a header reading "Alive (3)" over two names is the bug this prevents."""
+    rows = [
+        (1, "alive", None),
+        (2, "alive", None),
+        (3, "ghost", "picks"),
+        (4, "ghost", "left"),
+    ]
+    shown = panel_roster(rows, picked_ids={1, 2}, present_ids={1, 3})
+
+    assert shown.hidden == {2, 4}
+    assert shown.members == [(1, "alive"), (3, "ghost")]
+    assert (shown.alive, shown.ghost, shown.total) == (1, 1, 2)
+    # The counts and the list agree, whatever the filter did.
+    assert shown.alive == sum(1 for _, st in shown.members if st == "alive")
+    assert shown.ghost == len(shown.members) - shown.alive
+    assert shown.total == len(shown.members)
+    # A departed picker cannot push "x of y picked" past the roster.
+    assert shown.picked == 1
+    assert shown.picked <= shown.alive
+
+
+def test_panel_roster_hides_nobody_without_a_trusted_cache():
+    """survivor-174: an unchunked cache is a suspicion, not a verdict, so
+    only the recorded departure is honoured and the panel stays populated."""
+    rows = [(1, "alive", None), (2, "ghost", "left")]
+    shown = panel_roster(rows, picked_ids={1}, present_ids=None)
+
+    assert shown.hidden == {2}
+    assert shown.members == [(1, "alive")]
+    assert (shown.alive, shown.ghost, shown.total, shown.picked) == (1, 0, 1, 1)

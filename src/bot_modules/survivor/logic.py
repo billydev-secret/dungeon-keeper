@@ -27,6 +27,10 @@ KIND_BUYIN = "survivor_buyin"
 KIND_GAUNTLET_FEE = "survivor_gauntlet_fee"
 KIND_WEEKLY_WIN = "survivor_weekly_win"
 KIND_PAYOUT = "survivor_payout"
+# The side-pot pays under its own kind (spec §5): the Ghost Streak is a
+# separate game with a separate purse, and the economy metrics are
+# supposed to be able to tell the two apart.
+KIND_GHOST_PAYOUT = "survivor_ghost_payout"
 
 # ESPN abbreviations by conference, for the dual-select pick panel
 # (Discord's 25-option cap vs 32 teams, spec §2.4). The full set is pinned
@@ -185,6 +189,52 @@ def departed_from_rows(rows, present_ids: set[int] | None) -> set[int]:
     if present_ids is None:
         return {uid for uid, source in pairs if source == "left"}
     return {uid for uid, _ in pairs if uid not in present_ids}
+
+
+@dataclass(frozen=True)
+class PanelRoster:
+    """The channel panel's roster after todo #203, counts included.
+
+    The counts live here, beside the filter that produced them, because they
+    have to be derived from the very list the names are read off: a header
+    reading "Alive (17)" over sixteen names is the bug that counting in SQL
+    and filtering in the view always eventually produces. The view's job is
+    to render ``members``; it must never re-count them.
+    """
+
+    members: list[tuple[int, str]]   # (user_id, status), departed removed
+    hidden: set[int]
+    alive: int
+    ghost: int
+    total: int
+    picked: int
+
+
+def panel_roster(rows, picked_ids: set[int], present_ids: set[int] | None) -> PanelRoster:
+    """Filter the panel's roster and count what is left.
+
+    ``rows`` are ``(user_id, status, elimination_source)`` as the panel reads
+    them in its worker thread; ``present_ids`` is the guild answer it only
+    has once it is back on the event loop (see :func:`present_member_ids`).
+    ``picked_ids`` are the living who have picked this week — filtered by the
+    same verdict, so the "x of y picked" line can never exceed the roster it
+    is counting against.
+    """
+    hidden = departed_from_rows(
+        ((uid, source) for uid, _, source in rows), present_ids
+    )
+    members = [
+        (int(uid), status) for uid, status, _ in rows if int(uid) not in hidden
+    ]
+    alive = sum(1 for _, status in members if status == "alive")
+    return PanelRoster(
+        members=members,
+        hidden=hidden,
+        alive=alive,
+        ghost=len(members) - alive,
+        total=len(members),
+        picked=len(picked_ids - hidden),
+    )
 
 
 # ── the satchel ────────────────────────────────────────────────────────

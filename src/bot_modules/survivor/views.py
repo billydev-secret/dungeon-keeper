@@ -619,10 +619,8 @@ async def build_live_panel(
                     (year, week if week is not None else -1),
                 ).fetchall()
             ]
-            # Counts are derived from the same filtered roster the names
-            # come from (todo #203) rather than counted in SQL: a header
-            # reading "Alive (17)" over sixteen names is the bug that
-            # filtering in two places always eventually produces.
+            # Ids, not a COUNT(*): the panel's counts are derived from the
+            # filtered roster (logic.panel_roster), never from SQL.
             picked_ids = {
                 int(r["user_id"]) for r in conn.execute(
                     "SELECT DISTINCT p.user_id FROM survivor_picks p "
@@ -659,18 +657,12 @@ async def build_live_panel(
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
-    # Departed members leave the panel entirely (todo #203) — and the counts
-    # are derived from the same filtered roster the names come from, since a
-    # header reading "Alive (17)" over sixteen names is what filtering in two
-    # places eventually produces.
-    hidden = logic.departed_from_rows(
-        ((uid, source) for uid, _, source in roster),
-        logic.present_member_ids(guild),
+    # Departed members leave the panel entirely (todo #203). The filter and
+    # the counts are one call in the logic layer on purpose — see
+    # logic.PanelRoster — so nothing here can count a list it didn't render.
+    shown = logic.panel_roster(
+        roster, picked_ids, logic.present_member_ids(guild)
     )
-    roster = [(uid, status) for uid, status, _ in roster if uid not in hidden]
-    alive = sum(1 for _, status in roster if status == "alive")
-    ghost, total = len(roster) - alive, len(roster)
-    picked = len(picked_ids - hidden)
     config = season["config"]
     from bot_modules.survivor.reckoning import slate_join_line
 
@@ -685,16 +677,18 @@ async def build_live_panel(
         guild=guild,
         db_path=db_path,
         guild_id=season["guild_id"],
-        user_ids=[uid for uid, _ in roster],
+        user_ids=[uid for uid, _ in shown.members],
     )
 
     # Sorted by name so the list is scannable and stable between edits —
     # join order would reshuffle nothing but still read as arbitrary.
     alive_names = sorted(
-        (_display(uid) for uid, st in roster if st == "alive"), key=str.casefold
+        (_display(uid) for uid, st in shown.members if st == "alive"),
+        key=str.casefold,
     )
     eliminated_names = sorted(
-        (_display(uid) for uid, st in roster if st != "alive"), key=str.casefold
+        (_display(uid) for uid, st in shown.members if st != "alive"),
+        key=str.casefold,
     )
     # Enrolling seasons show the pre-kickoff face (week=None hides the
     # slate section even if the schedule is loaded but week 1 is far off?
@@ -703,16 +697,16 @@ async def build_live_panel(
     # members want the games list. week is None only with no open games.
     embed = build_panel_embed(
         season_name=season["name"],
-        entrants=total,
+        entrants=shown.total,
         buyin=int(config["buyin_coins"]),
         gauntlet_mode=gauntlet_mode,
         late_entry=str(config["late_entry"]),
         strikes=int(config["strikes"]),
         week=week,
         games=games,
-        alive=alive,
-        eliminated=ghost,
-        picked=picked,
+        alive=shown.alive,
+        eliminated=shown.ghost,
+        picked=shown.picked,
         pot=pots["main"],
         ghost_pot=pots["ghost"],
         alive_names=alive_names,

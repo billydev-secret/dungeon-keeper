@@ -22,13 +22,20 @@ from datetime import datetime, timezone
 import pytest
 
 from bot_modules.core.db_utils import open_db
+from bot_modules.economy.kinds import UNSCALED_CREDIT_KINDS
 from bot_modules.services.survivor_service import (
     SeasonError,
     create_season,
     eliminate_player,
     get_season,
 )
-from bot_modules.survivor.logic import burned_teams, join_season, place_pick
+from bot_modules.survivor.logic import (
+    KIND_GHOST_PAYOUT,
+    KIND_PAYOUT,
+    burned_teams,
+    join_season,
+    place_pick,
+)
 from bot_modules.survivor.payout import (
     even_shares,
     payout_receipt,
@@ -352,6 +359,48 @@ def test_the_ghost_pot_goes_to_the_longest_streak(db):
         assert receipt["ghost"] == [(3, 200)]
         assert receipt["main"] == [(1, 400), (2, 400)]
         assert {r["pot"] for r in payout_receipt(conn, season)} == {"main", "ghost"}
+
+
+def test_the_two_pots_pay_under_their_own_ledger_kinds(db):
+    """Spec §5: the side-pot is a separate game with a separate purse, so
+    it pays under ``survivor_ghost_payout`` and the economy metrics can tell
+    the two apart. Collapsing them back into one kind loses that, and the
+    receipt would have to guess a pot out of the meta."""
+    with open_db(db) as conn:
+        season = _season(
+            conn, strikes=0, wipeout_annul_through_week=0,
+            pot_seed=1000, ghost_pot_pct=20, buyin_coins=0,
+        )
+        for user_id, team in ((1, "SEA"), (2, "SEA"), (3, "NE")):
+            join_season(conn, season, user_id, NOW)
+            place_pick(conn, season, user_id, 1, team, NOW)
+        _finalize(conn, "g1", "SEA")
+        run_settle(conn, season, AFTER_W1)
+        season = get_season(conn, season["id"])
+
+        place_pick(conn, season, 3, 2, "PHI", W1 + HOUR)
+        for user_id in (1, 2):
+            place_pick(conn, season, user_id, 2, "DAL", W1 + HOUR)
+        _finalize(conn, "g2", "PHI")
+        run_settle(conn, season, AFTER_W2)
+
+        by_kind = {
+            (r["kind"], int(r["user_id"])): int(r["amount"])
+            for r in conn.execute(
+                "SELECT kind, user_id, amount FROM econ_ledger "
+                "WHERE guild_id = ? AND amount > 0",
+                (GID,),
+            ).fetchall()
+        }
+        assert by_kind == {
+            (KIND_PAYOUT, 1): 400,
+            (KIND_PAYOUT, 2): 400,
+            (KIND_GHOST_PAYOUT, 3): 200,
+        }
+        # And the side-pot is carved out of the advertised seed, so the
+        # faucet scale must not shrink it on the way out.
+        assert KIND_GHOST_PAYOUT in UNSCALED_CREDIT_KINDS
+        assert KIND_PAYOUT in UNSCALED_CREDIT_KINDS
 
 
 def test_a_settled_season_refuses_a_second_payout(db):
