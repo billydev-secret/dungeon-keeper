@@ -54,7 +54,10 @@ RETIRED = {
     "nhie": ["lives", "min_players", "max_players"],
     "price": ["min_players", "max_players"],
     "rushmore": ["draft_rounds"],
-    "clapback": ["allow_nsfw"],
+    # The player-limit pair went with the rest on 2026-08-27; the cog caps its
+    # lobby with its own MIN_PLAYERS / MAX_PLAYERS and never read the stored
+    # values. Migration 220 deletes the row they left in prod.
+    "clapback": ["allow_nsfw", "min_players", "max_players"],
 }
 
 
