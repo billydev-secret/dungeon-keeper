@@ -8,13 +8,17 @@ the defects" — so the remaining 85 findings were worked too.
 
 **Defect queue outcome: 82 fixed, 3 deferred**, by thirteen agents each in an
 isolated worktree, one per feature area, then merged here. The three deferrals
-were product calls, not oversights; two have since been closed (#53 by
-migration 193, #89 as won't-do), leaving #91:
+were product calls, not oversights; **all three are now closed** (#53 by
+migration 193, #89 as won't-do, #91 as won't-do on 2026-09-11):
 
 * **#91 LegitLibs blank axes/prompts** — read-only from the dashboard, but no
   copy claims otherwise. Closing it means a new CRUD surface with cascading
   pos/domain/form and min_tier rules: a feature, and a decision about who may
-  reword the in-game prompts.
+  reword the in-game prompts. **CLOSED won't-do 2026-09-11**: the two tables
+  are bot-wide (no `guild_id`, and in `GLOBAL_TABLES`), so one guild's edit
+  rewords the prompts for every guild the bot serves. Reason and revisit
+  conditions in `docs/games_system_spec.md` § Environment / files, pinned by
+  `tests/web/test_legitlibs_vocabulary_is_seed_content.py`.
 * **#89 XP `role_grant_level`** — the milestone level is hard-coded at 5.
   Partly addressed (the report stopped hard-coding it and now reads the
   setting); making it a dial strands three member-facing surfaces that bake
@@ -1312,6 +1316,23 @@ medium = divergence that will bite on the next touch, low = latent debris.
    in-game blank prompt, but are read-only from the dashboard — no
    create/update/delete endpoint exists, so this content is tunable only by
    migration or direct DB edit.
+   **CLOSED won't-do 2026-09-11** on Billy's call. The decisive fact is one the
+   audit did not record: both tables are **bot-wide**, carrying no `guild_id`
+   and listed in `guild_purge_service.GLOBAL_TABLES` as "Bot-wide by design",
+   so an editor on any one guild's dashboard would reword the prompts and
+   re-gate the domains for **every** guild the bot serves — including guilds
+   this instance does not run. Raising an axis's `min_tier` can also invalidate
+   already-published templates, since `validate_template` re-checks the tier
+   rule at load. Prod holds exactly the 16 axes and 46 prompts migration 019
+   seeded, untouched, and no copy in Discord or on the dashboard claims the
+   content is editable — so there is no unenforced promise here, which is what
+   separates this from the *missing control* entries around it. The reason and
+   the condition for revisiting (answer the cross-guild question first — either
+   per-guild rows with a fallback to the seeded set, or a bot-owner-only
+   surface — and revalidate published templates when an axis tightens) are in
+   `docs/games_system_spec.md` § Environment / files, and
+   `tests/web/test_legitlibs_vocabulary_is_seed_content.py` fails if a write
+   path appears without that pass.
 
 92. **[low]** FFA bank draws treat 'truth' and 'dare' as reserved required
    tags (a truth-kind round only serves rows tagged 'truth'), but the games-

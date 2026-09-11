@@ -157,7 +157,7 @@ These settings are **live and enforced** but are configured from the web dashboa
   toggle.
 - **Audit channel** (`games_audit_channel`). When set, anonymous submissions are mirrored there with the original author visible. **Only** anonymous submissions: nothing writes a game-lifecycle event there, and the panel hint no longer claims otherwise. This is now a *mirror*, not the record — every anonymous action is also written to `anon_audit_log` and surfaced on the admin dashboard regardless of whether this channel is configured (see `anon_audit_spec.md`).
 - **Game Host / editor role** (`games_editor_role`). Holders pass the Game-Host check for content authoring on the dashboard and can add/remove other players via `/games join|leave`.
-- **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4), set per-row on the Games Config → Allowed Channels table, and LegitLibs template/vocabulary content.
+- **LegitLibs per-channel tier cap** (`legitlibs_channel_config.max_tier`, default 4), set per-row on the Games Config → Allowed Channels table, and LegitLibs template authoring. The LegitLibs **blank vocabulary** is not in that list and is not configurable — see *Environment / files* below.
 
 ### Dashboard
 
@@ -388,6 +388,30 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
 
 - No API key is needed for the question games: the AI fallback and its per-game prompt file were removed 2026-07-28; every question game is bank-only.
 - A LegitLibs starter pack of templates (`bot_modules/games/templates_seed.json`, `data.SEED_PATH`) is loaded into the shared global pool (`guild_id = 0`) on every boot, one `INSERT … WHERE NOT EXISTS` per template keyed on (global, title, body): a guild that has authored its own templates still gets the pack once, and re-runs add nothing. The file carries no ids — `template_id` is an INTEGER PRIMARY KEY the database assigns. Until 2026-09-04 the pack had never loaded anywhere: the path pointed at the repo root, the rows carried string ids, and a "skip if any published template exists" guard hid both (trivia-tail-82). Tags are stored the way the dashboard stores them (comma-separated), and the gameplay reader accepts either that or a JSON list.
+- The LegitLibs **blank vocabulary** — `legitlibs_blank_axes` (the parts of
+  speech, and the domains and forms valid under each) and
+  `legitlibs_blank_prompts` (the wording and examples a fill modal shows) — is
+  **seed content, edited by migration only**. It is read by `data.get_axes` /
+  `data.get_prompts` and by `validate_template`, exposed read-only at
+  `GET /api/games/legitlibs/axes` for the template editor's dropdowns, and has
+  no create/update/delete surface anywhere. That is a **decision, not an
+  oversight** (finding #91 of the 2026-08-29 config audit, closed won't-do
+  2026-09-11): both tables are **bot-wide**, carrying no `guild_id` and listed
+  in `guild_purge_service.GLOBAL_TABLES` as "Bot-wide by design", so any edit
+  from any guild's dashboard would reword the prompts and re-gate the domains
+  for **every** guild the bot is in — including guilds this instance does not
+  run. Raising an axis's `min_tier` can also invalidate templates that are
+  already published, because `validate_template` re-checks the tier rule at
+  load. Nothing in Discord or on the dashboard claims this content is editable,
+  so there is no unenforced promise to fix; the audit's own note recorded the
+  cost of closing it as "a new CRUD surface with cascading pos/domain/form and
+  min_tier rules: a feature, and a decision about who may reword the in-game
+  prompts". **To revisit**, the cross-guild question has to be answered first —
+  either per-guild rows (a `guild_id` column plus a fallback chain to the
+  seeded set) or an explicit bot-owner-only surface — and published templates
+  have to be revalidated when an axis tightens.
+  `tests/web/test_legitlibs_vocabulary_is_seed_content.py` fails if a write
+  path appears without that.
 
 ### In-memory
 
