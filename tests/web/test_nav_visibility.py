@@ -327,7 +327,10 @@ def test_help_nav_label_uses_the_guilds_assistant_name(browser, dashboard):
 
 def test_help_panel_title_uses_the_guilds_assistant_name(browser, dashboard):
     """Same for the panel's own title — and the manual's duplicate heading is
-    still dropped, since that comparison uses the static fallback label."""
+    still dropped, now that the manual's own heading names nobody and so can
+    match neither the branded title nor the static fallback. The entry states
+    the heading to strip (`manualHeading`); without that, a guild would see
+    "Ask Sparkles (AI)" with "Ask the AI Assistant" stacked under it."""
     ctx, page = _page_with_brand(browser, dashboard.base, "help-ask")
     errors: list[str] = []
     page.on("pageerror", lambda e: errors.append(str(e)))
@@ -337,9 +340,56 @@ def test_help_panel_title_uses_the_guilds_assistant_name(browser, dashboard):
             "() => /Ask Sparkles \\(AI\\)/.test(document.querySelector('#panel-root h2').textContent)",
             timeout=10_000,
         )
-        body = page.inner_text("#panel-root .dk-help")
-        assert "Ask Billy-bot (AI)" not in body, "manual heading rendered as a second title"
+        # Structural, not textual: the manual's heading is replaced by an empty
+        # anchor div, so the section content starts with a paragraph. The
+        # previous version of this check looked for the heading's text in
+        # inner_text() and could never have failed — the stylesheet uppercases
+        # h3s, so the needle never matched however broken the de-duplication was.
+        first = page.evaluate(
+            "() => (document.querySelector('#panel-root .dk-help')"
+            ".firstElementChild || {}).tagName"
+        )
+        assert first == "DIV", f"manual heading rendered as a second title (<{first}>)"
+        body = page.inner_text("#panel-root .dk-help").lower()
+        assert "ask the ai assistant" not in body, "manual heading rendered as a second title"
+        assert "billy" not in body, "the guide still names the assistant for every guild"
         assert not errors, errors
+    finally:
+        ctx.close()
+
+
+@pytest.mark.parametrize("page_id,label", [
+    ("help-word-cloud", "Word Cloud"),
+    ("help-usage-telemetry", "Command & Panel Usage"),
+])
+def test_a_permission_chip_does_not_leave_the_heading_behind(browser, dashboard, page_id, label):
+    """Two help pages drew their title twice, and nothing noticed.
+
+    Three manual subsections carry their audience as a chip inside the heading
+    itself (``Word Cloud <span class="perm">Mod</span>``). The chip lands in
+    textContent, so the heading read "Word Cloud Mod" and never matched the nav
+    label "Word Cloud" — the de-duplication silently declined, and the page
+    showed the panel header's title with the manual's own heading stacked
+    underneath it. Found while making the assistant's heading name-free
+    (todo #164); these two are the same defect with a different cause.
+    """
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        page.goto(f"{dashboard.base}/#/{page_id}", wait_until="domcontentloaded", timeout=15000)
+        page.wait_for_selector("#panel-root .dk-help", timeout=30_000)
+        page.wait_for_selector("#panel-root .dk-help .panel-loading", state="detached", timeout=30_000)
+        first = page.evaluate(
+            "() => (document.querySelector('#panel-root .dk-help')"
+            ".firstElementChild || {}).outerHTML || ''"
+        )
+        assert "<h3" not in first.lower(), f"{label}: manual heading kept — {first[:120]}"
+        headings = page.eval_on_selector_all(
+            "#panel-root .dk-help h3", "els => els.map(e => e.textContent.trim())"
+        )
+        assert not any(h.startswith(label) for h in headings), (
+            f"{label} still appears as a heading inside the page body: {headings[:3]}"
+        )
     finally:
         ctx.close()
 

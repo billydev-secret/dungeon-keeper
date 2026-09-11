@@ -180,22 +180,3 @@ def test_sparkline_helper_accepts_css_custom_properties():
     assert "fill-opacity" in body, "the fill-opacity replacement for hex alpha is gone"
 
 
-def test_the_emotion_bar_is_actually_styled():
-    """Regression for a tile that rendered nothing at all.
-
-    js/tiles/sentiment.js writes `.emotion-bar` / `.emotion-bar-seg`, and
-    neither had a single CSS rule. The segments carry only an inline
-    `width: N%`, so with no height they collapsed and the bar measured 0px —
-    the Sentiment & Tone tile shipped its emotion breakdown invisible.
-    """
-    css = (_JS.parent / "app.css").read_text(encoding="utf-8")
-    bar = re.search(r"\.emotion-bar \{([^}]*)\}", css)
-    seg = re.search(r"\.emotion-bar-seg \{([^}]*)\}", css)
-    assert bar, ".emotion-bar has no CSS rule — its segments collapse to zero height"
-    assert seg, ".emotion-bar-seg has no CSS rule"
-    assert "height" in bar.group(1), ".emotion-bar sets no height, so it renders as nothing"
-    assert "gap" in bar.group(1), (
-        "the 2px segment gap is gone — five categorical slots from this palette "
-        "cannot all clear the CVD target (every 5-of-6 subset lands at ΔE 6.2-6.4), "
-        "so the separation is required, not decorative"
-    )

@@ -177,7 +177,11 @@ function dropDuplicateHeading(root, label) {
   const heading = root.querySelector("h2, h3");
   if (!heading || heading !== root.firstElementChild) return;
   const clone = heading.cloneNode(true);
-  clone.querySelectorAll(".section-num").forEach((n) => n.remove());
+  // Chrome the heading carries but the nav label never does: the section
+  // number, and the Mod/Admin permission chip on the three audience-gated
+  // subsections. Both land in textContent, and while they did, Word Cloud and
+  // Command & Panel Usage each rendered their title twice.
+  clone.querySelectorAll(".section-num, .perm").forEach((n) => n.remove());
   if (normalizeTitle(clone.textContent) !== normalizeTitle(label)) return;
   if (heading.id) {
     const anchor = document.createElement("div");
@@ -205,7 +209,7 @@ function rewriteInternalLinks(root) {
 // ── Getting Started: reshape from a flat scroll into scannable chunks ──
 //
 // The manual nests four h3 subsections under this one h2, and the last —
-// "Ask Billy-bot (AI)" — is a full explainer (4 paragraphs + a callout)
+// "Ask the AI Assistant" — is a full explainer (4 paragraphs + a callout)
 // that also has its own dedicated nav page (help-ask). Shown in full here
 // too, it was most of what made this page read as a wall of text. This
 // reshapes the *rendered* DOM only — the manual's own text is untouched,
@@ -312,7 +316,7 @@ function buildSearchIndex(doc) {
 
   const headingTitle = (h) => {
     const clone = h.cloneNode(true);
-    clone.querySelectorAll(".section-num").forEach((n) => n.remove());
+    clone.querySelectorAll(".section-num, .perm").forEach((n) => n.remove());
     return clone.textContent.trim();
   };
 
@@ -448,8 +452,8 @@ export async function mount(container, params = {}) {
   h2.textContent = meta.label;
   // Same per-guild branding the nav applies (IA5): the static label is only a
   // fallback, so the title picks up this guild's name for the assistant. The
-  // manual's own heading is still de-duplicated against the static label, which
-  // is what dropDuplicateHeading compares.
+  // manual's own heading names nobody and so cannot match either one — it is
+  // de-duplicated against the entry's `manualHeading` instead.
   if (meta.brand === "assistant") {
     assistantName().then((name) => { h2.textContent = assistantHelpLabel(name); });
   }
@@ -505,7 +509,7 @@ export async function mount(container, params = {}) {
     body.replaceChildren();
     if (sectionFragment) {
       body.appendChild(sectionFragment.cloneNode(true));
-      dropDuplicateHeading(body, meta.label);
+      dropDuplicateHeading(body, meta.manualHeading || meta.label);
       rewriteInternalLinks(body);
       if (meta.page === "help-start") restructureGettingStarted(body);
     } else {

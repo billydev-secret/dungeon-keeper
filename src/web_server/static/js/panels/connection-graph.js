@@ -878,6 +878,17 @@ export function mount(container, initialParams) {
 
   const REPLAY_WINDOW_BINS = 4;   // 28-day rolling window
   const REPLAY_STEP_MS = 1400;    // per week, divided by the speed picker
+  // How many nodes the replay asks for, independent of the Max Nodes dial.
+  //
+  // It used to be `max(Max Nodes, 60)`, so the dial's ceiling of 100 fed the
+  // replay a graph whose worst week needs 2,466 settle ticks — past the burst's
+  // own bound, which means the frame gets drawn mid-rearrange and the week
+  // visibly travels instead of holding still (todo #171). The settle cost is
+  // superlinear in node count and is paid once per week, 30 times a playback,
+  // so the dial cannot be allowed to set it: 60 is where a busy week still
+  // converges inside the bound with room to spare. The live graph keeps the
+  // dial — it settles once, not thirty times.
+  const REPLAY_NODES = 60;
   // Playback starts where the window is first complete. Starting at 0 would
   // sum one week, then two, then three — every replay opening with a growth
   // curve that is an artefact of the ramp, not the community.
@@ -1034,11 +1045,14 @@ export function mount(container, initialParams) {
     // left for the animation loop afterwards is the short glide into the new
     // equilibrium, which is the movement worth watching.
     //
-    // The cost tracks the week's churn, not the graph size — a week nobody
-    // joined settles in one tick, a week with 8 arrivals takes ~1,300 and can
-    // reach the burst's wall-clock guard. That is affordable once per step and
-    // NOT affordable once per scrub event, which is why `settle` is optional:
-    // see the scrubber's handlers.
+    // The cost tracks the week's churn: a week nobody joined settles in one
+    // tick, and the worst week of a 60-node replay takes just under 2,000 —
+    // about 150ms, inside the burst's tick bound and nowhere near its
+    // wall-clock guard, which is sized to stay out of the way precisely so the
+    // frame doesn't depend on how loaded the machine is. (Before the replay was
+    // pinned to REPLAY_NODES, a graph at the dial's ceiling went over both.)
+    // That is affordable once per step and NOT affordable once per scrub event,
+    // which is why `settle` is optional: see the scrubber's handlers.
     if (settle && layoutIsDynamic()) physicsSettle(nodes, edges, physicsOpts());
     startSim();
   }
@@ -1087,7 +1101,7 @@ export function mount(container, initialParams) {
     try {
       d = await api("/api/reports/interaction-graph-series", {
         weeks: 30,
-        limit: Math.max(parseInt(limitEl.value) || 40, 60),
+        limit: REPLAY_NODES,
         resolution: parseFloat(resolutionEl.value) || 1.2,
       });
     } catch (err) {

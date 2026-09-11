@@ -242,42 +242,6 @@ def _sentiment_feed_payload(
     }
 
 
-def _sentiment_outliers(
-    conn, guild_id: int, bot_clause: str, bot_params: tuple, *, avg: float
-) -> dict:
-    """The two most positive / most negative messages beyond 1 sigma of *avg*."""
-    # ``sentiment IS NOT NULL`` replaces what the join to message_sentiment used
-    # to do implicitly — without it, unscored messages would drag the mean.
-    std_row = conn.execute(
-        f"SELECT COALESCE(SQRT(AVG((sentiment - ?) * (sentiment - ?))), 0.3) AS sd "
-        f"FROM messages "
-        f"WHERE guild_id = ? AND ts >= ? AND sentiment IS NOT NULL{bot_clause}",
-        (avg, avg, guild_id, time.time() - 86400 * 30, *bot_params),
-    ).fetchone()
-    sd = max(std_row["sd"], 0.1)
-    top2 = conn.execute(
-        f"""SELECT message_id, channel_id, author_id,
-                   substr(content, 1, 100) AS content, sentiment, emotion, ts
-            FROM messages
-            WHERE guild_id = ? AND sentiment >= ?{bot_clause}
-            ORDER BY sentiment DESC, ts DESC LIMIT 2""",
-        (guild_id, avg + sd, *bot_params),
-    ).fetchall()
-    bot2 = conn.execute(
-        f"""SELECT message_id, channel_id, author_id,
-                   substr(content, 1, 100) AS content, sentiment, emotion, ts
-            FROM messages
-            WHERE guild_id = ? AND sentiment <= ?{bot_clause}
-            ORDER BY sentiment ASC, ts DESC LIMIT 2""",
-        (guild_id, avg - sd, *bot_params),
-    ).fetchall()
-    return {
-        "top": [_sentiment_row(r) for r in top2],
-        "bottom": [_sentiment_row(r) for r in bot2],
-        "threshold": round(sd, 3),
-    }
-
-
 # ---------------------------------------------------------------------------
 # Grid endpoint — compact data for all tiles
 # ---------------------------------------------------------------------------
@@ -475,41 +439,6 @@ async def health_tiles(
                         "node_count": cached["node_count"],
                     }
 
-                if _want("sentiment"):
-                    cached = get_cached(conn, guild_id, ck("sentiment"))
-                    if cached is None:
-                        cached = compute_sentiment(
-                            conn, guild_id, include_bots=include_bots
-                        )
-                        set_cached(conn, guild_id, ck("sentiment"), cached)
-
-                    # Outlier messages: 1 sigma above / below the mean. Cached
-                    # under their own key (compute_sentiment builds the tile
-                    # payload and doesn't know about them); same 15-min TTL, so
-                    # the mean they key off is at most one TTL out of step.
-                    _outliers = get_cached(conn, guild_id, ck("sentiment_outliers"))
-                    if _outliers is None:
-                        _outliers = _sentiment_outliers(
-                            conn,
-                            guild_id,
-                            bot_clause,
-                            bot_params,
-                            avg=cached["avg_sentiment"],
-                        )
-                        set_cached(
-                            conn, guild_id, ck("sentiment_outliers"), _outliers
-                        )
-
-                    tiles["sentiment"] = {
-                        "avg_sentiment": cached["avg_sentiment"],
-                        "badge": cached["badge"],
-                        "emotions": cached["emotions"],
-                        "spikes_7d": cached["spikes_7d"],
-                        "pos_neg_ratio": cached["pos_neg_ratio"],
-                        "sparkline": cached["sparkline"],
-                        "outliers": _outliers,
-                    }
-
                 if _want("newcomer_funnel"):
                     cached = get_cached(conn, guild_id, ck("newcomer_funnel"))
                     if cached is None:
@@ -570,11 +499,6 @@ async def health_tiles(
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
                     ch_ids.add(int(msg["channel_id"]))
-            if "sentiment" in tiles:
-                for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
-                    ch_ids.add(int(msg["channel_id"]))
-                for msg in tiles["sentiment"].get("outliers", {}).get("bottom", []):
-                    ch_ids.add(int(msg["channel_id"]))
             ch_names = (
                 _resolve_channel_names(conn, guild, guild_id, ch_ids)
                 if ch_ids
@@ -588,11 +512,6 @@ async def health_tiles(
                     mod_user_ids.add(int(m["user_id"]))
             if "sentiment_feed" in tiles:
                 for msg in tiles["sentiment_feed"].get("messages", []):
-                    mod_user_ids.add(int(msg["author_id"]))
-            if "sentiment" in tiles:
-                for msg in tiles["sentiment"].get("outliers", {}).get("top", []):
-                    mod_user_ids.add(int(msg["author_id"]))
-                for msg in tiles["sentiment"].get("outliers", {}).get("bottom", []):
                     mod_user_ids.add(int(msg["author_id"]))
             user_names = (
                 _resolve_user_names(conn, guild, guild_id, mod_user_ids)

@@ -1,10 +1,14 @@
 // Single source of truth for the dashboard's Help navigation and the help
 // panel's page→manual-section mapping.
 //
-// `page`   — dashboard hash-route id (#/<page>)
-// `anchor` — heading id in /static/manual.html (h2 or h3; h3 anchors render
-//            just that subsection — see extractSectionContent in help.js)
-// `label`  — nav + panel title
+// `page`          — dashboard hash-route id (#/<page>)
+// `anchor`        — heading id in /static/manual.html (h2 or h3; h3 anchors
+//                   render just that subsection — see extractSectionContent in
+//                   help.js)
+// `label`         — nav + panel title
+// `manualHeading` — the manual's own heading text, when it differs from
+//                   `label`; help.js strips that heading so the page doesn't
+//                   show two titles. Omit it and `label` is used.
 //
 // app.js builds the sidebar "Help" section from HELP_GROUPS; help.js resolves
 // routes via HELP_PAGES. Add new manual sections here (and only here) — a
@@ -30,10 +34,13 @@ export const HELP_GROUPS = [
     // since it wouldn't otherwise sort ahead of "Ask …".
     { page: "help-start",    anchor: "getting-started",   label: "Getting Started",       order: 1 },
     { page: "help-overview", anchor: "functional-blocks", label: "Feature Map",           order: 2 },
-    // `label` here is the fallback only — see assistantHelpLabel above. It must
-    // keep matching the manual's own <h3 id="ask-guide"> text so help.js's
-    // dropDuplicateHeading still removes the duplicate title.
+    // The one page whose title deliberately is NOT the manual's own heading.
+    // `label` carries the assistant's name (the fallback — see
+    // assistantHelpLabel above), while the manual ships as one file for every
+    // guild and so names nobody. The heading help.js strips therefore has to be
+    // stated outright; drop `manualHeading` and this page renders two titles.
     { page: "help-ask",      anchor: "ask-guide",         label: assistantHelpLabel(),    order: 3,
+      manualHeading: "Ask the AI Assistant",
       brand: "assistant", keywords: "ask ai assistant advisor billy billy-bot" },
   ]},
   // Groups run audience-first — members, then moderators, then admins —
@@ -42,7 +49,8 @@ export const HELP_GROUPS = [
   // Keep each `label` identical to the manual heading its `anchor` points at:
   // the help panel prints the label as the page title and suppresses the
   // manual's own heading only when the two match (help.js dropDuplicateHeading),
-  // so drift here means users see two slightly different titles per page.
+  // so drift here means users see two slightly different titles per page. Where
+  // they must differ, say so with `manualHeading` (only help-ask does).
   // `page` ids are routed from panel headers — rename labels, never ids.
   { heading: "Games & Social", items: [
     { page: "help-casino",      anchor: "economy-casino",  label: "Casino" },

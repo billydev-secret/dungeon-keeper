@@ -51,10 +51,11 @@ verdict and needed no decision from Billy:
   config-global omits its card silently because nothing does. Written into
   `dashboard_ia.md` so the mismatch isn't flattened later.
 
-**Left for Billy, not built:** the narrow composite `health-sentiment` home
-widget still renders the retired average/ratio/spikes. Removing it would drop
-it from saved home layouts, which is an owner's call rather than a cleanup —
-say the word and it goes. The wide `health-sentiment-feed` widget was
+**Left for Billy, then done:** the narrow composite `health-sentiment` home
+widget rendered the retired average/ratio/spikes. Removal would drop it from
+saved home layouts, which made it an owner's call rather than a cleanup; the
+word was given and it went on 2026-09-11 (todo #185, see
+`reporting_spec.md` § Flagged Messages). The wide `health-sentiment-feed` widget was
 relabelled to **Flagged Messages** to match the panel.
 
 **Superseded, not done by us:** Part 5 #2 (Quality Score) — another session did
@@ -333,7 +334,9 @@ Ordered by Billy's evident pain, not by size.
 ## Part 5 — research, not yet actionable
 
 1. **Sentiment & Tone feels useless** (`health-sentiment`) — "we gotta figure out
-   something for that." Rethink the metric or retire the panel.
+   something for that." **Settled 2026-09-11:** retired. The panel became
+   Flagged Messages (the one part that reads) and the composite home widget was
+   deleted outright (todo #185).
 2. **Quality Score metric** (`quality-score`) — looks representative of what he
    sees in the world, but worth researching how to improve it.
 3. **Feature Rotation settings layout** (`feature-rotation`) — the three-wide

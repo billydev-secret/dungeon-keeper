@@ -22,9 +22,14 @@
 // px/frame — and `settle()` fixes (2) by paying the convergence cost up front
 // when a replay frame is composed.
 //
-// The replay requests `max(limit, 60)` nodes while the live view defaults to
-// 40, which is why this showed up in the replay first; the live graph sits on
-// the same cliff and goes over it whenever Max Nodes is raised.
+// Why it came back (2026-09-11, same row): both bounds on that burst were
+// under-sized, so the fix converted "never settles at all" into "settles on a
+// quiet week, still jumps on a busy one" — which reads as intermittent because
+// it tracks churn, not anything the user did. The replay used to ask for
+// `max(Max Nodes, 60)`, so raising the dial to its ceiling of 100 took the
+// worst week to 2,466 ticks against a 2,000 bound and ~715ms against a 250ms
+// one. The replay now asks for a flat 60 whatever the dial says, and the two
+// bounds below are sized against the worst 60-node week rather than near it.
 
 export const BASE_REPULSION = 8000;
 export const SPRING_K = 0.005;
@@ -43,6 +48,23 @@ export const MAX_NODE_SPEED = 30;
 
 /** Separation floor for repulsion, when the two dots' radii aren't known. */
 const FALLBACK_RADIUS = 10;
+
+/** Tick bound on a settle burst: the working bound, and the one that must bind
+ *  first. Sized from a 90-week sweep of 60-node weeks (what the replay asks
+ *  for) across churn from 0 to 50% of the graph: the worst converged in 1,975
+ *  ticks. It was 2,000 — clearing the measured worst by 1.3%, which is not a
+ *  margin, it is a coincidence. */
+export const SETTLE_MAX_TICKS = 3000;
+
+/** Wall-clock bound on a settle burst: a hang guard, NOT the working bound.
+ *  A burst cut off by the clock makes the picture depend on how loaded the
+ *  machine is, and a half-converged frame is not a proportionally better
+ *  frame — see the table in settle(). So this is sized to stay out of the way:
+ *  that worst 1,975-tick week costs ~154ms on a developer laptop, and the full
+ *  3,000-tick budget about 235ms, so a client four times slower still gets
+ *  every tick it asks for. It was 250ms, which covered 35% of the worst week
+ *  the old node limit allowed. */
+export const SETTLE_BUDGET_MS = 1000;
 
 /**
  * Advance the simulation one step, mutating `nodes` in place.
@@ -168,29 +190,29 @@ export function tick(nodes, edges, opts = {}) {
  * @returns {{ticks: number, settled: boolean, speed: number}}
  */
 export function settle(nodes, edges, opts = {}) {
-  // Bounds sized from the measurement in todo #171, on a 60-node graph (what
-  // the replay asks for) with a week's worth of joiners spawning into it:
+  // The burst has to run all the way to the threshold. Cutting it off part-way
+  // does not give a proportionally better frame, because the layout is
+  // mid-rearrange — drift over the 700ms the week is on screen, for the worst
+  // 60-node week, against the tick at which the burst was stopped:
   //
-  //   joiners   ticks to settle   worst drift over the step
-  //         0                 1                     0.4 px
-  //         3               687                     0.7 px
-  //         8             1,285                     0.7 px
-  //        25             1,501                     1.4 px
+  //      ticks      drift       ticks      drift
+  //        100      57 px        1000       4 px
+  //        200      61 px        1200      25 px
+  //        300      28 px        1400       2 px
+  //        500      15 px        1600      10 px
+  //        700      41 px        1900       9 px
+  //        900       5 px        1975 ✓     1.3 px
   //
-  // The burst has to run to the threshold to get that. Cutting it off part-way
-  // does NOT give a proportionally better frame — the layout is mid-rearrange,
-  // so a 190-tick burst leaves ~38px of drift and a 600-tick one can leave
-  // more than a 300-tick one. Hence a tick bound generous enough to reach
-  // convergence rather than a tight one: the cost is up to ~220ms of a 700ms
-  // step on a busy week, and nothing at all on a quiet one, which is the price
-  // of a week that actually holds still.
-  //
-  // The wall clock is a hang guard, not the working bound — it is deliberately
-  // slack enough that a normal client never reaches it, because a time-bound
-  // burst makes the *picture* depend on how loaded the machine is. A client
-  // slow enough to hit it gets a softer frame instead of a stall.
-  const maxTicks = opts.maxTicks ?? 2000;
-  const budgetMs = opts.budgetMs ?? 250;
+  // Read down the column: more work does not mean a stiller picture. Seven of
+  // the fifteen steps above are *worse* than the one before, because the
+  // layout passes through its own rearrangements on the way. Only the
+  // converged row is reliable — everything short of it is a coin toss between
+  // 2px and 61px, and a sequence of those coin tosses is precisely the
+  // "jumps around" of todo #171. Which is why SETTLE_MAX_TICKS is sized to
+  // reach convergence with room over it, and why SETTLE_BUDGET_MS must never
+  // be the bound that actually stops the loop.
+  const maxTicks = opts.maxTicks ?? SETTLE_MAX_TICKS;
+  const budgetMs = opts.budgetMs ?? SETTLE_BUDGET_MS;
   const now = opts.now ?? (() => (typeof performance !== "undefined" ? performance.now() : Date.now()));
   const started = now();
   let speed = 0;

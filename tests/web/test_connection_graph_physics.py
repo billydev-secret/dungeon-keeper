@@ -24,6 +24,28 @@ The replay asks for ``max(limit, 60)`` nodes while the live view defaults to
 the same cliff, so the fix is in the shared model rather than gated on replay
 (Billy's call, 2026-09-01).
 
+**The row reopened (2026-09-11), and this file is why it could.** Both of
+``settle()``'s bounds were under-sized, so the 09-01 fix turned "never settles
+at all" into "settles on a quiet week, still jumps on a busy one" — load- and
+churn-dependent, which is why it read as intermittent. The tests above could
+not see it for two reasons, both now covered:
+
+  * they measured 60-node weeks built as *survivors plus newcomers*, so a week
+    with 25 joiners was a 85-node graph. A real week replaces departures: the
+    total stays at whatever the replay asked for, and ``limit`` went up to the
+    Max Nodes ceiling of 100, whose worst week needs 2,466 ticks against a
+    bound of 2,000.
+  * ``budgetMs`` was 250ms against a worst week costing ~715ms, so the wall
+    clock — not the tick count — was the bound that actually stopped the loop
+    on a busy week. The ``replay`` spec below freezes the clock on purpose (see
+    its comment), which is right for a layout assertion and is exactly why no
+    test here could ever have noticed.
+
+``test_the_worst_replay_week_converges_within_the_tick_bound`` and
+``test_the_replay_asks_for_a_fixed_number_of_nodes`` both fail on the 09-01
+code. The tick counts they assert are integer arithmetic over a seeded graph,
+so they mean the same thing on any machine.
+
 The module is imported directly rather than through the mounted panel: the
 physics has no DOM in it, and driving it through a canvas would test the
 canvas. One wiring assertion at the bottom checks the panel actually calls it.
@@ -163,8 +185,40 @@ async (spec) => {
     return { nodes, edges };
   };
 
+  // A week as the replay actually composes one: the graph holds `total` nodes,
+  // of which `joiners` are new this week and the rest carry their settled
+  // position and velocity over. Newcomers spawn at the canvas centre, which is
+  // what makes a high-churn week expensive — they all start on top of each
+  // other, in the middle, and have to be pushed out through the pack.
+  //
+  // The distinction from `build(total) + joiners` matters: that builds
+  // total + joiners nodes, a graph the Max Nodes ceiling does not allow, and
+  // it was how the 09-01 measurements came out optimistic.
+  const week = (total, joiners, deg, maxW, s) => {
+    // Reseed per week, so repeated calls in one evaluate compose the SAME week
+    // rather than walking the generator on and measuring a different graph each
+    // time. Without this the truncation sweep below compares stopping points
+    // across different graphs, which measures nothing.
+    seed = s;
+    const survivors = total - joiners;
+    const { nodes, edges } = build(survivors, deg, maxW);
+    P.settle(nodes, edges, { width: W, height: H, maxTicks: 8000, budgetMs: 1e9, now: () => 0 });
+    for (let i = 0; i < joiners; i++) {
+      nodes.push({ x: W / 2 + (rnd() - 0.5) * 60, y: H / 2 + (rnd() - 0.5) * 60,
+                   vx: 0, vy: 0, r: 6 + rnd() * 22 });
+      edges.push({ source: nodes.length - 1, target: Math.floor(rnd() * survivors),
+                   weight: 1 + Math.floor(rnd() * maxW) });
+    }
+    return { nodes, edges };
+  };
+
   const opts = { width: W, height: H };
-  const out = { MAX_NODE_SPEED: P.MAX_NODE_SPEED, SETTLED_SPEED: P.SETTLED_SPEED };
+  const out = {
+    MAX_NODE_SPEED: P.MAX_NODE_SPEED,
+    SETTLED_SPEED: P.SETTLED_SPEED,
+    SETTLE_MAX_TICKS: P.SETTLE_MAX_TICKS,
+    SETTLE_BUDGET_MS: P.SETTLE_BUDGET_MS,
+  };
   // tick() reports |vx|+|vy| — that is the unit SETTLED_SPEED has always been
   // in. The cap is on the true magnitude, so measure that separately instead
   // of comparing one against the other (they differ by up to √2).
@@ -250,6 +304,41 @@ async (spec) => {
     const res = P.settle(nodes, edges, { ...opts, budgetMs: spec.budgetMs, maxTicks: 100000, now });
     out.ticks = res.ticks;
     out.settled = res.settled;
+    return out;
+  }
+
+  if (spec.kind === 'week') {
+    // Ticks to convergence for one real week, clock frozen so only the tick
+    // count can stop the loop — the figure is then arithmetic, not a benchmark.
+    const { nodes, edges } = week(spec.total, spec.joiners, spec.deg, spec.maxW, spec.seed);
+    const res = P.settle(nodes, edges, { ...opts, maxTicks: 8000, budgetMs: 1e9, now: () => 0 });
+    out.ticks = res.ticks;
+    out.settled = res.settled;
+    // Ticks the PRODUCTION defaults would allow it — no maxTicks/budgetMs
+    // override, so a change to either constant shows up here.
+    const again = week(spec.total, spec.joiners, spec.deg, spec.maxW, spec.seed);
+    const prod = P.settle(again.nodes, again.edges, { ...opts, now: () => 0 });
+    out.prodTicks = prod.ticks;
+    out.prodSettled = prod.settled;
+    return out;
+  }
+
+  if (spec.kind === 'truncation') {
+    // One week, settled repeatedly with the burst stopped at each of `caps`,
+    // measuring how far the worst dot then travels over the frame's time on
+    // screen. Converged is the last entry.
+    out.rows = spec.caps.map((cap) => {
+      const { nodes, edges } = week(spec.total, spec.joiners, spec.deg, spec.maxW, spec.seed);
+      const res = P.settle(nodes, edges, { ...opts, maxTicks: cap, budgetMs: 1e9, now: () => 0 });
+      const from = nodes.map((n) => ({ x: n.x, y: n.y }));
+      for (let i = 0; i < spec.animationFrames; i++) P.tick(nodes, edges, opts);
+      return {
+        cap,
+        ticks: res.ticks,
+        settled: res.settled,
+        drift: Math.max(...nodes.map((n, i) => Math.hypot(n.x - from[i].x, n.y - from[i].y))),
+      };
+    });
     return out;
   }
 
@@ -378,6 +467,133 @@ def test_settle_stops_at_its_budget(page):
     )
 
 
+# ── Defect 3 (2026-09-11): the bounds on the burst were under-sized ──────
+#
+# Every figure below comes from a 90-week sweep — churn from 0 to 50% of the
+# graph, ten seeds each — over the same seeded builder the harness uses. The
+# worst 60-node week is 24 joiners on seed 1; the worst 100-node week is 40
+# joiners on seed 42. Those two weeks are what these tests drive.
+#
+# The degree and weight spread (8 and 438) are the live graph's, not the
+# defaults used above: the weeks a replay actually composes are denser than a
+# synthetic deg-6 graph, and the settle cost is in the density.
+_WORST_WEEK = dict(deg=8, maxW=438)
+_WORST_60 = dict(total=60, joiners=24, seed=1, **_WORST_WEEK)
+_WORST_100 = dict(total=100, joiners=40, seed=42, **_WORST_WEEK)
+
+
+def test_the_worst_replay_week_converges_within_the_tick_bound(page):
+    """A busy week finishes settling, and finishes with room to spare.
+
+    This is the one that reopened todo #171. The 09-01 bound was 2,000 ticks
+    and the worst 60-node week needs 1,975 — it cleared by 1.3%, which is not a
+    margin, and at the node limit the replay used to request it did not clear
+    at all. A week that does not converge is drawn mid-rearrange, and a frame
+    drawn mid-rearrange travels while it is on screen (see the test below).
+    """
+    r = _run(page, kind="week", **_WORST_60)
+
+    assert r["settled"], f"the worst 60-node week never converged ({r['ticks']} ticks)"
+    assert r["prodSettled"], (
+        f"the worst 60-node week needs {r['ticks']} ticks and the production "
+        f"bound is {r['SETTLE_MAX_TICKS']} — the frame gets drawn half-settled"
+    )
+    # Not merely inside the bound: inside it with somewhere to go. A graph the
+    # sweep didn't happen to hit must not be a cliff edge.
+    assert r["ticks"] <= r["SETTLE_MAX_TICKS"] * 0.8, (
+        f"the worst week uses {r['ticks']} of {r['SETTLE_MAX_TICKS']} ticks — "
+        f"over 80% of the bound leaves nothing for a week the sweep missed"
+    )
+
+
+def test_the_replay_node_cap_is_what_makes_that_bound_reachable(page):
+    """Why the replay stopped honouring Max Nodes.
+
+    The dial goes to 100, and the replay used to ask for `max(dial, 60)`. The
+    settle cost is superlinear in node count, so the worst week at the ceiling
+    needs 2,466 ticks — more than the bound, and it is paid once per week, 30
+    times a playback. This documents the gap the cap exists to close: raise the
+    replay's node count again and this test says what it costs.
+    """
+    r = _run(page, kind="week", **_WORST_100)
+
+    assert r["ticks"] > 2000, (
+        f"a 100-node week now converges in {r['ticks']} ticks — the force model "
+        f"got cheaper, so the replay's node cap may be worth revisiting"
+    )
+    # The capped week is the comparison: same churn fraction, far less work.
+    capped = _run(page, kind="week", **_WORST_60)
+    assert capped["ticks"] < r["ticks"], (capped["ticks"], r["ticks"])
+
+
+def test_a_burst_cut_short_is_not_a_proportionally_better_frame(page):
+    """The reason the bound has to reach convergence rather than approach it.
+
+    Spending more ticks does not buy a stiller picture — the layout passes
+    through its own rearrangements on the way, so drift over the frame's time on
+    screen rises and falls as the burst is stopped later and later. Only the
+    converged frame is reliable. A replay whose weeks land on random points of
+    that curve is the "jumps around" in the row's own words, and it is why a
+    wall-clock bound is the wrong shape for this: it stops the loop at whatever
+    point the machine's load puts it at.
+    """
+    caps = [100, 200, 300, 500, 700, 900, 1200, 1600, 1900, 3000]
+    r = _run(
+        page, kind="truncation", caps=caps, animationFrames=_STEP_FRAMES, **_WORST_60
+    )
+    rows = r["rows"]
+    converged = [row for row in rows if row["settled"]]
+    cut = [row for row in rows if not row["settled"]]
+    assert converged, "no cap in the sweep reached convergence — the week got harder"
+    assert len(cut) >= 6, f"only {len(cut)} cut-short bursts to compare"
+
+    # The converged frame holds still; the worst cut-short one does not, by an
+    # order of magnitude. Measured: 1.3px converged against 61px at 200 ticks.
+    assert converged[0]["drift"] < 5, converged[0]
+    worst_cut = max(row["drift"] for row in cut)
+    assert worst_cut > 25, (
+        f"the worst cut-short burst only drifted {worst_cut:.0f}px — if stopping "
+        f"the burst early has stopped mattering, these bounds can be revisited"
+    )
+
+    # And it is not monotonic, which is the part that makes a partial burst
+    # worthless rather than merely worse: at least one later stopping point is
+    # further from rest than an earlier one.
+    inversions = [
+        (a["ticks"], a["drift"], b["ticks"], b["drift"])
+        for a, b in zip(cut, cut[1:])
+        if b["drift"] > a["drift"]
+    ]
+    assert inversions, (
+        "drift now falls monotonically as the burst runs longer, so a "
+        f"time-bounded burst would degrade gracefully: {[(x['ticks'], round(x['drift'], 1)) for x in cut]}"
+    )
+
+
+def test_the_wall_clock_cannot_become_the_working_bound(page):
+    """``budgetMs`` is a hang guard; ``maxTicks`` is the bound that must bind.
+
+    A burst stopped by the clock makes the picture depend on how loaded the
+    machine is — and by the test above, a partial burst is not a partial
+    improvement, so that is not a graceful degradation but a random one. The
+    two constants together say how slow a client has to be before the clock
+    takes over: budget ÷ ticks is the per-tick cost at which it starts binding.
+    Pure arithmetic over the two exported values, so it holds anywhere.
+
+    At the 09-01 values (250ms / 2000 ticks) the clock took over at 0.125
+    ms/tick, against a measured 0.078 on a developer laptop — a 1.6x margin,
+    which a background tab or a phone eats whole.
+    """
+    r = _run(page, kind="week", total=60, joiners=0, seed=1, **_WORST_WEEK)
+    ms_per_tick = r["SETTLE_BUDGET_MS"] / r["SETTLE_MAX_TICKS"]
+    assert ms_per_tick >= 0.3, (
+        f"the wall clock starts cutting bursts short at {ms_per_tick:.3f} ms/tick; "
+        f"a 60-node tick measures about 0.078 ms, so this leaves only "
+        f"{ms_per_tick / 0.078:.1f}x for a slower client. Raise SETTLE_BUDGET_MS "
+        f"with SETTLE_MAX_TICKS, or the tick bound stops being the real one."
+    )
+
+
 def test_a_held_node_is_not_moved_by_physics(page):
     """Dragging survives the fix — the cap must not nudge the node under the cursor."""
     r = _run(page, kind="dragged", n=40, deg=6, maxW=400, ticks=200)
@@ -394,6 +610,28 @@ def test_replay_step_calls_the_settle_burst():
     assert "physicsSettle(" in step, (
         "applyReplayStep no longer settles the frame before drawing it — "
         "the replay is back to animating its convergence (todo #171)"
+    )
+
+
+def test_the_replay_asks_for_a_fixed_number_of_nodes():
+    """The Max Nodes dial must not reach the replay's node count.
+
+    ``enterReplay`` asked for ``Math.max(parseInt(limitEl.value) || 40, 60)``,
+    so a dial at its ceiling handed the replay a graph whose worst week cannot
+    settle inside the burst's bound — thirty times over, once per week. The
+    live graph keeps the dial; it settles once.
+    """
+    src = _PANEL.read_text(encoding="utf-8")
+    assert "const REPLAY_NODES = 60;" in src, (
+        "REPLAY_NODES is gone — the replay's node count is back to being "
+        "whatever the Max Nodes dial says (todo #171)"
+    )
+    start = src.index("async function enterReplay()")
+    body = src[start : src.index("function exitReplay(")]
+    assert "limit: REPLAY_NODES," in body, "the replay no longer pins its node count"
+    assert "limitEl" not in body, (
+        "enterReplay reads the Max Nodes dial again — the settle cost per week "
+        "is superlinear in node count and is paid 30 times per playback"
     )
 
 
