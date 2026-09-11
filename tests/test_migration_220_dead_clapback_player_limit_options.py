@@ -12,6 +12,14 @@ read them, so a blanket json_remove over the table would delete two live
 settings for two games. The migration enumerates game types instead of matching
 on key name, and the third test here is what bites if someone later
 "simplifies" it into a key match.
+
+Migration 217 is the precedent worth reading, and the precedent is its *shape*,
+not its SQL: it deletes by an enumerated ``key IN (...)`` precisely because
+``guess_`` and ``veil_`` prefix live settings its own tests name, and its
+docstring states the rule as "the delete enumerates its two keys and these
+tests pin that it stays enumerated". Migration 195 is where the trap was real
+— a ``LIKE 'nsfw_%'`` there would have taken Image Guard's live thresholds
+along with the dead legacy block.
 """
 
 from __future__ import annotations
