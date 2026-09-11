@@ -518,3 +518,31 @@ async def test_end_early_retires_sticky_board_via_panel_refresh(sync_db_path):
     edit_kwargs = channel.get_partial_message.return_value.edit.await_args.kwargs
     assert "view" in edit_kwargs and "embed" in edit_kwargs
     cog._show_recap.assert_awaited_once()
+
+
+# ── a submission's redraw racing the round's own retirement ────────────────
+
+
+@pytest.mark.asyncio
+async def test_refresh_embed_swallows_a_retired_panels_refusal(sync_db_path):
+    """``PriceModal.on_submit`` calls ``refresh_embed`` directly, with nothing
+    synchronising it against the round closing: two players submitting in the
+    same moment means one submission completes the round (``skip_timer`` →
+    ``_retire_board``) while the other's redraw is still in flight. That
+    redraw then reaches ``_board_content``'s deliberate resurrection refusal,
+    which ``StickyPanel.refresh`` does not guard — so it used to surface as an
+    unhandled RuntimeError traceback for a perfectly ordinary round ending."""
+    cog = _cog(sync_db_path)
+    guild = _guild()
+    game_view = PriceGameView(
+        game_id="g", host_id=HOST, host_name="Host", scenario="Eat a bug",
+        round_num=1, total_rounds=3, timer_secs=30, db=cog.db, bot=cog.bot,
+        cog=cog, expected_ids=set(), settings={"rounds": 3}, guild=guild,
+    )
+    panel = MagicMock()
+    panel.refresh = AsyncMock(side_effect=RuntimeError("board retired"))
+    game_view._panel = panel
+
+    await game_view.refresh_embed()
+
+    panel.refresh.assert_awaited_once_with(GUILD)

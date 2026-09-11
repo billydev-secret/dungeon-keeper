@@ -520,13 +520,27 @@ class PriceGameView(discord.ui.View):
         reposted the board to the bottom of the channel since the last
         redraw, and an edit against the old ``self._msg`` would then
         silently 404 (same reasoning as RushmoreDraftView.refresh_board).
+
+        ``PriceModal.on_submit`` calls this directly — unlike Rushmore's
+        blitz picks, there's no coalescer/cancel between a submission and
+        the round retiring its board, so two players submitting close
+        together can race: the second one's redraw can land after
+        ``PriceCog._retire_board`` has already flipped ``_board_retired``.
+        ``StickyPanel.refresh`` doesn't guard its own ``build`` call, so
+        that reaches us as ``_board_content``'s deliberate
+        resurrection-refusal ``RuntimeError`` — swallow it the same way an
+        edit 404 is swallowed below; the round is over, there's nothing
+        left to redraw.
         """
         if self._panel is not None:
             # Guarded the same way PriceCog._open_board guards its own
             # guild.id read — a panel is only ever created when self.guild
             # was truthy at that point, but nothing re-asserts that here.
             if self.guild is not None:
-                await self._panel.refresh(self.guild.id)
+                try:
+                    await self._panel.refresh(self.guild.id)
+                except RuntimeError:
+                    pass
             return
         if self._msg:
             try:

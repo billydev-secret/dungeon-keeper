@@ -427,7 +427,13 @@ class RushmoreDraftView(discord.ui.View):
             # truthy at that point, but nothing re-asserts that here, so this
             # stays defensive rather than assuming it.
             if self.guild is not None:
-                await self._panel.refresh(self.guild.id)
+                try:
+                    await self._panel.refresh(self.guild.id)
+                except RuntimeError:
+                    # _board_content's deliberate resurrection-refusal, if a
+                    # redraw ever lands after _retire_board flips
+                    # _board_retired — the game's over, nothing to redraw.
+                    pass
             return
         if self._msg is None:
             return
@@ -1063,26 +1069,36 @@ class RushmoreCog(commands.Cog):
         msg = await self._open_board(game_id, draft_view, channel, guild, msg)
         draft_view._msg = msg
 
-        # Show draft order announcement
-        if mode == "blitz":
-            await channel.send(
-                "**⚡ Blitz draft:** everyone picks at the same time each round — "
-                "duplicates go to the fastest fingers!"
-            )
-        else:
-            order_names = [resolve_name(guild, uid) for uid in draft_view.players]
-            rev_names = list(reversed(order_names))
-            await channel.send(
-                f"**Draft order:** {' → '.join(order_names)}\n"
-                f"(Round 2 reverses: {' → '.join(rev_names)})"
-            )
+        # From here until the loop takes over, a failure must still retire
+        # the board — the loops' own try/finally is the only other place
+        # that calls _retire_board, and nothing wraps this span. Without it
+        # an exception here (an unguarded channel.send included) would leave
+        # the panel in self._boards forever, resticking a frozen board under
+        # every future message in the channel.
+        try:
+            # Show draft order announcement
+            if mode == "blitz":
+                await channel.send(
+                    "**⚡ Blitz draft:** everyone picks at the same time each round — "
+                    "duplicates go to the fastest fingers!"
+                )
+            else:
+                order_names = [resolve_name(guild, uid) for uid in draft_view.players]
+                rev_names = list(reversed(order_names))
+                await channel.send(
+                    f"**Draft order:** {' → '.join(order_names)}\n"
+                    f"(Round 2 reverses: {' → '.join(rev_names)})"
+                )
 
-        # Save draft state
-        payload = await get_game_payload(self.db, game_id)
-        payload["draft_order"] = draft_view.draft_order
-        payload["boards"] = draft_view.boards
-        payload["all_picks"] = draft_view.all_picks
-        await update_game_payload(self.db, game_id, payload)
+            # Save draft state
+            payload = await get_game_payload(self.db, game_id)
+            payload["draft_order"] = draft_view.draft_order
+            payload["boards"] = draft_view.boards
+            payload["all_picks"] = draft_view.all_picks
+            await update_game_payload(self.db, game_id, payload)
+        except Exception:
+            self._retire_board(draft_view)
+            raise
 
         # Run each pick
         if mode == "blitz":

@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from bot_modules.cogs.games_rushmore_cog import RushmoreCog
+from bot_modules.cogs.games_rushmore_cog import RushmoreCog, RushmoreDraftView
 from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.game_manager import create_game
 from bot_modules.services.game_board_sticky_service import set_board_sticky_enabled
@@ -449,3 +449,66 @@ async def test_run_blitz_loop_retires_board_on_forced_end(sync_db_path):
 
     assert draft_view._board_retired is True
     assert game_id not in cog._boards
+
+
+# ── the redraw seam, and the span before the loop takes over ───────────────
+
+
+@pytest.mark.asyncio
+async def test_refresh_board_swallows_a_retired_panels_refusal():
+    """``_board_content`` refuses to render a retired board by raising, and
+    ``StickyPanel.refresh`` does not guard its own ``build`` call — so the
+    refusal comes straight back out at the caller. A redraw landing after the
+    game ended is an ordinary race (a blitz pick in flight as the round
+    closes), not an error: ``refresh_board`` swallows it the same way it
+    swallows an edit 404 on the non-sticky path."""
+    view = object.__new__(RushmoreDraftView)
+    view.guild = _guild()
+    view._msg = None
+    panel = MagicMock()
+    panel.refresh = AsyncMock(side_effect=RuntimeError("board retired"))
+    view._panel = panel
+
+    await view.refresh_board()
+
+    panel.refresh.assert_awaited_once_with(GUILD)
+
+
+@pytest.mark.asyncio
+async def test_start_draft_retires_the_board_if_the_announcement_fails(sync_db_path):
+    """Only the draft loops' own ``try/finally`` calls ``_retire_board``, and
+    the announcement/payload-save span sits *between* opening the board and
+    entering a loop. A failure there used to propagate out of ``_start_draft``
+    with the panel still in ``cog._boards`` — resticking a frozen board under
+    every future message in the channel, forever."""
+    cog = _cog(sync_db_path)
+    with cog.bot.ctx.open_db() as conn:
+        set_board_sticky_enabled(conn, True, GUILD)
+    lobby_msg = _lobby_msg(1)
+    game_id = await _seed_game(cog, CHAN_A, message_id=lobby_msg.id)
+    channel = _channel(CHAN_A)
+    guild = _guild(channel)
+    # Names come out as bare ids rather than MagicMock attributes.
+    guild.get_member = MagicMock(return_value=None)
+
+    # The board's own post succeeds; the draft-order announcement right
+    # after it does not (a transient 500 from Discord).
+    posted = channel.send.side_effect
+
+    async def _send_then_fail(*args, **kwargs):
+        channel.send.side_effect = _fail
+        return await posted(*args, **kwargs)
+
+    async def _fail(*args, **kwargs):
+        raise discord.HTTPException(MagicMock(status=500), "boom")
+
+    channel.send.side_effect = _send_then_fail
+
+    with pytest.raises(discord.HTTPException):
+        await cog._start_draft(
+            game_id, HOST, "Host", "Topic", [HOST, 2],
+            channel, guild, lobby_msg, {"mode": "snake"},
+        )
+
+    assert game_id not in cog._boards
+    assert cog.bot.active_views[game_id]._board_retired is True
