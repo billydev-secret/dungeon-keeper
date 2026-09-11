@@ -22,6 +22,10 @@ from bot_modules.services.game_start_ping_service import (
     parse_idle_dials,
 )
 from bot_modules.services.feature_roles import GAME_NIGHT_PING
+from bot_modules.services.game_board_sticky_service import (
+    get_board_sticky_enabled,
+    set_board_sticky_enabled,
+)
 from web_server.auth import AuthenticatedUser
 from web_server.deps import get_active_guild_id, get_ctx, require_game_host, require_perms, run_query
 
@@ -1666,6 +1670,49 @@ async def set_lobby_dials(
                 )
             conn.commit()
             return _lobby_dials(conn, guild_id)
+
+    return await run_query(_q)
+
+
+# ── Board sticky (keep a live game's board at the channel bottom) ────────────
+
+
+class BoardStickyBody(BaseModel):
+    enabled: bool
+
+
+@router.get("/config/board-sticky")
+async def get_board_sticky(
+    request: Request,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    """Whether a live game's board re-posts itself to the channel's bottom as
+    chat buries it. Off by default; a game reads this once, when its board is
+    first posted."""
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            return {"enabled": get_board_sticky_enabled(conn, guild_id)}
+
+    return await run_query(_q)
+
+
+@router.put("/config/board-sticky")
+async def set_board_sticky(
+    request: Request,
+    body: BoardStickyBody,
+    _: AuthenticatedUser = Depends(require_game_host),
+):
+    ctx = get_ctx(request)
+    guild_id = get_active_guild_id(request)
+
+    def _q():
+        with ctx.open_db() as conn:
+            set_board_sticky_enabled(conn, body.enabled, guild_id)
+            conn.commit()
+            return {"enabled": body.enabled}
 
     return await run_query(_q)
 

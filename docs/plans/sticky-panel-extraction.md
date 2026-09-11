@@ -3,7 +3,9 @@
 **Status:** Groups A and B **done** — including `guess`, migrated 2026-08-06,
 which closes group B, and `whisper`, migrated 2026-09-04. Group C stays out by
 design. `confessions` remains unmigrated (it was never blocked on anything; it
-is simply behind).
+is simply behind). Group E — Mt. Rushmore Draft's live board, 2026-09-10 — is
+the second lifecycle panel and the first scoped per-channel rather than
+per-guild (one `StickyPanel` instance per live game); see "Group E" below.
 
 `bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
 debounce, id cache, post-before-delete placer, signature gate and listener —
@@ -144,6 +146,36 @@ couple the cogs at runtime or let one panel yield to another (a shared-behaviour
 change), `/bank auction start` calls `sticky_panel_channels` and **warns the
 mod**. Prod precedent: the first auction ever run was in the casino hub's
 channel.
+
+### Group E — one panel per live game, not per guild (2026-09-10)
+
+Mt. Rushmore Draft's live board (`RushmoreCog`, `games_rushmore_cog.py`) is
+the eleventh site and the second with a lifecycle. It follows Group D's shape
+— `build` raises rather than returns `None` once the game is over
+(`_board_content` raises `RuntimeError` when `RushmoreDraftView._board_retired`
+is set, exactly like `_build_auction_panel`'s conversion of
+`build_auction_panel`'s `None`), and teardown calls `cancel_all()` the moment
+the state ends (`RushmoreCog._retire_board`, from a `try/finally` around both
+draft loops so it fires on natural completion and on a forced `/games end`
+alike) — but it departs from Group D on the one axis every prior site shared:
+**scope**. Every panel through Group D is one per **guild**, matching
+`StickyPanel`'s own internals (its locks, TTL id cache and known-guilds fast
+path are all keyed by guild id). A live game's board is scoped to one
+**channel**, and a guild can run several Rushmore drafts in different channels
+at once — so Rushmore gives up the shared singleton and constructs **one
+`StickyPanel` instance per live game** instead, keyed by `game_id` in
+`RushmoreCog._boards`, built when the draft opens its board and dropped in
+`_retire_board`. `load_ids`/`save_ids` are synchronous closures over that one
+game's row in `games_active_games` (its `channel_id`/`message_id` columns,
+the same ones `update_game_message` and the busy-check's jump link read) —
+they ignore the guild id `StickyPanel` passes them, since the id to resolve is
+the game's, not "the guild's one panel". Because every board is posted
+through `panel.place()` (`RushmoreCog._open_board`), the Group D
+posted-outside-`place()` trap does not apply here and no `forget()` call was
+needed. Sitting behind a new per-guild dial (`games_board_sticky_enabled`,
+**Live Game Boards** on Games Global Config, default off) read once — when
+the board is first posted — this is also the first site gated by a feature
+dial rather than being unconditionally on for every guild.
 
 ### The `hold` hook
 
