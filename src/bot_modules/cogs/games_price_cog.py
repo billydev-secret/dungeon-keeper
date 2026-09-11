@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.sticky import PanelContent, StickyPanel
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
@@ -88,6 +89,7 @@ from bot_modules.games_price.logic import (
     toggle_player,
     vote_possible,
 )
+from bot_modules.services.game_board_sticky_service import get_board_sticky_enabled
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -456,6 +458,7 @@ class PriceGameView(discord.ui.View):
         expected_ids: set[int] | None = None,
         accent: discord.Color | None = None,
         settings: dict | None = None,
+        guild: "discord.Guild | None" = None,
     ):
         super().__init__(timeout=None)
         self.game_id = game_id
@@ -465,6 +468,7 @@ class PriceGameView(discord.ui.View):
         self.round_num = round_num
         self.total_rounds = total_rounds
         self.timer_secs = timer_secs
+        self.guild = guild
         self.db = db
         self.bot = bot
         self.cog = cog
@@ -480,6 +484,13 @@ class PriceGameView(discord.ui.View):
         self._msg: discord.Message | None = None
         self._timer: GameTimer | None = None
         self._closed = False
+        # Set when the guild's sticky dial is on for this round's submission
+        # board: the StickyPanel that owns reposting it, and the flag
+        # PriceCog._retire_board sets once this round's board is done (the
+        # panel's build callback checks this — see PriceCog._board_content).
+        # Both stay None/False for a round when the dial is off.
+        self._panel: "StickyPanel | None" = None
+        self._board_retired: bool = False
 
     def everyone_in(self) -> bool:
         """Has everyone who joined named a price? (A spectator's price counts
@@ -502,6 +513,21 @@ class PriceGameView(discord.ui.View):
         )
 
     async def refresh_embed(self):
+        """Redraw the submission board with the current price count.
+
+        When the sticky dial is on, this routes through the panel's own
+        refresh instead of the cached ``self._msg`` — the panel may have
+        reposted the board to the bottom of the channel since the last
+        redraw, and an edit against the old ``self._msg`` would then
+        silently 404 (same reasoning as RushmoreDraftView.refresh_board).
+        """
+        if self._panel is not None:
+            # Guarded the same way PriceCog._open_board guards its own
+            # guild.id read — a panel is only ever created when self.guild
+            # was truthy at that point, but nothing re-asserts that here.
+            if self.guild is not None:
+                await self._panel.refresh(self.guild.id)
+            return
         if self._msg:
             try:
                 await self._msg.edit(embed=self._build_embed())
@@ -688,10 +714,179 @@ class PriceCog(commands.Cog):
     def __init__(self, bot: "Bot"):
         self.bot = bot
         self._auto_tasks: set[asyncio.Task] = set()
+        # One StickyPanel per *live round's submission board*, not one
+        # shared instance — same shape as RushmoreCog._boards (see
+        # docs/plans/sticky-panel-extraction.md, Group E), but scoped to a
+        # round rather than a whole game: a fresh panel is made each round
+        # in _open_board and dropped in _retire_board once that round's
+        # submission window closes (disabled frame shown, or reveal posted).
+        # Keyed by game_id — only one round is ever live per game at a time.
+        self._boards: dict[str, StickyPanel] = {}
 
     @property
     def db(self):
         return self.bot.games_db
+
+    async def cog_unload(self) -> None:
+        # A reload mid-round must not leave a debounced restick armed
+        # against a cog that's gone.
+        for panel in list(self._boards.values()):
+            panel.cancel_all()
+        self._boards.clear()
+
+    @commands.Cog.listener("on_message")
+    async def _restick_boards(self, message: discord.Message) -> None:
+        for panel in list(self._boards.values()):
+            await panel.on_message(message)
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_board_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        for panel in list(self._boards.values()):
+            await panel.on_channel_delete(channel)
+
+    # ── Sticky board (Games Global Config → Live Game Boards) ─────────
+    # Same dial as Mt. Rushmore Draft (games_board_sticky_enabled) — one
+    # dial covers every game wired up to it, not a per-game override.
+
+    def _read_board_sticky_dial(self, guild_id: int) -> bool:
+        with self.bot.ctx.open_db() as conn:
+            return get_board_sticky_enabled(conn, guild_id)
+
+    def _board_ids(self, game_id: str) -> tuple[int, int]:
+        """``StickyPanel.load_ids`` for one game — reads the *live* row, not
+        a second store, so it can never drift from what ``update_game_message``
+        and the busy-check's jump link see."""
+        with self.bot.ctx.open_db() as conn:
+            row = conn.execute(
+                "SELECT channel_id, message_id FROM games_active_games WHERE game_id = ?",
+                (game_id,),
+            ).fetchone()
+        if row is None:
+            return 0, 0
+        return int(row["channel_id"] or 0), int(row["message_id"] or 0)
+
+    def _save_board_ids(self, game_id: str, channel_id: int, message_id: int) -> None:
+        """``StickyPanel.save_ids`` — same table/columns ``update_game_message``
+        writes, so a repost keeps the jump link live."""
+        with self.bot.ctx.open_db() as conn:
+            conn.execute(
+                "UPDATE games_active_games SET channel_id = ?, message_id = ? WHERE game_id = ?",
+                (channel_id, message_id, game_id),
+            )
+
+    async def _board_content(
+        self, game_view: "PriceGameView", guild: discord.Guild
+    ) -> PanelContent:
+        """``StickyPanel.build`` for one round's submission board. Raising is
+        the guard against resurrection: a debounced restick that fires after
+        this round's board has already retired must not redraw it.
+        ``_board_retired`` — not ``_closed`` — is the flag this checks, since
+        ``_closed`` is set one legitimate render (the disabled frame) before
+        the board is actually retired; see ``_retire_board``."""
+        if game_view._board_retired:
+            raise RuntimeError(
+                f"price board for game {game_view.game_id} round "
+                f"{game_view.round_num} is retired"
+            )
+        return PanelContent(embed=game_view._build_embed(), view=game_view)
+
+    def _make_board_panel(
+        self, game_id: str, game_view: "PriceGameView"
+    ) -> StickyPanel:
+        def _load(_guild_id: int) -> tuple[int, int]:
+            return self._board_ids(game_id)
+
+        def _save(_guild_id: int, channel_id: int, message_id: int) -> None:
+            self._save_board_ids(game_id, channel_id, message_id)
+
+        async def _build(guild: discord.Guild) -> PanelContent:
+            return await self._board_content(game_view, guild)
+
+        return StickyPanel(
+            f"price board {game_id}", self.bot,
+            load_ids=_load, save_ids=_save, build=_build,
+        )
+
+    async def _open_board(
+        self,
+        game_id: str,
+        game_view: "PriceGameView",
+        channel,
+        guild,
+        msg: discord.Message,
+    ) -> discord.Message:
+        """Post a round's submission board — sticky if the guild has turned
+        the dial on, an in-place edit of ``msg`` otherwise (the pre-existing
+        behaviour). Read once, here, when the round's board is first posted:
+        a mid-game flip of the dial never touches a round already running.
+
+        No explicit delete of the message being replaced: ``_board_ids``
+        (this panel's ``load_ids``) reads it out of the game row at this
+        point (the previous round's board, or the lobby message at round 1),
+        so ``place()`` treats it as "the old panel" and removes it itself —
+        post-before-delete. Deleting it first would invert that: a placement
+        failure would then leave the round with no board and no way to
+        submit a price.
+        """
+        sticky = await asyncio.to_thread(
+            self._read_board_sticky_dial, guild.id if guild else 0
+        )
+        if sticky and channel is not None:
+            panel = self._make_board_panel(game_id, game_view)
+            posted = await panel.place(guild, channel)
+            if posted is not None:
+                self._boards[game_id] = panel
+                game_view._panel = panel
+                return posted
+            # Placement failed — fall through to the ordinary non-sticky
+            # path rather than leave the round without a board.
+
+        embed = game_view._build_embed()
+        try:
+            await msg.edit(embed=embed, view=game_view)
+            return msg
+        except Exception:
+            new_msg = await channel.send(embed=embed, view=game_view)
+            await update_game_message(self.db, game_id, new_msg.id)
+            return new_msg
+
+    def _retire_board(
+        self, game_view: "PriceGameView", channel
+    ) -> discord.Message | None:
+        """Stop this round's submission board from reposting, and refuse to
+        render it again. Called at every point the submission window closes
+        (the disabled frame, a host's early End Game, or a forced
+        ``/games end``) so the panel is released promptly rather than left
+        for a straggling ``on_message`` to restick — same promptness rule as
+        RushmoreCog._retire_board's ``forget()`` call. Idempotent and a
+        no-op when the dial was never on for this round.
+
+        Returns wherever the board actually ended up (``None`` when the dial
+        was off), since the sticky panel may have reposted it since
+        ``_open_board`` handed back its message — reveal, the disabled
+        frame's own send-fallback, and the next round's own post must all
+        target that, not whatever local ``msg`` variable the caller started
+        the round with.
+        """
+        game_view._board_retired = True
+        panel = self._boards.pop(game_view.game_id, None)
+        if panel is None:
+            return None
+        panel.cancel_all()
+        # Drop the cached ids too, not just the pending restick (Group D /
+        # RushmoreCog._retire_board precedent): an on_message call already
+        # in-flight when this round ends could otherwise still read the
+        # panel's stale cached ids and schedule a restick nothing cancels,
+        # reaching _board_content's refusal and logging it as an ERROR
+        # traceback for a perfectly ordinary round ending.
+        if game_view.guild is not None:
+            panel.forget(game_view.guild.id)
+        channel_id, message_id = self._board_ids(game_view.game_id)
+        if channel is not None and message_id:
+            return channel.get_partial_message(message_id)
+        return None
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """After a restart: re-register a lobby's view, or re-drive the round
@@ -1058,18 +1253,16 @@ class PriceCog(commands.Cog):
             expected_ids=set(lobby_players(payload)),
             accent=accent,
             settings=settings,
+            guild=guild,
         )
         self.bot.active_views[game_id] = game_view
 
-        embed = game_view._build_embed()
-        try:
-            await msg.edit(embed=embed, view=game_view)
-            game_view._msg = msg
-        except Exception:
-            new_msg = await channel.send(embed=embed, view=game_view)
-            game_view._msg = new_msg
-            msg = new_msg
-            await update_game_message(self.db, game_id, msg.id)
+        # Post the submission board — sticky (reposts to the bottom of the
+        # channel as chat buries it) for the length of this round's
+        # submission window when the guild's dial is on, an in-place edit
+        # of ``msg`` otherwise.
+        msg = await self._open_board(game_id, game_view, channel, guild, msg)
+        game_view._msg = msg
 
         # Start timer
         submission_done = asyncio.Event()
@@ -1088,15 +1281,26 @@ class PriceCog(commands.Cog):
         await submission_done.wait()
 
         if game_view._closed:
+            # Forced end (/games end, or the host's own End Game button —
+            # see end_early) while submissions were open. Whichever fired,
+            # the board's retired already or is retiring right now;
+            # idempotent either way.
+            self._retire_board(game_view, channel)
             return
 
-        # Disable submission view
+        # Disable submission view — the board's last render before it
+        # retires below, so it goes through the panel too when sticky
+        # (same reasoning as refresh_embed: an edit against a possibly
+        # stale ``msg`` would silently 404 if a restick moved the board).
         game_view._closed = True
         disable_all_items(game_view)
-        try:
-            await msg.edit(view=game_view)
-        except discord.HTTPException:
-            pass
+        if game_view._panel is not None and guild is not None:
+            await game_view._panel.refresh(guild.id)
+        else:
+            try:
+                await msg.edit(view=game_view)
+            except discord.HTTPException:
+                pass
 
         prices = dict(game_view.prices)
 
@@ -1105,13 +1309,20 @@ class PriceCog(commands.Cog):
         payload = await get_game_payload(self.db, game_id)
         total_rounds = payload.get("total_rounds", settings["rounds"])
 
+        # The submission board's life ends here — everything from this
+        # point on (reveal, vote, results, next round) is a fresh edit/send
+        # against wherever the board actually ended up, not necessarily
+        # ``msg``: the sticky panel may have reposted it since _open_board
+        # handed ``msg`` back at the top of this round.
+        current_msg = self._retire_board(game_view, channel) or msg
+
         # ── Handle 0 or 1 submissions ──
         if len(prices) == 0:
             try:
                 await channel.send("Nobody submitted a price this round. Moving on…")
             except discord.HTTPException:
                 pass
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, pre_round_delay=3, accent=accent)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, current_msg, pre_round_delay=3, accent=accent)
             return
 
         # ── Reveal phase ──
@@ -1120,7 +1331,7 @@ class PriceCog(commands.Cog):
         reveal_embed = build_reveal_embed(host_name, scenario, round_num, total_rounds, named_ladder, color=accent)
 
         try:
-            await msg.edit(embed=reveal_embed, view=None)
+            await current_msg.edit(embed=reveal_embed, view=None)
         except discord.HTTPException:
             pass
 
@@ -1137,7 +1348,7 @@ class PriceCog(commands.Cog):
             except discord.HTTPException:
                 pass
             await asyncio.sleep(3)
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, current_msg, accent=accent)
             return
 
         # 5s pause for reactions
@@ -1169,7 +1380,7 @@ class PriceCog(commands.Cog):
             vote_view._msg = vote_msg
         except Exception:
             # Can't send vote view — skip voting
-            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
+            await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, current_msg, accent=accent)
             return
 
         vote_done = asyncio.Event()
@@ -1249,7 +1460,7 @@ class PriceCog(commands.Cog):
 
         # ── Next round or recap ──
         await asyncio.sleep(5)
-        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, msg, accent=accent)
+        await self._advance_round(game_id, host_id, host_name, channel, guild, round_num, settings, current_msg, accent=accent)
 
     async def _record_round(self, game_id: str, round_num: int, scenario: str, prices: dict[int, int]) -> dict:
         """Write a round's prices to the payload (locked): this is what the
@@ -1276,11 +1487,21 @@ class PriceCog(commands.Cog):
             return
         game_view._closed = True
         disable_all_items(game_view)
-        if game_view._msg is not None:
+        if game_view._panel is not None and guild is not None:
+            await game_view._panel.refresh(guild.id)
+        elif game_view._msg is not None:
             try:
                 await game_view._msg.edit(view=game_view)
             except discord.HTTPException:
                 pass
+        # Retire the board here rather than waiting for the round loop's own
+        # wake-up to notice _closed (it's about to, via skip_timer() below,
+        # but that's a second, concurrent coroutine) — same promptness rule
+        # as RushmoreCog._retire_board's forget() call: a chat message
+        # landing in that window could otherwise still restick a submission
+        # board for a round whose recap is already posting. Idempotent
+        # against the round loop's own (redundant) call to the same thing.
+        self._retire_board(game_view, channel)
         if game_view.prices:
             await self._record_round(game_view.game_id, game_view.round_num, game_view.scenario, dict(game_view.prices))
         # Wake the round loop; it sees _closed and returns without advancing.
