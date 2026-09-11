@@ -52,6 +52,7 @@ from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
+    DEFAULT_PICK_SECONDS,
     DRAFT_ROUNDS,
     MAX_PLAYERS,
     MIN_PLAYERS,
@@ -595,7 +596,7 @@ class RushmoreRecapView(discord.ui.View):
             guild_id=interaction.guild_id or 0,
             options={
                 "topic": "",
-                "timer": self._settings.get("timer", 30),
+                "timer": self._settings.get("timer", DEFAULT_PICK_SECONDS),
                 "source": self._settings.get("source", "host"),
                 "vote_timer": self._settings.get("vote_timer", 30),
                 "mode": self._settings.get("mode", "blitz"),
@@ -742,7 +743,7 @@ class RushmoreCog(commands.Cog):
         # *options* value (e.g. from a saved schedule) still wins.
         game_opts = await get_game_options(self.db, "rushmore", guild_id)
         timer, vote_timer = clamp_settings(
-            int(options.get("timer", game_opts.get("timer", 30))),
+            int(options.get("timer", game_opts.get("timer", DEFAULT_PICK_SECONDS))),
             int(options.get("vote_timer", game_opts.get("vote_timer", 30))),
         )
         # Blitz by default (social-prompt-37): a six-player snake is 24 timed
@@ -820,7 +821,7 @@ class RushmoreCog(commands.Cog):
         mode = settings.get("mode", "snake")
         draft_view = RushmoreDraftView(
             game_id, host_id, host_name, topic,
-            players, settings.get("timer", 30), guild, self.db, self.bot, self,
+            players, settings.get("timer", DEFAULT_PICK_SECONDS), guild, self.db, self.bot, self,
             mode=mode, accent=accent,
         )
         self.bot.active_views[game_id] = draft_view
@@ -864,7 +865,7 @@ class RushmoreCog(commands.Cog):
             await self._run_draft_loop(draft_view, channel, guild, settings)
 
     async def _run_draft_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
-        timer_secs = settings.get("timer", 30)
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         assert draft_view._msg  # set by _start_draft before this loop runs
 
         while draft_view.current_pick_index < len(draft_view.draft_order):
@@ -972,7 +973,7 @@ class RushmoreCog(commands.Cog):
 
     async def _run_blitz_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         """Blitz mode: every round, all players pick simultaneously."""
-        timer_secs = settings.get("timer", 30)
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         assert draft_view._msg  # set by _start_draft before this loop runs
 
         for rnd in range(1, DRAFT_ROUNDS + 1):

@@ -26,6 +26,7 @@ from bot_modules.games_rushmore.embeds import (
     render_draft_board,
 )
 from bot_modules.games_rushmore.logic import (
+    DEFAULT_PICK_SECONDS,
     DRAFT_ROUNDS,
     MAX_PLAYERS,
     MIN_PLAYERS,
@@ -55,6 +56,10 @@ def _name_resolver(uid: int) -> str:
 
 def test_draft_rounds_is_four():
     assert DRAFT_ROUNDS == 4
+
+
+def test_default_pick_seconds_is_forty_five():
+    assert DEFAULT_PICK_SECONDS == 45
 
 
 def test_skipped_marker_is_string():
@@ -421,6 +426,15 @@ def test_clamp_settings_above_max_pushed_down():
 def test_clamp_settings_boundary_values():
     assert clamp_settings(10, 10) == (10, 10)
     assert clamp_settings(120, 60) == (120, 60)
+
+
+def test_clamp_settings_range_unchanged_by_new_default():
+    # DEFAULT_PICK_SECONDS moved from 30 to 45, but the dial's own bounds
+    # (10-120) did not — the new default clamps through untouched, and the
+    # min/max edges still bite exactly where they used to.
+    assert clamp_settings(DEFAULT_PICK_SECONDS, 30) == (DEFAULT_PICK_SECONDS, 30)
+    assert clamp_settings(9, 30)[0] == 10
+    assert clamp_settings(121, 30)[0] == 120
 
 
 # ── render_draft_board ───────────────────────────────────────────────

@@ -42,6 +42,11 @@ SKIPPED_MARKER: str = "⏭️ Skipped"
 # skipped slots before the final boards are shown.
 BACKFILL_SECONDS: int = 60
 
+# Fallback pick timer when a server has never set its own "Seconds to Make
+# a Pick" dial. The dial's own range (clamp_settings, below) stays 10-120 —
+# only this default changed.
+DEFAULT_PICK_SECONDS: int = 45
+
 
 def generate_snake_order(
     players: list[int], rounds: int = DRAFT_ROUNDS,
