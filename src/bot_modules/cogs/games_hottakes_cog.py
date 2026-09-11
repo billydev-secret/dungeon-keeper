@@ -170,13 +170,18 @@ class HotTakesSubmitView(discord.ui.View):
 
         # A public heads-up that names nobody: takes are anonymous, and
         # @-mentioning the submitters here (as this once did) gave them away.
+        # Caught broadly, and this one matters most of the three: it sits
+        # *outside* the try below, so a connection that died before it got an
+        # HTTP status escaped the narrower except and killed the whole handler
+        # before voting was ever started — losing the game with no notice and
+        # no classification.
         try:
             await channel.send(
                 build_voting_start_message(takes),
                 delete_after=15,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-        except discord.HTTPException:
+        except Exception:
             log.warning("hottakes: voting heads-up failed in #%s", channel_name(channel))
 
         try:
@@ -201,6 +206,11 @@ class HotTakesSubmitView(discord.ui.View):
                     "hottakes game %s hit a transient Discord failure (%s) — "
                     "leaving it live for recovery", self.game_id, e,
                 )
+                # Caught broadly, not just discord.HTTPException: the failure
+                # this whole path exists for ("reset before headers") never
+                # makes it to an HTTP status, and a narrower except here would
+                # let this courtesy send's own transient failure skip the
+                # active_views pop below it.
                 try:
                     await channel.send(
                         "⚠️ Discord is having trouble right now, so this game is "
@@ -208,14 +218,14 @@ class HotTakesSubmitView(discord.ui.View):
                         "the next restart, or the host or a mod can close it out "
                         "with `/games end`."
                     )
-                except discord.HTTPException:
+                except Exception:
                     log.warning("hottakes: couldn't post the pause notice")
                 self.bot.active_views.pop(self.game_id, None)
                 return
             log.error("Failed to start voting for game %s: %s", self.game_id, e, exc_info=True)
             try:
                 await channel.send("❌ Something went wrong starting the vote. Game ended.")
-            except discord.HTTPException:
+            except Exception:
                 log.warning("hottakes: couldn't post the crash notice")
             await end_game(self.db, self.game_id)
             self.bot.active_views.pop(self.game_id, None)

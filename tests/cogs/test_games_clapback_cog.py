@@ -881,3 +881,44 @@ def test_every_phase_card_goes_out_through_the_retry():
         assert bare not in src, f"a phase card still sends without retry_transient: {bare}"
     # And the card that actually died is wrapped, by name.
     assert "clapback round {round_num} matchup {matchup_index + 1}" in src
+
+
+async def test_a_dead_connection_on_the_pause_notice_still_re_drives(
+    sync_db_path, monkeypatch
+):
+    """The notices fire when Discord is *already* misbehaving, so their own
+    send is the likeliest thing to fail — and a connection that dies before
+    it gets a status is not a ``discord.HTTPException``. Catching only that
+    let the courtesy send throw straight past the re-drive, stalling the game
+    silently: the precise outcome this whole path exists to prevent."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    channel = _channel()
+    channel.send = AsyncMock(side_effect=ConnectionError("reset before headers"))
+    calls: list[str] = []
+    monkeypatch.setattr(cog, "_run_game", _raiser(_server_error(), calls, stop_after=1))
+
+    await cog._play(gid, channel, dict(IN_PLAY_PAYLOAD))
+
+    assert len(calls) == 2, "a failed pause notice must not eat the re-drive"
+    assert await _lobby_row(cog.db, gid) is not None
+
+
+async def test_a_dead_connection_on_the_crash_notice_still_cancels(
+    sync_db_path, monkeypatch
+):
+    """Same hole on the other branch: the row would outlive the game with
+    nobody driving it."""
+    monkeypatch.setattr(cog_module, "REDRIVE_PAUSE_S", 0)
+    bot = _bot(sync_db_path)
+    cog = ClapbackCog(bot)  # type: ignore[arg-type]
+    gid = await _in_play_game(cog)
+    channel = _channel()
+    channel.send = AsyncMock(side_effect=ConnectionError("reset before headers"))
+    monkeypatch.setattr(cog, "_run_game", _raiser(KeyError("scores"), []))
+
+    await cog._play(gid, channel, dict(IN_PLAY_PAYLOAD))
+
+    assert await _lobby_row(cog.db, gid) is None

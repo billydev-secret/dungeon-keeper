@@ -111,3 +111,36 @@ async def test_a_real_bug_still_ends_the_game(sync_db_path):
     assert await _row(view.db, gid) is None
     said = " ".join(str(c.args[0]) for c in channel.send.await_args_list if c.args)
     assert "Something went wrong" in said
+
+
+async def test_a_dead_connection_on_the_crash_notice_still_ends_the_game(sync_db_path):
+    """The notice fires when Discord is already misbehaving, and a connection
+    that dies before it gets a status is not a ``discord.HTTPException`` — so
+    catching only that let the courtesy send throw past ``end_game``, leaving
+    a broken game's row behind with nobody driving it."""
+    view = _view(sync_db_path, "placeholder", KeyError("takes"))
+    gid = await _game(view.db)
+    view.game_id = gid
+    view.bot.active_views[gid] = view
+    channel = _channel()
+    channel.send = AsyncMock(side_effect=ConnectionError("reset before headers"))
+
+    await view.start_voting.callback(_interaction(channel))  # type: ignore[arg-type]
+
+    assert await _row(view.db, gid) is None
+    assert gid not in view.bot.active_views
+
+
+async def test_a_dead_connection_on_the_pause_notice_still_drops_the_view(sync_db_path):
+    """Transient branch, same hole: the stale view would be left registered."""
+    view = _view(sync_db_path, "placeholder", _server_error())
+    gid = await _game(view.db)
+    view.game_id = gid
+    view.bot.active_views[gid] = view
+    channel = _channel()
+    channel.send = AsyncMock(side_effect=ConnectionError("reset before headers"))
+
+    await view.start_voting.callback(_interaction(channel))  # type: ignore[arg-type]
+
+    assert await _row(view.db, gid) is not None, "still a transient failure"
+    assert gid not in view.bot.active_views

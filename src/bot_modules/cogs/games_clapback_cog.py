@@ -1084,10 +1084,17 @@ class ClapbackCog(commands.Cog):
     async def _say(channel, text: str) -> None:
         """Post a line the game can afford to lose — these fire when Discord
         is already misbehaving, so a failure here must not mask the error
-        that got us here or skip the cleanup that follows."""
+        that got us here or skip the cleanup that follows.
+
+        Catches broadly, not just ``discord.HTTPException``: the exact
+        failure this feature exists for ("reset before headers") never makes
+        it to an HTTP status at all, so a narrower except would let this
+        courtesy send's own transient failure escape and skip the cancel /
+        redrive / pop that has to run after it.
+        """
         try:
             await channel.send(text)
-        except discord.HTTPException:
+        except Exception:
             log.warning("clapback: couldn't post %r", text[:40])
 
     async def auto_start(self, row, payload: dict, channel) -> bool:
