@@ -152,6 +152,33 @@ async def test_dial_off_by_default_open_board_edits_in_place(sync_db_path):
     assert cog._boards == {}
 
 
+@pytest.mark.asyncio
+async def test_dial_on_but_guild_none_falls_through_to_in_place_edit(sync_db_path):
+    """``guild`` comes from ``getattr(channel, "guild", None)`` and a games
+    channel always has one, so this is unreachable today — but
+    ``StickyPanel.place`` takes a non-optional guild and dereferences
+    ``guild.id`` immediately, so a ``None`` here must never reach it. Turn
+    the dial on at the guild-0 fallback row (what the old ``guild.id if
+    guild else 0`` read would have consulted) to prove the None case can no
+    longer walk into that crash even when that row says on."""
+    cog = _cog(sync_db_path)
+    with cog.bot.ctx.open_db() as conn:
+        set_board_sticky_enabled(conn, True, 0)
+    game_id = await _seed_game(cog, CHAN_A)
+    game_view = _FakeGameView(game_id)
+    channel = _channel(CHAN_A)
+    anchor = _anchor_msg(1)
+
+    result = await cog._open_board(game_id, game_view, channel, None, anchor)
+
+    anchor.edit.assert_awaited_once()
+    anchor.delete.assert_not_awaited()
+    channel.send.assert_not_awaited()
+    assert result is anchor
+    assert game_view._panel is None
+    assert cog._boards == {}
+
+
 # ── dial on: sticks, and follows post-before-delete ─────────────────────────
 
 

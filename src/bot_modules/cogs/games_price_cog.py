@@ -829,9 +829,16 @@ class PriceCog(commands.Cog):
         post-before-delete. Deleting it first would invert that: a placement
         failure would then leave the round with no board and no way to
         submit a price.
+
+        Never reachable today (``guild`` comes from ``getattr(channel,
+        "guild", None)`` and a games channel always has one), but
+        ``StickyPanel.place`` takes a non-optional ``discord.Guild`` and
+        ``_place_locked`` dereferences ``guild.id`` immediately — so a
+        ``None`` here must fall through to the non-sticky path rather than
+        reach ``panel.place`` at all.
         """
-        sticky = await asyncio.to_thread(
-            self._read_board_sticky_dial, guild.id if guild else 0
+        sticky = guild is not None and await asyncio.to_thread(
+            self._read_board_sticky_dial, guild.id
         )
         if sticky and channel is not None:
             panel = self._make_board_panel(game_id, game_view)
