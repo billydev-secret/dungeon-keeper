@@ -531,9 +531,10 @@ the cheapest demonstration that the token layer does what it claims.
   to how navigation behaves and wants a decision, not a patch.
 - **A handful of older per-panel colours are unvalidated single semantic
   picks, deliberately left alone.** channels.js's 5-bucket score-distribution
-  ramp, health-sentiment's positive/negative bar colouring, retention's
-  activity-drop red, and voice-activity's hour-of-day accent all still use
-  pre-migration hex literals. Each is a single deliberate colour choice for
+  ramp, retention's activity-drop red, and voice-activity's hour-of-day accent
+  all still use pre-migration hex literals. (A fourth, health-sentiment's
+  positive/negative bar colouring, stopped existing on 2026-09-11 — the home
+  widget holding it was retired with the `.emotion-bar` rules, todo #185.) Each is a single deliberate colour choice for
   one meaning, not a multi-series set needing CVD separation from its
   neighbours, so they were judged lower-risk than the categorical drift this
   pass did fix (which produced two measurable collisions — see the Charts
