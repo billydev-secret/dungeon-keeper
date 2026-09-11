@@ -681,8 +681,11 @@ medium = divergence that will bite on the next touch, low = latent debris.
    quiplash mode ever consults player_max — only player_min gates the start;
    latecomers are never capped.
    **CLOSED 2026-09-11** — verified fixed in source: `player_max` is enforced by
-   `games_legitlibs/validation.py::lobby_is_full`, which both modes' Join paths
-   consult. See the *Games panel sweep* note at the head of this appendix.
+   `lobby_is_full` (`src/bot_modules/cogs/games_legitlibs/validation.py:34`),
+   which both modes' Join paths consult, and which is held by
+   `tests/test_games_legitlibs_classic_logic.py::test_lobby_is_full` (one
+   parametrised row per edge: at, over, unset, zero). See the *Games panel
+   sweep* note at the head of this appendix.
 
 27. **[medium]** The LegitLibs panel's editable Minimum/Maximum Players values
    are silently discarded on save: create_ll_template unconditionally derives

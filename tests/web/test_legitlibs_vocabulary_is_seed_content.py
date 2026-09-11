@@ -28,7 +28,13 @@ import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[2]
-_ROUTES = _ROOT / "src" / "web_server" / "routes"
+_SRC = _ROOT / "src"
+_ROUTES = _SRC / "web_server" / "routes"
+
+#: Migrations are the sanctioned editor — "edited by migration only" is the
+#: decision, so 019's seed INSERTs and any later correction are not offenders.
+#: Everything else under src/ is.
+_MIGRATIONS = _SRC / "migrations"
 
 VOCAB_TABLES = ("legitlibs_blank_axes", "legitlibs_blank_prompts")
 
@@ -76,18 +82,28 @@ def test_the_axes_endpoint_is_still_the_read_only_one() -> None:
         )
 
 
-def test_no_dashboard_route_module_mutates_the_vocabulary_tables() -> None:
-    """The route check is by path, so it would miss a writer hidden behind an
-    unrelated URL. This one reads the SQL instead."""
+def test_nothing_outside_a_migration_mutates_the_vocabulary_tables() -> None:
+    """The route check above matches on URL wording, so it would miss an editor
+    called /legitlibs/vocabulary or /legitlibs/blanks. This one reads the SQL,
+    and it reads *all* of src/ rather than the route modules — because the
+    layering rule sends the next author somewhere else entirely. Routes are
+    glue; the only module that queries these tables today is
+    `cogs/games_legitlibs/data.py`, which is exactly where a spec-compliant CRUD
+    implementation would put its writes, and a route-only scan would wave it
+    through."""
     offenders: list[str] = []
-    for path in sorted(_ROUTES.glob("*.py")):
+    for path in sorted(_SRC.rglob("*.py")):
+        if _MIGRATIONS in path.parents:
+            continue
         src = path.read_text(encoding="utf-8")
         for table in VOCAB_TABLES:
-            for verb in ("INSERT INTO", "INSERT OR REPLACE INTO", "UPDATE", "DELETE FROM"):
-                if re.search(rf"{verb}\s+{table}\b", src, re.IGNORECASE):
-                    offenders.append(f"{path.name}: {verb} {table}")
+            for verb in ("INSERT INTO", "INSERT OR REPLACE INTO", "INSERT OR IGNORE INTO",
+                         "REPLACE INTO", "UPDATE", "DELETE FROM"):
+                if re.search(rf"\b{verb}\s+{table}\b", src, re.IGNORECASE):
+                    offenders.append(f"{path.relative_to(_ROOT)}: {verb} {table}")
     assert not offenders, (
-        f"the dashboard writes LegitLibs' bot-wide blank vocabulary: {offenders}"
+        f"LegitLibs' bot-wide blank vocabulary is written outside a migration: "
+        f"{offenders}. See docs/games_system_spec.md § Environment / files."
     )
 
 
@@ -102,10 +118,23 @@ def test_the_tables_are_declared_bot_wide() -> None:
             "docs/plans/dashboard-config-ia.md before adding an editor anyway"
         )
 
-    schema = (_ROOT / "src" / "migrations" / "019_games.sql").read_text(encoding="utf-8")
-    for table in VOCAB_TABLES:
-        body = schema.split(f"CREATE TABLE IF NOT EXISTS {table} (", 1)[1].split(");", 1)[0]
-        assert "guild_id" not in body, (
-            f"{table} has gained a guild_id: per-guild vocabulary is exactly the "
-            "change that would make an editor safe, so wire one up and delete this"
-        )
+
+def test_neither_table_has_gained_a_guild_id(tmp_path) -> None:
+    """Read the schema the migrations actually build, not 019's CREATE text: a
+    later ALTER TABLE ... ADD COLUMN would be invisible to a parse of the
+    original statement. Per-guild vocabulary is the change that would answer
+    the cross-guild objection and make an editor safe — so if it lands, wire
+    one up and delete this file rather than leaving the tripwire to fail."""
+    import migrations
+    from bot_modules.core.db_utils import open_db
+
+    db = tmp_path / "t.db"
+    migrations.apply_migrations_sync(db)
+    with open_db(db) as conn:
+        for table in VOCAB_TABLES:
+            columns = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert columns, f"{table} is gone from the schema entirely"
+            assert "guild_id" not in columns, (
+                f"{table} has gained a guild_id: the vocabulary can now be scoped "
+                "per guild, which is what this decision was waiting for"
+            )
