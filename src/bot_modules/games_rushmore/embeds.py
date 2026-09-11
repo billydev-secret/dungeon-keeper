@@ -141,6 +141,7 @@ def build_draft_embed(
     round_num: int,
     timer_secs: int,
     color: discord.Color | None = None,
+    deadline: int | None = None,
 ) -> discord.Embed:
     """Active-round draft embed.
 
@@ -148,8 +149,20 @@ def build_draft_embed(
     string-based builders below doesn't have to mock the timer module.
     The "Now Picking" field is dropped when there's no active player
     (used during the final "draft complete" frame).
+
+    ``deadline`` is the Unix timestamp the round's countdown ends at.
+    Callers with a live round should compute it once (``now_plus(timer_secs)``)
+    when that round/turn opens and pass the *same* value into every redraw —
+    this used to be computed fresh on every call, which was harmless while a
+    redraw only ever happened at a turn/round boundary, but turned into a
+    visible countdown-reset bug the moment a board could redraw mid-round
+    (blitz picks landing). Left ``None`` only for a one-off render with no
+    live round behind it (e.g. a test), which falls back to the old
+    ``now_plus(timer_secs)`` behavior.
     """
     from bot_modules.games.utils.timer import format_deadline, now_plus
+    if deadline is None:
+        deadline = now_plus(timer_secs)
     embed = discord.Embed(
         title=(
             f"{GAME_ICONS['rushmore']} Mt. Rushmore of: "
@@ -161,7 +174,7 @@ def build_draft_embed(
         name="Timer",
         value=(
             f"Round {round_num}/{DRAFT_ROUNDS} | "
-            f"{format_deadline(now_plus(timer_secs))}"
+            f"{format_deadline(deadline)}"
         ),
         inline=False,
     )

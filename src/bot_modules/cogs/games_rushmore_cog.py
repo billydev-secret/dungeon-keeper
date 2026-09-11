@@ -50,6 +50,7 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
+from bot_modules.games.utils.timer import now_plus
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
     DEFAULT_PICK_SECONDS,
@@ -57,6 +58,7 @@ from bot_modules.games_rushmore.logic import (
     MAX_PLAYERS,
     MIN_PLAYERS,
     SKIPPED_MARKER,
+    RedrawCoalescer,
     apply_backfill,
     can_start,
     clamp_player_limits,
@@ -383,9 +385,33 @@ class RushmoreDraftView(discord.ui.View):
         # pick. Unused in snake mode.
         self._blitz_round: int = 0
         self._blitz_pending: set[int] = set()
+        # The current turn/round's countdown deadline (Unix ts), computed
+        # once when the turn/round opens and threaded into every embed
+        # render — see build_draft_embed's ``deadline`` param. Blitz mode
+        # holds this fixed across a round's coalesced mid-round redraws;
+        # snake mode refreshes it at every redraw, same as before.
+        self._round_deadline: int = 0
+        # Coalesces blitz's mid-round board redraws (see RedrawCoalescer) so
+        # a burst of simultaneous picks costs one Discord edit, not one per
+        # pick. Unused in snake mode, which redraws directly.
+        self._redraw_coalescer = RedrawCoalescer()
 
     def _player_tuples(self) -> list[tuple[int, str]]:
         return [(uid, resolve_name(self.guild, uid)) for uid in self.players]
+
+    async def refresh_board(self) -> None:
+        """Redraw the board message with the current state.
+
+        The single seam every board redraw goes through — both draft loops
+        and the blitz coalescer call this instead of editing ``self._msg``
+        directly, so there's exactly one place that knows how.
+        """
+        if self._msg is None:
+            return
+        try:
+            await self._msg.edit(embed=self._build_embed(), view=self)
+        except discord.HTTPException:
+            pass
 
     def accept_pick(self, pick_text: str, user_id: int):
         """Called by PickModal when a valid pick is made."""
@@ -397,6 +423,7 @@ class RushmoreDraftView(discord.ui.View):
             self.all_picks.append(pick_text)
             self.pick_times[f"{user_id}_{rnd}"] = _time.time() - self._pick_start
             self._blitz_pending.discard(user_id)
+            self._redraw_coalescer.schedule(self.refresh_board)
             if not self._blitz_pending and self._pick_event:
                 self._pick_event.set()
             return
@@ -422,7 +449,7 @@ class RushmoreDraftView(discord.ui.View):
             return build_draft_embed(
                 self.host_name, self.topic, self._player_tuples(),
                 self.boards, None, None, rnd, self.timer_secs,
-                color=self.accent,
+                color=self.accent, deadline=self._round_deadline or None,
             )
         if self.current_pick_index < len(self.draft_order):
             rnd, pid = self.draft_order[self.current_pick_index]
@@ -432,7 +459,7 @@ class RushmoreDraftView(discord.ui.View):
         return build_draft_embed(
             self.host_name, self.topic, self._player_tuples(),
             self.boards, pid, name, rnd, self.timer_secs,
-            color=self.accent,
+            color=self.accent, deadline=self._round_deadline or None,
         )
 
     async def handle_pick_click(self, interaction: discord.Interaction):
@@ -623,6 +650,15 @@ class RushmoreCog(commands.Cog):
     @property
     def db(self):
         return self.bot.games_db
+
+    async def cog_unload(self) -> None:
+        # Stop any blitz redraw coalescer still holding a pending task —
+        # a reload mid-draft must not leave one running after the cog (and
+        # the Discord state it edits) is gone.
+        for view in list(self.bot.active_views.values()):
+            coalescer = getattr(view, "_redraw_coalescer", None)
+            if coalescer is not None:
+                coalescer.cancel()
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Recover after a restart.
@@ -819,11 +855,16 @@ class RushmoreCog(commands.Cog):
         await update_game_payload(self.db, game_id, payload)
 
         mode = settings.get("mode", "snake")
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         draft_view = RushmoreDraftView(
             game_id, host_id, host_name, topic,
-            players, settings.get("timer", DEFAULT_PICK_SECONDS), guild, self.db, self.bot, self,
+            players, timer_secs, guild, self.db, self.bot, self,
             mode=mode, accent=accent,
         )
+        # A real deadline before the very first render, or this initial embed
+        # would show a countdown that already "ended" (see build_draft_embed's
+        # ``deadline`` param) until the loop below sets its own.
+        draft_view._round_deadline = now_plus(timer_secs)
         self.bot.active_views[game_id] = draft_view
 
         # Show initial draft board
@@ -876,12 +917,10 @@ class RushmoreCog(commands.Cog):
             draft_view._active_player_id = pid
             player_name = resolve_name(guild, pid)
 
-            # Update draft board embed
-            embed = draft_view._build_embed()
-            try:
-                await draft_view._msg.edit(embed=embed, view=draft_view)
-            except discord.HTTPException:
-                pass
+            # Update draft board embed — a fresh deadline every turn, same as
+            # every render used to get before the deadline became explicit.
+            draft_view._round_deadline = now_plus(timer_secs)
+            await draft_view.refresh_board()
 
             # Ping the player — with its own pick button, so nobody has to
             # scroll back up to the board message to act. One message per
@@ -951,21 +990,17 @@ class RushmoreCog(commands.Cog):
             payload["skipped"] = draft_view.skipped
             await update_game_payload(self.db, draft_view.game_id, payload)
 
-            # Update board after pick
+            # Update board after pick — same fresh-deadline treatment; the
+            # next turn (or the "draft complete" frame below) gets its own.
             if not draft_view._closed:
-                embed = draft_view._build_embed()
-                try:
-                    await draft_view._msg.edit(embed=embed, view=draft_view)
-                except discord.HTTPException:
-                    pass
+                draft_view._round_deadline = now_plus(timer_secs)
+                await draft_view.refresh_board()
 
         # Draft complete — disable draft view
         draft_view._closed = True
+        draft_view._redraw_coalescer.cancel()
         disable_all_items(draft_view)
-        try:
-            await draft_view._msg.edit(view=draft_view)
-        except discord.HTTPException:
-            pass
+        await draft_view.refresh_board()
 
         # Backfill window for skipped slots, then final boards
         await self._run_backfill(draft_view, channel, guild)
@@ -991,11 +1026,11 @@ class RushmoreCog(commands.Cog):
             draft_view._pick_event = round_done
             draft_view._pick_start = _time.time()
 
-            embed = draft_view._build_embed()
-            try:
-                await draft_view._msg.edit(embed=embed, view=draft_view)
-            except discord.HTTPException:
-                pass
+            # One deadline for the whole round — held fixed while picks land
+            # mid-round (see build_draft_embed's ``deadline`` param and
+            # RedrawCoalescer) instead of resetting on every coalesced redraw.
+            draft_view._round_deadline = now_plus(timer_secs)
+            await draft_view.refresh_board()
 
             mentions = " ".join(
                 m.mention for uid in pending
@@ -1036,6 +1071,13 @@ class RushmoreCog(commands.Cog):
             if nudge_task and not nudge_task.done():
                 nudge_task.cancel()
 
+            # The round is over — cancel any redraw the coalescer still has
+            # in flight for a pick that landed right at the buzzer. The next
+            # round's own redraw (or the "draft complete" one below) covers
+            # showing that pick; nothing should fire after the round it
+            # belongs to has already moved on.
+            draft_view._redraw_coalescer.cancel()
+
             if draft_view._closed:
                 return
 
@@ -1056,11 +1098,9 @@ class RushmoreCog(commands.Cog):
             await update_game_payload(self.db, draft_view.game_id, payload)
 
         draft_view._closed = True
+        draft_view._redraw_coalescer.cancel()
         disable_all_items(draft_view)
-        try:
-            await draft_view._msg.edit(embed=draft_view._build_embed(), view=draft_view)
-        except discord.HTTPException:
-            pass
+        await draft_view.refresh_board()
 
         await self._run_backfill(draft_view, channel, guild)
         await self._show_final_boards(draft_view, channel, guild, settings)
