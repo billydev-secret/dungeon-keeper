@@ -37,9 +37,12 @@
 
 ### 1.6 Endgame
 - **Sole survivor** wins the pot + `🏈 Sole Survivor` role (held until next season).
-- **Wipeout (all remaining eliminated same week):**
-  - Through Week 13 → **week annulled**: nobody dies, teams used stay burned.
-  - Week 14+ → **equal split** among that week's players.
+- **Wipeout (all remaining eliminated same week):** *(built 2026-09-11, stage 6b)*
+  - Through `wipeout_annul_through_week` (default 13) → **week annulled**: nobody dies, teams used stay burned.
+  - After it → **equal split** among that week's players: everyone who was still standing when the week began.
+  - A week is a wipeout only if it (a) killed at least one player *of their picks*, (b) left nobody alive, and (c) had no death after it. (a) keeps an attrition week — the last two players running out of auto-assigns, or leaving the server — from resurrecting people who are no longer there; (c) keeps it a question about *that week*, so re-grading Week 1 after the field has since died out in Week 9 does not annul a week that wiped out nobody.
+  - **Both outcomes are recorded decisions, not derivations.** The annul goes into the season's `annulled_weeks` and stays; the split sets `status = 'complete'`, which is also what stops a retried sweep paying twice. Deriving either on every sweep would let a later correction dissolve a Reckoning the channel has already read — burying a roster the bot had just announced survived. The sweep only asks about weeks it actually graded that pass, so a no-news sweep never re-opens the question.
+  - `0` = never annul: the first wipeout ends the season whenever it lands. There is no "off" — a season with nobody alive has to resolve somehow.
 - **The Accord (legalized collusion):** once ≤6 remain (config), any living player may invoke `/survivor accord` in the Tuesday-to-Thursday-kickoff window. The bot posts a public vote; if **every** living player accepts within 24h, the season ends immediately in an equal split, with its own ceremony: *"the meadow chose peace."* Any decline (or silence) dissolves it — one invocation per player per season, so it can't become a weekly nag. Final tables deal openly here; nobody has to sneak a wipeout.
 - **Multiple survivors after the final week** → equal split. No margin-of-victory tiebreakers in v1.
 - **Any season end settles both pots** *(decided 2026-08-17)*: sole survivor, final-week split, wipeout split, or Accord — the Ghost Streak side-pot pays out the same day, on that day's standings.
@@ -313,20 +316,22 @@ CREATE TABLE nfl_games (
 | `max_auto_assigns` | 3 | Per season; 4th = elimination |
 | `double_pick_start_week` | 14 | 0 = never. **Stored but unread since 2026-09-02** — the gauntlet replay was its only reader and graded late joiners on a rule live members couldn't play; hidden on the panel until stage 6c wires the live flow and the replay together |
 | `double_pick_min_alive` | 5 | Only escalates if ≥ this many alive. **Not a stored setting yet** — see below |
-| `wipeout_annul_through_week` | 13 | After: equal split. **Not a stored setting yet** — see below |
+| `wipeout_annul_through_week` | 13 | Annul a wipeout up to and including this week; after it the season ends in an equal split. 0 = never annul. **Stored and enforced since 2026-09-11** (§1.6, stage 6b) |
 | `accord_max_alive` | 6 | `/survivor accord` available at ≤ this many living. **Not a stored setting yet** — see below |
 | `ghost_streak` | on | Side-pot % of main pot + DOA fees |
 | `slate_hour`, `lastcall_hour`, `reckoning_hour` | Wed 9 / Sat 18 / Tue 9 | Guild-local, via `tz_offset_hours`. `slate_hour` added 2026-08-17 — §2.3 schedules three tasks; the table only had hours for two |
+| `annulled_weeks` | `[]` | **State, not a dial** — the weeks §1.6 struck from the record, written by the settle sweep and read by `recompute_player`. Not rendered on the panel, so no admin save ever carries it; `validate_config` still normalises it (whole weeks 1–30, deduped and sorted) so the stored order can never carry meaning a rewrite would lose |
 | `channel_id`, `role_survivor_id`, `role_ghost_id`, `role_sole_survivor_id` | 0 (unset) | Wiring, not rules — the #survivor channel and the three managed roles (§3.3). Added at stage 1; 0 degrades that step to skipped-and-logged, never a crash |
 
-**Tier 2 dials are not stored yet** *(2026-08-29)*: `double_pick_min_alive`,
-`wipeout_annul_through_week` and `accord_max_alive` were defined in
-`DEFAULT_CONFIG` and rendered on the panel before anything read them, so an
-admin could set a season rule the bot never played by. They were removed from
-the defaults, the validator and the panel; `validate_config` now rejects them
-outright. The values above stay as the intended defaults — they come back, key
-and dial together, in the same change that ships the rule that enforces them
-(§1.5 double-pick escalation, §1.6 wipeout/annul and the Accord).
+**Tier 2 dials are not stored yet** *(2026-08-29, narrowed 2026-09-11)*:
+`double_pick_min_alive` and `accord_max_alive` are **not** in `DEFAULT_CONFIG`,
+are not on the panel, and `validate_config` rejects them outright. They were
+all three defined and rendered before anything read them, so an admin could
+set a season rule the bot never played by. The values above stay as the
+intended defaults — each comes back, key and dial together, in the same change
+that ships the rule that enforces it (§1.5 double-pick escalation, the
+Accord). `wipeout_annul_through_week` did exactly that on 2026-09-11: §1.6
+shipped, so the key, the validator range and the panel dial returned with it.
 
 ### 5.1 The seed is a faucet — say so out loud
 
@@ -376,7 +381,7 @@ raising the float, so a pot that grows past the seed is not extra faucet.
 11. **Accord discipline:** invocations outside the Tue–Thu window are rejected with the window shown; a player who leaves the server during a vote counts as a decline; accord during a locked pick voids nothing retroactively — the split is computed on invocation-day standings.
 12. **One active season per guild;** archives queryable.
 13. **Auto-assign dead end** *(added 2026-08-17)*: at the final kickoff every legal not-yet-kicked-off team is burned for the player → week voided (survive), no auto-assign charged. Mirrors #10; must not crash or auto-kill.
-14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own fixed line (*"left the server mid-season. Eliminated."*); ghost streak frozen at its best; no further picks accepted. *(2026-09-03, survivor-174: absence from the member cache is a **suspicion**, not a verdict — the Reckoning eliminates a leaver only when the bot is ready, the guild is fully chunked, and `guild.fetch_member` answers NotFound; any other answer keeps the player. A partial cache in the seconds after a re-IDENTIFY used to be able to bury the whole roster as `left`, which settle never undoes.)* Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. Inside an Accord vote, leaving still counts as a decline (#11).
+14. **Member leaves the server mid-season** *(added 2026-08-17)*: eliminated at the next Reckoning with its own fixed line (*"left the server mid-season. Eliminated."*); ghost streak frozen at its best; no further picks accepted. *(2026-09-03, survivor-174: absence from the member cache is a **suspicion**, not a verdict — the Reckoning eliminates a leaver only when the bot is ready, the guild is fully chunked, and `guild.fetch_member` answers NotFound; any other answer keeps the player. A partial cache in the seconds after a re-IDENTIFY used to be able to bury the whole roster as `left`, which settle never undoes.)* Rejoining the server reactivates nothing for the living game — dead is dead — but a rejoined ghost may resume Ghost Streak picking. *(2026-09-11, Billy, todo #203: a departed member is **dropped** from the board, the channel panel and the Reckoning rather than shown. They used to render as the literal `soul 4917…` — a bare id no guild can resolve, the exact failure the house name rule exists to prevent — and the fixed eulogy line went with them, since there is nobody in the post to eulogise. The drop is decided by the member cache when it can be trusted (`guild.chunked`), because that is the fresher answer and it makes a rejoined member reappear on its own; when it cannot, it falls back to the recorded `left` elimination, stale by up to a week but never wrong in bulk. Filtering happens where the data is assembled, so a list and its own header count cannot disagree.)* Inside an Accord vote, leaving still counts as a decline (#11).
 
 ---
 

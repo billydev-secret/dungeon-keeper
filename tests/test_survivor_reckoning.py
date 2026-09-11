@@ -24,9 +24,12 @@ from bot_modules.survivor import tasks
 from bot_modules.survivor.logic import ghost_streaks, join_season, place_pick
 from bot_modules.survivor.reckoning import (
     build_reckoning_data,
+    build_reckoning_embed,
     eulogy_for,
     eliminate_leavers,
+    named_ids,
     next_reckoning_week,
+    wipeout_for,
 )
 from bot_modules.survivor.settle import run_settle
 from tests.db_template import migrated_db
@@ -140,13 +143,26 @@ def test_reckoning_no_deaths_is_just_the_numbers(db):
     [
         pytest.param("cap", "out of auto-assigns", id="cap-fixed-line"),
         pytest.param("missed", "never picked", id="missed-fixed-line"),
-        pytest.param("left", "left the server", id="leaver-fixed-line"),
     ],
 )
 def test_eulogy_fixed_lines_by_source(source, needle):
     entry = {"source": source, "fatal_team": None, "user_id": 1}
     line = eulogy_for(entry, {"week": 3}, "Loaf", 0)
     assert needle in line and "Loaf" in line
+
+
+def test_no_leaver_eulogy_because_leavers_are_dropped():
+    """Billy, 2026-09-11 (todo #203): a member who left the server is
+    dropped from every Survivor surface, so there is nobody in the post to
+    eulogise — the roster simply stops listing them. This test fails if the
+    'left the server mid-season' line is reintroduced without also undoing
+    the drop, which would print a eulogy for a name the post never showed.
+    """
+    import bot_modules.survivor.reckoning as reck
+
+    assert not hasattr(reck, "LEAVER_LINE")
+    entry = {"source": "left", "fatal_team": None, "user_id": 1}
+    assert "left the server" not in eulogy_for(entry, {"week": 3}, "Loaf", 0)
 
 
 def test_eulogy_football_death_states_the_facts():
@@ -1126,3 +1142,161 @@ async def test_reckoning_commit_yields_to_a_parallel_pass(db, monkeypatch):
         # Paid exactly once — by the pass that got there first.
         assert economy_service.get_balance(conn, GID, 1) == 25
         assert int(get_season(conn, season["id"])["config"]["last_reckoned_week"]) == 1
+
+
+# ── §1.6 in the post (stage 6b) ───────────────────────────────────────
+#
+# The settle sweep decides the wipeout; the Reckoning only reports it. So
+# these check the reporting reads the recorded decision and nothing else.
+
+
+def _wipe_week1(conn, season):
+    """Both players pick the loser of the Thursday game."""
+    for user_id in (1, 2):
+        join_season(conn, season, user_id, NOW)
+        place_pick(conn, season, user_id, 1, "NE", NOW)
+    _finalize(conn, "g-thu", "SEA")
+    _finalize(conn, "g-mon", "KC")
+    return run_settle(conn, season, AFTER_W1)
+
+
+def test_a_clean_week_carries_no_wipeout(db):
+    with open_db(db) as conn:
+        season = _season(conn)
+        _settled_week1(conn, season)
+        assert build_reckoning_data(conn, season, 1, AFTER_W1)["wipeout"] is None
+
+
+def test_an_annulled_week_leads_the_post(db):
+    with open_db(db) as conn:
+        season = _season(conn, strikes=0, wipeout_annul_through_week=13)
+        assert _wipe_week1(conn, season).annulled == [1]
+        season = get_season(conn, season["id"])
+
+        data = build_reckoning_data(conn, season, 1, AFTER_W1)
+        assert data["wipeout"] == {"kind": "annul", "week": 1}
+        # Nobody died, so the toll is flat and there are no eulogies.
+        assert (data["before"], data["after"]) == (2, 2)
+        assert data["deaths"] == []
+
+        embed = build_reckoning_embed(
+            data, lambda uid: f"P{uid}", season_name="S"
+        )
+        assert embed.description.startswith("☠️ **Wipeout.**")
+        assert "stricken from the record" in embed.description
+        assert not [f for f in embed.fields if f.name.startswith("⚖️")]
+
+
+def test_a_split_week_prints_the_shares(db):
+    with open_db(db) as conn:
+        season = _season(
+            conn, strikes=0, wipeout_annul_through_week=0,
+            pot_seed=1000, ghost_pot_pct=0, buyin_coins=0,
+        )
+        assert _wipe_week1(conn, season).season_ended is not None
+        season = get_season(conn, season["id"])
+
+        data = build_reckoning_data(conn, season, 1, AFTER_W1)
+        assert data["wipeout"]["kind"] == "split"
+        assert [s["amount"] for s in data["wipeout"]["shares"]] == [500, 500]
+        # Every id the post will name is prefetched, the split included —
+        # a missed one renders as a bare <@id> for exactly that member.
+        assert named_ids(data) == [1, 2]
+
+        embed = build_reckoning_embed(
+            data, lambda uid: f"P{uid}", season_name="S"
+        )
+        assert "The season ends here" in embed.description
+        split = next(f for f in embed.fields if f.name.startswith("⚖️"))
+        assert "P1" in split.value and "P2" in split.value
+
+
+def test_a_departed_split_recipient_is_dropped_from_the_shares(db):
+    """Regression, 2026-09-11 review: every other list build_reckoning_data
+    assembles is filtered through ``hidden`` (todo #203), but the wipeout
+    split's shares came straight from payout_receipt unfiltered — a departed
+    member who shared in the split still printed in the 'The Split' field,
+    the exact thing todo #203 exists to stop."""
+    with open_db(db) as conn:
+        season = _season(
+            conn, strikes=0, wipeout_annul_through_week=0,
+            pot_seed=1000, ghost_pot_pct=0, buyin_coins=0,
+        )
+        assert _wipe_week1(conn, season).season_ended is not None
+        season = get_season(conn, season["id"])
+
+        full = build_reckoning_data(conn, season, 1, AFTER_W1)
+        assert [s["user_id"] for s in full["wipeout"]["shares"]] == [1, 2]
+
+        data = build_reckoning_data(conn, season, 1, AFTER_W1, hidden={2})
+        assert [s["user_id"] for s in data["wipeout"]["shares"]] == [1]
+        assert named_ids(data) == [1]
+
+        embed = build_reckoning_embed(
+            data, lambda uid: f"P{uid}", season_name="S"
+        )
+        split = next(f for f in embed.fields if f.name.startswith("⚖️"))
+        assert "P1" in split.value and "P2" not in split.value
+
+
+def test_wipeout_for_reports_only_what_was_recorded(db):
+    """A season that ended some other way, or a week nobody recorded, is
+    not this week's wipeout — the ceremony never re-decides §1.6."""
+    with open_db(db) as conn:
+        season = _season(conn, strikes=0, wipeout_annul_through_week=13)
+        _wipe_week1(conn, season)
+        season = get_season(conn, season["id"])
+        assert wipeout_for(conn, season, 1) == {"kind": "annul", "week": 1}
+        assert wipeout_for(conn, season, 2) is None
+
+
+# ── departed members are dropped (todo #203) ──────────────────────────
+
+
+def test_departed_members_leave_the_post_entirely(db):
+    """Billy, 2026-09-11: a member who left the server is dropped, not
+    printed as a bare id. The toll counts come from the filtered roster, so
+    before → after still reconciles with the names underneath it."""
+    with open_db(db) as conn:
+        season = _season(conn, strikes=0)
+        join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
+        place_pick(conn, season, 1, 1, "SEA", NOW)
+        place_pick(conn, season, 2, 1, "NE", NOW)
+        join_season(conn, season, 3, THU + HOUR)  # a gauntlet arrival
+        _finalize(conn, "g-thu", "SEA")
+        _finalize(conn, "g-mon", "KC")
+        run_settle(conn, season, AFTER_W1)  # 1 survives, 2 dies
+
+        full = build_reckoning_data(conn, season, 1, AFTER_W1)
+        assert (full["before"], full["after"]) == (3, 2)
+        assert [a["user_id"] for a in full["arrivals"]] == [3]
+
+        data = build_reckoning_data(conn, season, 1, AFTER_W1, hidden={2, 3})
+        assert data["deaths"] == []               # the dead leaver is gone
+        assert [e["user_id"] for e in data["ledger"]] == [1]
+        assert data["arrivals"] == []             # so is the arrival
+        # 1 survivor listed, 1 counted, 0 deaths: the numbers add up.
+        assert (data["before"], data["after"]) == (1, 1)
+        assert named_ids(data) == [1]
+
+
+def test_a_departed_ghost_leaves_the_streak_strip(db):
+    with open_db(db) as conn:
+        season = _season(conn, strikes=0)
+        _settled_week1(conn, season)  # player 2 is a ghost from week 1
+        season = get_season(conn, season["id"])
+        place_pick(conn, season, 2, 2, "SF", AFTER_W1)
+        _finalize(conn, "g2", "SF")
+        run_settle(conn, season, NOW + 13 * DAY)
+
+        full = build_reckoning_data(conn, season, 2, NOW + 13 * DAY)
+        assert [uid for uid, _ in full["streak_strip"]] == [2]
+        assert full["streak_record"] == 1
+
+        data = build_reckoning_data(
+            conn, season, 2, NOW + 13 * DAY, hidden={2}
+        )
+        assert data["streak_strip"] == []
+        # The record goes with them: it was their streak.
+        assert data["streak_record"] == 0

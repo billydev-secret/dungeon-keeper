@@ -543,12 +543,18 @@ const RULES_CARDS = [
       + "is an elimination.", { max: 18 }],
   ]],
   ["Escalation & Endgame", [
-    // The double-pick-start, wipeout-annul, double-pick-minimum and Accord
-    // dials are deliberately absent: nothing enforces those rules yet, so
-    // offering them here would promise a season rule the bot does not play
-    // by. (Double-pick's start week was the last to go, 2026-09-02: only the
-    // gauntlet replay read it, grading late joiners on a rule nobody else
-    // played.) They return with the code that reads them.
+    // The double-pick-minimum and Accord dials are deliberately absent:
+    // nothing enforces those rules yet, so offering them here would promise
+    // a season rule the bot does not play by. (Double-pick's start week was
+    // the last to go, 2026-09-02: only the gauntlet replay read it, grading
+    // late joiners on a rule nobody else played.) They return with the code
+    // that reads them — as the wipeout dial did on 2026-09-11.
+    ["num", "wipeout_annul_through_week", "Annul Wipeouts Through Week",
+      "A week that kills every living player is <em>annulled</em> up to and "
+      + "including this week: nobody is eliminated, but the teams they spent "
+      + "stay burned. After it, that week ends the season and its players "
+      + "split both pots. 0 = never annul — the first wipeout ends the "
+      + "season, whenever it lands.", { max: 18 }],
     ["check", "ghost_streak", "Ghost Streak side-game",
       "The dead keep picking for a side-pot. Load-bearing for late entry — "
       + "gauntlet joiners who arrive dead land here."],
@@ -597,12 +603,13 @@ function renderRulesCards(zone, season, roles, channels) {
   zone.innerHTML = `
     <form class="form form-cards" data-rules-form>
       <div class="notice-banner mb-8">
-        <strong>Under construction:</strong> the Week-1 game is fully live —
-        picks, results, strikes, the groundskeeper, the gauntlet, ghosts, and
-        the weekly posts. Still to come (each before its own in-season
-        deadline): wipeout/annul handling, double-pick weeks (wk 14), the
-        Accord, the endgame payouts, and the member notification toggles —
-        their dials store now and bind when that logic ships.
+        <strong>Under construction:</strong> the week-by-week game is fully
+        live — picks, results, strikes, the groundskeeper, the gauntlet,
+        ghosts, the weekly posts, and the wipeout rule below. Still to come
+        (each before its own in-season deadline): double-pick weeks (wk 14),
+        the Accord, the endgame payouts, and the member notification toggles.
+        Those have no dials here yet — they arrive with the rules that read
+        them, so nothing on this page is a setting the bot ignores.
       </div>
       <div class="card">
         <div class="section-label">Wiring</div>

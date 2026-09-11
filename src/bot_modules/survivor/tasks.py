@@ -26,6 +26,7 @@ import discord
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db, open_db_immediate
 from bot_modules.services.dm_branding import send_branded_dm
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services.survivor_service import SeasonError, get_season, update_config
 from bot_modules.survivor import logic, reckoning
 from bot_modules.survivor.views import SlatePickButton, swap_member_roles
@@ -511,6 +512,12 @@ async def post_reckoning(
         return False
     guild = channel.guild
     present = {m.id for m in guild.members}
+    # Departed members are dropped from the post rather than eulogised
+    # (todo #203). present_member_ids is the *guarded* read of the same
+    # cache: it returns None on an unchunked guild, so a partial cache can
+    # blank nobody. The raw ``present`` above stays as it was — it feeds
+    # suspected_leavers, which has its own fetch_member confirmation.
+    display_present = logic.present_member_ids(guild)
 
     def _suspects():
         with open_db(db_path) as conn:
@@ -524,7 +531,10 @@ async def post_reckoning(
         for real after Discord accepted it (survivor-173)."""
         reckoning.eliminate_leavers(conn, season, week, present, confirmed=gone)
         paid = reckoning.pay_weekly_wins(conn, season, week)
-        data = reckoning.build_reckoning_data(conn, season, week, now)
+        data = reckoning.build_reckoning_data(
+            conn, season, week, now,
+            hidden=logic.departed_players(conn, season, display_present),
+        )
         if paid:
             data["weekly_win"] = {"count": len(paid), "amount": paid[0][1]}
         update_config(conn, season["id"], {
@@ -561,13 +571,12 @@ async def post_reckoning(
         return True
 
     data, settings = await asyncio.to_thread(_preview)
-
-    def name_of(user_id: int) -> str:
-        member = guild.get_member(user_id)
-        return (
-            discord.utils.escape_markdown(member.display_name)
-            if member else f"soul {user_id}"
-        )
+    name_of = await build_name_fn(
+        guild=guild,
+        db_path=db_path,
+        guild_id=season["guild_id"],
+        user_ids=reckoning.named_ids(data),
+    )
 
     color = await safe_resolve_accent(db_path, guild, log_label="survivor")
     embed = reckoning.build_reckoning_embed(

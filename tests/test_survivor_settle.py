@@ -119,11 +119,20 @@ def test_expected_result(status, winner, team, expected):
 # ── strikes and eliminations ───────────────────────────────────────────
 
 
+# Player 2 in the elimination tests is load-bearing, not decoration: a season
+# whose only player dies is a §1.6 wipeout, and from 2026-09-11 the sweep
+# annuls the week and hands them their life back (see test_survivor_wipeout).
+# Without someone left standing these tests would assert the strike rule and
+# silently measure the wipeout rule instead.
+
+
 def test_first_loss_strikes_second_loss_kills(db):
     with open_db(db) as conn:
         season = _season(conn)
         join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
         place_pick(conn, season, 1, 1, "NE", NOW)
+        place_pick(conn, season, 2, 1, "SEA", NOW)
         _finalize(conn, "g-thu", "SEA")
         run_settle(conn, season, THU + 4 * HOUR)
         p = _player(conn, season, 1)
@@ -131,23 +140,28 @@ def test_first_loss_strikes_second_loss_kills(db):
 
         # Week 2: second wrong week is the end.
         place_pick(conn, season, 1, 2, "DAL", MON + HOUR)
+        place_pick(conn, season, 2, 2, "PHI", MON + HOUR)
         _finalize(conn, "g2-a", "PHI")
         run_settle(conn, season, W2_SUN + 4 * HOUR)
         p = _player(conn, season, 1)
         assert (p["status"], p["eliminated_week"]) == ("ghost", 2)
         assert p["elimination_source"] == "picks"
         assert p["strikes_used"] == 2
+        assert _player(conn, season, 2)["status"] == "alive"
 
 
 def test_sudden_death_when_strikes_zero(db):
     with open_db(db) as conn:
         season = _season(conn, strikes=0)
         join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
         place_pick(conn, season, 1, 1, "NE", NOW)
+        place_pick(conn, season, 2, 1, "SEA", NOW)
         _finalize(conn, "g-thu", "SEA")
         run_settle(conn, season, THU + 4 * HOUR)
         p = _player(conn, season, 1)
         assert (p["status"], p["eliminated_week"]) == ("ghost", 1)
+        assert _player(conn, season, 2)["status"] == "alive"
 
 
 @pytest.mark.parametrize(
@@ -239,12 +253,14 @@ def test_correction_resurrects_the_wrongly_dead(db):
     with open_db(db) as conn:
         season = _season(conn, strikes=0)
         join_season(conn, season, 1, NOW)
+        join_season(conn, season, 2, NOW)
         place_pick(conn, season, 1, 1, "NE", NOW)
+        place_pick(conn, season, 2, 1, "SF", NOW)
         _finalize(conn, "g-thu", "SEA")
         run_settle(conn, season, THU + 4 * HOUR)
         assert _player(conn, season, 1)["status"] == "ghost"
 
-        out = manual_settle(conn, YEAR, "g-thu", "NE", [season])
+        out = manual_settle(conn, YEAR, "g-thu", "NE", [season], now=THU + 4 * HOUR)
         assert out["old_winner"] == "SEA"
         assert _pick_result(conn, season, 1) == "win"
         p = _player(conn, season, 1)
@@ -261,7 +277,7 @@ def test_manual_void_unwinds_the_strike_and_returns_the_team(db):
         run_settle(conn, season, THU + 4 * HOUR)
         assert _player(conn, season, 1)["strikes_used"] == 1
 
-        manual_settle(conn, YEAR, "g-thu", "VOID", [season])
+        manual_settle(conn, YEAR, "g-thu", "VOID", [season], now=THU + 4 * HOUR)
         assert _pick_result(conn, season, 1) == "void"
         assert _player(conn, season, 1)["strikes_used"] == 0
         assert "NE" in satchel(conn, season["id"], 1)
@@ -271,9 +287,9 @@ def test_manual_settle_validates_outcome(db):
     with open_db(db) as conn:
         season = _season(conn)
         with pytest.raises(ValueError, match="Outcome must be"):
-            manual_settle(conn, YEAR, "g-thu", "KC", [season])
+            manual_settle(conn, YEAR, "g-thu", "KC", [season], now=NOW)
         with pytest.raises(ValueError, match="No such game"):
-            manual_settle(conn, YEAR, "nope", "SEA", [season])
+            manual_settle(conn, YEAR, "nope", "SEA", [season], now=NOW)
 
 
 def test_non_pick_deaths_survive_recomputation(db):
@@ -400,7 +416,7 @@ def test_manual_void_sticks_through_a_feed_poll(db):
         season = _season(conn)
         join_season(conn, season, 1, NOW)
         place_pick(conn, season, 1, 1, "SEA", NOW)
-        manual_settle(conn, YEAR, "g-thu", "VOID", [season])
+        manual_settle(conn, YEAR, "g-thu", "VOID", [season], now=NOW)
         assert _pick_result(conn, season, 1) == "void"
 
         # The feed still thinks the game is on, then final.

@@ -35,7 +35,11 @@ GROUNDSKEEPER_LINE = (
     "**{name}** — out of auto-assigns, no pick made. Eliminated."
 )
 MISSED_LINE = "**{name}** never picked. Eliminated."
-LEAVER_LINE = "**{name}** left the server mid-season. Eliminated."
+# No leaver line (Billy, 2026-09-11, todo #203). A member who has left the
+# server is dropped from every Survivor surface rather than named, so there
+# is nobody left in the post to eulogise — the roster simply no longer lists
+# them. eliminate_leavers still runs: the game state has to stop accepting
+# their picks. Only the announcement of it is gone. Spec §6.14 amended.
 
 _RESULT_ICON = {
     "win": "✅", "loss": "💀", "tie": "🤝", "void": "🌫️", None: "⏳",
@@ -139,14 +143,29 @@ def pay_weekly_wins(
 
 
 def build_reckoning_data(
-    conn: sqlite3.Connection, season: dict, week: int, now: float
+    conn: sqlite3.Connection,
+    season: dict,
+    week: int,
+    now: float,
+    *,
+    hidden: set[int] | None = None,
 ) -> dict:
-    """Everything the three acts need, as plain data. No Discord objects."""
-    players = conn.execute(
-        "SELECT user_id, status, strikes_used, eliminated_week, elimination_source"
-        " FROM survivor_players WHERE season_id = ?",
-        (season["id"],),
-    ).fetchall()
+    """Everything the three acts need, as plain data. No Discord objects.
+
+    ``hidden`` drops departed members (todo #203). They leave the ledger,
+    the eliminations and the streak strip together — and the toll counts are
+    computed from what survives the filter, so before → after still
+    reconciles with the names printed underneath it.
+    """
+    hidden = hidden or set()
+    players = [
+        r for r in conn.execute(
+            "SELECT user_id, status, strikes_used, eliminated_week,"
+            " elimination_source FROM survivor_players WHERE season_id = ?",
+            (season["id"],),
+        ).fetchall()
+        if int(r["user_id"]) not in hidden
+    ]
     picks = conn.execute(
         "SELECT user_id, slot, team, result, auto_assigned FROM survivor_picks "
         "WHERE season_id = ? AND week = ? ORDER BY user_id, slot",
@@ -218,9 +237,13 @@ def build_reckoning_data(
             (season["id"],),
         ).fetchall()
         if _joined_ts(r["joined_at"]) > gate_after
+        and int(r["user_id"]) not in hidden
     ]
 
-    streaks = ghost_streaks(conn, season, now)
+    streaks = {
+        uid: st for uid, st in ghost_streaks(conn, season, now).items()
+        if uid not in hidden
+    }
     strip = sorted(
         ((uid, st) for uid, st in streaks.items() if st["current"] > 0),
         key=lambda t: (-t[1]["current"], t[0]),
@@ -232,6 +255,7 @@ def build_reckoning_data(
         "before": alive_now + len(deaths),
         "after": alive_now,
         "pots": pot_totals(conn, season),
+        "wipeout": wipeout_for(conn, season, week, hidden=hidden),
         "deaths": deaths,
         "ledger": ledger,
         "arrivals": arrivals,
@@ -239,6 +263,53 @@ def build_reckoning_data(
         "streak_strip": strip,
         "streak_record": record,
     }
+
+
+def wipeout_for(
+    conn: sqlite3.Connection,
+    season: dict,
+    week: int,
+    *,
+    hidden: set[int] | None = None,
+) -> dict | None:
+    """How §1.6 resolved ``week``, if it wiped the field out — or None.
+
+    Derived from what the settle sweep recorded, never re-decided here: an
+    annul is a week in the season's ``annulled_weeks``, and a split is a
+    season the sweep marked ``complete``, whose shares are read back out of
+    the ledger so the ceremony can only report money that really moved.
+
+    ``hidden`` drops departed members from the split the same way
+    :func:`build_reckoning_data` drops them everywhere else (todo #203) — a
+    payout is still money that moved, but a departed member isn't shown
+    collecting it any more than they're shown dying.
+    """
+    if week in {int(w) for w in season["config"].get("annulled_weeks") or ()}:
+        return {"kind": "annul", "week": week}
+    if season["status"] != "complete":
+        return None
+    from bot_modules.survivor.payout import payout_receipt
+
+    hidden = hidden or set()
+    shares = [
+        row for row in payout_receipt(conn, season)
+        if row["pot"] == "main" and row["user_id"] not in hidden
+    ]
+    if not shares:
+        return None
+    return {"kind": "split", "week": week, "shares": shares}
+
+
+ANNUL_LINE = (
+    "☠️ **Wipeout.** Everyone died. Therefore nobody did — Week {week} is "
+    "stricken from the record. Nobody is eliminated, and the teams you "
+    "burned stay burned."
+)
+SPLIT_LINE = (
+    "☠️ **Wipeout.** Week {week} killed the whole field, and it is too "
+    "late in the season to strike a week from the record. The season ends "
+    "here — the fallen split the pot."
+)
 
 
 def _joined_ts(joined_at: str) -> float:
@@ -256,12 +327,26 @@ def eulogy_for(entry: dict, data: dict, name: str, index: int) -> str:
         return _fill(GROUNDSKEEPER_LINE, name=name)
     if entry["source"] == "missed":
         return _fill(MISSED_LINE, name=name)
-    if entry["source"] == "left":
-        return _fill(LEAVER_LINE, name=name)
     return _fill(
         FATAL_LINE, name=name, team=entry["fatal_team"] or "—",
         week=data["week"],
     )
+
+
+def named_ids(data: dict) -> list[int]:
+    """Every user id :func:`build_reckoning_embed` will ask to name.
+
+    The resolver prefetches from this, so a name missing here would fall
+    back to a bare ``<@id>`` for exactly one member — the failure mode the
+    house rule exists to prevent. Gathering it beside the builder keeps the
+    two in step.
+    """
+    ids = [e["user_id"] for e in data["deaths"] + data["ledger"]]
+    ids += [a["user_id"] for a in data["arrivals"]]
+    ids += [uid for uid, _ in data["streak_strip"]]
+    wipeout = data.get("wipeout") or {}
+    ids += [share["user_id"] for share in wipeout.get("shares", ())]
+    return sorted(set(ids))
 
 
 def build_reckoning_embed(
@@ -299,6 +384,12 @@ def build_reckoning_embed(
             f"\n⏳ {data['stragglers']} result(s) still pending — an update "
             "follows when they're final"
         )
+    # §1.6: a week that killed everyone leads the post. It is the whole
+    # story of the week, so it goes above the ledger rather than into it.
+    wipeout = data.get("wipeout")
+    if wipeout:
+        line = ANNUL_LINE if wipeout["kind"] == "annul" else SPLIT_LINE
+        toll = _fill(line, week=wipeout["week"]) + "\n\n" + toll
     embed.description = toll
     if data["arrivals"]:
         breathing = sum(1 for a in data["arrivals"] if not a["dead"])
@@ -344,6 +435,15 @@ def build_reckoning_embed(
         ]
         embed.add_field(
             name="🪦 Eliminations", value=_clip_field(lines, "eliminated"),
+            inline=False,
+        )
+    if wipeout and wipeout["kind"] == "split":
+        lines = [
+            f"{name_of(share['user_id'])} — {coins(settings, share['amount'])}"
+            for share in wipeout["shares"]
+        ]
+        embed.add_field(
+            name="⚖️ The Split", value=_clip_field(lines, "shares"),
             inline=False,
         )
     embed.set_footer(text=f"{season_name} • results post every Tuesday")

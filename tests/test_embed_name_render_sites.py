@@ -111,3 +111,26 @@ def test_ttl_final_results_name_resolver_comes_from_the_recap_resolvers():
         "build_recap_embed sites whose name_resolver is not the first value "
         "of _recap_resolvers(...): " + ", ".join(missed)
     )
+
+
+@pytest.mark.parametrize(
+    "module_path",
+    [
+        pytest.param("bot_modules/cogs/survivor_cog.py", id="survivor-cog"),
+        pytest.param("bot_modules/survivor/tasks.py", id="survivor-reckoning"),
+        pytest.param("bot_modules/survivor/views.py", id="survivor-panel"),
+        pytest.param("web_server/routes/survivor.py", id="survivor-preview"),
+    ],
+)
+def test_survivor_render_sites_resolve_names(module_path):
+    """Survivor's builders take their resolver *positionally* (``name_of``),
+    so the kwarg table above can't see them. Until 2026-09-11 all four sites
+    passed a hand-rolled ``lambda uid: f"soul {uid}"`` instead — a literal
+    bare id in the post, the exact failure this rule exists to prevent
+    (todo #203). Each site must build a real resolver.
+    """
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "src" / module_path
+    ).read_text(encoding="utf-8")
+    assert "build_name_fn(" in src, f"{module_path} builds no name resolver"
+    assert "soul {" not in src, f"{module_path} formats a bare member id"

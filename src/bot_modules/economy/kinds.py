@@ -67,5 +67,14 @@ UNSCALED_CREDIT_KINDS: frozenset[str] = frozenset(
         "grant",
         "rental_refund",
         "survivor_refund",
+        # The Survivor pot is a number the panel and the season announcement
+        # show members all year, and with a buy-in it is partly their own
+        # coin recycled. Shaving the payout would pay out less than the pot
+        # the bot advertised — the deliberate-amount case, not a faucet the
+        # guild gets to tune. The Ghost Streak side-pot is carved out of
+        # that same advertised seed, so it goes on the list with it.
+        # (The weekly win prize is a faucet and scales.)
+        "survivor_payout",
+        "survivor_ghost_payout",
     }
 )
