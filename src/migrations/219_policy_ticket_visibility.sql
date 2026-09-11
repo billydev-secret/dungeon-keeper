@@ -1,0 +1,23 @@
+-- Migration 219: a policy proposal remembers whether it is open to members
+-- (2026-09-11, docs/dungeon_keeper_jail_ticket_spec.md).
+--
+-- `/policy open` has always created the proposal channel with @everyone
+-- denied view_channel, granting only the mod and admin roles. In practice a
+-- proposal is sometimes opened to the general public once mods have talked it
+-- over, which until now meant editing the channel overwrites by hand — so
+-- nothing recorded that it had happened, and the proposal card went on
+-- implying a private room.
+--
+-- The proposal card now carries a mod-gated Open to Members / Make Mods-Only
+-- toggle, and this column is where that lands so it survives a restart.
+--
+-- Ships dark: every existing row defaults to 'mods', which is what the
+-- channel overwrites already say, and the column is only ever written by a
+-- button press. No channel's permissions change on restart — this migration
+-- moves no member into or out of any room.
+--
+-- Per-user data: no new column names a member. `policy_tickets` is already
+-- registered in docs/data_register.md (creator_id); visibility describes a
+-- channel, not a person.
+
+ALTER TABLE policy_tickets ADD COLUMN visibility TEXT NOT NULL DEFAULT 'mods';

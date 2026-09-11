@@ -10,6 +10,7 @@ from bot_modules.services.moderation import (
     find_expired_policy_votes,
     get_policy_ticket,
     resolve_policy_vote,
+    set_policy_visibility,
     start_policy_vote,
 )
 
@@ -139,3 +140,54 @@ async def test_vote_timeout_sweep_consults_every_guild(sync_db_path: Path, monke
             SimpleNamespace(), ctx, SimpleNamespace(id=gid)
         )
     assert seen == [GUILD, 9002]
+
+
+# ── Visibility (migration 219) ────────────────────────────────────────
+
+
+def _seed_open_policy(db_path: Path) -> int:
+    with open_db(db_path) as conn:
+        return create_policy_ticket(
+            conn,
+            guild_id=GUILD,
+            creator_id=CREATOR,
+            channel_id=556,
+            title="visibility policy",
+            description="desc",
+        )
+
+
+def test_a_new_policy_is_mods_only(sync_db_path: Path):
+    """The column ships dark: nothing is open until a button says so."""
+    pid = _seed_open_policy(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "mods"
+
+
+def test_set_policy_visibility_round_trips(sync_db_path: Path):
+    pid = _seed_open_policy(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        set_policy_visibility(conn, pid, visibility="public")
+    with open_db(sync_db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "public"
+
+    # And back — the toggle has to survive a return trip, since a mod who
+    # opens a channel by mistake needs the deny to go back on.
+    with open_db(sync_db_path) as conn:
+        set_policy_visibility(conn, pid, visibility="mods")
+    with open_db(sync_db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "mods"
+
+
+def test_visibility_is_per_policy(sync_db_path: Path):
+    """Opening one proposal must not open another."""
+    first = _seed_open_policy(sync_db_path)
+    with open_db(sync_db_path) as conn:
+        second = create_policy_ticket(
+            conn, guild_id=GUILD, creator_id=CREATOR, channel_id=557,
+            title="other", description="desc",
+        )
+        set_policy_visibility(conn, first, visibility="public")
+    with open_db(sync_db_path) as conn:
+        assert get_policy_ticket(conn, first)["visibility"] == "public"
+        assert get_policy_ticket(conn, second)["visibility"] == "mods"

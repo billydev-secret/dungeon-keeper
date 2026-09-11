@@ -54,6 +54,7 @@ from bot_modules.services.moderation import (
     release_jail,
     reopen_ticket,
     resolve_policy_vote,
+    set_policy_visibility,
     store_transcript,
     ticket_notify_on_create_enabled,
     write_audit,
@@ -77,12 +78,20 @@ from bot_modules.services.policy_ballot_service import (
 from bot_modules.jail.apply import create_jail_channel
 from bot_modules.jail.embeds import (
     build_policy_ballot_embed,
+    build_policy_proposal_embed,
     build_policy_vote_update_embed,
 )
 from bot_modules.jail.logic import (
+    POLICY_EXPOSURE_COUNT_CAP,
+    POLICY_VISIBILITY_MODS,
+    POLICY_VISIBILITY_PUBLIC,
     channel_needs_jail_deny,
     channels_needing_jail_deny,
     eligible_voters,
+    is_policy_public,
+    policy_exposure_warning,
+    policy_visibility_label,
+    toggle_policy_visibility,
     vote_outcome as _vote_outcome,
 )
 
@@ -1047,6 +1056,299 @@ class PolicyVoteAbstainButton(
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await _handle_policy_vote(interaction, self.policy_id, "abstain")
+
+
+# ---------------------------------------------------------------------------
+# Policy channel visibility
+# ---------------------------------------------------------------------------
+#
+# A proposal starts private (`/policy open` denies @everyone view_channel and
+# grants the mod and admin roles) and a mod may open it to the general public
+# from the proposal card. Notes that matter here:
+#
+#  * **Opening is one-way in the only sense that counts.** The overwrites come
+#    back off on a second press, but what members read while it was open, they
+#    have read. That is why opening confirms and closing doesn't.
+#  * **The gate is a runtime check**, like every other button in this module —
+#    a member can see the card the moment the channel is open, so the button
+#    has to refuse them on press rather than be hidden.
+#  * **Jailed members stay out either way.** The channel carries an explicit
+#    `@Jailed → view_channel=False` overwrite stamped by the create listener
+#    in the cog, and an @everyone allow does not override a role deny.
+
+
+def _policy_visibility_view(policy_id: int, visibility: object) -> discord.ui.View:
+    """The proposal card's one button, labelled for what pressing it does."""
+    view = discord.ui.View(timeout=None)
+    view.add_item(PolicyVisibilityButton(policy_id, visibility))
+    return view
+
+
+class PolicyVisibilityButton(
+    discord.ui.DynamicItem[discord.ui.Button],
+    template=r"policy_visibility:(?P<pid>\d+)",
+):
+    """Persistent 'Open to Members' / 'Make Mods-Only' toggle.
+
+    The custom id carries only the policy id, never the visibility: a card
+    that sat through a restart, or through someone else pressing the same
+    button first, would otherwise act on a stale state. **The press re-reads
+    the row** and toggles from that, which is the part that has to be right —
+    the label Discord shows comes from the component it stored when the card
+    was last rendered, so a card whose channel was opened by hand can be
+    showing the wrong verb until the next re-render. Pressing it still does
+    the correct thing.
+    """
+
+    def __init__(self, policy_id: int, visibility: object = None) -> None:
+        public = is_policy_public(visibility)
+        super().__init__(
+            discord.ui.Button(
+                label=policy_visibility_label(visibility),
+                emoji="🌐" if not public else "🔒",
+                style=(
+                    discord.ButtonStyle.secondary
+                    if public
+                    else discord.ButtonStyle.primary
+                ),
+                custom_id=f"policy_visibility:{policy_id}",
+            )
+        )
+        self.policy_id = policy_id
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match, /):
+        pid = int((item.custom_id or "").split(":")[-1])  # type: ignore[attr-defined]
+        bot = interaction.client
+        ctx: AppContext = cast("Bot", bot).ctx
+
+        def _read():
+            with ctx.open_db() as conn:
+                row = get_policy_ticket(conn, pid)
+            return row["visibility"] if row else None
+
+        return cls(pid, await asyncio.to_thread(_read))
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        bot = interaction.client
+        ctx: AppContext = cast("Bot", bot).ctx
+        member = interaction.user
+        guild = interaction.guild
+        if not isinstance(member, discord.Member) or guild is None:
+            return
+        # Admin, matching `/policy open`: deciding a proposal goes public is
+        # the same call as deciding to open one.
+        if not _is_admin(member, ctx):
+            await interaction.response.send_message(
+                "❌ Only admins can change who can see a policy proposal.",
+                ephemeral=True,
+            )
+            return
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ This only works in a policy channel.", ephemeral=True
+            )
+            return
+
+        # Defer before any I/O: reading the row and counting the backlog is
+        # up to five REST pages, which does not fit in Discord's 3-second
+        # first-response window.
+        await interaction.response.defer(ephemeral=True)
+
+        policy_id = self.policy_id
+
+        def _read():
+            with ctx.open_db() as conn:
+                return get_policy_ticket(conn, policy_id)
+
+        policy = await asyncio.to_thread(_read)
+        if policy is None:
+            await interaction.followup.send(
+                "❌ That policy proposal no longer exists.", ephemeral=True
+            )
+            return
+
+        # Re-read rather than trust the card: someone may have pressed this
+        # between the render and the press.
+        target = toggle_policy_visibility(policy["visibility"])
+
+        if target == POLICY_VISIBILITY_MODS:
+            await self._apply(interaction, ctx, policy, target)
+            return
+
+        count, capped = await _count_channel_messages(channel)
+        confirm_view = discord.ui.View(timeout=60)
+        confirmed = False
+
+        async def do_confirm(inter: discord.Interaction):
+            nonlocal confirmed
+            confirmed = True
+            await inter.response.edit_message(
+                content="Opening the channel…", view=None
+            )
+            confirm_view.stop()
+
+        async def do_cancel(inter: discord.Interaction):
+            await inter.response.edit_message(
+                content="Left mods-only. Nothing changed.", view=None
+            )
+            confirm_view.stop()
+
+        btn_yes: discord.ui.Button = discord.ui.Button(
+            label="Open It", emoji="🌐", style=discord.ButtonStyle.danger
+        )  # type: ignore[assignment]
+        btn_no: discord.ui.Button = discord.ui.Button(
+            label="Cancel", style=discord.ButtonStyle.secondary
+        )  # type: ignore[assignment]
+        btn_yes.callback = do_confirm  # type: ignore[method-assign,assignment]
+        btn_no.callback = do_cancel  # type: ignore[method-assign,assignment]
+        confirm_view.add_item(btn_yes)
+        confirm_view.add_item(btn_no)
+
+        await interaction.followup.send(
+            policy_exposure_warning(count, capped=capped),
+            view=confirm_view,
+            ephemeral=True,
+        )
+        await confirm_view.wait()
+        if not confirmed:
+            return
+        await self._apply(interaction, ctx, policy, target)
+
+    async def _apply(
+        self,
+        interaction: discord.Interaction,
+        ctx: AppContext,
+        policy: "PolicyTicketRow",
+        target: str,
+    ) -> None:
+        """Move the overwrites, persist, and re-render the card."""
+        guild = interaction.guild
+        channel = interaction.channel
+        member = interaction.user
+        if guild is None or not isinstance(channel, discord.TextChannel):
+            return
+
+        public = target == POLICY_VISIBILITY_PUBLIC
+        try:
+            if public:
+                await channel.set_permissions(
+                    guild.default_role,
+                    view_channel=True,
+                    read_message_history=True,
+                    send_messages=True,
+                    reason=f"Policy #{policy['id']} opened to members by {member}",
+                )
+            else:
+                # Back to the state `/policy open` creates: an explicit deny,
+                # not a cleared overwrite, so the channel does not start
+                # inheriting whatever the category says.
+                await channel.set_permissions(
+                    guild.default_role,
+                    view_channel=False,
+                    read_message_history=None,
+                    send_messages=None,
+                    reason=f"Policy #{policy['id']} returned to mods-only by {member}",
+                )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ I can't edit this channel's permissions — check I have "
+                "Manage Roles here.",
+                ephemeral=True,
+            )
+            return
+
+        policy_id = policy["id"]
+        guild_id = guild.id
+        actor_id = member.id
+
+        def _persist():
+            with ctx.open_db() as conn:
+                set_policy_visibility(conn, policy_id, visibility=target)
+                write_audit(
+                    conn,
+                    guild_id=guild_id,
+                    action="policy_visibility",
+                    actor_id=actor_id,
+                    extra={"policy_id": policy_id, "visibility": target},
+                )
+
+        await asyncio.to_thread(_persist)
+
+        message = interaction.message
+        if message is not None:
+            # Resolve the proposer again rather than reuse whatever string the
+            # old card held: the card is being re-rendered precisely because
+            # its audience may have just widened.
+            name_fn = await build_name_fn(
+                guild=guild,
+                db_path=ctx.db_path,
+                guild_id=guild_id,
+                user_ids=[policy["creator_id"]],
+            )
+            embed = build_policy_proposal_embed(
+                policy_id=policy_id,
+                title=policy["title"],
+                description=policy["description"],
+                proposer=name_fn(policy["creator_id"]),
+                visibility=target,
+                now=datetime.fromtimestamp(policy["created_at"], timezone.utc),
+            )
+            try:
+                await message.edit(
+                    embed=embed,
+                    view=_policy_visibility_view(policy_id, target),
+                )
+            except discord.HTTPException:
+                log.exception("Could not re-render policy card %s", policy_id)
+
+        # Said in the channel, not ephemerally: everyone already in the room
+        # needs to know the audience changed under them.
+        await channel.send(
+            f"🌐 {member.mention} opened this proposal to all members — "
+            "anything above this line is now public."
+            if public
+            else f"🔒 {member.mention} made this proposal mods-only again."
+        )
+        await interaction.followup.send(
+            "Opened to members." if public else "Back to mods-only.",
+            ephemeral=True,
+        )
+
+        audit_embed = discord.Embed(
+            title="📋 Policy Visibility Changed",
+            description=(
+                f"**{policy['title']}** in {channel.mention} is now "
+                + ("**open to all members**" if public else "**mods-only**")
+                + f" ({member.mention})."
+            ),
+            color=CLR_POLICY,
+        )
+        await _post_audit(ctx, guild, audit_embed)
+
+
+async def _count_channel_messages(
+    channel: discord.TextChannel,
+) -> tuple[int, bool]:
+    """Count the channel's backlog, stopping at the cap.
+
+    Returns ``(count, capped)``; ``capped`` means the channel holds at least
+    that many and counting stopped early, so the confirm prompt says "N+".
+    A channel we can't read history in counts zero — the warning then leans
+    on its wording rather than a number it can't get.
+    """
+    count = 0
+    capped = False
+    try:
+        async for _ in channel.history(limit=POLICY_EXPOSURE_COUNT_CAP + 1):
+            count += 1
+            if count > POLICY_EXPOSURE_COUNT_CAP:
+                return POLICY_EXPOSURE_COUNT_CAP, True
+    except discord.HTTPException:
+        log.exception("Could not count backlog in %s", channel.id)
+    return count, capped
 
 
 # ---------------------------------------------------------------------------

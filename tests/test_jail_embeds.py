@@ -586,7 +586,7 @@ def test_policy_proposal_embed_basic():
     now = datetime(2026, 6, 1, tzinfo=timezone.utc)
     embed = build_policy_proposal_embed(
         policy_id=1, title="Foo", description="Bar",
-        proposer_mention="<@1>", now=now,
+        proposer="Ada", now=now,
     )
     assert embed.title == "📋 Policy Proposal #1: Foo"
     assert embed.description == "Bar"
@@ -597,9 +597,40 @@ def test_policy_proposal_embed_basic():
 
 def test_policy_proposal_embed_defaults_timestamp():
     embed = build_policy_proposal_embed(
-        policy_id=1, title="Foo", description="Bar", proposer_mention="<@1>",
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
     )
     assert embed.timestamp is not None
+
+
+def test_policy_proposal_embed_names_the_proposer_never_mentions_them():
+    """The card can be opened to every member from its own button.
+
+    It used to render the proposer as ``user.mention``, which was survivable
+    while the channel was mod-only and stopped being survivable the moment
+    the same card could go public — an embed mention is resolved by the
+    reading client's own cache.
+    """
+    embed = build_policy_proposal_embed(
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
+    )
+    assert _fv(embed, "Proposed by") == "Ada"
+    assert "<@" not in "\n".join(
+        f"{f.name} {f.value}" for f in embed.fields
+    )
+
+
+@pytest.mark.parametrize("visibility,shown", [
+    (None, "🔒 Mods only"),          # a row written before migration 219
+    ("mods", "🔒 Mods only"),
+    ("public", "🌐 Open to members"),
+    ("nonsense", "🔒 Mods only"),    # unknown reads as private, never public
+])
+def test_policy_proposal_embed_states_who_can_see_the_channel(visibility, shown):
+    embed = build_policy_proposal_embed(
+        policy_id=1, title="Foo", description="Bar", proposer="Ada",
+        visibility=visibility,
+    )
+    assert _fv(embed, "Visibility") == shown
 
 
 def test_policy_close_embed_with_reason():

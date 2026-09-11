@@ -239,7 +239,8 @@ def init_moderation_tables(conn: sqlite3.Connection) -> None:
             vote_text       TEXT NOT NULL DEFAULT '',
             created_at      REAL NOT NULL,
             vote_started_at REAL,
-            vote_ended_at   REAL
+            vote_ended_at   REAL,
+            visibility      TEXT NOT NULL DEFAULT 'mods'
         )
         """
     )
@@ -335,6 +336,7 @@ class PolicyTicketRow(TypedDict):
     created_at: float
     vote_started_at: float | None
     vote_ended_at: float | None
+    visibility: str
 
 
 class PolicyVoteRow(TypedDict):
@@ -973,6 +975,22 @@ def get_policy_ticket(
         (policy_id,),
     ).fetchone()
     return dict(row) if row else None  # type: ignore[return-value]
+
+
+def set_policy_visibility(
+    conn: sqlite3.Connection, policy_id: int, *, visibility: str
+) -> None:
+    """Record whether a policy channel is open to members.
+
+    The channel overwrites are the truth about who can see the room; this is
+    the bot's memory of the decision, so the proposal card renders the right
+    toggle after a restart. Callers pass a value already normalized through
+    ``jail.logic.normalize_policy_visibility``.
+    """
+    conn.execute(
+        "UPDATE policy_tickets SET visibility = ? WHERE id = ?",
+        (visibility, policy_id),
+    )
 
 
 def start_policy_vote(

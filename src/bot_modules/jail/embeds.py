@@ -36,6 +36,7 @@ from bot_modules.services.embeds import (
     xp_breakdown_parts,
 )
 from bot_modules.core.branding import apply_section_spacing
+from bot_modules.jail.logic import policy_visibility_status
 
 
 
@@ -596,18 +597,35 @@ def build_policy_proposal_embed(
     policy_id: int,
     title: str,
     description: str,
-    proposer_mention: str,
+    proposer: str,
+    visibility: object = None,
     now: datetime | None = None,
 ) -> discord.Embed:
-    """Build the policy-proposal embed posted when ``/policy open`` runs."""
+    """Build the policy-proposal embed posted when ``/policy open`` runs.
+
+    The Visibility field states who can see the channel, because the card's
+    own toggle can change it mid-discussion and a mod scrolling back needs
+    the answer without checking the channel settings. It reads as the state
+    ("🔒 Mods only"); the button next to it reads as the action ("Open to
+    Members"), so the two are never mistaken for each other.
+
+    ``proposer`` is a **resolved display name**, not a ``<@id>``. It used to
+    be a mention, which was survivable while only mods read this card — and
+    stopped being survivable the moment that same card could be opened to
+    every member, since an embed mention is resolved by the *reading* client
+    from its own cache. Callers pass ``build_name_fn(...)(creator_id)``.
+    """
     embed = discord.Embed(
         title=f"📋 Policy Proposal #{policy_id}: {title}",
         description=description,
         color=MOD_POLICY,
         timestamp=now or datetime.now(timezone.utc),
     )
-    embed.add_field(name="Proposed by", value=proposer_mention, inline=True)
+    embed.add_field(name="Proposed by", value=proposer, inline=True)
     embed.add_field(name="Status", value="💬 Open for Discussion", inline=True)
+    embed.add_field(
+        name="Visibility", value=policy_visibility_status(visibility), inline=True
+    )
     embed.set_footer(text="Use /policy vote to start the formal vote when ready.")
     apply_section_spacing(embed)
     return embed
