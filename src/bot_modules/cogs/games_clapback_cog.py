@@ -30,6 +30,7 @@ from bot_modules.games.utils.game_manager import (
     get_game_payload,
     modify_payload,
     end_game,
+    is_game_expired,
     update_session,
     resolve_name,
     channel_name,
@@ -39,7 +40,8 @@ from bot_modules.services.name_resolver import NameFn, build_name_fn
 from bot_modules.services.no_contact_service import no_contact_pairs_among
 from bot_modules.services.game_start_ping_service import resolve_start_epoch
 from bot_modules.games.utils.launch_guard import refuse_launch
-from bot_modules.games.utils.recovery import start_redrive
+from bot_modules.games.utils.recovery import RecoverySentinel, start_redrive
+from bot_modules.games.utils.send_retry import is_transient, retry_transient
 from bot_modules.games.utils.question_source import (
     get_clapback_prompt,
     has_clapback_prompts,
@@ -82,6 +84,32 @@ from bot_modules.services.anon_audit_service import (
 )
 
 log = logging.getLogger(__name__)
+
+# How long a game waits out a Discord wobble before trying to pick itself back
+# up, and how many times it will try. One re-drive: if the edge is still down a
+# minute later it is an outage, not a hiccup, and a game that kept re-driving
+# would just keep re-posting phase cards into the channel. What is left after
+# that is a live row, which restart-recovery, `/games end` and the 24h sweep
+# all know how to finish — see _survive_hiccup.
+REDRIVE_PAUSE_S = 60
+MAX_REDRIVES = 1
+
+# Said in the channel when a send has already been retried and still failed.
+# Neither promises the game is over, because it isn't.
+HICCUP_NOTE = (
+    "⚠️ Discord hiccuped — hanging on a moment, then picking up where we left off."
+)
+# By the time this one is said the re-drive budget is spent, so it must not
+# promise a resume nothing is scheduling: what is actually left is a restart,
+# `/games end`, and the 24h sweep. Its sibling in Hot Takes says the same
+# thing the same way.
+FROZEN_NOTE = (
+    "⚠️ Discord is having trouble right now, so this game is paused — nothing "
+    "you've played is lost. It'll pick up again after the next restart, or the "
+    "host or a mod can close it out with `/games end` — everyone still gets "
+    "paid for the rounds you played."
+)
+
 
 ICON = GAME_ICONS["clapback"]
 
@@ -732,6 +760,12 @@ class ClapbackCog(commands.Cog):
         # Games the countdown auto-start spawned; held so the tasks aren't
         # garbage-collected mid-game.
         self._auto_tasks: set[asyncio.Task] = set()
+        # How many times a game has picked itself back up after a transient
+        # Discord failure, so one wobble is survived and an outage isn't
+        # re-driven forever. In memory on purpose: a restart re-drives once
+        # through recovery anyway, so the count starting over is the right
+        # behaviour rather than a lost value.
+        self._redrives: dict[str, int] = {}
 
     @property
     def db(self):
@@ -905,7 +939,13 @@ class ClapbackCog(commands.Cog):
         self.bot.active_views[game_id] = view
 
         try:
-            msg = await channel.send(embed=embed, view=view)
+            # The row exists by now, so a send that fails for a second would
+            # leak it until the 24h sweep. Forbidden is re-raised untouched
+            # and still lands on the guard below.
+            msg = await retry_transient(
+                lambda: channel.send(embed=embed, view=view),
+                label="clapback lobby",
+            )
         except discord.Forbidden:
             await end_game(self.db, game_id)
             self.bot.active_views.pop(game_id, None)
@@ -961,13 +1001,106 @@ class ClapbackCog(commands.Cog):
         return payload
 
     async def _play(self, game_id: str, channel, payload: dict) -> None:
-        """Run the game to its end, archiving a crash as one."""
+        """Run the game to its end, archiving a crash as one.
+
+        A crash and Discord having a bad second are not the same thing, and
+        until 2026-09-10 this handler treated them identically. Game
+        959cd749 was four rounds into five when the next vote card's send
+        came back 503; the blanket handler archived it as a crash, which
+        calls ``end_game`` — *deleting the very row ``recover_game`` resumes
+        from*, and without the ``bot=``/``player_ids=`` that pay a roster.
+        Four played rounds, four players, nothing paid and nothing to resume.
+        The irony was that the checkpoint machinery it needed
+        (``scores_checkpoint`` and friends) was already there and working.
+
+        So a transient failure never cancels. The game keeps its row and
+        hands off to :meth:`_survive_hiccup`; a real bug still archives
+        exactly as before, because a game that is genuinely broken must not
+        become an immortal row nothing can clear.
+        """
         try:
             await self._run_game(game_id, channel, payload)
         except Exception as e:
+            if is_transient(e):
+                await self._survive_hiccup(game_id, channel, payload, e)
+                return
             log.error("Clapback game %s crashed: %s", game_id, e, exc_info=True)
-            await channel.send("❌ Something went wrong. Game ended.")
+            # Best-effort: if this send is what failed, the cancel below still
+            # has to happen or the row outlives the game with nobody driving it.
+            await self._say(channel, "❌ Something went wrong. Game ended.")
             await self._cancel_game(game_id, reason="crash")
+
+    async def _survive_hiccup(self, game_id: str, channel, payload: dict, exc) -> None:
+        """Keep a game alive through a transient Discord failure.
+
+        Waits out the wobble and re-enters :meth:`_play` once. That is all a
+        resume needs: ``_run_game`` re-reads the payload, resumes at
+        ``len(round_history) + 1`` and rolls scores back to the last
+        completed round's checkpoint, so the interrupted round is replayed
+        without double-counting — the same path a restart takes.
+
+        If the re-drive fails too, the game is left **frozen but whole**: the
+        row stays in ``games_active_games`` with its checkpoints, which gives
+        it three ways to finish, all of them better than being archived
+        unpaid. Restart-recovery resumes it at the next completed round;
+        ``/games end`` archives and pays it (the busy-channel refusal another
+        host gets tells them exactly that); and failing both, the hourly
+        24-hour sweep archives it *with* the roster and pays it. The live
+        view is dropped so the stale card's buttons stop registering votes
+        for a round that is going to be replayed from scratch.
+        """
+        redrives = self._redrives.get(game_id, 0)
+        if redrives >= MAX_REDRIVES:
+            log.error(
+                "Clapback game %s: Discord still failing after %d re-drive(s) "
+                "(%s) — leaving it live for recovery",
+                game_id, redrives, exc,
+            )
+            await self._say(channel, FROZEN_NOTE)
+            self.bot.active_views.pop(game_id, None)
+            return
+
+        self._redrives[game_id] = redrives + 1
+        log.warning(
+            "Clapback game %s hit a transient Discord failure (%s) — resuming "
+            "in %ss", game_id, exc, REDRIVE_PAUSE_S,
+        )
+        await self._say(channel, HICCUP_NOTE)
+        await asyncio.sleep(REDRIVE_PAUSE_S)
+
+        # A mod may have run `/games end` while we waited, and the 24h sweep
+        # may have reaped it. Re-driving a game whose row is gone would have
+        # _run_game read an empty payload and replay the whole thing from
+        # round 1, so the row is the gate — `is_game_expired` is True for both
+        # a deleted row and one already past the sweep's 24h. Not
+        # `_is_cancelled`: that reads an absent active_views entry as
+        # cancelled, which is exactly the state a crashed loop leaves behind
+        # and the sentinel below is about to fill.
+        if game_id in self._game_cancelled or await is_game_expired(self.db, game_id):
+            log.info("Clapback game %s went away during the pause; not resuming", game_id)
+            return
+
+        # The loop's own guard treats a missing active_views entry as a
+        # cancelled game, so seed the sentinel recovery uses before re-entering.
+        self.bot.active_views[game_id] = RecoverySentinel()
+        await self._play(game_id, channel, payload)
+
+    @staticmethod
+    async def _say(channel, text: str) -> None:
+        """Post a line the game can afford to lose — these fire when Discord
+        is already misbehaving, so a failure here must not mask the error
+        that got us here or skip the cleanup that follows.
+
+        Catches broadly, not just ``discord.HTTPException``: the exact
+        failure this feature exists for ("reset before headers") never makes
+        it to an HTTP status at all, so a narrower except would let this
+        courtesy send's own transient failure escape and skip the cancel /
+        redrive / pop that has to run after it.
+        """
+        try:
+            await channel.send(text)
+        except Exception:
+            log.warning("clapback: couldn't post %r", text[:40])
 
     async def auto_start(self, row, payload: dict, channel) -> bool:
         """Start a countdown lobby without a button press (clapback-8).
@@ -1302,7 +1435,10 @@ class ClapbackCog(commands.Cog):
                     f"round's average. You can still vote!"
                 ).strip()
 
-        msg = await channel.send(content=content, embed=embed, view=view)
+        msg = await retry_transient(
+            lambda: channel.send(content=content, embed=embed, view=view),
+            label=f"clapback round {round_num} prompt",
+        )
         await update_game_message(self.db, game_id, msg.id)
 
         submit_event = asyncio.Event()
@@ -1426,7 +1562,10 @@ class ClapbackCog(commands.Cog):
         )
         self.bot.active_views[game_id] = view
 
-        msg = await channel.send(embed=embed, view=view)
+        msg = await retry_transient(
+            lambda: channel.send(embed=embed, view=view),
+            label=f"clapback round {round_num} matchup {matchup_index + 1}",
+        )
 
         vote_event = asyncio.Event()
         self._vote_events[game_id] = vote_event
@@ -1556,7 +1695,10 @@ class ClapbackCog(commands.Cog):
         )
         view = ClapbackRoundSummaryView(game_id, host_id, self.db, self.bot, self)
         self.bot.active_views[game_id] = view
-        msg = await channel.send(embed=embed, view=view)
+        msg = await retry_transient(
+            lambda: channel.send(embed=embed, view=view),
+            label=f"clapback round {round_num} summary",
+        )
 
         # Auto-advance after 10s or host click
         try:
@@ -1624,7 +1766,9 @@ class ClapbackCog(commands.Cog):
             final=final, color=self._accents.get(game_id),
             name_resolver=name_fn,
         )
-        await channel.send(embed=embed)
+        await retry_transient(
+            lambda: channel.send(embed=embed), label="clapback scoreboard",
+        )
 
     # ── Final recap ──────────────────────────────────────────────────────
 
@@ -1650,7 +1794,9 @@ class ClapbackCog(commands.Cog):
         view = ClapbackRecapView(
             game_id, host_id, config, self.db, self.bot, self, players=list(players),
         )
-        view.message = await channel.send(embed=embed, view=view)
+        view.message = await retry_transient(
+            lambda: channel.send(embed=embed, view=view), label="clapback recap",
+        )
 
         # End game
         log.info("Game %s ended — %d players, %d rounds", game_id, len(players), rounds_played)
@@ -1700,6 +1846,7 @@ class ClapbackCog(commands.Cog):
         self._submit_events.pop(game_id, None)
         self._vote_events.pop(game_id, None)
         self._accents.pop(game_id, None)
+        self._redrives.pop(game_id, None)
         self._game_cancelled.discard(game_id)
 
     # ── Mid-game join / leave (dispatched from /games join, /games leave) ──

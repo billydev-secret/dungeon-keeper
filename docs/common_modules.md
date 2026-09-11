@@ -47,6 +47,7 @@ Two things this page is not:
 | Seam | What it owns |
 |---|---|
 | `games/utils/question_source` | Every question-drawing game's draw: the shared `games_question_bank` table, heat-tag filtering, NSFW gating, least-recently-served selection and mark-served. Bank-only — an empty bank means the game has no question, and there is no AI fallback |
+| `games/utils/send_retry` | Retrying a Discord call that failed transiently, and the `is_transient` classification that decides whether it was worth retrying at all. discord.py retries `{500, 502, 504, 524}` unconditionally but **not 503**, so a bare `channel.send` dies of one. Filed under `games/` because that is who calls it today; nothing in it is game-shaped, so reach for it before writing a fourth inline 5xx loop (`core/sticky._retry_delete` and `events_cog._fetch_reaction_message` are the other two, each with a genuinely different contract) |
 | `games/utils/derangement.random_derangement` | Secret-partner assignment: everyone gives to exactly one other, receives from exactly one other, nobody gets themselves (Sattolo cycle, O(n)) |
 | `duels/base_game.py` | The template-method base the six mini-games override. Their `on_game_start` / `render_*_state` / `handle_interaction` "clones" are required overrides, not duplication — see the LEAVE list in `plans/common-lib-round-2.md` |
 

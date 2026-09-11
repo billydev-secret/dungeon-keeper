@@ -426,6 +426,64 @@ on resume so a crash mid-scoring can't double-count either. Until 2026-09-04
 only the scores were checkpointed, so a resume in matchup 3 re-counted the
 CLAPBACKs of whoever swept matchups 1–2 (clapback-14).
 
+### 5.1 A hiccup is not a crash (2026-09-10)
+
+Every phase card — lobby, round prompt, matchup, round summary, scoreboard,
+recap — goes out through `retry_transient`
+(`games/utils/send_retry.py`): three attempts, 1s then 2s apart, for a 5xx or
+a dead connection, and no retry at all for anything under 500 (a 403 will not
+come good, and sleeping on it parks the loop). This exists because discord.py
+retries `{500, 502, 504, 524}` unconditionally but **not 503**
+(`discord/http.py:765`), so a 503 came straight out of `channel.send`.
+
+`_play` then classifies whatever survives the ladder, via the same
+`is_transient`:
+
+- **Transient** — the game is *never* archived. `_survive_hiccup` waits
+  `REDRIVE_PAUSE_S` (60s) and re-enters `_play` once (`MAX_REDRIVES = 1`);
+  `_run_game` resumes at `len(round_history) + 1` off the checkpoints above,
+  so the interrupted round replays without double-counting. A second failure
+  leaves the game **frozen but whole**: the row keeps its checkpoints, and the
+  live view is dropped so a stale card stops taking votes for a round that is
+  going to be replayed. Three things then finish it, all better than an
+  unpaid archive — restart recovery resumes it, `/games end` archives and pays
+  it (which is what the busy-channel refusal already tells the next host), and
+  the hourly 24h sweep archives it *with* the roster and pays it. The re-drive
+  count is per-process and deliberately not persisted: a restart re-drives once
+  through recovery anyway.
+- **Anything else** — archived with `reason="crash"` exactly as before. A
+  genuinely broken game must not become an immortal row.
+
+The bound matters in both directions. One re-drive, because a game that kept
+re-driving through an outage would just re-post phase cards into the channel;
+and a hard cancel for real bugs, because the alternative is a row nothing
+clears. `_survive_hiccup` re-checks the row (`is_game_expired`, true for a
+deleted row too) before resuming — a `/games end` landing during the pause
+would otherwise have `_run_game` read an empty payload and replay from round 1.
+
+Why this is written down: Clapback game `959cd749` was four rounds into a
+five-round game with four players when the next matchup's send returned 503.
+The blanket `except Exception` archived it as a crash, and `_cancel_game`
+calls `end_game` — deleting the very row `recover_game` resumes from, without
+the `bot=` / `player_ids=` that pay a roster. Four played rounds paid nothing,
+and the checkpoint machinery that would have saved it was already there.
+
+**The two notices catch every exception, not just `HTTPException` — on
+purpose.** A connection reset before headers never reaches an HTTP status, so
+it arrives as `ConnectionError` / `TimeoutError` / `aiohttp.ClientConnectionError`
+and a narrower `except` lets it through. These are courtesy sends that fire
+when Discord is *already* misbehaving, and each one guards cleanup that has to
+run after it: the `HICCUP_NOTE` send sits directly in front of the re-drive, so
+narrowing it back stalls the game silently — the exact outcome this section
+exists to prevent. Hot Takes has the same three sites, including one *outside*
+its handler's `try` that killed the whole callback. Pinned by
+`test_a_dead_connection_on_the_pause_notice_still_re_drives` and its three
+siblings, which fail if the excepts are narrowed.
+
+**Known trade:** retrying a send can post a card twice if Discord accepted the
+first attempt and lost the response. discord.py already takes that bet for its
+four statuses, and a duplicated vote card beats a destroyed game.
+
 ## 6. Not yet built
 
 - No seeding or bracket progression — each round's pairing is independent, so

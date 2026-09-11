@@ -37,6 +37,7 @@ from bot_modules.games.utils.game_manager import (
 from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.live_bar import LiveBarUpdater
 from bot_modules.games.utils.recovery import start_redrive
+from bot_modules.games.utils.send_retry import is_transient, retry_transient
 from bot_modules.games.utils.round_pacing import (
     RoundPacing,
     launch_pacing,
@@ -169,13 +170,18 @@ class HotTakesSubmitView(discord.ui.View):
 
         # A public heads-up that names nobody: takes are anonymous, and
         # @-mentioning the submitters here (as this once did) gave them away.
+        # Caught broadly, and this one matters most of the three: it sits
+        # *outside* the try below, so a connection that died before it got an
+        # HTTP status escaped the narrower except and killed the whole handler
+        # before voting was ever started — losing the game with no notice and
+        # no classification.
         try:
             await channel.send(
                 build_voting_start_message(takes),
                 delete_after=15,
                 allowed_mentions=discord.AllowedMentions.none(),
             )
-        except discord.HTTPException:
+        except Exception:
             log.warning("hottakes: voting heads-up failed in #%s", channel_name(channel))
 
         try:
@@ -187,9 +193,48 @@ class HotTakesSubmitView(discord.ui.View):
                 channel=channel,
             )
         except Exception as e:
+            if is_transient(e):
+                # Discord having a bad second is not a broken game. The row
+                # holds the takes and the results so far, which is exactly
+                # what recover_game re-drives voting from on the next
+                # restart; the 24h sweep archives and *pays* it if no restart
+                # comes first. Archiving it here did neither — the bare
+                # end_game below carries no payload, no bot and no
+                # player_ids, so a hiccup cost the room its payout as well as
+                # its game (see Clapback game 959cd749, 2026-09-10).
+                log.warning(
+                    "hottakes game %s hit a transient Discord failure (%s) — "
+                    "leaving it live for recovery", self.game_id, e,
+                )
+                # Caught broadly, not just discord.HTTPException: the failure
+                # this whole path exists for ("reset before headers") never
+                # makes it to an HTTP status, and a narrower except here would
+                # let this courtesy send's own transient failure skip the
+                # active_views pop below it.
+                try:
+                    await channel.send(
+                        "⚠️ Discord is having trouble right now, so this game is "
+                        "paused — nothing submitted is lost. It'll pick up after "
+                        "the next restart, or the host or a mod can close it out "
+                        "with `/games end`."
+                    )
+                except Exception:
+                    log.warning("hottakes: couldn't post the pause notice")
+                self.bot.active_views.pop(self.game_id, None)
+                return
             log.error("Failed to start voting for game %s: %s", self.game_id, e, exc_info=True)
-            await channel.send("❌ Something went wrong starting the vote. Game ended.")
-            await end_game(self.db, self.game_id)
+            try:
+                await channel.send("❌ Something went wrong starting the vote. Game ended.")
+            except Exception:
+                log.warning("hottakes: couldn't post the crash notice")
+            # reason= so the archive can tell a crashed game from a played
+            # one, as every other game's crash path already does (compliment,
+            # nhie, wyr, mlt, and clapback's _cancel_game). This call stays
+            # bare of bot=/player_ids= on purpose: a crash archive records but
+            # does not pay, repo-wide — see games_system_spec.md, "Which end
+            # paths pay". Whether that policy is right is a separate question
+            # than this branch.
+            await end_game(self.db, self.game_id, reason="crash")
             self.bot.active_views.pop(self.game_id, None)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ht_htp")
@@ -555,7 +600,10 @@ class HotTakesCog(commands.Cog):
             self.bot.active_views[game_id] = view
 
             embed = view._build_embed()
-            msg = await channel.send(embed=embed, view=view)
+            msg = await retry_transient(
+                lambda: channel.send(embed=embed, view=view),
+                label=f"hottakes take {take_num}/{total_takes}",
+            )
             await update_game_message(self.db, game_id, msg.id)
             # The timer closes the take unless Next, a complete vote, or a
             # force-end gets there first (round_pacing's wait_for pattern).

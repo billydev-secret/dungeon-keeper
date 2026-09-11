@@ -251,6 +251,36 @@ Because every path now routes through `end_game`, its `DELETE`-first claim is wh
 
 **What `end_game` records is not gated on the caller knowing the roster.** Since 2026-09-04 a bare call — a lobby timeout, an empty-bank unwind, crash cleanup — archives the game's **stored** payload when none is passed, and when it names neither `player_ids` nor a `player_count`, the roster and round count are rebuilt from that payload through `game_roster` and recorded (platform-20: half the game types wrote `player_count = 0` and `payload = {}` on every non-completion path, and Play Statistics, `/recap` and the Ping Response report all read those zeros). Recording never pays: the faucet still fires only on an explicit `player_ids`. The archived `guild_id` is copied from the live row (platform-19: every bare call wrote 0 — 51 prod rows invisible to the guild-filtered dashboard, thirty of them the daily photo post) and re-derived only when the row still says 0 — from the bot's channel cache when a bot is passed, else from the channel allowlist. An optional `reason` (`'lobby_timeout'`, `'crash'`, `'expired'` — the sweep passes the last) lands in the archived payload so the dashboard can tell an abandoned lobby from a game that was played (clapback-9). Clapback's two lobby-death paths use it: the lobby view's inactivity timeout and a crash inside Start both go through `_cancel_game`, which reads the stored payload and archives the roster count, the rounds played and the reason — a lobby that died with six joined and no host reads as exactly that. `end_game` returns a `GameEnd` (guild, counts, `coins_paid`) or `None` when another call already claimed the game; `pay_game_rewards` returns the coins it credited to make that possible. The Ping Response report treats a photo history row at `player_count = 0` as unknown (blank) rather than a failed ping, since the daily post archives before anyone replies (photo-external-104).
 
+**A transient Discord failure must not archive a game (2026-09-10).** discord.py
+retries `{500, 502, 504, 524}` unconditionally but **not 503**
+(`discord/http.py:765`), so a 503 comes straight out of `channel.send` with no
+attempt at all. `games/utils/send_retry.py` holds the two halves of the answer:
+`retry_transient(op)` — three attempts, 1s then 2s apart, retrying a 5xx or a
+dead connection and re-raising anything under 500 at once (a 403 will not come
+good on the second try, and sleeping on it parks a game loop) — and
+`is_transient(exc)`, the same classification a crash handler asks afterwards, so
+the two never keep drifting lists of status codes. Every Clapback phase card and
+every Hot Takes take card goes out through it.
+
+What survives the ladder is then **classified rather than blanket-archived**.
+Clapback's `_play` waits 60s and re-drives itself once off its round
+checkpoints, then leaves the game frozen-but-whole (`clapback_spec.md` §5.1);
+Hot Takes' Start Voting leaves the row for `recover_game` without an in-process
+re-drive, since a button callback is not a loop it can re-enter. Either way the
+live-game row survives, which is the point: the row is what `recover_game`
+resumes from, what `/games end` archives and *pays*, and what the 24h sweep
+archives and pays. A non-transient error still archives with `reason="crash"` —
+a genuinely broken game must not become an immortal row.
+
+This was not theoretical. Clapback game `959cd749` was four rounds into five
+with four players when the next matchup's send returned 503; the blanket
+`except Exception` called `end_game`, deleting the row `recover_game` would
+have picked up and skipping the `bot=`/`player_ids=` that pay a roster. Four
+played rounds paid nothing. Hot Takes carried a worse version of the same
+handler — a bare `end_game(db, game_id)` with no payload, no bot and no roster.
+The trade taken knowingly: a retried send can post a card twice if Discord
+accepted the first attempt and lost the response.
+
 ## Coin wagers (duel + group games)
 
 All six duel/group games (Pressure Cooker, Quickdraw, Hot Potato, Hot Potato
