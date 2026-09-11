@@ -395,6 +395,34 @@ journal; the claims here are self-contained enough to work from. Severity is
 the audit's call: high = a live lie to an admin or a real prod misbehavior,
 medium = divergence that will bite on the next touch, low = latent debris.
 
+> **Games panel sweep, 2026-09-11** (todo row 156 — findings #26, #27, #49,
+> #71, #72, #75, #76, #82, #91, #92). Nine of the ten were already fixed when
+> this row was opened, and by a single commit: `37e3f351` *"Games: every game
+> switch, bank and player range tells the truth"*. The dates are the whole
+> story — the audit landed in `3d546980` at 18:29 on 2026-08-29 and the sweep
+> landed at 22:50 the same evening, four hours later. The audit agents read the
+> pre-sweep tree, nobody reconciled the entries afterwards, and the findings
+> have read as open ever since. Each of the nine was re-verified in source here
+> rather than taken on the commit message's word, and each is held by a named
+> test — mostly in `tests/web/test_game_dials_are_enforced.py`, the contract
+> file that sweep added for exactly this class of defect. The markers on the
+> individual entries name which.
+>
+> **Two residuals, and they are opposite defects.** #49 is half open: the
+> dashboard half is fixed (a save replaces the option bag instead of merging
+> into it, so a retired dial can finally be cleared) but the *prod row survived
+> the fix* — guild 1469…666 still carries clapback options
+> `{"min_players": 2, "max_players": 16}` that nothing has read since those
+> dials were retired, because clearing them needs a save nobody has pressed.
+> That is a dead key, so it is deleted: **migration 220**, scoped to the two
+> keys, leaving the bag `{}` and every other row untouched. #91 is the reverse
+> — a control that never existed — and is closed **won't-do**; see its entry.
+>
+> Read together, the nine are a caution about this appendix's provenance rather
+> than about the code: a finding here is a claim about the tree on 2026-08-29,
+> not a standing defect, and the only safe way to work a row off this queue is
+> to re-derive it against current source first.
+
 ### Duplicated controls — the same setting writable from two surfaces (9)
 
 1. **[high]** bios_archive_grace is writable from two surfaces that disagree
@@ -648,12 +676,20 @@ medium = divergence that will bite on the next touch, low = latent debris.
    that is stored and displayed on template cards, but neither classic nor
    quiplash mode ever consults player_max — only player_min gates the start;
    latecomers are never capped.
+   **CLOSED 2026-09-11** — verified fixed in source: `player_max` is enforced by
+   `games_legitlibs/validation.py::lobby_is_full`, which both modes' Join paths
+   consult. See the *Games panel sweep* note at the head of this appendix.
 
 27. **[medium]** The LegitLibs panel's editable Minimum/Maximum Players values
    are silently discarded on save: create_ll_template unconditionally derives
    player_min/player_max from the blanks JSON (ignoring the body's values),
    and update overwrites them whenever blanks accompany the save — which the
    form always sends when the blanks table has rows.
+   **CLOSED 2026-09-11** — verified fixed in source: `player_min`/`player_max` are
+   gone from `LegitLibsTemplateBody` and `LegitLibsTemplateUpdateBody`, so the form
+   no longer collects a range it cannot keep; it displays the derived one instead
+   (`tests/web/test_games_routes.py::test_ll_template_player_range_comes_from_the_blank_count`).
+   See the *Games panel sweep* note at the head of this appendix.
 
 28. **[low]** Bump auto-detection only fires for detector-bot messages posted
    in the configured Reminder Channel, a constraint the panel's Detection hint
@@ -862,6 +898,12 @@ medium = divergence that will bite on the next touch, low = latent debris.
    MAX_PLAYERS constant — and the PUT endpoint's merge-only update
    (existing_opts.update) means such stale keys can never be cleared from the
    dashboard.
+   **PARTLY CLOSED 2026-09-11** — the dashboard half is fixed in source: a config
+   save now replaces the option bag rather than merging into it
+   (`tests/web/test_games_routes.py::test_game_config_save_replaces_the_whole_option_set`),
+   so a key a panel stops offering can be cleared. **The prod row outlived the fix**
+   and is cleared by migration 220. See the *Games panel sweep* note at the head of
+   this appendix.
 
 50. **[medium]** pen_pals_config.auto_round_dow and auto_round_hour are stored
    columns with no reader anywhere in src/, and prod guild 1476525656115515484
@@ -1088,11 +1130,21 @@ medium = divergence that will bite on the next touch, low = latent debris.
    nine mountGamePanel panels plus pen-pals ever call PUT
    /api/games/config/games/{type}), so those games can never be disabled from
    the dashboard even though the code would honor it.
+   **CLOSED 2026-09-11** — verified fixed in source: the *Available on This Server*
+   list on Games Global Config renders every type in `ALL_GAME_TYPES`, all six
+   included, and each now gates its own start
+   (`tests/web/test_game_dials_are_enforced.py::test_every_toggleable_game_gates_its_own_start`).
+   See the *Games panel sweep* note at the head of this appendix.
 
 72. **[medium]** Risky Rolls' scheduler enable check reads game_type
    'risky_roll', but the config API's ALL_GAME_TYPES spells it 'risky_roller',
    so PUT /api/games/config/games/risky_roll 404s and a 'risky_roller' row
    would never be consulted — the toggle is unreachable in both spellings.
+   **CLOSED 2026-09-11** — verified fixed in source: `ALL_GAME_TYPES` spells it
+   `risky_roll`, the spelling the scheduler reads; the phantom `risky_roller` entry
+   is deleted rather than given a switch
+   (`tests/web/test_game_dials_are_enforced.py::test_the_config_api_knows_every_game_it_can_switch_off`).
+   See the *Games panel sweep* note at the head of this appendix.
 
 73. **[low]** ai_rules_watch_check resolves its model via registry key
    'ai_prompt_rules_watch', which does not exist in ai_config._PROMPTS, so the
@@ -1125,11 +1177,20 @@ medium = divergence that will bite on the next touch, low = latent debris.
    games_game_config ('ttl'), but no dashboard panel exists for TTL, so that
    server-level default can never be set (only per-schedule overrides via the
    scheduling panel reach it).
+   **CLOSED 2026-09-11** — verified fixed in source, by deleting the reader rather
+   than adding a writer: the `games_game_config` fallback is gone from
+   `games_ttl_cog.py` and the per-schedule option stands alone
+   (`tests/web/test_game_dials_are_enforced.py::test_every_stored_option_a_cog_reads_has_a_panel_dial`).
+   See the *Games panel sweep* note at the head of this appendix.
 
 76. **[low]** The Rushmore cog reads a per-server 'mode' default (snake/blitz)
    from games_game_config that the games-rushmore panel's optSchema does not
    expose — the server-level fallback can only be reached by hand-editing the
    DB or raw API options.
+   **CLOSED 2026-09-11** — verified fixed in source, by adding the writer: the
+   Rushmore panel's `optSchema` offers a Draft Mode select (blitz/snake), pinned by
+   `tests/web/test_game_dials_are_enforced.py::test_every_stored_option_a_cog_reads_has_a_panel_dial`.
+   See the *Games panel sweep* note at the head of this appendix.
 
 77. **[low]** GET /api/moderation/anon-audit accepts and applies an actor_id
    filter that no dashboard surface (or any other caller) ever sets — the
@@ -1168,6 +1229,11 @@ medium = divergence that will bite on the next touch, low = latent debris.
    ALL_GAME_TYPES so the config PUT rejects it, the cog never calls
    check_game_enabled, and the scheduler's check_game_enabled('legitlibs') can
    never find a row — a guild cannot disable LegitLibs.
+   **CLOSED 2026-09-11** — verified fixed in source: `legitlibs` is in
+   `ALL_GAME_TYPES`, the cog gates its start through `refuse_launch`, and the panel
+   carries the switch
+   (`tests/web/test_game_dials_are_enforced.py::test_every_toggleable_game_gates_its_own_start`).
+   See the *Games panel sweep* note at the head of this appendix.
 
 83. **[medium]** Pen Pals scheduled-mode rounds fire at a hard-coded 8am
    America/New_York (_SCHEDULED_MATCH_HOUR/_SCHEDULED_MATCH_TZ), ignoring the
@@ -1252,6 +1318,11 @@ medium = divergence that will bite on the next touch, low = latent debris.
    ffa panel is plain free-tag mode with the generic hint — nothing tells the
    curator the contract, unlike Traditional's enforced category dropdown, so
    untagged questions silently never serve in truth/dare rounds.
+   **CLOSED 2026-09-11** — verified fixed in source: the FFA bank hint states the
+   reserved `truth`/`dare` contract, pinned by
+   `tests/web/test_game_dials_are_enforced.py::test_ffa_bank_states_its_reserved_tags`.
+   The tags stay optional, unlike Traditional's enforced category. See the
+   *Games panel sweep* note at the head of this appendix.
 
 93. **[low]** Whisper's guesses-per-whisper cap is fixed at 3 by a schema
    default with no config key or panel control, inconsistent with the sibling
