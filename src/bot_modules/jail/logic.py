@@ -284,12 +284,20 @@ def policy_visibility_status(value: object) -> str:
     )
 
 
-def format_exposure_count(count: int, *, capped: bool = False) -> str:
+def format_exposure_count(count: int | None, *, capped: bool = False) -> str:
     """Render a backlog size for the confirm prompt.
 
     ``capped`` means counting stopped at ``POLICY_EXPOSURE_COUNT_CAP`` rather
     than reaching the end of the channel, so the figure is a floor.
+
+    ``count is None`` means the backlog could not be counted at all — most
+    often because the bot cannot read history here. That must not render as
+    a number: "0 messages" is the single most reassuring thing this prompt
+    could say, and it would be saying it at the exact moment nobody knows
+    what is about to be exposed. An unknown backlog says so in words.
     """
+    if count is None:
+        return "everything already posted in this channel"
     if capped:
         return f"{count}+ messages"
     if count == 1:
@@ -297,7 +305,7 @@ def format_exposure_count(count: int, *, capped: bool = False) -> str:
     return f"{count} messages"
 
 
-def policy_exposure_warning(count: int, *, capped: bool = False) -> str:
+def policy_exposure_warning(count: int | None, *, capped: bool = False) -> str:
     """The ephemeral confirm text shown before a channel is opened.
 
     Names the backlog explicitly. The failure this guards against is a mod

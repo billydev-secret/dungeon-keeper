@@ -1090,3 +1090,111 @@ async def test_a_forbidden_permission_edit_does_not_record_a_change(tmp_path):
         assert get_policy_ticket(conn, pid)["visibility"] == "mods"
     channel.send.assert_not_awaited()
     assert "Manage Roles" in interaction.followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_a_non_forbidden_permission_edit_failure_does_not_record_a_change(
+    tmp_path,
+):
+    """A deleted-mid-press channel (or any other Discord hiccup) raises
+    ``discord.HTTPException`` rather than ``discord.Forbidden``. That must
+    not fall through uncaught and leave the deferred interaction hanging
+    with no followup — and, same as the Forbidden case, must not persist a
+    visibility change that never actually landed."""
+    from bot_modules.services.moderation import create_policy_ticket, get_policy_ticket
+
+    ctx = _make_ctx(tmp_path / "t.db")
+    with open_db(ctx.db_path) as conn:
+        pid = create_policy_ticket(
+            conn, guild_id=10, creator_id=7, channel_id=556,
+            title="T", description="D",
+        )
+        policy = get_policy_ticket(conn, pid)
+
+    interaction, channel = _visibility_interaction(ctx)
+    channel.set_permissions = AsyncMock(
+        side_effect=discord.NotFound(MagicMock(status=404), "unknown channel")
+    )
+
+    await jc.PolicyVisibilityButton(pid)._apply(interaction, ctx, policy, "public")
+
+    with open_db(ctx.db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "mods"
+    channel.send.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
+    assert "went wrong" in interaction.followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total,expected", [
+    (0, (0, False)),
+    (1, (1, False)),
+    (jc.POLICY_EXPOSURE_COUNT_CAP - 1, (jc.POLICY_EXPOSURE_COUNT_CAP - 1, False)),
+    # Exactly the cap is a real total, not a floor: "500 messages", no "+".
+    (jc.POLICY_EXPOSURE_COUNT_CAP, (jc.POLICY_EXPOSURE_COUNT_CAP, False)),
+    # One past it is the first genuinely capped case.
+    (jc.POLICY_EXPOSURE_COUNT_CAP + 1, (jc.POLICY_EXPOSURE_COUNT_CAP, True)),
+])
+async def test_backlog_count_reports_the_cap_as_a_floor_only_when_it_is_one(
+    total, expected
+):
+    """Off-by-one here is a wrong number in a safety prompt: a channel of
+    exactly the cap must not be announced as "500+"."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 556
+
+    def _history(limit=None):
+        async def _gen():
+            for i in range(min(total, limit or total)):
+                yield MagicMock()
+        return _gen()
+
+    channel.history = _history
+    assert await jc._count_channel_messages(channel) == expected
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_backlog_counts_as_unknown_not_as_zero():
+    """``discord.Forbidden`` IS a ``discord.HTTPException``, so a bot without
+    Read Message History in the policy channel lands in the same handler as
+    a transient API error.
+
+    Returning the running tally there would render "0 messages readable by
+    every member" — the most reassuring sentence the confirm can produce,
+    printed precisely when the backlog is unmeasured. Unknown must stay
+    unknown all the way to the prompt.
+    """
+    from bot_modules.jail.logic import policy_exposure_warning
+
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 556
+
+    def _history(limit=None):
+        async def _gen():
+            raise discord.Forbidden(MagicMock(status=403), "no history")
+            yield  # pragma: no cover - unreachable, makes this a generator
+        return _gen()
+
+    channel.history = _history
+    count, capped = await jc._count_channel_messages(channel)
+    assert count is None
+    assert capped is False
+    assert "0 messages" not in policy_exposure_warning(count, capped=capped)
+
+
+@pytest.mark.asyncio
+async def test_a_backlog_that_fails_partway_discards_the_partial_tally():
+    """A count that dies after 37 of 4,000 messages must not report "37
+    messages" — an understatement is the dangerous direction here."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 556
+
+    def _history(limit=None):
+        async def _gen():
+            for _ in range(37):
+                yield MagicMock()
+            raise discord.HTTPException(MagicMock(status=500), "boom")
+        return _gen()
+
+    channel.history = _history
+    assert await jc._count_channel_messages(channel) == (None, False)

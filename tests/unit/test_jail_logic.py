@@ -345,3 +345,20 @@ def test_exposure_warning_names_the_backlog_and_the_irreversibility():
 def test_exposure_warning_is_a_floor_when_counting_stopped():
     text = policy_exposure_warning(POLICY_EXPOSURE_COUNT_CAP, capped=True)
     assert "500+ messages" in text
+
+
+def test_an_uncountable_backlog_never_renders_as_a_number():
+    """``None`` means the count failed — usually the bot cannot read history
+    in this channel at all.
+
+    Rendering that as "0 messages" would put the most reassuring sentence
+    this prompt can produce in front of a mod at the exact moment nobody
+    knows how much is about to be exposed. It has to read as unknown.
+    """
+    assert format_exposure_count(None) == "everything already posted in this channel"
+    text = policy_exposure_warning(None)
+    assert "0 messages" not in text
+    assert "everything already posted in this channel" in text
+    # The rest of the warning still has to land.
+    assert "before now" in text
+    assert "cannot un-read" in text

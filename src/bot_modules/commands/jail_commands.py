@@ -1259,6 +1259,22 @@ class PolicyVisibilityButton(
                 ephemeral=True,
             )
             return
+        except discord.HTTPException:
+            # Not a permissions problem (that's Forbidden, above) — the
+            # channel may have been deleted or renamed out from under this
+            # press (e.g. `/policy close` ran while the confirm prompt was
+            # sitting there). Either way the deferred interaction needs a
+            # followup or it just hangs from the mod's side, and the DB/card
+            # must not claim a change that never landed.
+            log.exception(
+                "Could not change permissions for policy %s", policy["id"]
+            )
+            await interaction.followup.send(
+                "❌ Something went wrong changing this channel's permissions. "
+                "Nothing was changed — try again.",
+                ephemeral=True,
+            )
+            return
 
         policy_id = policy["id"]
         guild_id = guild.id
@@ -1331,16 +1347,20 @@ class PolicyVisibilityButton(
 
 async def _count_channel_messages(
     channel: discord.TextChannel,
-) -> tuple[int, bool]:
+) -> tuple[int | None, bool]:
     """Count the channel's backlog, stopping at the cap.
 
     Returns ``(count, capped)``; ``capped`` means the channel holds at least
     that many and counting stopped early, so the confirm prompt says "N+".
-    A channel we can't read history in counts zero — the warning then leans
-    on its wording rather than a number it can't get.
+
+    A count we could not finish returns ``None``, not the partial tally.
+    ``discord.Forbidden`` is a ``discord.HTTPException``, so the bot simply
+    lacking Read Message History here lands in this handler — and returning
+    the running total would then put "0 messages" in front of a mod about to
+    expose a channel whose contents nobody has measured. Unknown has to read
+    as unknown; ``format_exposure_count`` renders it in words.
     """
     count = 0
-    capped = False
     try:
         async for _ in channel.history(limit=POLICY_EXPOSURE_COUNT_CAP + 1):
             count += 1
@@ -1348,7 +1368,8 @@ async def _count_channel_messages(
                 return POLICY_EXPOSURE_COUNT_CAP, True
     except discord.HTTPException:
         log.exception("Could not count backlog in %s", channel.id)
-    return count, capped
+        return None, False
+    return count, False
 
 
 # ---------------------------------------------------------------------------
