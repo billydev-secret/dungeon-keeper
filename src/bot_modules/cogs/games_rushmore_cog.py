@@ -422,7 +422,12 @@ class RushmoreDraftView(discord.ui.View):
         edit against the old ``self._msg`` would then silently 404.
         """
         if self._panel is not None:
-            await self._panel.refresh(self.guild.id)
+            # Guarded the same way ``_open_board`` guards its own guild.id
+            # read — a panel is only ever created when ``self.guild`` was
+            # truthy at that point, but nothing re-asserts that here, so this
+            # stays defensive rather than assuming it.
+            if self.guild is not None:
+                await self._panel.refresh(self.guild.id)
             return
         if self._msg is None:
             return
@@ -785,18 +790,23 @@ class RushmoreCog(commands.Cog):
         )
         if sticky and channel is not None:
             panel = self._make_board_panel(game_id, draft_view)
-            try:
-                await msg.delete()
-            except discord.HTTPException:
-                pass
+            # No explicit delete of the lobby message here: ``_board_ids``
+            # (this panel's ``load_ids``) still reads the lobby message's own
+            # channel_id/message_id out of the game row at this point, so
+            # ``place()`` treats it as "the old panel" and removes it itself
+            # — post-before-delete, same as every other sticky site. Deleting
+            # it first would invert that: a placement failure (the bot lost
+            # Send Messages, say) would then leave the draft with neither the
+            # lobby message nor a board and no way to fall back.
             posted = await panel.place(guild, channel)
             if posted is not None:
                 self._boards[game_id] = panel
                 draft_view._panel = panel
                 return posted
-            # Placement failed (e.g. the bot lost Send Messages) — fall
-            # through to the ordinary non-sticky path rather than leave the
-            # draft without a board.
+            # Placement failed — the lobby message is untouched (place()
+            # never got far enough to delete it). Fall through to the
+            # ordinary non-sticky path rather than leave the draft without a
+            # board.
 
         embed = draft_view._build_embed()
         try:
@@ -819,6 +829,19 @@ class RushmoreCog(commands.Cog):
         panel = self._boards.pop(draft_view.game_id, None)
         if panel is not None:
             panel.cancel_all()
+            # Drop the cached ids too, not just the pending restick — same
+            # move the auction card makes at close (Group D, auction_views.py
+            # _release_panel). ``on_message`` reads ids through a TTL cache
+            # that outlives this pop, so an ``on_message`` call already
+            # in-flight against this panel when the game ended could still
+            # read the stale cached (channel, message) pair and schedule a
+            # restick nothing cancels — reaching ``_board_content``'s refusal
+            # and logging it as an ERROR traceback for a perfectly ordinary
+            # game finishing. forget() forces the next read to miss the
+            # cache and go back to the DB, where the ended game's row no
+            # longer resolves to a live message.
+            if draft_view.guild is not None:
+                panel.forget(draft_view.guild.id)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Recover after a restart.
