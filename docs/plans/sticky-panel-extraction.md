@@ -3,7 +3,13 @@
 **Status:** Groups A and B **done** — including `guess`, migrated 2026-08-06,
 which closes group B, and `whisper`, migrated 2026-09-04. Group C stays out by
 design. `confessions` remains unmigrated (it was never blocked on anything; it
-is simply behind).
+is simply behind). Group E — Mt. Rushmore Draft's live board, 2026-09-10 — is
+the second lifecycle panel and the first scoped per-channel rather than
+per-guild (one `StickyPanel` instance per live game); see "Group E" below.
+Name Your Price's submission board (`PriceCog`, `games_price_cog.py`) joined
+it 2026-09-11, scoped one notch narrower still — per **round**, not per game
+(see "Group E — Name Your Price" below). Stopped there deliberately: no third
+game has been wired up yet.
 
 `bot_modules/core/sticky.py` now holds `StickyPanel` — the shared locks,
 debounce, id cache, post-before-delete placer, signature gate and listener —
@@ -144,6 +150,80 @@ couple the cogs at runtime or let one panel yield to another (a shared-behaviour
 change), `/bank auction start` calls `sticky_panel_channels` and **warns the
 mod**. Prod precedent: the first auction ever run was in the casino hub's
 channel.
+
+### Group E — one panel per live game, not per guild (2026-09-10)
+
+Mt. Rushmore Draft's live board (`RushmoreCog`, `games_rushmore_cog.py`) is
+the eleventh site and the second with a lifecycle. It follows Group D's shape
+— `build` raises rather than returns `None` once the game is over
+(`_board_content` raises `RuntimeError` when `RushmoreDraftView._board_retired`
+is set, exactly like `_build_auction_panel`'s conversion of
+`build_auction_panel`'s `None`), and teardown calls `cancel_all()` the moment
+the state ends (`RushmoreCog._retire_board`, from a `try/finally` around both
+draft loops so it fires on natural completion and on a forced `/games end`
+alike) — but it departs from Group D on the one axis every prior site shared:
+**scope**. Every panel through Group D is one per **guild**, matching
+`StickyPanel`'s own internals (its locks, TTL id cache and known-guilds fast
+path are all keyed by guild id). A live game's board is scoped to one
+**channel**, and a guild can run several Rushmore drafts in different channels
+at once — so Rushmore gives up the shared singleton and constructs **one
+`StickyPanel` instance per live game** instead, keyed by `game_id` in
+`RushmoreCog._boards`, built when the draft opens its board and dropped in
+`_retire_board`. `load_ids`/`save_ids` are synchronous closures over that one
+game's row in `games_active_games` (its `channel_id`/`message_id` columns,
+the same ones `update_game_message` and the busy-check's jump link read) —
+they ignore the guild id `StickyPanel` passes them, since the id to resolve is
+the game's, not "the guild's one panel". Because every board is posted
+through `panel.place()` (`RushmoreCog._open_board`), the Group D
+posted-outside-`place()` trap does not apply here — but a *different* reason
+to call `forget()` does: `_retire_board` calls it (mirroring the auction
+card's `_release_panel` at close) because an `on_message` call already
+in-flight when the game ends can otherwise still read the panel's stale
+cached ids and schedule a restick nothing cancels, reaching `_board_content`'s
+refusal and logging an ordinary game ending as an `ERROR` traceback — found in
+review, 2026-09-10, alongside two other fixes to this site: `_open_board`
+placing the new board before ever touching the lobby message it replaces
+(previously deleted it first, so a placement failure left neither), and
+`refresh_board` guarding `self.guild` the same way `_open_board` already did.
+Sitting behind a new per-guild dial (`games_board_sticky_enabled`,
+**Live Game Boards** on Games Global Config, default off) read once — when
+the board is first posted — this is also the first site gated by a feature
+dial rather than being unconditionally on for every guild.
+
+### Group E — Name Your Price (2026-09-11)
+
+Name Your Price's submission board (`PriceCog`, `games_price_cog.py`) is the
+second game wired to the same `games_board_sticky_enabled` dial — deliberately
+the same dial, not a second one, and no per-game override. It reuses
+Rushmore's shape (`_board_ids`/`_save_board_ids` reading and writing the same
+`games_active_games` row `update_game_message` already writes,
+`_board_content` raising once retired, `_retire_board` calling `forget()` for
+the same in-flight-`on_message` reason) but departs on **scope** a second
+time: Price's round lifecycle is recursive, not a `while` loop —
+`_start_rounds` kicks off exactly one `asyncio.create_task`, and each round
+(`_run_round`) recurses into the next via `_advance_round` rather than
+looping. There is no single loop to wrap in a `try`/`finally`, so
+`PriceCog._boards` holds one `StickyPanel` per **round's submission window**,
+not per game — a fresh panel made in `_open_board` each time a round posts
+its board, dropped in `_retire_board` at every point that window closes:
+the disabled-frame render before reveal, a forced `/games end`, and the
+host's own in-view End Game button (`end_early` — a control Rushmore has no
+equivalent of, since it only ever ends via the slash command; `end_early`
+and the round loop's own wake-up both react to `_closed` concurrently, so
+`_retire_board` is idempotent and `end_early` calls it directly rather than
+leaving it to the loop's next turn).
+
+One wrinkle Rushmore never had: Price keeps threading the *same* local
+message variable through every phase of a round (submission → reveal → next
+round's own post), all as plain edits, unlike Rushmore's single persistent
+view object. If the sticky panel reposted the board mid-round, an edit
+against that stale local variable would silently 404. So Price's
+`_retire_board` — unlike Rushmore's, which returns nothing — reads the game
+row's ids fresh and returns a `discord.Message` for wherever the board
+actually ended up, which `_run_round` reassigns its local `current_msg` to
+before continuing; `refresh_embed` and the disabled-frame render route
+through `panel.refresh()` for the same reason, rather than editing
+`self._msg` directly.
 
 ### The `hold` hook
 

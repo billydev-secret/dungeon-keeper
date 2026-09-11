@@ -27,6 +27,8 @@ High-leverage pieces:
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 # How many picks each player makes — surfaced here so the cog, embed
@@ -41,6 +43,68 @@ SKIPPED_MARKER: str = "⏭️ Skipped"
 # Length of the post-draft window in which players may fill their own
 # skipped slots before the final boards are shown.
 BACKFILL_SECONDS: int = 60
+
+# Fallback pick timer when a server has never set its own "Seconds to Make
+# a Pick" dial. The dial's own range (clamp_settings, below) stays 10-120 —
+# only this default changed.
+DEFAULT_PICK_SECONDS: int = 45
+
+# How long to hold a blitz-round board redraw open once armed (todo #208/
+# #209). Blitz has every player picking at once, so a burst of accepted
+# picks needs to collapse into one Discord edit rather than one per pick —
+# long enough that a handful of players clicking within the same second or
+# two land inside the same window, short enough the board still reads live.
+REDRAW_COALESCE_SECONDS: float = 1.5
+
+
+class RedrawCoalescer:
+    """Collapses a burst of redraw requests into a single call.
+
+    Blitz mode has every player picking at once, so treating each accepted
+    pick as its own immediate redraw would mean five players landing within
+    the same second cost five board edits — real rate-limit risk. ``schedule``
+    is safe to call once per pick: the first call while idle arms a delay of
+    :data:`REDRAW_COALESCE_SECONDS`, and every call that lands before that
+    delay fires is absorbed for free (a no-op) rather than queuing its own
+    redraw. Only the delay's own fire actually redraws, and it calls
+    ``redraw_fn`` fresh at that moment, so a coalesced batch still shows
+    every pick that landed inside the window — not just the one that armed
+    it.
+
+    Deliberately not :class:`bot_modules.games.utils.live_bar.LiveBarUpdater`:
+    that helper rate-limits against the wall-clock time of the *last actual
+    edit*, so the first call after any quiet period always fires immediately
+    — correct for a vote bar trickling in one vote at a time, wrong here,
+    where the very first pick of a round would still get its own instant
+    edit and the rest of the simultaneous batch a second one: two edits for
+    one burst, not the one this exists to guarantee. ``core.sticky``'s
+    debounce is the other existing candidate; it's a much heavier fit,
+    coupled to a per-guild lock map, a placed-message registry and
+    post-before-delete channel reposting — none of which applies to editing
+    one message this cog already owns, so a small purpose-built coalescer
+    beats reusing or partially unpicking it.
+    """
+
+    def __init__(self, delay: float = REDRAW_COALESCE_SECONDS) -> None:
+        self._delay = delay
+        self._task: "asyncio.Task[None] | None" = None
+
+    def schedule(self, redraw_fn: Callable[[], Awaitable[None]]) -> None:
+        """Arm a coalesced redraw unless one is already pending."""
+        if self._task is not None and not self._task.done():
+            return
+
+        async def _fire() -> None:
+            await asyncio.sleep(self._delay)
+            await redraw_fn()
+
+        self._task = asyncio.create_task(_fire())
+
+    def cancel(self) -> None:
+        """Cancel any pending redraw. Safe to call when nothing is scheduled."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+        self._task = None
 
 
 def generate_snake_order(

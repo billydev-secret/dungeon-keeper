@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
+from bot_modules.core.sticky import StickyPanel
+from bot_modules.services.game_board_sticky_service import (
+    open_game_board,
+    retire_game_board,
+)
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -50,12 +55,15 @@ from bot_modules.games.utils.game_manager import (
 )
 from bot_modules.games.utils.launch_guard import refuse_launch
 from bot_modules.games.utils.question_source import get_rushmore_topic, channel_allows_nsfw
+from bot_modules.games.utils.timer import now_plus
 from bot_modules.games_rushmore.logic import (
     BACKFILL_SECONDS,
+    DEFAULT_PICK_SECONDS,
     DRAFT_ROUNDS,
     MAX_PLAYERS,
     MIN_PLAYERS,
     SKIPPED_MARKER,
+    RedrawCoalescer,
     apply_backfill,
     can_start,
     clamp_player_limits,
@@ -374,6 +382,15 @@ class RushmoreDraftView(discord.ui.View):
         self.skipped: list[str] = []
         self._msg: discord.Message | None = None
         self._closed = False
+        # Set when the game turns on the "keep the board at the bottom"
+        # dial: the per-game StickyPanel that owns reposting this board, and
+        # the flag ``_retire_board`` sets once the game is over — the panel's
+        # ``build`` callback checks this, not ``_closed`` (which is set one
+        # legitimate render *before* the board is actually retired; see
+        # ``_retire_board``). Both stay None/False for the life of the game
+        # when the dial is off.
+        self._panel: "StickyPanel | None" = None
+        self._board_retired: bool = False
         self._pick_event: asyncio.Event | None = None
         self._pick_start: float = 0.0
         self._draft_start: float = _time.time()
@@ -382,9 +399,51 @@ class RushmoreDraftView(discord.ui.View):
         # pick. Unused in snake mode.
         self._blitz_round: int = 0
         self._blitz_pending: set[int] = set()
+        # The current turn/round's countdown deadline (Unix ts), computed
+        # once when the turn/round opens and threaded into every embed
+        # render — see build_draft_embed's ``deadline`` param. Blitz mode
+        # holds this fixed across a round's coalesced mid-round redraws;
+        # snake mode refreshes it at every redraw, same as before.
+        self._round_deadline: int = 0
+        # Coalesces blitz's mid-round board redraws (see RedrawCoalescer) so
+        # a burst of simultaneous picks costs one Discord edit, not one per
+        # pick. Unused in snake mode, which redraws directly.
+        self._redraw_coalescer = RedrawCoalescer()
 
     def _player_tuples(self) -> list[tuple[int, str]]:
         return [(uid, resolve_name(self.guild, uid)) for uid in self.players]
+
+    async def refresh_board(self) -> None:
+        """Redraw the board message with the current state.
+
+        The single seam every board redraw goes through — both draft loops
+        and the blitz coalescer call this instead of editing ``self._msg``
+        directly, so there's exactly one place that knows how. When the
+        sticky dial is on, this routes through the panel's own refresh
+        instead of the cached ``self._msg`` — the panel may have re-posted
+        the board to the bottom of the channel since the last redraw, and an
+        edit against the old ``self._msg`` would then silently 404.
+        """
+        if self._panel is not None:
+            # Guarded the same way ``_open_board`` guards its own guild.id
+            # read — a panel is only ever created when ``self.guild`` was
+            # truthy at that point, but nothing re-asserts that here, so this
+            # stays defensive rather than assuming it.
+            if self.guild is not None:
+                try:
+                    await self._panel.refresh(self.guild.id)
+                except RuntimeError:
+                    # _board_content's deliberate resurrection-refusal, if a
+                    # redraw ever lands after _retire_board flips
+                    # _board_retired — the game's over, nothing to redraw.
+                    pass
+            return
+        if self._msg is None:
+            return
+        try:
+            await self._msg.edit(embed=self._build_embed(), view=self)
+        except discord.HTTPException:
+            pass
 
     def accept_pick(self, pick_text: str, user_id: int):
         """Called by PickModal when a valid pick is made."""
@@ -396,6 +455,7 @@ class RushmoreDraftView(discord.ui.View):
             self.all_picks.append(pick_text)
             self.pick_times[f"{user_id}_{rnd}"] = _time.time() - self._pick_start
             self._blitz_pending.discard(user_id)
+            self._redraw_coalescer.schedule(self.refresh_board)
             if not self._blitz_pending and self._pick_event:
                 self._pick_event.set()
             return
@@ -421,7 +481,7 @@ class RushmoreDraftView(discord.ui.View):
             return build_draft_embed(
                 self.host_name, self.topic, self._player_tuples(),
                 self.boards, None, None, rnd, self.timer_secs,
-                color=self.accent,
+                color=self.accent, deadline=self._round_deadline or None,
             )
         if self.current_pick_index < len(self.draft_order):
             rnd, pid = self.draft_order[self.current_pick_index]
@@ -431,7 +491,7 @@ class RushmoreDraftView(discord.ui.View):
         return build_draft_embed(
             self.host_name, self.topic, self._player_tuples(),
             self.boards, pid, name, rnd, self.timer_secs,
-            color=self.accent,
+            color=self.accent, deadline=self._round_deadline or None,
         )
 
     async def handle_pick_click(self, interaction: discord.Interaction):
@@ -595,7 +655,7 @@ class RushmoreRecapView(discord.ui.View):
             guild_id=interaction.guild_id or 0,
             options={
                 "topic": "",
-                "timer": self._settings.get("timer", 30),
+                "timer": self._settings.get("timer", DEFAULT_PICK_SECONDS),
                 "source": self._settings.get("source", "host"),
                 "vote_timer": self._settings.get("vote_timer", 30),
                 "mode": self._settings.get("mode", "blitz"),
@@ -618,10 +678,74 @@ class RushmoreRecapView(discord.ui.View):
 class RushmoreCog(commands.Cog):
     def __init__(self, bot: "Bot"):
         self.bot = bot
+        # One StickyPanel per *live game*, not one shared instance — a game
+        # board is per-channel, but StickyPanel's internals are keyed per
+        # guild, and one guild can run several Rushmore drafts in different
+        # channels at once. Populated only when the dial is on for the
+        # game's guild; a dial-off game never gets an entry. Keyed by
+        # game_id and dropped by ``_retire_board`` the moment the game ends.
+        self._boards: dict[str, StickyPanel] = {}
 
     @property
     def db(self):
         return self.bot.games_db
+
+    async def cog_unload(self) -> None:
+        # Stop any blitz redraw coalescer still holding a pending task —
+        # a reload mid-draft must not leave one running after the cog (and
+        # the Discord state it edits) is gone.
+        for view in list(self.bot.active_views.values()):
+            coalescer = getattr(view, "_redraw_coalescer", None)
+            if coalescer is not None:
+                coalescer.cancel()
+        # Likewise for every live game's sticky board — a reload must not
+        # leave a debounced restick armed against a cog that's gone.
+        for panel in list(self._boards.values()):
+            panel.cancel_all()
+        self._boards.clear()
+
+    @commands.Cog.listener("on_message")
+    async def _restick_boards(self, message: discord.Message) -> None:
+        for panel in list(self._boards.values()):
+            await panel.on_message(message)
+
+    @commands.Cog.listener("on_guild_channel_delete")
+    async def _forget_deleted_board_channel(
+        self, channel: discord.abc.GuildChannel
+    ) -> None:
+        for panel in list(self._boards.values()):
+            await panel.on_channel_delete(channel)
+
+    # ── Sticky board (Games Global Config → Live Game Boards) ─────────
+    # The wiring lives in services/game_board_sticky_service; this cog
+    # supplies the view and the two call sites, nothing else. Name Your
+    # Price rides the same dial through the same helpers.
+
+    async def _open_board(
+        self,
+        game_id: str,
+        draft_view: "RushmoreDraftView",
+        channel,
+        guild,
+        msg: discord.Message,
+    ) -> discord.Message:
+        """Post the live draft board — sticky when the guild's dial is on, an
+        in-place edit of the lobby message otherwise. The dial is read once,
+        here, so a mid-game flip never disturbs a draft already running."""
+        return await open_game_board(
+            self.bot, self.db, self._boards, f"rushmore board {game_id}",
+            game_id, draft_view, channel, guild, msg,
+        )
+
+    def _retire_board(self, draft_view: "RushmoreDraftView") -> None:
+        """Stop this draft's board reposting, and refuse to render it again.
+
+        Called from a ``try/finally`` around both draft loops so it fires on
+        natural completion *and* on a forced end (``/games end`` returns the
+        loop early), and from ``_start_draft``'s own guard for a failure that
+        never reaches a loop at all.
+        """
+        retire_game_board(self.bot, self._boards, draft_view)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Recover after a restart.
@@ -742,7 +866,7 @@ class RushmoreCog(commands.Cog):
         # *options* value (e.g. from a saved schedule) still wins.
         game_opts = await get_game_options(self.db, "rushmore", guild_id)
         timer, vote_timer = clamp_settings(
-            int(options.get("timer", game_opts.get("timer", 30))),
+            int(options.get("timer", game_opts.get("timer", DEFAULT_PICK_SECONDS))),
             int(options.get("vote_timer", game_opts.get("vote_timer", 30))),
         )
         # Blitz by default (social-prompt-37): a six-player snake is 24 timed
@@ -818,44 +942,54 @@ class RushmoreCog(commands.Cog):
         await update_game_payload(self.db, game_id, payload)
 
         mode = settings.get("mode", "snake")
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         draft_view = RushmoreDraftView(
             game_id, host_id, host_name, topic,
-            players, settings.get("timer", 30), guild, self.db, self.bot, self,
+            players, timer_secs, guild, self.db, self.bot, self,
             mode=mode, accent=accent,
         )
+        # A real deadline before the very first render, or this initial embed
+        # would show a countdown that already "ended" (see build_draft_embed's
+        # ``deadline`` param) until the loop below sets its own.
+        draft_view._round_deadline = now_plus(timer_secs)
         self.bot.active_views[game_id] = draft_view
 
-        # Show initial draft board
-        embed = draft_view._build_embed()
+        # Show initial draft board — sticky (reposts to the bottom of the
+        # channel as chat buries it) when the guild's dial is on, an in-place
+        # edit of the lobby message otherwise.
+        msg = await self._open_board(game_id, draft_view, channel, guild, msg)
+        draft_view._msg = msg
+
+        # From here until the loop takes over, a failure must still retire
+        # the board — the loops' own try/finally is the only other place
+        # that calls _retire_board, and nothing wraps this span. Without it
+        # an exception here (an unguarded channel.send included) would leave
+        # the panel in self._boards forever, resticking a frozen board under
+        # every future message in the channel.
         try:
-            await msg.edit(embed=embed, view=draft_view)
-            draft_view._msg = msg
+            # Show draft order announcement
+            if mode == "blitz":
+                await channel.send(
+                    "**⚡ Blitz draft:** everyone picks at the same time each round — "
+                    "duplicates go to the fastest fingers!"
+                )
+            else:
+                order_names = [resolve_name(guild, uid) for uid in draft_view.players]
+                rev_names = list(reversed(order_names))
+                await channel.send(
+                    f"**Draft order:** {' → '.join(order_names)}\n"
+                    f"(Round 2 reverses: {' → '.join(rev_names)})"
+                )
+
+            # Save draft state
+            payload = await get_game_payload(self.db, game_id)
+            payload["draft_order"] = draft_view.draft_order
+            payload["boards"] = draft_view.boards
+            payload["all_picks"] = draft_view.all_picks
+            await update_game_payload(self.db, game_id, payload)
         except Exception:
-            new_msg = await channel.send(embed=embed, view=draft_view)
-            draft_view._msg = new_msg
-            msg = new_msg
-            await update_game_message(self.db, game_id, msg.id)
-
-        # Show draft order announcement
-        if mode == "blitz":
-            await channel.send(
-                "**⚡ Blitz draft:** everyone picks at the same time each round — "
-                "duplicates go to the fastest fingers!"
-            )
-        else:
-            order_names = [resolve_name(guild, uid) for uid in draft_view.players]
-            rev_names = list(reversed(order_names))
-            await channel.send(
-                f"**Draft order:** {' → '.join(order_names)}\n"
-                f"(Round 2 reverses: {' → '.join(rev_names)})"
-            )
-
-        # Save draft state
-        payload = await get_game_payload(self.db, game_id)
-        payload["draft_order"] = draft_view.draft_order
-        payload["boards"] = draft_view.boards
-        payload["all_picks"] = draft_view.all_picks
-        await update_game_payload(self.db, game_id, payload)
+            self._retire_board(draft_view)
+            raise
 
         # Run each pick
         if mode == "blitz":
@@ -864,107 +998,110 @@ class RushmoreCog(commands.Cog):
             await self._run_draft_loop(draft_view, channel, guild, settings)
 
     async def _run_draft_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
-        timer_secs = settings.get("timer", 30)
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         assert draft_view._msg  # set by _start_draft before this loop runs
 
-        while draft_view.current_pick_index < len(draft_view.draft_order):
-            if draft_view._closed:
-                return
+        try:
+            while draft_view.current_pick_index < len(draft_view.draft_order):
+                if draft_view._closed:
+                    return
 
-            rnd, pid = draft_view.draft_order[draft_view.current_pick_index]
-            draft_view._active_player_id = pid
-            player_name = resolve_name(guild, pid)
+                rnd, pid = draft_view.draft_order[draft_view.current_pick_index]
+                draft_view._active_player_id = pid
+                player_name = resolve_name(guild, pid)
 
-            # Update draft board embed
-            embed = draft_view._build_embed()
-            try:
-                await draft_view._msg.edit(embed=embed, view=draft_view)
-            except discord.HTTPException:
-                pass
+                # Update draft board embed — a fresh deadline every turn, same as
+                # every render used to get before the deadline became explicit.
+                draft_view._round_deadline = now_plus(timer_secs)
+                await draft_view.refresh_board()
 
-            # Ping the player — with its own pick button, so nobody has to
-            # scroll back up to the board message to act. One message per
-            # turn: the 10-second nudge edits this same ping in place rather
-            # than posting a second one (social-prompt-37 — a six-player
-            # snake used to leave ~70 self-deleting messages behind).
-            member = guild.get_member(pid) if guild else None
-            ping_text = (
-                f"{member.mention if member else player_name} It's your turn! "
-                f"Pick for Round {rnd} of your Mt. Rushmore of **{discord.utils.escape_markdown(draft_view.topic)}**!"
-            )
-            ping_msg = None
-            try:
-                ping_msg = await channel.send(
-                    ping_text, view=RushmorePingView(draft_view), delete_after=timer_secs,
+                # Ping the player — with its own pick button, so nobody has to
+                # scroll back up to the board message to act. One message per
+                # turn: the 10-second nudge edits this same ping in place rather
+                # than posting a second one (social-prompt-37 — a six-player
+                # snake used to leave ~70 self-deleting messages behind).
+                member = guild.get_member(pid) if guild else None
+                ping_text = (
+                    f"{member.mention if member else player_name} It's your turn! "
+                    f"Pick for Round {rnd} of your Mt. Rushmore of **{discord.utils.escape_markdown(draft_view.topic)}**!"
                 )
-            except discord.HTTPException:
-                pass
-
-            # Wait for pick or timeout
-            pick_event = asyncio.Event()
-            draft_view._pick_event = pick_event
-            draft_view._pick_start = _time.time()
-
-            # Schedule nudge
-            nudge_task = None
-            if timer_secs > 15 and ping_msg is not None:
-                async def _nudge(msg=ping_msg):
-                    await asyncio.sleep(timer_secs - 10)
-                    if not pick_event.is_set() and not draft_view._closed:
-                        try:
-                            await msg.edit(content=f"{ping_text}\n⏰ **10 seconds left to pick!**")
-                        except discord.HTTPException:
-                            pass
-                nudge_task = asyncio.create_task(_nudge())
-
-            try:
-                await asyncio.wait_for(draft_view._pick_event.wait(), timeout=timer_secs)
-            except asyncio.TimeoutError:
-                if not draft_view._closed:
-                    # Skipped
-                    key = f"{pid}_{rnd}"
-                    draft_view.boards[str(pid)][rnd - 1] = SKIPPED_MARKER
-                    draft_view.skipped.append(key)
-                    draft_view.pick_times[key] = None
-                    try:
-                        m = member.mention if member else player_name
-                        await channel.send(f"{m} ⏱️ Time's up! Your pick was skipped.", delete_after=10)
-                    except discord.HTTPException:
-                        pass
-
-            if nudge_task and not nudge_task.done():
-                nudge_task.cancel()
-
-            if draft_view._closed:
-                return
-
-            # Advance to next pick
-            draft_view.current_pick_index += 1
-
-            # Save progress to DB
-            payload = await get_game_payload(self.db, draft_view.game_id)
-            payload["boards"] = draft_view.boards
-            payload["all_picks"] = draft_view.all_picks
-            payload["current_pick_index"] = draft_view.current_pick_index
-            payload["pick_times"] = draft_view.pick_times
-            payload["skipped"] = draft_view.skipped
-            await update_game_payload(self.db, draft_view.game_id, payload)
-
-            # Update board after pick
-            if not draft_view._closed:
-                embed = draft_view._build_embed()
+                ping_msg = None
                 try:
-                    await draft_view._msg.edit(embed=embed, view=draft_view)
+                    ping_msg = await channel.send(
+                        ping_text, view=RushmorePingView(draft_view), delete_after=timer_secs,
+                    )
                 except discord.HTTPException:
                     pass
 
-        # Draft complete — disable draft view
-        draft_view._closed = True
-        disable_all_items(draft_view)
-        try:
-            await draft_view._msg.edit(view=draft_view)
-        except discord.HTTPException:
-            pass
+                # Wait for pick or timeout
+                pick_event = asyncio.Event()
+                draft_view._pick_event = pick_event
+                draft_view._pick_start = _time.time()
+
+                # Schedule nudge
+                nudge_task = None
+                if timer_secs > 15 and ping_msg is not None:
+                    async def _nudge(msg=ping_msg):
+                        await asyncio.sleep(timer_secs - 10)
+                        if not pick_event.is_set() and not draft_view._closed:
+                            try:
+                                await msg.edit(content=f"{ping_text}\n⏰ **10 seconds left to pick!**")
+                            except discord.HTTPException:
+                                pass
+                    nudge_task = asyncio.create_task(_nudge())
+
+                try:
+                    await asyncio.wait_for(draft_view._pick_event.wait(), timeout=timer_secs)
+                except asyncio.TimeoutError:
+                    if not draft_view._closed:
+                        # Skipped
+                        key = f"{pid}_{rnd}"
+                        draft_view.boards[str(pid)][rnd - 1] = SKIPPED_MARKER
+                        draft_view.skipped.append(key)
+                        draft_view.pick_times[key] = None
+                        try:
+                            m = member.mention if member else player_name
+                            await channel.send(f"{m} ⏱️ Time's up! Your pick was skipped.", delete_after=10)
+                        except discord.HTTPException:
+                            pass
+
+                if nudge_task and not nudge_task.done():
+                    nudge_task.cancel()
+
+                if draft_view._closed:
+                    return
+
+                # Advance to next pick
+                draft_view.current_pick_index += 1
+
+                # Save progress to DB
+                payload = await get_game_payload(self.db, draft_view.game_id)
+                payload["boards"] = draft_view.boards
+                payload["all_picks"] = draft_view.all_picks
+                payload["current_pick_index"] = draft_view.current_pick_index
+                payload["pick_times"] = draft_view.pick_times
+                payload["skipped"] = draft_view.skipped
+                await update_game_payload(self.db, draft_view.game_id, payload)
+
+                # Update board after pick — same fresh-deadline treatment; the
+                # next turn (or the "draft complete" frame below) gets its own.
+                if not draft_view._closed:
+                    draft_view._round_deadline = now_plus(timer_secs)
+                    await draft_view.refresh_board()
+
+            # Draft complete — disable draft view
+            draft_view._closed = True
+            draft_view._redraw_coalescer.cancel()
+            disable_all_items(draft_view)
+            await draft_view.refresh_board()
+
+        finally:
+            # Guarantees the board stops reposting on every exit path —
+            # natural completion just above, or the early return on a
+            # forced end (/games end -> force_end_active_game sets
+            # _closed and this loop returns before ever reaching that
+            # completion code).
+            self._retire_board(draft_view)
 
         # Backfill window for skipped slots, then final boards
         await self._run_backfill(draft_view, channel, guild)
@@ -972,94 +1109,105 @@ class RushmoreCog(commands.Cog):
 
     async def _run_blitz_loop(self, draft_view: RushmoreDraftView, channel, guild, settings: dict):
         """Blitz mode: every round, all players pick simultaneously."""
-        timer_secs = settings.get("timer", 30)
+        timer_secs = settings.get("timer", DEFAULT_PICK_SECONDS)
         assert draft_view._msg  # set by _start_draft before this loop runs
 
-        for rnd in range(1, DRAFT_ROUNDS + 1):
-            if draft_view._closed:
-                return
-
-            pending = {
-                uid for uid in draft_view.players
-                if draft_view.boards[str(uid)][rnd - 1] is None
-            }
-            draft_view._blitz_round = rnd
-            draft_view._blitz_pending = pending
-
-            round_done = asyncio.Event()
-            draft_view._pick_event = round_done
-            draft_view._pick_start = _time.time()
-
-            embed = draft_view._build_embed()
-            try:
-                await draft_view._msg.edit(embed=embed, view=draft_view)
-            except discord.HTTPException:
-                pass
-
-            mentions = " ".join(
-                m.mention for uid in pending
-                if guild and (m := guild.get_member(uid))
-            )
-            try:
-                await channel.send(
-                    f"{mentions} ⚡ **Round {rnd}/{DRAFT_ROUNDS}** — everyone pick now! "
-                    f"First come, first served on duplicates.",
-                    view=RushmorePingView(draft_view), delete_after=timer_secs,
-                )
-            except discord.HTTPException:
-                pass
-
-            nudge_task = None
-            if timer_secs > 15:
-                async def _nudge():
-                    await asyncio.sleep(timer_secs - 10)
-                    if not round_done.is_set() and not draft_view._closed and draft_view._blitz_pending:
-                        stragglers = " ".join(
-                            m.mention for uid in draft_view._blitz_pending
-                            if guild and (m := guild.get_member(uid))
-                        )
-                        try:
-                            await channel.send(
-                                f"{stragglers} ⏰ 10 seconds left to pick!",
-                                view=RushmorePingView(draft_view), delete_after=10,
-                            )
-                        except discord.HTTPException:
-                            pass
-                nudge_task = asyncio.create_task(_nudge())
-
-            try:
-                await asyncio.wait_for(round_done.wait(), timeout=timer_secs)
-            except asyncio.TimeoutError:
-                pass
-
-            if nudge_task and not nudge_task.done():
-                nudge_task.cancel()
-
-            if draft_view._closed:
-                return
-
-            # Anyone still pending ran out the clock
-            for uid in sorted(draft_view._blitz_pending):
-                key = f"{uid}_{rnd}"
-                draft_view.boards[str(uid)][rnd - 1] = SKIPPED_MARKER
-                draft_view.skipped.append(key)
-                draft_view.pick_times[key] = None
-            draft_view._blitz_pending = set()
-
-            # Save progress to DB
-            payload = await get_game_payload(self.db, draft_view.game_id)
-            payload["boards"] = draft_view.boards
-            payload["all_picks"] = draft_view.all_picks
-            payload["pick_times"] = draft_view.pick_times
-            payload["skipped"] = draft_view.skipped
-            await update_game_payload(self.db, draft_view.game_id, payload)
-
-        draft_view._closed = True
-        disable_all_items(draft_view)
         try:
-            await draft_view._msg.edit(embed=draft_view._build_embed(), view=draft_view)
-        except discord.HTTPException:
-            pass
+            for rnd in range(1, DRAFT_ROUNDS + 1):
+                if draft_view._closed:
+                    return
+
+                pending = {
+                    uid for uid in draft_view.players
+                    if draft_view.boards[str(uid)][rnd - 1] is None
+                }
+                draft_view._blitz_round = rnd
+                draft_view._blitz_pending = pending
+
+                round_done = asyncio.Event()
+                draft_view._pick_event = round_done
+                draft_view._pick_start = _time.time()
+
+                # One deadline for the whole round — held fixed while picks land
+                # mid-round (see build_draft_embed's ``deadline`` param and
+                # RedrawCoalescer) instead of resetting on every coalesced redraw.
+                draft_view._round_deadline = now_plus(timer_secs)
+                await draft_view.refresh_board()
+
+                mentions = " ".join(
+                    m.mention for uid in pending
+                    if guild and (m := guild.get_member(uid))
+                )
+                try:
+                    await channel.send(
+                        f"{mentions} ⚡ **Round {rnd}/{DRAFT_ROUNDS}** — everyone pick now! "
+                        f"First come, first served on duplicates.",
+                        view=RushmorePingView(draft_view), delete_after=timer_secs,
+                    )
+                except discord.HTTPException:
+                    pass
+
+                nudge_task = None
+                if timer_secs > 15:
+                    async def _nudge():
+                        await asyncio.sleep(timer_secs - 10)
+                        if not round_done.is_set() and not draft_view._closed and draft_view._blitz_pending:
+                            stragglers = " ".join(
+                                m.mention for uid in draft_view._blitz_pending
+                                if guild and (m := guild.get_member(uid))
+                            )
+                            try:
+                                await channel.send(
+                                    f"{stragglers} ⏰ 10 seconds left to pick!",
+                                    view=RushmorePingView(draft_view), delete_after=10,
+                                )
+                            except discord.HTTPException:
+                                pass
+                    nudge_task = asyncio.create_task(_nudge())
+
+                try:
+                    await asyncio.wait_for(round_done.wait(), timeout=timer_secs)
+                except asyncio.TimeoutError:
+                    pass
+
+                if nudge_task and not nudge_task.done():
+                    nudge_task.cancel()
+
+                # The round is over — cancel any redraw the coalescer still has
+                # in flight for a pick that landed right at the buzzer. The next
+                # round's own redraw (or the "draft complete" one below) covers
+                # showing that pick; nothing should fire after the round it
+                # belongs to has already moved on.
+                draft_view._redraw_coalescer.cancel()
+
+                if draft_view._closed:
+                    return
+
+                # Anyone still pending ran out the clock
+                for uid in sorted(draft_view._blitz_pending):
+                    key = f"{uid}_{rnd}"
+                    draft_view.boards[str(uid)][rnd - 1] = SKIPPED_MARKER
+                    draft_view.skipped.append(key)
+                    draft_view.pick_times[key] = None
+                draft_view._blitz_pending = set()
+
+                # Save progress to DB
+                payload = await get_game_payload(self.db, draft_view.game_id)
+                payload["boards"] = draft_view.boards
+                payload["all_picks"] = draft_view.all_picks
+                payload["pick_times"] = draft_view.pick_times
+                payload["skipped"] = draft_view.skipped
+                await update_game_payload(self.db, draft_view.game_id, payload)
+
+            draft_view._closed = True
+            draft_view._redraw_coalescer.cancel()
+            disable_all_items(draft_view)
+            await draft_view.refresh_board()
+
+        finally:
+            # Same guarantee as the snake loop: retire on every exit,
+            # not just natural completion.
+            self._retire_board(draft_view)
 
         await self._run_backfill(draft_view, channel, guild)
         await self._show_final_boards(draft_view, channel, guild, settings)

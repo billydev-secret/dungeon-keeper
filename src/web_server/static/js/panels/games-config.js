@@ -80,6 +80,21 @@ export function mount(container) {
         </section>
 
         <section>
+          <div class="section-label">Live Game Boards</div>
+          <div class="field-hint">Off by default. When on, a running game's board
+            re-posts itself to the bottom of the channel as chat buries it, so
+            players never have to scroll back up to see it or pick a turn, then
+            it stops moving once the board is done. Covers Mt. Rushmore Draft's
+            draft board (for the whole draft) and Name Your Price's submission
+            board (for each round's submissions).</div>
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px;">
+            <input type="checkbox" data-ctrl="board-sticky" style="width:16px;height:16px;cursor:pointer;" />
+            <span>Keep the game board at the bottom of the channel</span>
+            <span class="save-status" data-status="board-sticky" style="font-size:12px;"></span>
+          </label>
+        </section>
+
+        <section>
           <div class="section-label">Idle Lobbies</div>
           <div class="field-hint">Six games open a lobby and wait for someone to press start
             (Clapback, Spin the Compliment, Marry-Fornicate-Kiss, Most Likely To, Mt. Rushmore Draft,
@@ -322,6 +337,17 @@ export function mount(container) {
       }
     }
 
+    async function loadBoardSticky() {
+      const st = statusEl("board-sticky");
+      const box = container.querySelector('[data-ctrl="board-sticky"]');
+      try {
+        const data = await api("/api/games/config/board-sticky");
+        box.checked = !!data.enabled;
+      } catch (err) {
+        showStatus(st, false, err.message);
+      }
+    }
+
     async function loadLobbyDials() {
       const st = statusEl("lobby");
       try {
@@ -409,6 +435,20 @@ export function mount(container) {
       } catch (err) { showStatus(st, false, err.message); }
     });
 
+    // Commits on its own change, same as the availability checkboxes above —
+    // there's nothing else on the row to fill in first.
+    container.querySelector('[data-ctrl="board-sticky"]').addEventListener("change", async (e) => {
+      const box = e.target;
+      const st = statusEl("board-sticky");
+      try {
+        await apiPut("/api/games/config/board-sticky", { enabled: box.checked });
+        showStatus(st, true, box.checked ? "On" : "Off");
+      } catch (err) {
+        box.checked = !box.checked;
+        showStatus(st, false, err.message);
+      }
+    });
+
     container.querySelector('[data-action="save-lobby"]').addEventListener("click", async () => {
       const st = statusEl("lobby");
       const nudge = parseInt(container.querySelector('[data-ctrl="idle-nudge"]').value, 10);
@@ -427,6 +467,7 @@ export function mount(container) {
     loadAllowedChannels();
     loadAvailability();
     loadEditorRole();
+    loadBoardSticky();
     loadLobbyDials();
     loadAudit();
   }, { errorMsg: "Couldn’t load the games global config." });

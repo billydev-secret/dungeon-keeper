@@ -26,6 +26,7 @@ from bot_modules.games_rushmore.embeds import (
     render_draft_board,
 )
 from bot_modules.games_rushmore.logic import (
+    DEFAULT_PICK_SECONDS,
     DRAFT_ROUNDS,
     MAX_PLAYERS,
     MIN_PLAYERS,
@@ -55,6 +56,10 @@ def _name_resolver(uid: int) -> str:
 
 def test_draft_rounds_is_four():
     assert DRAFT_ROUNDS == 4
+
+
+def test_default_pick_seconds_is_forty_five():
+    assert DEFAULT_PICK_SECONDS == 45
 
 
 def test_skipped_marker_is_string():
@@ -423,6 +428,15 @@ def test_clamp_settings_boundary_values():
     assert clamp_settings(120, 60) == (120, 60)
 
 
+def test_clamp_settings_range_unchanged_by_new_default():
+    # DEFAULT_PICK_SECONDS moved from 30 to 45, but the dial's own bounds
+    # (10-120) did not — the new default clamps through untouched, and the
+    # min/max edges still bite exactly where they used to.
+    assert clamp_settings(DEFAULT_PICK_SECONDS, 30) == (DEFAULT_PICK_SECONDS, 30)
+    assert clamp_settings(9, 30)[0] == 10
+    assert clamp_settings(121, 30)[0] == 120
+
+
 # ── render_draft_board ───────────────────────────────────────────────
 
 
@@ -560,6 +574,78 @@ def test_build_draft_embed_omits_now_picking_when_no_active_player():
     )
     field_names = [f.name for f in embed.fields]
     assert not any("Now Picking" in (n or "") for n in field_names)
+
+
+def _timer_field(embed):
+    return next(f.value for f in embed.fields if f.name == "Timer")
+
+
+def test_build_draft_embed_deadline_is_stable_across_rerenders_in_a_round(monkeypatch):
+    """Regression (todo #208/#209): build_draft_embed used to recompute
+    ``now_plus(timer_secs)`` fresh on every call, so a mid-round redraw (a
+    blitz pick landing) reset the visible countdown back to the full
+    duration. Two renders "in the same round" — same explicit ``deadline``
+    passed in — must show the identical countdown even though real time
+    passed between them."""
+    import bot_modules.games.utils.timer as timer_mod
+
+    clock = {"t": 1_700_000_000}
+    monkeypatch.setattr(timer_mod.time, "time", lambda: clock["t"])
+
+    deadline = timer_mod.now_plus(30)  # computed once, "when the round opens"
+    clock["t"] += 20  # time passes mid-round before another pick redraws it
+
+    kwargs = dict(
+        host_name="Host", topic="t", players=[(1, "Alice")],
+        boards={"1": [None] * 4}, active_player_id=None, active_player_name=None,
+        round_num=1, timer_secs=30, deadline=deadline,
+    )
+    first = _timer_field(build_draft_embed(**kwargs))
+    second = _timer_field(build_draft_embed(**kwargs))
+    assert first == second
+
+
+def test_build_draft_embed_deadline_advances_on_a_new_round(monkeypatch):
+    """The other half of the same fix: a genuinely new round *does* get a
+    new deadline — this isn't a frozen timer, just one that stops resetting
+    itself on every redraw of the same round."""
+    import bot_modules.games.utils.timer as timer_mod
+
+    clock = {"t": 1_700_000_000}
+    monkeypatch.setattr(timer_mod.time, "time", lambda: clock["t"])
+
+    round1_deadline = timer_mod.now_plus(30)
+    clock["t"] += 30  # round 1 ends, round 2 opens and computes its own
+    round2_deadline = timer_mod.now_plus(30)
+    assert round1_deadline != round2_deadline
+
+    base = dict(
+        host_name="Host", topic="t", players=[(1, "Alice")],
+        boards={"1": [None] * 4}, active_player_id=None, active_player_name=None,
+        round_num=1, timer_secs=30,
+    )
+    first = _timer_field(build_draft_embed(**base, deadline=round1_deadline))
+    second = _timer_field(build_draft_embed(**base, deadline=round2_deadline))
+    assert first != second
+
+
+def test_build_draft_embed_falls_back_to_a_fresh_deadline_when_omitted(monkeypatch):
+    """No live round backing the render (e.g. an ad-hoc test/preview) —
+    ``deadline=None`` keeps the old always-fresh behavior."""
+    import bot_modules.games.utils.timer as timer_mod
+
+    clock = {"t": 1_700_000_000}
+    monkeypatch.setattr(timer_mod.time, "time", lambda: clock["t"])
+
+    kwargs = dict(
+        host_name="Host", topic="t", players=[(1, "Alice")],
+        boards={"1": [None] * 4}, active_player_id=None, active_player_name=None,
+        round_num=1, timer_secs=30,
+    )
+    first = _timer_field(build_draft_embed(**kwargs))
+    clock["t"] += 5
+    second = _timer_field(build_draft_embed(**kwargs))
+    assert first != second
 
 
 # ── build_final_boards_embed ─────────────────────────────────────────
@@ -782,12 +868,14 @@ def test_build_recap_embed_empty_stats_omits_draft_stats_field():
 
 # ── economy roster enrichment (Stage 2 faucet) ──────────────────────
 
+import asyncio  # noqa: E402
 import time as _time_mod  # noqa: E402
 from types import SimpleNamespace  # noqa: E402
 from unittest.mock import AsyncMock  # noqa: E402
 
 import bot_modules.cogs.games_rushmore_cog as rushmore_cog  # noqa: E402
 from bot_modules.games.utils.game_manager import create_game  # noqa: E402
+from bot_modules.games_rushmore.logic import RedrawCoalescer  # noqa: E402
 from bot_modules.services.games_db import GamesDb  # noqa: E402
 
 
@@ -819,6 +907,90 @@ async def test_show_recap_pays_drafters(monkeypatch, sync_db_path):
     assert call is not None and spy.await_count == 1
     assert call.kwargs["player_ids"] == [1, 2, 3]
     assert call.kwargs["bot"] is bot
+
+
+# ── blitz board coalescing (todo #208/#209) ──────────────────────────
+#
+# Blitz mode has every player picking at once; without coalescing, an
+# accepted pick redrew the board immediately, so five simultaneous picks
+# meant five Discord edits. RedrawCoalescer collapses a burst into one, and
+# RushmoreDraftView.accept_pick is the only thing that schedules one.
+
+
+def _blitz_view(players=(1, 2, 3)):
+    view = rushmore_cog.RushmoreDraftView(
+        "gid", 1, "Host", "Topic", list(players), 30,
+        None, None, None, None, mode="blitz",
+    )
+    # A fast coalescer so the tests don't wait on the real ~1.5s default.
+    view._redraw_coalescer = RedrawCoalescer(delay=0.01)
+    view._msg = SimpleNamespace(edit=AsyncMock())
+    view._blitz_round = 1
+    view._blitz_pending = set(players)
+    return view
+
+
+async def test_redraw_coalescer_collapses_a_simultaneous_burst_into_one_call():
+    """The coalescer in isolation: N ``schedule`` calls made back-to-back
+    (no ``await`` between them, i.e. arriving "together") fire ``redraw_fn``
+    exactly once."""
+    calls = 0
+
+    async def redraw():
+        nonlocal calls
+        calls += 1
+
+    coalescer = RedrawCoalescer(delay=0.01)
+    for _ in range(5):
+        coalescer.schedule(redraw)
+
+    await asyncio.sleep(0.05)
+    assert calls == 1
+
+
+async def test_five_simultaneous_blitz_picks_produce_exactly_one_board_edit():
+    """The full wiring: five players picking within the same tick — via
+    ``accept_pick``, the real entry point — must cost exactly one
+    ``_msg.edit`` call, not five."""
+    view = _blitz_view(players=range(1, 6))
+
+    for uid in range(1, 6):
+        view.accept_pick(f"Pick {uid}", uid)
+
+    await asyncio.sleep(0.05)
+    assert view._msg.edit.await_count == 1
+    assert view._blitz_pending == set()
+
+
+async def test_accept_pick_schedules_a_redraw_only_for_a_valid_blitz_pick():
+    view = _blitz_view()
+
+    # Not currently owed a pick (already picked, or not this round) — the
+    # attempt is a no-op and nothing gets scheduled.
+    view.accept_pick("Nope", 999)
+    assert view._redraw_coalescer._task is None
+    assert view._msg.edit.await_count == 0
+
+    # A valid pick schedules exactly one coalesced redraw.
+    view.accept_pick("Real Pick", 1)
+    assert view._redraw_coalescer._task is not None
+    await asyncio.sleep(0.05)
+    assert view._msg.edit.await_count == 1
+
+
+async def test_closing_the_draft_cancels_a_pending_redraw():
+    """No pending redraw task survives ``_closed`` — a pick landing right
+    as the round/draft ends must not fire a late edit after the fact."""
+    view = _blitz_view()
+    view.accept_pick("Last Pick", 1)
+    assert view._redraw_coalescer._task is not None
+
+    view._closed = True
+    view._redraw_coalescer.cancel()
+
+    assert view._redraw_coalescer._task is None
+    await asyncio.sleep(0.05)
+    assert view._msg.edit.await_count == 0
 
 
 # ── backfill helpers ─────────────────────────────────────────────────
@@ -1020,3 +1192,22 @@ async def test_run_again_is_open_to_any_member_who_becomes_the_host(monkeypatch,
     launch.assert_awaited_once()
     assert launch.await_args.kwargs["host_id"] == 42
     assert launch.await_args.kwargs["options"]["mode"] == "blitz", "blitz is the default draft mode"
+
+
+def test_schedule_schema_pick_seconds_tracks_the_code_default():
+    """A scheduled or rotation-launched draft must offer the same pick timer a
+    member-started one does.
+
+    ``SCHEDULE_OPTION_SCHEMA`` is what the Scheduling and Feature Rotation
+    option forms render and submit, and an explicit value in the submitted
+    options beats both the per-guild dial and ``DEFAULT_PICK_SECONDS``. While
+    the schema restated the number, raising the code default to 45 silently
+    left every scheduled draft on the old 30 seconds.
+    """
+    from bot_modules.games.constants import SCHEDULE_OPTION_SCHEMA
+    from bot_modules.games_rushmore.logic import DEFAULT_PICK_SECONDS
+
+    timer = next(
+        opt for opt in SCHEDULE_OPTION_SCHEMA["rushmore"] if opt["name"] == "timer"
+    )
+    assert timer["default"] == DEFAULT_PICK_SECONDS
