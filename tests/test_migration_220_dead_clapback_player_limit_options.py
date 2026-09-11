@@ -6,12 +6,12 @@ row they had written survived, and until 37e3f351 the config PUT merged into
 the stored options rather than replacing them, so every later save carried the
 dead keys forward. The merge is fixed; this migration deletes what it stranded.
 
-The hazard is the one migration 217 recorded in another shape: these two key
-names are *not* dead everywhere. Most Likely To and Mt. Rushmore Draft both
-have a join phase, still offer both dials and still read them, so a blanket
-json_remove over the table would delete two live settings for two games. The
-migration enumerates game types instead of matching on key name, and the third
-test here is what bites if someone later "simplifies" it into a key match.
+The hazard: these two key names are *not* dead everywhere. Most Likely To and
+Mt. Rushmore Draft both have a join phase, still offer both dials and still
+read them, so a blanket json_remove over the table would delete two live
+settings for two games. The migration enumerates game types instead of matching
+on key name, and the third test here is what bites if someone later
+"simplifies" it into a key match.
 """
 
 from __future__ import annotations
@@ -34,13 +34,20 @@ PROD_CLAPBACK = {"min_players": 2, "max_players": 16}
 PROD_PHOTO = {"channel_id": "1528057071235371088", "ping_role_id": ""}
 
 
+#: Stamped on every seeded row so "left untouched" is observable. It has to be
+#: a value ``CURRENT_TIMESTAMP`` can never produce: SQLite's is second-grained,
+#: so a row rewritten in the same second as it was seeded would otherwise carry
+#: an identical timestamp and the churn would be invisible.
+SEEDED_AT = "1999-01-01 00:00:00"
+
+
 def _seed(db_path, rows) -> None:
     """Insert (guild_id, game_type, options) rows and re-arm migration 220."""
     with open_db(db_path) as conn:
         conn.executemany(
-            "INSERT OR REPLACE INTO games_game_config (guild_id, game_type, options)"
-            " VALUES (?, ?, ?)",
-            [(g, gt, json.dumps(opts)) for g, gt, opts in rows],
+            "INSERT OR REPLACE INTO games_game_config"
+            " (guild_id, game_type, options, updated_at) VALUES (?, ?, ?, ?)",
+            [(g, gt, json.dumps(opts), SEEDED_AT) for g, gt, opts in rows],
         )
         conn.execute("DELETE FROM schema_version WHERE migration LIKE '220%'")
         conn.commit()
@@ -53,6 +60,15 @@ def _options(db_path, guild_id, game_type) -> dict:
             (guild_id, game_type),
         ).fetchone()
     return json.loads(row[0])
+
+
+def _updated_at(db_path, guild_id, game_type) -> str:
+    with open_db(db_path) as conn:
+        row = conn.execute(
+            "SELECT updated_at FROM games_game_config WHERE guild_id = ? AND game_type = ?",
+            (guild_id, game_type),
+        ).fetchone()
+    return row[0]
 
 
 def test_the_stranded_clapback_pair_is_removed(tmp_path):
@@ -80,9 +96,9 @@ def test_it_leaves_the_other_dials_on_the_same_row_alone(tmp_path):
 def test_it_does_not_touch_the_two_games_whose_limits_are_live(tmp_path):
     """MLT and Rushmore have a lobby, offer both dials and read them
     (games_mlt_cog.py:519, games_rushmore_cog.py:878). A key-name match instead
-    of a game-type match would silently unset two real settings — the same
-    prefix-matching trap migration 217 recorded. Photo Challenge's row is here
-    for the same reason: it is the only other row in prod."""
+    of a game-type match would silently unset two real settings. Photo
+    Challenge's row is here for the same reason: it is the only other row in
+    prod."""
     db = tmp_path / "t.db"
     migrations.apply_migrations_sync(db)
     limits = {"min_players": 4, "max_players": 12}
@@ -98,6 +114,9 @@ def test_it_does_not_touch_the_two_games_whose_limits_are_live(tmp_path):
     assert _options(db, GUILD, "rushmore") == {**limits, "mode": "snake"}
     assert _options(db, GUILD, "photo") == PROD_PHOTO
     assert _options(db, GUILD, "clapback") == {}
+    # Not merely "the same options": the rows were not rewritten at all.
+    for game_type in ("mlt", "rushmore", "photo"):
+        assert _updated_at(db, GUILD, game_type) == SEEDED_AT, game_type
 
 
 def test_it_clears_the_pair_in_every_guild(tmp_path):
@@ -119,10 +138,16 @@ def test_it_clears_the_pair_in_every_guild(tmp_path):
 
 
 def test_a_row_without_the_pair_is_left_untouched(tmp_path):
-    """Re-running migrations must not churn rows that were already clean."""
+    """Re-running migrations must not churn rows that were already clean — and
+    the options alone cannot show that. ``json_remove`` of an absent key is a
+    no-op, so an options-only assertion passes even against a migration whose
+    WHERE clause has lost both key guards, which is precisely the edit that
+    would restamp every clapback row on every deploy. ``updated_at`` is the
+    column that moves, so that is what this pins."""
     db = tmp_path / "t.db"
     migrations.apply_migrations_sync(db)
     _seed(db, [(GUILD, "clapback", {"rounds": 5})])
     migrations.apply_migrations_sync(db)
 
     assert _options(db, GUILD, "clapback") == {"rounds": 5}
+    assert _updated_at(db, GUILD, "clapback") == SEEDED_AT

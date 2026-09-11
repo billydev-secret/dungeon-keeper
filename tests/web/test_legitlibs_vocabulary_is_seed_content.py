@@ -87,10 +87,9 @@ def test_nothing_outside_a_migration_mutates_the_vocabulary_tables() -> None:
     called /legitlibs/vocabulary or /legitlibs/blanks. This one reads the SQL,
     and it reads *all* of src/ rather than the route modules — because the
     layering rule sends the next author somewhere else entirely. Routes are
-    glue; the only module that queries these tables today is
-    `cogs/games_legitlibs/data.py`, which is exactly where a spec-compliant CRUD
-    implementation would put its writes, and a route-only scan would wave it
-    through."""
+    glue: `routes/games.py` only SELECTs, and `cogs/games_legitlibs/data.py` is
+    where a spec-compliant CRUD implementation would put its writes, which a
+    route-only scan would wave straight through."""
     offenders: list[str] = []
     for path in sorted(_SRC.rglob("*.py")):
         if _MIGRATIONS in path.parents:
