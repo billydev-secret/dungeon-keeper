@@ -13,6 +13,7 @@ deterministic, and part of the default suite.
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 from pathlib import Path
 
@@ -75,6 +76,112 @@ def test_help_section_anchors_have_a_home():
     assert not missing, (
         "help-sections.js anchors with no matching id in manual.html:\n  "
         + "\n  ".join("#" + a for a in missing)
+    )
+
+
+# ── the page title vs the manual's own heading ──────────────────────────────
+#
+# The help panel prints the nav label as the page title and then strips the
+# manual's own heading from the rendered fragment — but only when the two read
+# the same (help.js dropDuplicateHeading normalizes and compares them). A label
+# edited without the heading, or the reverse, silently leaves two titles stacked
+# on the page. The comparison is a string match at runtime with nothing watching
+# it, so it is watched here.
+
+
+def _heading_text(html: str, anchor: str) -> str | None:
+    """The manual's own h2/h3 text for an anchor, as help.js reads it.
+
+    Mirrors dropDuplicateHeading: the section number and the Mod/Admin
+    permission chip are chrome the nav label never carries, so both come out
+    before the comparison.
+    """
+    m = re.search(rf'<h[23] id="{re.escape(anchor)}"[^>]*>(.*?)</h[23]>', html, re.S)
+    if not m:
+        return None
+    inner = re.sub(
+        r'<span class="(?:section-num|perm)[^"]*">.*?</span>', "", m.group(1), flags=re.S
+    )
+    return html_lib.unescape(re.sub(r"<[^>]+>", "", inner))
+
+
+def _normalize_title(text: str) -> str:
+    """help.js's normalizeTitle: case- and punctuation-insensitive."""
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _titled_entries() -> list[tuple[str, str, str]]:
+    """(anchor, title, source) per help entry, where `title` is what help.js
+    compares the manual heading against — `manualHeading` when the entry states
+    one, the `label` otherwise."""
+    src = HELP_SECTIONS.read_text(encoding="utf-8")
+    out = []
+    for m in re.finditer(r"\{\s*page:[^{}]*\}", src, re.S):
+        entry = m.group(0)
+        anchor = re.search(r'anchor:\s*"([\w-]+)"', entry)
+        if not anchor:
+            continue
+        override = re.search(r'manualHeading:\s*"([^"]+)"', entry)
+        label = re.search(r'label:\s*"([^"]+)"', entry)
+        if override:
+            out.append((anchor.group(1), override.group(1), "manualHeading"))
+        elif label:
+            out.append((anchor.group(1), label.group(1), "label"))
+        else:
+            # A computed label (the assistant's, which carries a per-guild name)
+            # can never match a heading the manual ships for every guild, so it
+            # has to state `manualHeading` — flag it rather than skip it.
+            out.append((anchor.group(1), "", "computed label, no manualHeading"))
+    return out
+
+
+def test_every_help_page_title_matches_its_manual_heading():
+    entries = _titled_entries()
+    assert len(entries) > 40, f"only parsed {len(entries)} help entries — parser drifted"
+    html = _manual_text()
+    bad = []
+    for anchor, title, source in entries:
+        heading = _heading_text(html, anchor)
+        if heading is None:
+            continue  # test_help_section_anchors_have_a_home owns this case
+        if _normalize_title(heading) != _normalize_title(title):
+            bad.append(f"#{anchor}: manual says {heading.strip()!r}, {source} says {title!r}")
+    assert not bad, (
+        "help page title and manual heading disagree, so the panel will show "
+        "both:\n  " + "\n  ".join(bad)
+    )
+
+
+def test_the_assistant_page_states_its_manual_heading():
+    """The one entry that must use `manualHeading`, and why.
+
+    The nav and panel title carry the guild's own name for the assistant
+    (Config → Branding); the manual is a single file served to every guild and
+    so names nobody. Those two can never match, which is what makes the
+    override load-bearing rather than stylistic — remove it and every guild
+    sees "Ask Sparkles (AI)" above a second "Ask the AI Assistant".
+    """
+    src = HELP_SECTIONS.read_text(encoding="utf-8")
+    entry = re.search(r'\{\s*page:\s*"help-ask"[^{}]*\}', src, re.S)
+    assert entry, "the help-ask entry moved — this guard can no longer see it"
+    assert "manualHeading:" in entry.group(0), (
+        "the help-ask entry lost its manualHeading; its label is the guild's "
+        "assistant name, which no shipped manual heading can equal"
+    )
+    assert "billy" in entry.group(0).lower(), (
+        "the old assistant name is gone from the keywords — it is how people "
+        "who know it by that name still find the page in the sidebar filter"
+    )
+
+
+def test_the_manual_never_names_the_assistant():
+    """The manual ships to every guild, so it must not hardcode one guild's
+    name for the assistant. Three paragraphs said "Billy-bot" long after the
+    name became per-guild branding (todo #164)."""
+    html = _manual_text()
+    assert "Billy" not in html, (
+        "manual.html names the assistant again — it is renamed per guild under "
+        "Config → Branding, so the guide has to describe it without a name"
     )
 
 
