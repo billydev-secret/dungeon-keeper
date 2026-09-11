@@ -1801,7 +1801,7 @@
       <span class="cmd-desc">Buttons on the proposal card. A proposal starts <strong>mods-only</strong>, and some proposals are better with members in the room — press <strong>Open to Members</strong> and everyone can read the channel and post in it. Press it again (<strong>Make Mods-Only</strong>) to close it back up. The card itself always says which it currently is.</span>
       <div class="cmd-params">
         <strong>Opening shows the whole channel, not just the proposal.</strong> Members can scroll back through everything said in there before you opened it, so the button asks you to confirm first and tells you how many messages that is. Closing it again takes the channel back out of view, but it can't un-read what people already saw — so read the confirmation before you press it.<br>
-        <strong>Jailed members never see it</strong>, open or not.<br>
+        <strong>Jailed members never see it</strong>, open or not — the bot shuts them out again as it opens the channel, and if it can't (it needs <em>Manage Roles</em> there) it leaves the channel mods-only and tells you so rather than opening it anyway.<br>
         <strong>Everyone in the channel is told</strong> when the audience changes, in the channel itself.
       </div>
     </div>

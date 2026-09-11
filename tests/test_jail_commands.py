@@ -1198,3 +1198,192 @@ async def test_a_backlog_that_fails_partway_discards_the_partial_tally():
 
     channel.history = _history
     assert await jc._count_channel_messages(channel) == (None, False)
+
+
+# ── Visibility: the confirm gate, and the jailed deny ────────────────
+
+
+class _EmptyHistory:
+    """Stand-in for ``channel.history(...)`` — an empty async iterator."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise StopAsyncIteration
+
+
+def _admin_visibility_press(ctx, *, channel_id: int = 556):
+    """``_visibility_interaction`` wired for a real button press by an admin:
+    a deferrable response, an admin presser, and a countable backlog."""
+    interaction, channel = _visibility_interaction(ctx, channel_id=channel_id)
+    interaction.user.guild_permissions = discord.Permissions(administrator=True)
+    interaction.response = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    channel.history = MagicMock(return_value=_EmptyHistory())
+    return interaction, channel
+
+
+def _seed_policy(ctx, *, visibility: str = "mods", channel_id: int = 556):
+    from bot_modules.services.moderation import (
+        create_policy_ticket,
+        get_policy_ticket,
+        set_policy_visibility,
+    )
+
+    with open_db(ctx.db_path) as conn:
+        pid = create_policy_ticket(
+            conn, guild_id=10, creator_id=7, channel_id=channel_id,
+            title="T", description="D",
+        )
+        if visibility != "mods":
+            set_policy_visibility(conn, pid, visibility=visibility)
+        return pid, get_policy_ticket(conn, pid)
+
+
+@pytest.mark.asyncio
+async def test_declining_the_confirm_opens_nothing(tmp_path, monkeypatch):
+    """The confirm is this feature's safety gate, so it gets a test that
+    proves it *denies*.
+
+    Cancel and timeout are deliberately the same outcome — ``_ConfirmView``
+    only sets ``result`` on a Confirm press — so a prompt nobody answers
+    fails closed. Patching ``View.wait`` to return without a press is
+    exactly that case: the channel must stay private and the row must still
+    read ``mods``, because everything the warning measures (the backlog a
+    member would be handed) is unrecoverable once it's wrong.
+    """
+    from bot_modules.services.moderation import get_policy_ticket
+
+    ctx = _make_ctx(tmp_path / "t.db")
+    pid, _ = _seed_policy(ctx)
+    interaction, channel = _admin_visibility_press(ctx)
+    monkeypatch.setattr(discord.ui.View, "wait", AsyncMock(return_value=None))
+
+    await jc.PolicyVisibilityButton(pid, "mods").callback(interaction)
+
+    # The warning was shown...
+    interaction.followup.send.assert_awaited_once()
+    assert "readable by every member" in interaction.followup.send.await_args.args[0]
+    # ...and nothing followed it.
+    channel.set_permissions.assert_not_awaited()
+    channel.send.assert_not_awaited()
+    with open_db(ctx.db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "mods"
+
+
+@pytest.mark.asyncio
+async def test_opening_re_denies_the_jailed_role_first(tmp_path):
+    """`manual.html` and the spec both promise jailed members never see a
+    policy channel, open or not. That rested on the create-time listener,
+    which is best-effort by design — so the press that grants
+    ``@everyone view_channel`` re-stamps the deny itself, and stamps it
+    *before* the allow so there is no window where the channel is public
+    without it.
+    """
+    ctx = _make_ctx(tmp_path / "t.db")
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "jailed_role_id", "777", guild_id=10)
+    pid, policy = _seed_policy(ctx)
+
+    interaction, channel = _admin_visibility_press(ctx)
+    jail_role = MagicMock(spec=discord.Role)
+    jail_role.id = 777
+    interaction.guild.get_role = MagicMock(return_value=jail_role)
+    # No overwrite for the jail role yet: jailed members inherit @everyone.
+    channel.overwrites_for = MagicMock(
+        return_value=discord.PermissionOverwrite(view_channel=None)
+    )
+
+    await jc.PolicyVisibilityButton(pid)._apply(interaction, ctx, policy, "public")
+
+    calls = channel.set_permissions.await_args_list
+    assert calls[0].args[0] is jail_role
+    assert calls[0].kwargs["view_channel"] is False
+    assert calls[1].args[0] is interaction.guild.default_role
+    assert calls[1].kwargs["view_channel"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_channel_we_cannot_shut_jailed_members_out_of_stays_private(
+    tmp_path,
+):
+    """If the deny can't be written, the promise can't be kept — so don't
+    open. Failing the other way would publish the channel to jailed members
+    while the admin guide says it can't happen, which is the worst of the
+    two errors: silent, and only visible to the people it exposes it to.
+    """
+    from bot_modules.services.moderation import get_policy_ticket
+
+    ctx = _make_ctx(tmp_path / "t.db")
+    with open_db(ctx.db_path) as conn:
+        _db_set(conn, "jailed_role_id", "777", guild_id=10)
+    pid, policy = _seed_policy(ctx)
+
+    interaction, channel = _admin_visibility_press(ctx)
+    jail_role = MagicMock(spec=discord.Role)
+    jail_role.id = 777
+    interaction.guild.get_role = MagicMock(return_value=jail_role)
+    channel.overwrites_for = MagicMock(
+        return_value=discord.PermissionOverwrite(view_channel=None)
+    )
+    channel.set_permissions = AsyncMock(
+        side_effect=discord.Forbidden(MagicMock(status=403), "no manage roles")
+    )
+
+    await jc.PolicyVisibilityButton(pid)._apply(interaction, ctx, policy, "public")
+
+    with open_db(ctx.db_path) as conn:
+        assert get_policy_ticket(conn, pid)["visibility"] == "mods"
+    channel.send.assert_not_awaited()
+    assert "jailed members" in interaction.followup.send.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_the_visibility_notice_and_audit_card_name_nobody_with_an_id(
+    tmp_path,
+):
+    """The branch that took `<@id>` out of the vote rosters doesn't get to
+    put one back in the card next door. The in-channel notice is message
+    content (where a mention resolves server-side) but pings nobody, and the
+    mod-log embed carries a resolved name — an embed mention is resolved by
+    the *reading* client's cache and renders as bare digits to anyone who
+    hasn't seen that member.
+    """
+    ctx = _make_ctx(tmp_path / "t.db")
+    pid, policy = _seed_policy(ctx)
+    interaction, channel = _admin_visibility_press(ctx)
+
+    # The resolver's documented last resort *is* `<@id>`, so give it someone
+    # to find — otherwise this test would pass on the fallback and prove
+    # nothing about the wiring.
+    def _member_named(uid):
+        m = MagicMock(spec=discord.Member)
+        m.display_name = {7: "Proposer Seven", 99: "Mod Nine"}.get(uid)
+        return m if m.display_name else None
+
+    interaction.guild.get_member = MagicMock(side_effect=_member_named)
+
+    posted: list[discord.Embed] = []
+
+    async def _capture(_ctx, _guild, embed):
+        posted.append(embed)
+
+    import bot_modules.commands.jail_commands as _jc
+
+    original = _jc._post_audit
+    _jc._post_audit = _capture
+    try:
+        await jc.PolicyVisibilityButton(pid)._apply(interaction, ctx, policy, "public")
+    finally:
+        _jc._post_audit = original
+
+    mentions = channel.send.await_args.kwargs["allowed_mentions"]
+    assert mentions.everyone is False
+    assert mentions.users is False
+    assert mentions.roles is False
+    assert posted, "the mod log never saw the change"
+    description = posted[0].description or ""
+    assert "Mod Nine" in description
+    assert "<@" not in description

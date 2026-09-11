@@ -457,6 +457,31 @@ deliberate ping belongs.
   facing cards get the name alone, always. Before appending an id, name the
   command a mod would paste it into and satisfy yourself no member will read
   the card; if either fails, don't.
+
+  **The sites that keep theirs.** The three named above are examples, not the
+  whole list — measure a new card against both prongs rather than against this
+  enumeration, and if you are *removing* ids, check the site is not one of
+  these first:
+  - `confessions_service.log_confession` / `log_reply`
+    (`services/confessions_service.py`) — the strongest case in the repo. A
+    confession's author is anonymous to members **by design**, so in the
+    private log the id is the only handle a mod has; there is no name to fall
+    back on and no other way to answer "who posted this". Fixed audience
+    (a log channel), real destination (`/warn`, `/jail`, an erasure request).
+    Do not strip this one.
+  - `games/utils/audit.py` — the games content-audit embed, posted to the same
+    mod log for a flagged submission. Fixed audience, and the paste
+    destination is a moderation command on the author.
+  - `intake_views.py` / `promotion_review_views.py` — these render
+    `Name (`handle`)`, the account handle rather than a snowflake, so the id
+    rule does not reach them at all. The one exception is a **departed**
+    member in the intake card, where the handle is unavailable and the raw id
+    is the fallback — which is the same reasoning as the no-contact
+    degradation below: a number beats nothing when there is no name to show.
+
+  A guide/code disagreement here is a pointer to repair, not a choice
+  (`design_guide.md` Part 7) — so if you find a fifth site, either add it here
+  with the prong that keeps it, or take the id out.
 - **The one exception: a no-contact pair.** Where a surface would name two
   people the no-contact list keeps apart, degrade to a plain `User <id>` for
   both. The bot naming them together in its own voice manufactures exactly the

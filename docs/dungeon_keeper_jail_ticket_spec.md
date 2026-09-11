@@ -167,6 +167,8 @@ shows an ephemeral confirm naming the figure and spelling out "including
 anything said before now". The mistake being guarded is a mod opening a
 channel while thinking about the proposal and forgetting the candid
 discussion above it. Closing needs no confirm: nothing is exposed by it.
+A confirm nobody answers expires after a minute and says so — cancel and
+timeout are the same outcome, so an unanswered prompt opens nothing.
 
 Three things fall out of this being a permission change rather than a
 cosmetic one:
@@ -174,9 +176,16 @@ cosmetic one:
 - **The gate is a runtime check.** Once the channel is open a member can see
   the card, so the button refuses non-admins on press rather than relying on
   being hidden — the same reasoning as the ballot's Close button.
-- **Jailed members stay out either way.** The channel carries an explicit
-  `@Jailed → view_channel=False` overwrite (stamped by the create listener),
-  and an `@everyone` allow does not override a role deny.
+- **Jailed members stay out either way, and opening re-asserts it.** A role
+  deny beats an `@everyone` allow, so the explicit
+  `@Jailed → view_channel=False` overwrite is what keeps them out — but the
+  create listener that stamps it is best-effort by design (a channel the bot
+  lacked Manage Roles on at creation is logged and skipped), which left this
+  guarantee resting on something that can silently not have happened. So the
+  press that widens the audience re-stamps the deny *before* granting
+  `@everyone` view, and **refuses to open at all** if it can't write it,
+  telling the mod to check Manage Roles. Failing the other way would expose
+  the channel to jailed members while the admin guide promises it cannot.
 - **The proposal card names its proposer, never mentions them.** It rendered
   `user.mention` until 2026-09-11, which was survivable only while the
   channel was mod-only; an embed mention resolves from the *reading*
