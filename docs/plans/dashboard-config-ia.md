@@ -8,7 +8,8 @@ the defects" — so the remaining 85 findings were worked too.
 
 **Defect queue outcome: 82 fixed, 3 deferred**, by thirteen agents each in an
 isolated worktree, one per feature area, then merged here. The three deferrals
-are product calls, not oversights:
+were product calls, not oversights; two have since been closed (#53 by
+migration 193, #89 as won't-do), leaving #91:
 
 * **#91 LegitLibs blank axes/prompts** — read-only from the dashboard, but no
   copy claims otherwise. Closing it means a new CRUD surface with cascading
@@ -17,7 +18,12 @@ are product calls, not oversights:
 * **#89 XP `role_grant_level`** — the milestone level is hard-coded at 5.
   Partly addressed (the report stopped hard-coding it and now reads the
   setting); making it a dial strands three member-facing surfaces that bake
-  "Level 5" into their wording.
+  "Level 5" into their wording. **CLOSED won't-do 2026-09-10** on Billy's call:
+  the level stays pinned at 5, the reason is written into `docs/xp_spec.md`
+  § Configuration, and
+  `tests/test_xp_system.py::test_role_grant_level_is_pinned_and_not_loadable_from_config`
+  fails if a tidy-up pass adds the key to the coefficient lists without also
+  renaming those surfaces.
 * **#53 `music_channel_settings`** — was deferred for wanting a `DROP TABLE`;
   **closed 2026-08-30** by migration 193 once Billy gave the go-ahead.
 
@@ -468,6 +474,24 @@ medium = divergence that will bite on the next touch, low = latent debris.
 
 ### Unenforced controls — the panel promises behavior the code does not deliver (30)
 
+> **Voice & XP re-reconciliation, 2026-09-10** (todo row 160 — findings #22,
+> #23, #24, #32, #33, #55, #56, #89). Seven of the eight were verified fixed in
+> the source, not just in this doc: voice XP now consults the exclusion list
+> (`voice_xp_service.is_qualifying_voice_channel`), the time-to-level report
+> loads the guild's own curve, Saveable Fields bites on restore
+> (`restorable_profile`) and an all-off CSV stays off, the transcription PUT
+> refuses an uncached model on enable, `SAVEABLE_FIELD_KEYS` is the single
+> vocabulary and includes `access`, and the two panel-id fields are off the
+> dataclass. None of the seven left a dead config key, so **no migration is
+> owed**. #89 closed won't-do (above). Two prod-state residuals, neither a code
+> defect: the live `voice_master_saveable_fields` row still reads
+> `blocked,limit,name,trusted` — the scar of the old `access` rejection, which
+> only a re-tick on the Voice Control panel repairs — and no guild has an
+> `xp_excluded_channel_ids` row at all, so the #22 fix is correct but inert
+> until one is set. The residual naming a second hard-coded reader in
+> `backfill_jobs.py` is stale: `d95610bf` deleted that file.
+
+
 10. **[high]** Every model selector on config-ai — Moderation Model, Wellness
    Model, and the per-command Model dropdown on all six prompt cards — is
    unenforced: ollama_client.chat() deliberately ignores its model argument on
@@ -583,6 +607,7 @@ medium = divergence that will bite on the next touch, low = latent debris.
    promises 'Messages, reactions, and voice time in these channels earn
    nothing', but the voice XP tick never consults xp_excluded_channel_ids — a
    voice channel on the exclusion list still pays voice XP every interval.
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 23. **[medium]** The Level Curve Factor dial on the XP page is not consulted
    by the /reports/time-to-level-5 endpoint: it calls
@@ -590,6 +615,7 @@ medium = divergence that will bite on the next touch, low = latent debris.
    with DEFAULT_XP_SETTINGS, so for prod guild 1469... (factor 20.0) the
    report computes crossings and 'XP required' at the default 15.6 curve
    (249.6 XP instead of the real 320).
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 24. **[medium]** Saveable Fields is only enforced on the save side, not the
    restore side: the room-creation path gates on disable_saves alone and re-
@@ -609,6 +635,7 @@ medium = divergence that will bite on the next touch, low = latent debris.
    for any legacy locked/spectator/age_gated row, or for
    name/limit/trusted/blocked (15 saved name/limit profiles, 4 trusted rows, 1
    blocked row exist) the moment an admin unchecks one of those fields.*
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 25. **[medium]** Risky Rolls' 'Minimum Round Length: 0 lets the host close a
    round the moment it opens' is only half-enforced: saving 0 deletes the
@@ -676,6 +703,7 @@ medium = divergence that will bite on the next touch, low = latent debris.
    default set' (including 'access'), so the all-off state silently snaps back
    to all five fields enabled on the next read and the panel re-renders all
    boxes checked.
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 33. **[low]** The Voice Transcription model picker lets an admin select and
    save a model that is not downloaded — the PUT accepts it (only membership
@@ -689,6 +717,7 @@ medium = divergence that will bite on the next touch, low = latent debris.
    yet downloaded, which the PUT accepts without a cache check. In current
    prod both valid models are cached, so nothing is broken live today — the
    finding is a real unenforced control, not an active outage.*
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 34. **[low]** The Games Global Config audit-channel hint promises 'Every game
    that starts, finishes, or is canceled is recorded here', but the only
@@ -912,12 +941,14 @@ medium = divergence that will bite on the next touch, low = latent debris.
    (commands:509; default at voice_master_service.py:86) — checking "Room
    access" makes the panel's own save fail 400 "Unknown fields: {'access'}",
    and prod's stored CSV lacking access is consistent with that.*
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 56. **[low]** VoiceMasterConfig.panel_channel_id and panel_message_id are
    loaded on every config read but never consumed through the dataclass — the
    cog manages those two keys via raw get_config_value, and the
    panel_message_id that GET /voice-master/config returns is never used by
    voice-settings.js — dead fields in the config surface.
+   **CLOSED 2026-09-10** — verified fixed in source; see the Voice & XP re-reconciliation note under *Unenforced controls*.
 
 57. **[low]** quest_board_monthly is stored in prod and accepted by the config
    PUT, but the board draw explicitly no longer reads it and no panel exposes
@@ -1189,10 +1220,20 @@ medium = divergence that will bite on the next touch, low = latent debris.
 
 89. **[low]** The level threshold for the automatic role grant is hard-coded
    at 5: XpSettings.role_grant_level exists but is excluded from both the
-   config loader's coefficient lists and the dashboard's coefficient table,
-   and the reports route hard-codes literal 5 — the 'Level 5 Role' / 'Level 5
-   Log Channel' pickers bake the number into their labels with no way to tune
-   it.
+   config loader's coefficient lists (`_FLOAT_COEFFS` / `_INT_COEFFS`) and the
+   dashboard's coefficient table (`_XP_COEFF_READERS`), so the 'Level 5 Role'
+   picker and the 'Level-Up Log Channel' hint bake the number into their
+   wording with no way to tune it.
+   *Two details of the original text are now stale and are corrected above: the
+   reports route no longer hard-codes literal 5 (`reports.py` reads
+   `settings.role_grant_level`), and there is no 'Level 5 Log Channel' label —
+   the XP panel's second picker reads 'Level-Up Log Channel' and the level-5
+   wording lives in its field hint.*
+   **CLOSED won't-do 2026-09-10** — the level stays pinned at 5 on Billy's
+   call. The reason (wording a dial cannot follow across four surfaces) and the
+   condition for revisiting are recorded in `docs/xp_spec.md` § Configuration,
+   and `tests/test_xp_system.py::test_role_grant_level_is_pinned_and_not_loadable_from_config`
+   fails if a tidy-up pass wires the key into the loader without that pass.
 
 90. **[low]** Icon-catalog display order is real (list and shop picker are
    ORDER BY sort_order, and Discord's 25-option cap trims a large catalog 'by
