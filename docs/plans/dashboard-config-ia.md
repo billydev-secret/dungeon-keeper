@@ -8,7 +8,8 @@ the defects" — so the remaining 85 findings were worked too.
 
 **Defect queue outcome: 82 fixed, 3 deferred**, by thirteen agents each in an
 isolated worktree, one per feature area, then merged here. The three deferrals
-are product calls, not oversights:
+were product calls, not oversights; two have since been closed (#53 by
+migration 193, #89 as won't-do), leaving #91:
 
 * **#91 LegitLibs blank axes/prompts** — read-only from the dashboard, but no
   copy claims otherwise. Closing it means a new CRUD surface with cascading
@@ -17,7 +18,12 @@ are product calls, not oversights:
 * **#89 XP `role_grant_level`** — the milestone level is hard-coded at 5.
   Partly addressed (the report stopped hard-coding it and now reads the
   setting); making it a dial strands three member-facing surfaces that bake
-  "Level 5" into their wording.
+  "Level 5" into their wording. **CLOSED won't-do 2026-09-10** on Billy's call:
+  the level stays pinned at 5, the reason is written into `docs/xp_spec.md`
+  § Configuration, and
+  `tests/test_xp_system.py::test_role_grant_level_is_pinned_and_not_loadable_from_config`
+  fails if a tidy-up pass adds the key to the coefficient lists without also
+  renaming those surfaces.
 * **#53 `music_channel_settings`** — was deferred for wanting a `DROP TABLE`;
   **closed 2026-08-30** by migration 193 once Billy gave the go-ahead.
 
@@ -467,6 +473,24 @@ medium = divergence that will bite on the next touch, low = latent debris.
    calls it (the panel mounts the photo bank with hasStatus:false).
 
 ### Unenforced controls — the panel promises behavior the code does not deliver (30)
+
+> **Voice & XP re-reconciliation, 2026-09-10** (todo row 160 — findings #22,
+> #23, #24, #32, #33, #55, #56, #89). Seven of the eight were verified fixed in
+> the source, not just in this doc: voice XP now consults the exclusion list
+> (`voice_xp_service.is_qualifying_voice_channel`), the time-to-level report
+> loads the guild's own curve, Saveable Fields bites on restore
+> (`restorable_profile`) and an all-off CSV stays off, the transcription PUT
+> refuses an uncached model on enable, `SAVEABLE_FIELD_KEYS` is the single
+> vocabulary and includes `access`, and the two panel-id fields are off the
+> dataclass. None of the seven left a dead config key, so **no migration is
+> owed**. #89 closed won't-do (above). Two prod-state residuals, neither a code
+> defect: the live `voice_master_saveable_fields` row still reads
+> `blocked,limit,name,trusted` — the scar of the old `access` rejection, which
+> only a re-tick on the Voice Control panel repairs — and no guild has an
+> `xp_excluded_channel_ids` row at all, so the #22 fix is correct but inert
+> until one is set. The residual naming a second hard-coded reader in
+> `backfill_jobs.py` is stale: `d95610bf` deleted that file.
+
 
 10. **[high]** Every model selector on config-ai — Moderation Model, Wellness
    Model, and the per-command Model dropdown on all six prompt cards — is

@@ -237,3 +237,34 @@ def test_load_xp_settings_clamps_zero_voice_interval(tmp_path):
         awarded_intervals=0,
     )
     assert completed_voice_intervals(session, now_ts=600.0, settings=settings) >= 0
+
+
+def test_role_grant_level_is_pinned_and_not_loadable_from_config(tmp_path):
+    """The milestone level stays 5 — a stored coefficient row must not move it.
+
+    Deliberate anomaly (2026-09-10, config audit finding #89). ``XpSettings``
+    carries ``role_grant_level`` and every enforcement site reads it, so the
+    field looks one line short of being a dial and a tidy-up pass would happily
+    add it to ``_INT_COEFFS``. It is left out on purpose: three surfaces bake
+    the number into wording a dial cannot follow — the frozen ``time-to-level5``
+    route id and its panel copy, the XP panel's "Level 5 Role" / "Level 5 Log
+    Channel" labels, and the Promotion Reviews copy — so a guild that set the
+    dial to 7 would read "Level 5" everywhere while the bot granted at 7.
+    See ``docs/xp_spec.md`` § Configuration.
+    """
+    from bot_modules.core.db_utils import open_db, set_config_value
+    from bot_modules.core.xp_system import load_xp_settings
+    from tests.db_template import migrated_db
+
+    db_path = tmp_path / "rgl.db"
+    migrated_db(db_path)
+    with open_db(db_path) as conn:
+        # A hand-written row in the shape every other coefficient uses, plus a
+        # second coefficient so the loader is definitely on its merge path.
+        set_config_value(conn, "xp_coeff_role_grant_level", "7", 7)
+        set_config_value(conn, "xp_coeff_message_word_xp", "0.5", 7)
+    with open_db(db_path) as conn:
+        settings = load_xp_settings(conn, 7)
+
+    assert settings.message_word_xp == 0.5, "loader did not read the stored coeffs"
+    assert settings.role_grant_level == DEFAULT_XP_SETTINGS.role_grant_level == 5
