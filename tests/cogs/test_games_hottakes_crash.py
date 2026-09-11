@@ -144,3 +144,20 @@ async def test_a_dead_connection_on_the_pause_notice_still_drops_the_view(sync_d
 
     assert await _row(view.db, gid) is not None, "still a transient failure"
     assert gid not in view.bot.active_views
+
+
+async def test_a_crashed_game_is_archived_as_one(sync_db_path):
+    """``reason`` is what lets the dashboard tell a game that broke from one
+    that was played — every other game's crash path records it, and this one
+    was archiving anonymously."""
+    view = _view(sync_db_path, "placeholder", KeyError("takes"))
+    gid = await _game(view.db)
+    view.game_id = gid
+    view.bot.active_views[gid] = view
+
+    await view.start_voting.callback(_interaction(_channel()))  # type: ignore[arg-type]
+
+    row = await view.db.fetchone(
+        "SELECT payload FROM games_game_history WHERE game_id = ?", (gid,)
+    )
+    assert json.loads(row["payload"])["reason"] == "crash"

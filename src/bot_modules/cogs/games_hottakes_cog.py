@@ -227,7 +227,14 @@ class HotTakesSubmitView(discord.ui.View):
                 await channel.send("❌ Something went wrong starting the vote. Game ended.")
             except Exception:
                 log.warning("hottakes: couldn't post the crash notice")
-            await end_game(self.db, self.game_id)
+            # reason= so the archive can tell a crashed game from a played
+            # one, as every other game's crash path already does (compliment,
+            # nhie, wyr, mlt, and clapback's _cancel_game). This call stays
+            # bare of bot=/player_ids= on purpose: a crash archive records but
+            # does not pay, repo-wide — see games_system_spec.md, "Which end
+            # paths pay". Whether that policy is right is a separate question
+            # than this branch.
+            await end_game(self.db, self.game_id, reason="crash")
             self.bot.active_views.pop(self.game_id, None)
 
     @discord.ui.button(label="❓ Help", style=discord.ButtonStyle.secondary, custom_id="ht_htp")

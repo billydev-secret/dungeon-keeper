@@ -468,6 +468,18 @@ calls `end_game` — deleting the very row `recover_game` resumes from, without
 the `bot=` / `player_ids=` that pay a roster. Four played rounds paid nothing,
 and the checkpoint machinery that would have saved it was already there.
 
+**The two notices catch every exception, not just `HTTPException` — on
+purpose.** A connection reset before headers never reaches an HTTP status, so
+it arrives as `ConnectionError` / `TimeoutError` / `aiohttp.ClientConnectionError`
+and a narrower `except` lets it through. These are courtesy sends that fire
+when Discord is *already* misbehaving, and each one guards cleanup that has to
+run after it: the `HICCUP_NOTE` send sits directly in front of the re-drive, so
+narrowing it back stalls the game silently — the exact outcome this section
+exists to prevent. Hot Takes has the same three sites, including one *outside*
+its handler's `try` that killed the whole callback. Pinned by
+`test_a_dead_connection_on_the_pause_notice_still_re_drives` and its three
+siblings, which fail if the excepts are narrowed.
+
 **Known trade:** retrying a send can post a card twice if Discord accepted the
 first attempt and lost the response. discord.py already takes that bet for its
 four statuses, and a duplicated vote card beats a destroyed game.

@@ -99,10 +99,15 @@ MAX_REDRIVES = 1
 HICCUP_NOTE = (
     "⚠️ Discord hiccuped — hanging on a moment, then picking up where we left off."
 )
+# By the time this one is said the re-drive budget is spent, so it must not
+# promise a resume nothing is scheduling: what is actually left is a restart,
+# `/games end`, and the 24h sweep. Its sibling in Hot Takes says the same
+# thing the same way.
 FROZEN_NOTE = (
     "⚠️ Discord is having trouble right now, so this game is paused — nothing "
-    "you've played is lost. It'll pick itself up shortly, or the host or a mod "
-    "can close it out with `/games end`."
+    "you've played is lost. It'll pick up again after the next restart, or the "
+    "host or a mod can close it out with `/games end` — everyone still gets "
+    "paid for the rounds you played."
 )
 
 
