@@ -221,9 +221,16 @@ def test_sentiment_feed_cache_does_not_bleed_across_include_bots(
     assert "sentiment_feed+bots" in keys
 
 
-@pytest.mark.parametrize("tile", ["sentiment_feed", "sentiment"])
-def test_sentiment_tiles_never_touch_message_sentiment(open_client, fake_ctx, tile):
-    """No sentiment read anywhere in the tiles path names the scanned table.
+# Parametrized over URLs rather than tile keys: the home page's small
+# "Sentiment & Tone" tile is gone (todo #185), so ``tiles=sentiment`` no longer
+# computes anything and asserting over it would pass by running no SQL at all.
+# ``compute_sentiment`` still runs behind the Flagged Messages panel's own
+# endpoint, which is where the guarantee now has to be checked.
+@pytest.mark.parametrize(
+    "url", ["/api/health/tiles?tiles=sentiment_feed", "/api/health/sentiment"]
+)
+def test_sentiment_reads_never_touch_message_sentiment(open_client, fake_ctx, url):
+    """No sentiment read on either path names the scanned table.
 
     ``compute_sentiment`` in ``services/health_metrics.py`` was the last reader
     holding ``message_sentiment`` on the hot path; its own equivalence tests
@@ -232,35 +239,8 @@ def test_sentiment_tiles_never_touch_message_sentiment(open_client, fake_ctx, ti
     _seed_sentiment_messages(fake_ctx)
     sink: list[str] = []
     with sql_trace(fake_ctx, sink):
-        open_client.get(f"/api/health/tiles?tiles={tile}")
+        open_client.get(url)
     assert not [s for s in sink if "message_sentiment" in s]
-
-
-def test_sentiment_outliers_are_read_from_the_messages_table(
-    open_client, authed_client, fake_ctx
-):
-    """The 1-sigma outlier block moved off the join too.
-
-    With rows only in ``messages``, the old ``message_sentiment`` join would
-    return nothing and both outlier lists would come back empty.
-    """
-    # A flat neutral bulk keeps the 1-sigma threshold well below the two
-    # extremes, so the assertion is about the query, not about the statistics.
-    rows = [(9200 + i, 0.0, "neutral") for i in range(10)]
-    rows.append((9300, 0.95, "joy"))
-    rows.append((9301, -0.95, "anger"))
-    with fake_ctx.open_db() as conn:
-        for mid, score, emotion in rows:
-            conn.execute(
-                "INSERT INTO messages (message_id, guild_id, channel_id, author_id,"
-                " content, ts, sentiment, emotion) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (mid, fake_ctx.guild_id, 77, 600, "text", 1785000000, score, emotion),
-            )
-
-    body = authed_client.get("/api/health/tiles?tiles=sentiment").json()
-    outliers = body["tiles"]["sentiment"]["outliers"]
-    assert [m["message_id"] for m in outliers["top"]] == ["9300"]
-    assert [m["message_id"] for m in outliers["bottom"]] == ["9301"]
 
 
 # ── B-PERF6 — deep-dive cache, and the keys that make it safe ────────────
