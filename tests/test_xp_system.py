@@ -247,8 +247,8 @@ def test_role_grant_level_is_pinned_and_not_loadable_from_config(tmp_path):
     field looks one line short of being a dial and a tidy-up pass would happily
     add it to ``_INT_COEFFS``. It is left out on purpose: three surfaces bake
     the number into wording a dial cannot follow — the frozen ``time-to-level5``
-    route id and its panel copy, the XP panel's "Level 5 Role" / "Level 5 Log
-    Channel" labels, and the Promotion Reviews copy — so a guild that set the
+    route id and its panel copy, the XP panel's "Level 5 Role" label and its
+    "Level-Up Log Channel" hint, and the Promotion Reviews copy — so a guild that set the
     dial to 7 would read "Level 5" everywhere while the bot granted at 7.
     See ``docs/xp_spec.md`` § Configuration.
     """
