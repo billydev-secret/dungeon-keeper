@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.core.sticky import StickyPanel
 from bot_modules.core.utils import disable_all_items, is_host_or_mod
 from discord.ext import commands
 from discord import app_commands
@@ -89,7 +89,10 @@ from bot_modules.games_price.logic import (
     toggle_player,
     vote_possible,
 )
-from bot_modules.services.game_board_sticky_service import get_board_sticky_enabled
+from bot_modules.services.game_board_sticky_service import (
+    open_game_board,
+    retire_game_board,
+)
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -761,67 +764,9 @@ class PriceCog(commands.Cog):
             await panel.on_channel_delete(channel)
 
     # ── Sticky board (Games Global Config → Live Game Boards) ─────────
-    # Same dial as Mt. Rushmore Draft (games_board_sticky_enabled) — one
-    # dial covers every game wired up to it, not a per-game override.
-
-    def _read_board_sticky_dial(self, guild_id: int) -> bool:
-        with self.bot.ctx.open_db() as conn:
-            return get_board_sticky_enabled(conn, guild_id)
-
-    def _board_ids(self, game_id: str) -> tuple[int, int]:
-        """``StickyPanel.load_ids`` for one game — reads the *live* row, not
-        a second store, so it can never drift from what ``update_game_message``
-        and the busy-check's jump link see."""
-        with self.bot.ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT channel_id, message_id FROM games_active_games WHERE game_id = ?",
-                (game_id,),
-            ).fetchone()
-        if row is None:
-            return 0, 0
-        return int(row["channel_id"] or 0), int(row["message_id"] or 0)
-
-    def _save_board_ids(self, game_id: str, channel_id: int, message_id: int) -> None:
-        """``StickyPanel.save_ids`` — same table/columns ``update_game_message``
-        writes, so a repost keeps the jump link live."""
-        with self.bot.ctx.open_db() as conn:
-            conn.execute(
-                "UPDATE games_active_games SET channel_id = ?, message_id = ? WHERE game_id = ?",
-                (channel_id, message_id, game_id),
-            )
-
-    async def _board_content(
-        self, game_view: "PriceGameView", guild: discord.Guild
-    ) -> PanelContent:
-        """``StickyPanel.build`` for one round's submission board. Raising is
-        the guard against resurrection: a debounced restick that fires after
-        this round's board has already retired must not redraw it.
-        ``_board_retired`` — not ``_closed`` — is the flag this checks, since
-        ``_closed`` is set one legitimate render (the disabled frame) before
-        the board is actually retired; see ``_retire_board``."""
-        if game_view._board_retired:
-            raise RuntimeError(
-                f"price board for game {game_view.game_id} round "
-                f"{game_view.round_num} is retired"
-            )
-        return PanelContent(embed=game_view._build_embed(), view=game_view)
-
-    def _make_board_panel(
-        self, game_id: str, game_view: "PriceGameView"
-    ) -> StickyPanel:
-        def _load(_guild_id: int) -> tuple[int, int]:
-            return self._board_ids(game_id)
-
-        def _save(_guild_id: int, channel_id: int, message_id: int) -> None:
-            self._save_board_ids(game_id, channel_id, message_id)
-
-        async def _build(guild: discord.Guild) -> PanelContent:
-            return await self._board_content(game_view, guild)
-
-        return StickyPanel(
-            f"price board {game_id}", self.bot,
-            load_ids=_load, save_ids=_save, build=_build,
-        )
+    # Same dial as Mt. Rushmore Draft, through the same helpers in
+    # services/game_board_sticky_service — one dial covers every game wired
+    # up to it, never a per-game override.
 
     async def _open_board(
         self,
@@ -831,83 +776,29 @@ class PriceCog(commands.Cog):
         guild,
         msg: discord.Message,
     ) -> discord.Message:
-        """Post a round's submission board — sticky if the guild has turned
-        the dial on, an in-place edit of ``msg`` otherwise (the pre-existing
-        behaviour). Read once, here, when the round's board is first posted:
-        a mid-game flip of the dial never touches a round already running.
-
-        No explicit delete of the message being replaced: ``_board_ids``
-        (this panel's ``load_ids``) reads it out of the game row at this
-        point (the previous round's board, or the lobby message at round 1),
-        so ``place()`` treats it as "the old panel" and removes it itself —
-        post-before-delete. Deleting it first would invert that: a placement
-        failure would then leave the round with no board and no way to
-        submit a price.
-
-        Never reachable today (``guild`` comes from ``getattr(channel,
-        "guild", None)`` and a games channel always has one), but
-        ``StickyPanel.place`` takes a non-optional ``discord.Guild`` and
-        ``_place_locked`` dereferences ``guild.id`` immediately — so a
-        ``None`` here must fall through to the non-sticky path rather than
-        reach ``panel.place`` at all.
-        """
-        sticky = guild is not None and await asyncio.to_thread(
-            self._read_board_sticky_dial, guild.id
+        """Post this round's submission board — sticky when the guild's dial
+        is on, an in-place edit of *msg* otherwise. Read once per round, so a
+        mid-game flip never disturbs a round already running."""
+        return await open_game_board(
+            self.bot, self.db, self._boards,
+            f"price board {game_id} round {game_view.round_num}",
+            game_id, game_view, channel, guild, msg,
         )
-        if sticky and channel is not None:
-            panel = self._make_board_panel(game_id, game_view)
-            posted = await panel.place(guild, channel)
-            if posted is not None:
-                self._boards[game_id] = panel
-                game_view._panel = panel
-                return posted
-            # Placement failed — fall through to the ordinary non-sticky
-            # path rather than leave the round without a board.
-
-        embed = game_view._build_embed()
-        try:
-            await msg.edit(embed=embed, view=game_view)
-            return msg
-        except Exception:
-            new_msg = await channel.send(embed=embed, view=game_view)
-            await update_game_message(self.db, game_id, new_msg.id)
-            return new_msg
 
     def _retire_board(
         self, game_view: "PriceGameView", channel
-    ) -> discord.Message | None:
-        """Stop this round's submission board from reposting, and refuse to
-        render it again. Called at every point the submission window closes
-        (the disabled frame, a host's early End Game, or a forced
-        ``/games end``) so the panel is released promptly rather than left
-        for a straggling ``on_message`` to restick — same promptness rule as
-        RushmoreCog._retire_board's ``forget()`` call. Idempotent and a
-        no-op when the dial was never on for this round.
+    ) -> "discord.PartialMessage | None":
+        """Stop this round's submission board reposting once its window
+        closes — the disabled frame, a host's early End Game, or a forced
+        ``/games end``. Idempotent, since the round loop and ``end_early``
+        can both reach it.
 
-        Returns wherever the board actually ended up (``None`` when the dial
-        was off), since the sticky panel may have reposted it since
-        ``_open_board`` handed back its message — reveal, the disabled
-        frame's own send-fallback, and the next round's own post must all
-        target that, not whatever local ``msg`` variable the caller started
-        the round with.
+        Returns wherever the board actually ended up, because a repost may
+        have moved it since ``_open_board`` handed its message back: reveal,
+        the next round and the recap must all edit *that*, not the local
+        ``msg`` the round started with.
         """
-        game_view._board_retired = True
-        panel = self._boards.pop(game_view.game_id, None)
-        if panel is None:
-            return None
-        panel.cancel_all()
-        # Drop the cached ids too, not just the pending restick (Group D /
-        # RushmoreCog._retire_board precedent): an on_message call already
-        # in-flight when this round ends could otherwise still read the
-        # panel's stale cached ids and schedule a restick nothing cancels,
-        # reaching _board_content's refusal and logging it as an ERROR
-        # traceback for a perfectly ordinary round ending.
-        if game_view.guild is not None:
-            panel.forget(game_view.guild.id)
-        channel_id, message_id = self._board_ids(game_view.game_id)
-        if channel is not None and message_id:
-            return channel.get_partial_message(message_id)
-        return None
+        return retire_game_board(self.bot, self._boards, game_view, channel)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """After a restart: re-register a lobby's view, or re-drive the round

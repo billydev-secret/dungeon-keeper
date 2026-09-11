@@ -32,6 +32,10 @@ from bot_modules.core.db_utils import open_db
 from bot_modules.games.utils.game_manager import create_game
 from bot_modules.services.game_board_sticky_service import set_board_sticky_enabled
 from bot_modules.services.games_db import GamesDb
+from bot_modules.services.game_board_sticky_service import (
+    board_location,
+    build_board_content,
+)
 
 GUILD = 4242
 CHAN_A = 778
@@ -206,7 +210,7 @@ async def test_dial_on_posts_sticky_board_and_saves_ids(sync_db_path):
     channel.send.assert_awaited_once()
     assert game_id in cog._boards
     assert game_view._panel is cog._boards[game_id]
-    assert cog._board_ids(game_id) == (CHAN_A, result.id)
+    assert board_location(cog.bot, game_id) == (CHAN_A, result.id)
 
 
 @pytest.mark.asyncio
@@ -239,20 +243,18 @@ async def test_placement_failure_leaves_anchor_message_alone(sync_db_path):
 
 
 @pytest.mark.asyncio
-async def test_board_content_renders_while_live(sync_db_path):
-    cog = _cog(sync_db_path)
+async def test_board_content_renders_while_live():
     game_view = _FakeGameView("g1")
-    content = await cog._board_content(game_view, _guild())
+    content = build_board_content("price board", game_view)
     assert content.embed.title == "price board g1 #1"
 
 
 @pytest.mark.asyncio
-async def test_board_content_refuses_once_retired(sync_db_path):
-    cog = _cog(sync_db_path)
+async def test_board_content_refuses_once_retired():
     game_view = _FakeGameView("g1")
     game_view._board_retired = True
     with pytest.raises(RuntimeError):
-        await cog._board_content(game_view, _guild())
+        build_board_content("price board", game_view)
 
 
 # ── retiring: no pending restick survives, cached ids don't outlive it, and ──
@@ -340,7 +342,7 @@ async def test_retire_board_hands_back_a_repost_not_the_original_anchor(sync_db_
     game_view = _FakeGameView(game_id, guild=guild)
     channel = _channel(CHAN_A)
     first = await cog._open_board(game_id, game_view, channel, guild, anchor)
-    assert cog._board_ids(game_id) == (CHAN_A, first.id)
+    assert board_location(cog.bot, game_id) == (CHAN_A, first.id)
 
     # Chat buried it; an explicit repost simulates the debounced restick
     # landing (core.sticky's own debounce timing is covered generically in
@@ -404,13 +406,13 @@ async def test_two_games_in_different_channels_do_not_interfere(sync_db_path):
     msg_a = await cog._open_board(game_a, view_a, channel_a, guild, _anchor_msg(1))
     msg_b = await cog._open_board(game_b, view_b, channel_b, guild, _anchor_msg(2))
 
-    assert cog._board_ids(game_a) == (CHAN_A, msg_a.id)
-    assert cog._board_ids(game_b) == (CHAN_B, msg_b.id)
+    assert board_location(cog.bot, game_a) == (CHAN_A, msg_a.id)
+    assert board_location(cog.bot, game_b) == (CHAN_B, msg_b.id)
 
     # Reposting A must not touch B's stored ids or panel.
     panel_a = cog._boards[game_a]
     await panel_a.place(guild, channel_a)
-    assert cog._board_ids(game_b) == (CHAN_B, msg_b.id)
+    assert board_location(cog.bot, game_b) == (CHAN_B, msg_b.id)
 
     # Retiring A must not retire or drop B.
     cog._retire_board(view_a, channel_a)

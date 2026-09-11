@@ -83,9 +83,10 @@ export function mount(container) {
           <div class="section-label">Live Game Boards</div>
           <div class="field-hint">Off by default. When on, a running game's board
             re-posts itself to the bottom of the channel as chat buries it, so
-            players never have to scroll back up to see it or pick a turn — for
-            the whole game, then it stops moving once the game ends. Covers
-            Mt. Rushmore Draft's draft board today.</div>
+            players never have to scroll back up to see it or pick a turn, then
+            it stops moving once the board is done. Covers Mt. Rushmore Draft's
+            draft board (for the whole draft) and Name Your Price's submission
+            board (for each round's submissions).</div>
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px;">
             <input type="checkbox" data-ctrl="board-sticky" style="width:16px;height:16px;cursor:pointer;" />
             <span>Keep the game board at the bottom of the channel</span>

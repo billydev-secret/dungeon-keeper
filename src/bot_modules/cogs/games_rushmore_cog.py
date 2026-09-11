@@ -23,8 +23,11 @@ if TYPE_CHECKING:
 import discord
 
 from bot_modules.core.branding import safe_resolve_accent
-from bot_modules.core.sticky import PanelContent, StickyPanel
-from bot_modules.services.game_board_sticky_service import get_board_sticky_enabled
+from bot_modules.core.sticky import StickyPanel
+from bot_modules.services.game_board_sticky_service import (
+    open_game_board,
+    retire_game_board,
+)
 from bot_modules.services.game_start_ping_service import (
     extract_start_epoch,
     resolve_start_epoch,
@@ -714,68 +717,9 @@ class RushmoreCog(commands.Cog):
             await panel.on_channel_delete(channel)
 
     # ── Sticky board (Games Global Config → Live Game Boards) ─────────
-
-    def _read_board_sticky_dial(self, guild_id: int) -> bool:
-        with self.bot.ctx.open_db() as conn:
-            return get_board_sticky_enabled(conn, guild_id)
-
-    def _board_ids(self, game_id: str) -> tuple[int, int]:
-        """``StickyPanel.load_ids`` for one game — reads the *live* row, not a
-        second store, so it can never drift from what the busy-check's jump
-        link and ``/games end`` see."""
-        with self.bot.ctx.open_db() as conn:
-            row = conn.execute(
-                "SELECT channel_id, message_id FROM games_active_games WHERE game_id = ?",
-                (game_id,),
-            ).fetchone()
-        if row is None:
-            return 0, 0
-        return int(row["channel_id"] or 0), int(row["message_id"] or 0)
-
-    def _save_board_ids(self, game_id: str, channel_id: int, message_id: int) -> None:
-        """``StickyPanel.save_ids`` for one game — same table/columns
-        ``update_game_message`` writes, so a repost keeps the jump link live."""
-        with self.bot.ctx.open_db() as conn:
-            conn.execute(
-                "UPDATE games_active_games SET channel_id = ?, message_id = ? WHERE game_id = ?",
-                (channel_id, message_id, game_id),
-            )
-
-    async def _board_content(
-        self, draft_view: "RushmoreDraftView", guild: discord.Guild
-    ) -> PanelContent:
-        """``StickyPanel.build`` for one game's board.
-
-        Raising is the real guard against resurrection (see
-        docs/plans/sticky-panel-extraction.md, Group D): a debounced restick
-        that fires after the game has already retired its board must not
-        redraw it. ``_board_retired`` — not ``_closed`` — is the flag this
-        checks: ``_closed`` is set one legitimate render *before* the board
-        is retired (the disabled "draft complete" frame), and that render
-        must still go through.
-        """
-        if draft_view._board_retired:
-            raise RuntimeError(
-                f"rushmore board for game {draft_view.game_id} is retired"
-            )
-        return PanelContent(embed=draft_view._build_embed(), view=draft_view)
-
-    def _make_board_panel(
-        self, game_id: str, draft_view: "RushmoreDraftView"
-    ) -> StickyPanel:
-        def _load(_guild_id: int) -> tuple[int, int]:
-            return self._board_ids(game_id)
-
-        def _save(_guild_id: int, channel_id: int, message_id: int) -> None:
-            self._save_board_ids(game_id, channel_id, message_id)
-
-        async def _build(guild: discord.Guild) -> PanelContent:
-            return await self._board_content(draft_view, guild)
-
-        return StickyPanel(
-            f"rushmore board {game_id}", self.bot,
-            load_ids=_load, save_ids=_save, build=_build,
-        )
+    # The wiring lives in services/game_board_sticky_service; this cog
+    # supplies the view and the two call sites, nothing else. Name Your
+    # Price rides the same dial through the same helpers.
 
     async def _open_board(
         self,
@@ -785,76 +729,23 @@ class RushmoreCog(commands.Cog):
         guild,
         msg: discord.Message,
     ) -> discord.Message:
-        """Post the live draft board — sticky if the guild has turned the
-        dial on, an in-place edit of the lobby message otherwise (the
-        pre-existing behaviour). Read once, here, when the board is first
-        posted: a mid-game flip of the dial never touches a game already
-        running.
-
-        Never reachable today (``guild`` comes from ``getattr(channel,
-        "guild", None)`` and a games channel always has one), but
-        ``StickyPanel.place`` takes a non-optional ``discord.Guild`` and
-        ``_place_locked`` dereferences ``guild.id`` immediately — so a
-        ``None`` here must fall through to the non-sticky path rather than
-        reach ``panel.place`` at all.
-        """
-        sticky = guild is not None and await asyncio.to_thread(
-            self._read_board_sticky_dial, guild.id
+        """Post the live draft board — sticky when the guild's dial is on, an
+        in-place edit of the lobby message otherwise. The dial is read once,
+        here, so a mid-game flip never disturbs a draft already running."""
+        return await open_game_board(
+            self.bot, self.db, self._boards, f"rushmore board {game_id}",
+            game_id, draft_view, channel, guild, msg,
         )
-        if sticky and channel is not None:
-            panel = self._make_board_panel(game_id, draft_view)
-            # No explicit delete of the lobby message here: ``_board_ids``
-            # (this panel's ``load_ids``) still reads the lobby message's own
-            # channel_id/message_id out of the game row at this point, so
-            # ``place()`` treats it as "the old panel" and removes it itself
-            # — post-before-delete, same as every other sticky site. Deleting
-            # it first would invert that: a placement failure (the bot lost
-            # Send Messages, say) would then leave the draft with neither the
-            # lobby message nor a board and no way to fall back.
-            posted = await panel.place(guild, channel)
-            if posted is not None:
-                self._boards[game_id] = panel
-                draft_view._panel = panel
-                return posted
-            # Placement failed — the lobby message is untouched (place()
-            # never got far enough to delete it). Fall through to the
-            # ordinary non-sticky path rather than leave the draft without a
-            # board.
-
-        embed = draft_view._build_embed()
-        try:
-            await msg.edit(embed=embed, view=draft_view)
-            return msg
-        except Exception:
-            new_msg = await channel.send(embed=embed, view=draft_view)
-            await update_game_message(self.db, game_id, new_msg.id)
-            return new_msg
 
     def _retire_board(self, draft_view: "RushmoreDraftView") -> None:
-        """Stop a live game's board from reposting, and refuse to render it
-        again. Called from a ``try/finally`` around both draft loops, so it
-        fires on natural completion *and* on a forced end (``/games end``
-        returns the loop early, before the natural-completion code) — every
-        exit path releases the panel promptly. Idempotent and a no-op when
-        the dial was never on for this game.
+        """Stop this draft's board reposting, and refuse to render it again.
+
+        Called from a ``try/finally`` around both draft loops so it fires on
+        natural completion *and* on a forced end (``/games end`` returns the
+        loop early), and from ``_start_draft``'s own guard for a failure that
+        never reaches a loop at all.
         """
-        draft_view._board_retired = True
-        panel = self._boards.pop(draft_view.game_id, None)
-        if panel is not None:
-            panel.cancel_all()
-            # Drop the cached ids too, not just the pending restick — same
-            # move the auction card makes at close (Group D, auction_views.py
-            # _release_panel). ``on_message`` reads ids through a TTL cache
-            # that outlives this pop, so an ``on_message`` call already
-            # in-flight against this panel when the game ended could still
-            # read the stale cached (channel, message) pair and schedule a
-            # restick nothing cancels — reaching ``_board_content``'s refusal
-            # and logging it as an ERROR traceback for a perfectly ordinary
-            # game finishing. forget() forces the next read to miss the
-            # cache and go back to the DB, where the ended game's row no
-            # longer resolves to a live message.
-            if draft_view.guild is not None:
-                panel.forget(draft_view.guild.id)
+        retire_game_board(self.bot, self._boards, draft_view)
 
     async def recover_game(self, row, payload, channel, message) -> bool:
         """Recover after a restart.

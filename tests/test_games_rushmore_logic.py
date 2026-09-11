@@ -1192,3 +1192,22 @@ async def test_run_again_is_open_to_any_member_who_becomes_the_host(monkeypatch,
     launch.assert_awaited_once()
     assert launch.await_args.kwargs["host_id"] == 42
     assert launch.await_args.kwargs["options"]["mode"] == "blitz", "blitz is the default draft mode"
+
+
+def test_schedule_schema_pick_seconds_tracks_the_code_default():
+    """A scheduled or rotation-launched draft must offer the same pick timer a
+    member-started one does.
+
+    ``SCHEDULE_OPTION_SCHEMA`` is what the Scheduling and Feature Rotation
+    option forms render and submit, and an explicit value in the submitted
+    options beats both the per-guild dial and ``DEFAULT_PICK_SECONDS``. While
+    the schema restated the number, raising the code default to 45 silently
+    left every scheduled draft on the old 30 seconds.
+    """
+    from bot_modules.games.constants import SCHEDULE_OPTION_SCHEMA
+    from bot_modules.games_rushmore.logic import DEFAULT_PICK_SECONDS
+
+    timer = next(
+        opt for opt in SCHEDULE_OPTION_SCHEMA["rushmore"] if opt["name"] == "timer"
+    )
+    assert timer["default"] == DEFAULT_PICK_SECONDS

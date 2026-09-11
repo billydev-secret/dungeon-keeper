@@ -1,3 +1,4 @@
+from bot_modules.games_rushmore.logic import DEFAULT_PICK_SECONDS
 from bot_modules.services.embeds import COLOR_GREEN, COLOR_RED
 
 BRAND_COLOR = 0xDAA520  # Goldenrod
@@ -419,7 +420,13 @@ SCHEDULE_OPTION_SCHEMA = {
     ],
     'rushmore': [
         {'name': 'topic', 'label': 'Topic (optional)', 'type': 'str', 'default': ''},
-        {'name': 'timer', 'label': 'Pick seconds', 'type': 'int', 'default': 30},
+        # Not a literal: this schema is what the Scheduling and Feature
+        # Rotation forms submit, and a value in the submitted options
+        # beats both the per-guild dial and the code default. Restating
+        # the number here once left scheduled drafts on the old 30s
+        # while member-started ones moved to 45.
+        {'name': 'timer', 'label': 'Pick seconds', 'type': 'int',
+         'default': DEFAULT_PICK_SECONDS},
         {'name': 'vote_timer', 'label': 'Voting seconds', 'type': 'int', 'default': 30},
         {'name': 'source', 'label': 'Topic source', 'type': 'choice', 'default': 'host',
          'choices': [{'value': 'host', 'label': 'Host writes'},
