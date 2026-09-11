@@ -1211,6 +1211,34 @@ def test_a_split_week_prints_the_shares(db):
         assert "P1" in split.value and "P2" in split.value
 
 
+def test_a_departed_split_recipient_is_dropped_from_the_shares(db):
+    """Regression, 2026-09-11 review: every other list build_reckoning_data
+    assembles is filtered through ``hidden`` (todo #203), but the wipeout
+    split's shares came straight from payout_receipt unfiltered — a departed
+    member who shared in the split still printed in the 'The Split' field,
+    the exact thing todo #203 exists to stop."""
+    with open_db(db) as conn:
+        season = _season(
+            conn, strikes=0, wipeout_annul_through_week=0,
+            pot_seed=1000, ghost_pot_pct=0, buyin_coins=0,
+        )
+        assert _wipe_week1(conn, season).season_ended is not None
+        season = get_season(conn, season["id"])
+
+        full = build_reckoning_data(conn, season, 1, AFTER_W1)
+        assert [s["user_id"] for s in full["wipeout"]["shares"]] == [1, 2]
+
+        data = build_reckoning_data(conn, season, 1, AFTER_W1, hidden={2})
+        assert [s["user_id"] for s in data["wipeout"]["shares"]] == [1]
+        assert named_ids(data) == [1]
+
+        embed = build_reckoning_embed(
+            data, lambda uid: f"P{uid}", season_name="S"
+        )
+        split = next(f for f in embed.fields if f.name.startswith("⚖️"))
+        assert "P1" in split.value and "P2" not in split.value
+
+
 def test_wipeout_for_reports_only_what_was_recorded(db):
     """A season that ended some other way, or a week nobody recorded, is
     not this week's wipeout — the ceremony never re-decides §1.6."""

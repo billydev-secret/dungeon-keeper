@@ -260,7 +260,7 @@ def test_correction_resurrects_the_wrongly_dead(db):
         run_settle(conn, season, THU + 4 * HOUR)
         assert _player(conn, season, 1)["status"] == "ghost"
 
-        out = manual_settle(conn, YEAR, "g-thu", "NE", [season])
+        out = manual_settle(conn, YEAR, "g-thu", "NE", [season], now=THU + 4 * HOUR)
         assert out["old_winner"] == "SEA"
         assert _pick_result(conn, season, 1) == "win"
         p = _player(conn, season, 1)
@@ -277,7 +277,7 @@ def test_manual_void_unwinds_the_strike_and_returns_the_team(db):
         run_settle(conn, season, THU + 4 * HOUR)
         assert _player(conn, season, 1)["strikes_used"] == 1
 
-        manual_settle(conn, YEAR, "g-thu", "VOID", [season])
+        manual_settle(conn, YEAR, "g-thu", "VOID", [season], now=THU + 4 * HOUR)
         assert _pick_result(conn, season, 1) == "void"
         assert _player(conn, season, 1)["strikes_used"] == 0
         assert "NE" in satchel(conn, season["id"], 1)
@@ -287,9 +287,9 @@ def test_manual_settle_validates_outcome(db):
     with open_db(db) as conn:
         season = _season(conn)
         with pytest.raises(ValueError, match="Outcome must be"):
-            manual_settle(conn, YEAR, "g-thu", "KC", [season])
+            manual_settle(conn, YEAR, "g-thu", "KC", [season], now=NOW)
         with pytest.raises(ValueError, match="No such game"):
-            manual_settle(conn, YEAR, "nope", "SEA", [season])
+            manual_settle(conn, YEAR, "nope", "SEA", [season], now=NOW)
 
 
 def test_non_pick_deaths_survive_recomputation(db):
@@ -416,7 +416,7 @@ def test_manual_void_sticks_through_a_feed_poll(db):
         season = _season(conn)
         join_season(conn, season, 1, NOW)
         place_pick(conn, season, 1, 1, "SEA", NOW)
-        manual_settle(conn, YEAR, "g-thu", "VOID", [season])
+        manual_settle(conn, YEAR, "g-thu", "VOID", [season], now=NOW)
         assert _pick_result(conn, season, 1) == "void"
 
         # The feed still thinks the game is on, then final.

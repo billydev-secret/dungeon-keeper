@@ -255,7 +255,7 @@ def build_reckoning_data(
         "before": alive_now + len(deaths),
         "after": alive_now,
         "pots": pot_totals(conn, season),
-        "wipeout": wipeout_for(conn, season, week),
+        "wipeout": wipeout_for(conn, season, week, hidden=hidden),
         "deaths": deaths,
         "ledger": ledger,
         "arrivals": arrivals,
@@ -266,7 +266,11 @@ def build_reckoning_data(
 
 
 def wipeout_for(
-    conn: sqlite3.Connection, season: dict, week: int
+    conn: sqlite3.Connection,
+    season: dict,
+    week: int,
+    *,
+    hidden: set[int] | None = None,
 ) -> dict | None:
     """How §1.6 resolved ``week``, if it wiped the field out — or None.
 
@@ -274,6 +278,11 @@ def wipeout_for(
     annul is a week in the season's ``annulled_weeks``, and a split is a
     season the sweep marked ``complete``, whose shares are read back out of
     the ledger so the ceremony can only report money that really moved.
+
+    ``hidden`` drops departed members from the split the same way
+    :func:`build_reckoning_data` drops them everywhere else (todo #203) — a
+    payout is still money that moved, but a departed member isn't shown
+    collecting it any more than they're shown dying.
     """
     if week in {int(w) for w in season["config"].get("annulled_weeks") or ()}:
         return {"kind": "annul", "week": week}
@@ -281,8 +290,10 @@ def wipeout_for(
         return None
     from bot_modules.survivor.payout import payout_receipt
 
+    hidden = hidden or set()
     shares = [
-        row for row in payout_receipt(conn, season) if row["pot"] == "main"
+        row for row in payout_receipt(conn, season)
+        if row["pot"] == "main" and row["user_id"] not in hidden
     ]
     if not shares:
         return None

@@ -132,6 +132,6 @@ def settle_kicked(
             outcome = "TIE"
         else:
             outcome = favorite if rng.random() < 0.6 else underdog
-        manual_settle(conn, year, r["game_id"], outcome, live_seasons)
+        manual_settle(conn, year, r["game_id"], outcome, live_seasons, now=now)
         settled.append((r["game_id"], outcome))
     return settled

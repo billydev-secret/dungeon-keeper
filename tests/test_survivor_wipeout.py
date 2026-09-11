@@ -185,7 +185,7 @@ def test_a_correction_does_not_dissolve_an_announced_annul(db):
         assert run_settle(conn, season, AFTER_W1).annulled == [1]
         season = get_season(conn, season["id"])
 
-        manual_settle(conn, YEAR, "g1b", "CHI", [season])
+        manual_settle(conn, YEAR, "g1b", "CHI", [season], now=AFTER_W1)
 
         assert get_season(conn, season["id"])["config"]["annulled_weeks"] == [1]
         assert _alive(conn, season) == 3
@@ -365,6 +365,84 @@ def test_a_settled_season_refuses_a_second_payout(db):
         # And the retried sweep simply finds nothing left to do.
         assert run_settle(conn, season, AFTER_W1 + HOUR).season_ended is None
         assert len(payout_receipt(conn, season)) == 3
+
+
+# ── review gaps, 2026-09-11: a wipeout only detectable off the report's
+# own graded_weeks ──────────────────────────────────────────────────────
+#
+# run_settle only asked resolve_wipeout about weeks its OWN report had just
+# graded a pick in (step 1). Two real paths complete a wipeout without ever
+# touching that set, and both used to leave the season stuck forever —
+# alive count zero, never annulled, never paid, and nothing left to grade
+# for that week on any future sweep either.
+
+
+def test_a_cap_elimination_still_completes_a_detected_wipeout(db):
+    """The last death of a wipeout can be the groundskeeper's cap
+    elimination (step 3), which never added its week to report.graded_weeks
+    (step 1's bookkeeping). Week 3 here has an early game, already graded in
+    a prior sweep (one real 'picks' death), and a late, closing game whose
+    kickoff just cap-eliminates the other player with nothing left for step
+    1 to grade — the exact case step 4's old ``for week in
+    report.graded_weeks`` loop could never see."""
+    with open_db(db) as conn:
+        season = _season(
+            conn, strikes=0, wipeout_annul_through_week=0, max_auto_assigns=0,
+            pot_seed=200, ghost_pot_pct=0, buyin_coins=0,
+        )
+        early = NOW + 20 * DAY
+        late = early + 3 * HOUR
+        for gid, home, away, ts in (
+            ("g3a", "SEA", "NE", early), ("g3b", "GB", "CHI", late),
+        ):
+            conn.execute(
+                "INSERT INTO nfl_games (season_year, week, game_id, home,"
+                " away, kickoff_utc) VALUES (?,?,?,?,?,?)",
+                (YEAR, 3, gid, home, away, _iso(ts)),
+            )
+        for user_id in (1, 2):
+            join_season(conn, season, user_id, NOW)
+        # After weeks 1-2's kickoffs, week 3 is the open pick week.
+        place_pick(conn, season, 1, 3, "NE", early - HOUR)  # player 2 never picks
+
+        _finalize(conn, "g3a", "SEA")
+        first = run_settle(conn, season, early + HOUR)
+        assert _player(conn, season, 1)["status"] == "ghost"
+        assert first.season_ended is None  # player 2 still alive
+
+        # g3b's kickoff closes the auto-assign window; g3a is already
+        # graded and g3b hasn't gone final, so step 1 grades nothing here.
+        second = run_settle(conn, season, late + 10 * 60)
+        assert _player(conn, season, 2)["elimination_source"] == "cap"
+        assert second.season_ended is not None
+        assert get_season(conn, season["id"])["status"] == "complete"
+
+
+def test_a_manual_correction_that_creates_a_wipeout_is_resolved(db):
+    """manual_settle (the admin correction button, and the simulator) never
+    called resolve_wipeout at all — a correction that turns the last
+    survivors' picks into losses used to leave the season at zero players
+    alive and never annulled, since nothing is left to grade for that week
+    afterward and a poll sweep would never revisit it either."""
+    with open_db(db) as conn:
+        season = _season(conn, strikes=0, wipeout_annul_through_week=13)
+        for user_id in (1, 2):
+            join_season(conn, season, user_id, NOW)
+            place_pick(conn, season, user_id, 1, "NE", NOW)
+        _finalize(conn, "g1", "NE")  # NE wins: both survive, for now
+        run_settle(conn, season, AFTER_W1)
+        for user_id in (1, 2):
+            assert _player(conn, season, user_id)["status"] == "alive"
+
+        # The admin corrects g1: NE actually lost. Both picks flip to a
+        # loss in the same stroke — a wipeout created by one correction.
+        manual_settle(conn, YEAR, "g1", "SEA", [season], now=AFTER_W1)
+
+        season = get_season(conn, season["id"])
+        assert season["config"]["annulled_weeks"] == [1]
+        for user_id in (1, 2):
+            row = _player(conn, season, user_id)
+            assert (row["status"], row["eliminated_week"]) == ("alive", None)
 
 
 # ── the pure pieces ────────────────────────────────────────────────────

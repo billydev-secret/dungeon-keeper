@@ -415,6 +415,8 @@ async def settle_game(
     outcome = body.outcome.strip().upper()
 
     def _q():
+        import time
+
         from bot_modules.survivor.settle import manual_settle
 
         with ctx.open_db() as conn:
@@ -434,7 +436,8 @@ async def settle_game(
             ]
             try:
                 out = manual_settle(
-                    conn, season["season_year"], body.game_id, outcome, live
+                    conn, season["season_year"], body.game_id, outcome, live,
+                    now=time.time(),
                 )
             except ValueError as exc:
                 raise svc.SeasonError(str(exc)) from exc

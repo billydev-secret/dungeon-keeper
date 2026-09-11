@@ -235,12 +235,17 @@ def run_settle(conn: sqlite3.Connection, season: dict, now: float) -> SettleRepo
     report.locked = cur.rowcount or 0
 
     # 3. The groundskeeper (§1.2): auto-assign at each week's final kickoff.
-    for week in _weeks_at_final_kickoff(conn, year, now):
+    kickoff_weeks = _weeks_at_final_kickoff(conn, year, now)
+    for week in kickoff_weeks:
         _auto_assign_week(conn, season, week, now, report)
 
-    # 4. The wipeout (§1.6): only weeks this sweep actually graded can have
-    # just become one, so a no-news sweep never re-asks.
-    for week in sorted(report.graded_weeks):
+    # 4. The wipeout (§1.6): a week can only just have become one if this
+    # sweep graded a pick in it OR its auto-assign window just closed — a
+    # cap/missed elimination (step 3) can be the death that completes a
+    # wipeout without any pick ever grading, and that week never reaches
+    # graded_weeks on its own (review, 2026-09-11). A no-news sweep still
+    # never re-asks: both sets are empty then.
+    for week in sorted(report.graded_weeks | set(kickoff_weeks)):
         resolve_wipeout(conn, season, week, now, report)
     return report
 
@@ -463,11 +468,17 @@ def manual_settle(
     game_id: str,
     outcome: str,
     live_seasons: list[dict],
+    *,
+    now: float,
 ) -> dict:
     """Record a result by hand and re-grade every live season that shares the
     schedule. ``outcome`` is a team abbr, 'TIE', or 'VOID' (postpones the
     game — picks void, teams return). Overwriting an existing winner is the
-    correction path: grading is derived, so strikes and deaths follow.
+    correction path: grading is derived, so strikes and deaths follow — and
+    that can make a week a wipeout (or resurrect one out of it) just as a
+    poll sweep's own grading can, so this checks §1.6 too (2026-09-11
+    review) rather than leaving a manually-corrected wipeout to a poll sweep
+    that will never re-touch a week with nothing left to grade.
     Returns {old_winner, old_status, reports: {season_id: SettleReport}}.
     """
     game = conn.execute(
@@ -503,5 +514,7 @@ def manual_settle(
             continue
         report = SettleReport()
         apply_game_result(conn, season, game_id, report)
+        for week in sorted(report.graded_weeks):
+            resolve_wipeout(conn, season, week, now, report)
         reports[season["id"]] = report
     return {**old, "reports": reports}
