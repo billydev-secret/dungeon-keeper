@@ -20,6 +20,7 @@ import discord
 from bot_modules.core import branding
 from bot_modules.core.db_utils import open_db, open_db_immediate
 from bot_modules.economy.view_helpers import coins
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services.survivor_service import get_season
 from bot_modules.survivor import logic
 from bot_modules.survivor.embeds import (
@@ -618,48 +619,58 @@ async def build_live_panel(
                     (year, week if week is not None else -1),
                 ).fetchall()
             ]
-            counts = conn.execute(
-                "SELECT "
-                " SUM(CASE WHEN status = 'alive' THEN 1 ELSE 0 END) AS alive,"
-                " SUM(CASE WHEN status = 'ghost' THEN 1 ELSE 0 END) AS ghost,"
-                " COUNT(*) AS total "
-                "FROM survivor_players WHERE season_id = ?",
-                (season_id,),
-            ).fetchone()
-            picked = conn.execute(
-                "SELECT COUNT(DISTINCT p.user_id) FROM survivor_picks p "
-                "JOIN survivor_players pl ON pl.season_id = p.season_id "
-                "AND pl.user_id = p.user_id "
-                "WHERE p.season_id = ? AND p.week = ? AND pl.status = 'alive'",
-                (season_id, week if week is not None else -1),
-            ).fetchone()[0]
+            # Counts are derived from the same filtered roster the names
+            # come from (todo #203) rather than counted in SQL: a header
+            # reading "Alive (17)" over sixteen names is the bug that
+            # filtering in two places always eventually produces.
+            picked_ids = {
+                int(r["user_id"]) for r in conn.execute(
+                    "SELECT DISTINCT p.user_id FROM survivor_picks p "
+                    "JOIN survivor_players pl ON pl.season_id = p.season_id "
+                    "AND pl.user_id = p.user_id "
+                    "WHERE p.season_id = ? AND p.week = ? "
+                    "AND pl.status = 'alive'",
+                    (season_id, week if week is not None else -1),
+                ).fetchall()
+            }
             pots = logic.pot_totals(conn, season)
             from bot_modules.services.economy_service import load_econ_settings
 
             settings = load_econ_settings(conn, season["guild_id"])
             gauntlet_mode = bool(logic.elapsed_weeks(conn, year, now))
             roster = [
-                (int(r["user_id"]), r["status"])
+                (int(r["user_id"]), r["status"], r["elimination_source"])
                 for r in conn.execute(
-                    "SELECT user_id, status FROM survivor_players "
-                    "WHERE season_id = ?",
+                    "SELECT user_id, status, elimination_source "
+                    "FROM survivor_players WHERE season_id = ?",
                     (season_id,),
                 ).fetchall()
             ]
         return (
-            season, week, games, int(counts["alive"] or 0),
-            int(counts["ghost"] or 0), int(counts["total"] or 0),
-            int(picked), pots, gauntlet_mode, roster, settings,
+            season, week, games, picked_ids, pots, gauntlet_mode,
+            roster, settings,
         )
 
     loaded = await asyncio.to_thread(_q)
     if loaded is None:
         return None
-    (season, week, games, alive, ghost, total, picked, pots,
-     gauntlet_mode, roster, settings) = loaded
+    (season, week, games, picked_ids, pots, gauntlet_mode,
+     roster, settings) = loaded
     guild = bot.get_guild(season["guild_id"])
     if guild is None:
         return None
+    # Departed members leave the panel entirely (todo #203) — and the counts
+    # are derived from the same filtered roster the names come from, since a
+    # header reading "Alive (17)" over sixteen names is what filtering in two
+    # places eventually produces.
+    hidden = logic.departed_from_rows(
+        ((uid, source) for uid, _, source in roster),
+        logic.present_member_ids(guild),
+    )
+    roster = [(uid, status) for uid, status, _ in roster if uid not in hidden]
+    alive = sum(1 for _, status in roster if status == "alive")
+    ghost, total = len(roster) - alive, len(roster)
+    picked = len(picked_ids - hidden)
     config = season["config"]
     from bot_modules.survivor.reckoning import slate_join_line
 
@@ -670,12 +681,12 @@ async def build_live_panel(
     ) is not None
     color = await branding.safe_resolve_accent(db_path, guild, log_label="survivor")
 
-    def _display(user_id: int) -> str:
-        member = guild.get_member(user_id)
-        return (
-            discord.utils.escape_markdown(member.display_name)
-            if member else f"soul {user_id}"
-        )
+    _display = await build_name_fn(
+        guild=guild,
+        db_path=db_path,
+        guild_id=season["guild_id"],
+        user_ids=[uid for uid, _ in roster],
+    )
 
     # Sorted by name so the list is scannable and stable between edits —
     # join order would reshuffle nothing but still read as arbitrary.

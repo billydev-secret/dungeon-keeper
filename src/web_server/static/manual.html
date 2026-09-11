@@ -625,7 +625,7 @@
       <div class="callout-body">
         <strong>Live for the 2026 NFL season</strong>
         <p>Enrollment is open now and the commands and buttons below all work. The season opens with the Week&nbsp;1 kickoff on <strong>Wednesday, September&nbsp;9 at 5:20pm PT</strong> &mdash; a short first week, so the Wednesday-night teams lock a day earlier than you might expect; check the lock time on your pick confirmation. <span class="cmd-name">/games help</span> points at the Survivor channel while the door is open.</p>
-        <p><strong>Still to come</strong>, each before the week it first matters: wipeout handling (a week that kills everyone), double-pick weeks, the Accord, the endgame payouts and the Sole Survivor ceremony, and per-category notification toggles. Until those ship, the endgame section below describes intent, not rules in force.</p>
+        <p><strong>Still to come</strong>, each before the week it first matters: double-pick weeks, the Accord, the endgame payouts and the Sole Survivor ceremony, and per-category notification toggles. Wipeout handling &mdash; what happens when a single week kills everyone still standing &mdash; is now in force; the rest of the endgame section below describes intent, not rules yet in force.</p>
       </div>
     </div>
     <p>An NFL pick&rsquo;em survival pool that runs the length of the football season. Pick one NFL team to win each week, straight up. No team twice all season. If your team loses, you&rsquo;re out &mdash; last one standing takes the coin pot. Your picks are <strong>secret until the weekly reveal</strong>: the bot never shows anyone what you picked, but table talk is legal and lying is encouraged.</p>
@@ -652,14 +652,18 @@
     <h4>Death is not the end</h4>
     <p>The eliminated get the 👻 Ghost role and keep picking every week with the same rules &mdash; the longest streak of correct picks after death wins a side-pot at season&rsquo;s end. Skipping a week resets your streak; your burned teams stay burned, so early ghosts are rich in teams and late ghosts scrape.</p>
 
-    <h4>The endgame <span class="muted">(still to come)</span></h4>
-    <p>The plan: the last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. And if one savage week kills everyone at once: early in the season the week is annulled (nobody dies, burned teams stay burned); late in the season, the fallen split the pot. None of this is in the bot yet &mdash; it lands before the season reaches it.</p>
+    <h4>Wipeout &mdash; the week that kills everybody</h4>
+    <p>Some weeks the whole field picks wrong. If a single week eliminates every player still standing, the bot does not let the season simply stop: <strong>early in the season the week is annulled</strong> &mdash; nobody is eliminated, the results post says so, and you carry on next week. The one thing you don&rsquo;t get back is the team you spent: burned is burned, so a wipeout costs everyone a team and no lives. <strong>Later in the season</strong> there is no season left to rescue, so that week ends it: everyone who was still alive when the week began splits the pot, and the Ghost Streak side-pot pays out the same day to the longest streak. Which weeks count as &ldquo;early&rdquo; is an admin setting; by default it is through Week&nbsp;13.</p>
+    <p class="muted">Annulled means annulled: if a result is corrected days later, the week stays struck. The bot will not quietly bury players it has already told the channel survived.</p>
+
+    <h4>The rest of the endgame <span class="muted">(still to come)</span></h4>
+    <p>The plan: the last living player takes the pot and the 🏈 Sole Survivor role. If the field ever collapses to a handful, any living player can propose <strong>the Accord</strong> &mdash; a public vote to end the season in an equal split, but only if <em>every</em> living player agrees within 24 hours. Neither is in the bot yet &mdash; each lands before the season reaches it.</p>
 
     <h4>Commands</h4>
     <ul>
       <li><span class="cmd-name">/survivor pick [team]</span> &mdash; make or change this week&rsquo;s pick. With a team, the autocomplete only offers what you can legally take &mdash; unburned, playing this week, not yet kicked off. Without one, you get a two-menu panel (AFC / NFC) instead: no syntax, just pick. Kickoff times in the menus are <em>server time</em> (the panel says so); the confirmation shows the lock in your own clock.</li>
       <li><span class="cmd-name">/survivor status</span> &mdash; private: your pick and its lock time, your satchel (🟢 turns 🟡 when you&rsquo;re under a dozen teams), your strikes.</li>
-      <li><span class="cmd-name">/survivor board</span> &mdash; public: the living with weeks survived, the graveyard with week of death, both pots, and the most-burned teams.</li>
+      <li><span class="cmd-name">/survivor board</span> &mdash; public: the living with weeks survived, the graveyard with week of death, both pots, and the most-burned teams. Anyone who has left the server is dropped from the board, the channel panel and the results post rather than shown as a number nobody can read; rejoin and you reappear.</li>
       <li><span class="cmd-name">/survivor history [member]</span> &mdash; revealed picks only, week by week &mdash; each line shows the matchup (both teams) and how it ended. Nothing current ever leaks. The panel&rsquo;s <strong>📜 My History</strong> button is the personal version: private to you, so it also shows your current still-hidden pick.</li>
     </ul>
     <p>Joining happens through the <strong>🏈 Join the Season</strong> button on the channel panel &mdash; it keeps itself at the bottom of the Survivor channel &mdash; and an ephemeral confirm shows the entry cost (and your balance, if it isn&rsquo;t free) before anything is charged.</p>

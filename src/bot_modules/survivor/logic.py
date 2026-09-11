@@ -26,6 +26,7 @@ from bot_modules.services.survivor_service import add_player
 KIND_BUYIN = "survivor_buyin"
 KIND_GAUNTLET_FEE = "survivor_gauntlet_fee"
 KIND_WEEKLY_WIN = "survivor_weekly_win"
+KIND_PAYOUT = "survivor_payout"
 
 # ESPN abbreviations by conference, for the dual-select pick panel
 # (Discord's 25-option cap vs 32 teams, spec §2.4). The full set is pinned
@@ -126,6 +127,64 @@ def elapsed_weeks(conn: sqlite3.Connection, season_year: int, now: float) -> lis
         is_open = r["status"] == "scheduled" and kickoff_ts(r["kickoff_utc"]) > now
         weeks[week] = weeks.get(week, True) and not is_open
     return sorted(w for w, fully_kicked in weeks.items() if fully_kicked)
+
+
+# ── who is still here ──────────────────────────────────────────────────
+
+
+def present_member_ids(guild) -> set[int] | None:
+    """The guild's member ids, or None when the cache can't be trusted.
+
+    None is not "nobody" — it means *don't ask this question of the cache*.
+    In the seconds between a re-IDENTIFY's GUILD_CREATE and chunk completion
+    ``guild.members`` is partial, and treating that as the roster would hide
+    every Survivor player at once (the display-side twin of survivor-174,
+    which nearly buried the roster for real). Callers with no guild at all
+    pass None the same way.
+    """
+    if guild is None or not getattr(guild, "chunked", False):
+        return None
+    return {m.id for m in guild.members}
+
+
+def departed_players(
+    conn: sqlite3.Connection, season: dict, present_ids: set[int] | None
+) -> set[int]:
+    """Players the Survivor surfaces hide: members who have left the server.
+
+    Billy, 2026-09-11 (todo #203): a departed member is dropped from the
+    board, the channel panel and the Reckoning rather than shown. Before
+    this they rendered as the literal ``soul 4917…`` — a bare id, which is
+    the exact failure the house name-resolver rule exists to prevent, and no
+    name the guild could resolve.
+
+    A trusted ``present_ids`` answers on its own and answers best: absence
+    from it *is* departure, and a member who left and came back is present
+    again, so they reappear — which §6.14 requires, since a rejoined ghost
+    may resume Ghost Streak picking. Only when the caller can't vouch for
+    the cache (None — see :func:`present_member_ids`) does this fall back to
+    ``elimination_source = 'left'``, the verdict a past Reckoning recorded
+    against the API. Stale by up to a week, but never wrong in bulk.
+    """
+    rows = conn.execute(
+        "SELECT user_id, elimination_source FROM survivor_players "
+        "WHERE season_id = ?",
+        (season["id"],),
+    ).fetchall()
+    return departed_from_rows(
+        ((int(r["user_id"]), r["elimination_source"]) for r in rows),
+        present_ids,
+    )
+
+
+def departed_from_rows(rows, present_ids: set[int] | None) -> set[int]:
+    """:func:`departed_players` over ``(user_id, elimination_source)`` pairs
+    the caller already has — for the panel, which reads its roster in a
+    worker thread and only learns the guild once it is back on the loop."""
+    pairs = [(int(uid), source) for uid, source in rows]
+    if present_ids is None:
+        return {uid for uid, source in pairs if source == "left"}
+    return {uid for uid, _ in pairs if uid not in present_ids}
 
 
 # ── the satchel ────────────────────────────────────────────────────────
@@ -463,14 +522,29 @@ def player_status(
     }
 
 
-def board_data(conn: sqlite3.Connection, season: dict, now: float) -> dict:
+def board_data(
+    conn: sqlite3.Connection,
+    season: dict,
+    now: float,
+    *,
+    hidden: set[int] | None = None,
+) -> dict:
     """The public board (§2.6): alive roster with weeks survived, graveyard
-    with week of death, the pots, and the most-burned-teams meta-stat."""
-    players = conn.execute(
-        "SELECT user_id, status, strikes_used, eliminated_week "
-        "FROM survivor_players WHERE season_id = ?",
-        (season["id"],),
-    ).fetchall()
+    with week of death, the pots, and the most-burned-teams meta-stat.
+
+    ``hidden`` drops departed members from both lists (todo #203) — see
+    :func:`departed_players`. Filtering here rather than at the render site
+    is what keeps a list and its own header count from disagreeing.
+    """
+    hidden = hidden or set()
+    players = [
+        r for r in conn.execute(
+            "SELECT user_id, status, strikes_used, eliminated_week "
+            "FROM survivor_players WHERE season_id = ?",
+            (season["id"],),
+        ).fetchall()
+        if int(r["user_id"]) not in hidden
+    ]
     survived = {
         int(r["user_id"]): int(r["n"])
         for r in conn.execute(

@@ -29,12 +29,15 @@ from bot_modules.survivor.logic import (
     PickError,
     board_data,
     burned_teams,
+    departed_from_rows,
+    departed_players,
     elapsed_weeks,
     join_season,
     legal_teams,
     pick_week,
     place_pick,
     player_status,
+    present_member_ids,
     pot_totals,
     satchel,
 )
@@ -612,3 +615,97 @@ def test_history_rows_survives_a_missing_game(db):
         (r,) = history_rows(conn, season, 1)
     assert r["team"] == "SEA"
     assert r["opponent"] is None and r["is_home"] is None
+
+
+# ── who is still here (todo #203, 2026-09-11) ─────────────────────────
+#
+# Members who leave the server used to linger on every Survivor surface as
+# a bare `soul 4917…` — a raw id no guild can resolve, which is exactly the
+# failure the house name rule exists to stop. Billy's call: drop them.
+#
+# The hazard on the other side is survivor-174's: a partial member cache
+# would report the entire roster as departed and blank the board. So an
+# untrusted cache hides nobody it isn't already sure of.
+
+
+class _FakeMember:
+    def __init__(self, user_id):
+        self.id = user_id
+
+
+class _FakeGuild:
+    def __init__(self, ids, chunked=True):
+        self.chunked = chunked
+        self.members = [_FakeMember(i) for i in ids]
+
+
+def test_present_member_ids_distrusts_an_unchunked_cache():
+    assert present_member_ids(_FakeGuild([1, 2])) == {1, 2}
+    # None is "don't ask", not "nobody" — the survivor-174 guard.
+    assert present_member_ids(_FakeGuild([1, 2], chunked=False)) is None
+    assert present_member_ids(None) is None
+
+
+@pytest.mark.parametrize(
+    ("present", "expected"),
+    [
+        pytest.param({1, 2, 3, 4}, set(), id="everyone-still-here"),
+        pytest.param({1, 2, 3}, {4}, id="cache-agrees-with-the-record"),
+        # Player 3 left this morning; no Reckoning has recorded it yet. A
+        # trusted cache is the fresher answer, so it wins on its own.
+        pytest.param({1, 2}, {3, 4}, id="cache-is-ahead-of-the-record"),
+        # No trustworthy cache: fall back to the verdict a past Reckoning
+        # recorded, and hide nobody else.
+        pytest.param(None, {4}, id="untrusted-cache-uses-the-record"),
+    ],
+)
+def test_departed_from_rows(present, expected):
+    rows = [(1, None), (2, "picks"), (3, "cap"), (4, "left")]
+    assert departed_from_rows(rows, present) == expected
+
+
+def test_departed_players_reads_the_roster(db):
+    with open_db(db) as conn:
+        season = _season(conn)
+        for user_id in (1, 2, 3):
+            _join(conn, season, user_id)
+        eliminate_player(conn, season["id"], 3, week=1, source="left")
+
+        assert departed_players(conn, season, {1, 2}) == {3}
+        assert departed_players(conn, season, None) == {3}
+        assert departed_players(conn, season, {1, 2, 3}) == set()
+
+
+def test_board_drops_departed_from_both_lists(db):
+    with open_db(db) as conn:
+        season = _season(conn)
+        for user_id in (1, 2, 3, 4):
+            _join(conn, season, user_id)
+        eliminate_player(conn, season["id"], 3, week=1, source="picks")
+        eliminate_player(conn, season["id"], 4, week=1, source="left")
+
+        full = board_data(conn, season, NOW)
+        assert [p["user_id"] for p in full["alive"]] == [1, 2]
+        assert [p["user_id"] for p in full["graveyard"]] == [3, 4]
+
+        # Player 2 left while alive, player 4 while a ghost: both vanish,
+        # and they vanish from the data, not the render — a count drawn
+        # from the list it labels cannot disagree with it.
+        trimmed = board_data(conn, season, NOW, hidden={2, 4})
+        assert [p["user_id"] for p in trimmed["alive"]] == [1]
+        assert [p["user_id"] for p in trimmed["graveyard"]] == [3]
+        # The pot is the pot: a departure neither refunds nor shrinks it.
+        assert trimmed["pots"] == full["pots"]
+
+
+def test_a_rejoined_member_comes_back(db):
+    """§6.14: a member who left and returned is present again, and a ghost
+    who returns may resume Ghost Streak picking — so the record of their
+    departure must not go on hiding them."""
+    with open_db(db) as conn:
+        season = _season(conn)
+        _join(conn, season, 1)
+        eliminate_player(conn, season["id"], 1, week=1, source="left")
+
+        assert departed_players(conn, season, None) == {1}
+        assert departed_players(conn, season, {1}) == set()

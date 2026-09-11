@@ -488,9 +488,14 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
     ctx = get_ctx(request)
     guild_id = get_active_guild_id(request)
 
+    def _guild():
+        bot = getattr(ctx, "bot", None)
+        return bot.get_guild(guild_id) if bot else None
+
     def _q():
         import time
 
+        from bot_modules.survivor import logic as svlogic
         from bot_modules.survivor import reckoning as reck
 
         now = time.time()
@@ -504,7 +509,15 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
                 # Nothing reckonable yet: preview the upcoming week's state
                 # anyway so the button always shows something honest.
                 week = int(season["config"].get("last_reckoned_week") or 0) + 1
-            data = reck.build_reckoning_data(conn, season, week, now)
+            # The preview shows the members the post would show, departed
+            # ones dropped (todo #203) — an admin checking the card before
+            # it goes out must be looking at the same roster.
+            data = reck.build_reckoning_data(
+                conn, season, week, now,
+                hidden=svlogic.departed_players(
+                    conn, season, svlogic.present_member_ids(_guild()),
+                ),
+            )
             from bot_modules.services.economy_service import load_econ_settings
 
             settings = load_econ_settings(conn, guild_id)
@@ -512,14 +525,15 @@ async def reckoning_preview(request: Request, _: AuthenticatedUser = _ADMIN):
 
     season, data, pending, settings = await _service_call(run_query(_q))
 
-    from bot_modules.survivor.reckoning import build_reckoning_embed
+    from bot_modules.services.name_resolver import build_name_fn
+    from bot_modules.survivor.reckoning import build_reckoning_embed, named_ids
 
-    bot = getattr(ctx, "bot", None)
-    guild = bot.get_guild(guild_id) if bot else None
-
-    def name_of(user_id: int) -> str:
-        member = guild.get_member(user_id) if guild else None
-        return member.display_name if member else f"soul {user_id}"
+    name_of = await build_name_fn(
+        guild=_guild(),
+        db_path=ctx.db_path,
+        guild_id=guild_id,
+        user_ids=named_ids(data),
+    )
 
     embed = build_reckoning_embed(
         data, name_of, season_name=season["name"], settings=settings,

@@ -21,9 +21,12 @@ sports copy register, the single updating channel panel (announcement +
 slate + board collapsed; Reckoning stays a post), the 📜 My History panel
 button, the season Simulator (spec §7.9), and a final self-review pass
 (week-1 weekly tasks on enrolling seasons, pin-notice sweep, panel refresh
-after manual settle/eliminate). Remaining: Tier 2
-(6b wipeout/annul — Wk 2; 6c double-pick — Wk 14; 6d Accord — Nov; 6e
-endgame payouts — Jan; 7 notification toggles — Wk 2) and Tier 3.
+after manual settle/eliminate). **6b shipped 2026-09-11** (§1.6 wipeout/annul + the split payout;
+`survivor/payout.py` is the primitive 6e reuses, and its dial returned to the
+panel with it — closing todo #144, which `2394be08` had in fact already
+answered by removing the three unread dials). Remaining: Tier 2
+(6c double-pick — Wk 14; 6d Accord — Nov; 6e endgame payouts — Jan; 7
+notification toggles — Wk 2) and Tier 3.
 
 **Spec:** [`docs/survivor_spec.md`](../survivor_spec.md) (v2.2, amended 2026-08-17)
 **Deadline:** NFL Week 1 kickoff — **Wednesday Sept 9 2026, 5:20pm PT** (corrected
@@ -73,10 +76,10 @@ the counter is correct from day one. Payout rides with stage 7.
 
 | Stage | What | Real deadline | Why it can wait |
 |---|---|---|---|
-| **6b. Wipeout / annul** | Week annulled through Wk 13, equal split Wk 14+ | Wk 2 (first plausible mass death) | Needs to exist before a wipeout *can* happen, which is not Week 1 — but this is the shortest leash in Tier 2, so it lands right after launch. |
+| ~~**6b. Wipeout / annul**~~ **SHIPPED 2026-09-11** | Week annulled through `wipeout_annul_through_week` (13), equal split after | Wk 2 (first plausible mass death) | Landed with the split payout, because "the season ends in an equal split" is not a rule you can ship without paying anyone: `survivor/payout.py` settles both pots and marks the season complete in one transaction, and 6e's three other endings reuse it. Landed mid-season 3 on Billy's call — it can only fire on a week that kills the whole field, which had not happened. |
 | **6c. Double-pick** | Two slots, independent locks | **Week 14 — Dec 4** | `double_pick_start_week: 14`. Fifteen weeks of runway. The slot column ships in stage 1's schema so no migration is needed later. *(2026-09-02: the dial still stores but nothing reads it — the gauntlet replay stopped honouring it and the panel hides it, so a late joiner is graded one slot per week like everyone else; 6c wires both back.)* |
 | **6d. The Accord** | Vote flow, unanimity, Tue–Thu window | When ≤6 alive — **Nov at the earliest** | Gated on `accord_max_alive: 6`; with 20–50 entrants and a strike, that's deep in the season. |
-| **6e. Endgame + payouts** | Ceremony, Sole Survivor role, main + ghost pot payouts | **~Jan (Wk 18)** | The single latest-binding piece. Four months of runway. |
+| **6e. Endgame + payouts** | Ceremony, Sole Survivor role, main + ghost pot payouts | **~Jan (Wk 18)** | The single latest-binding piece. Four months of runway. *(6b built the payout half: `settle_season_end` already splits both pots and closes the season; 6e adds the other three endings and the ceremony.)* |
 | **7. Notifications panel** | `/survivor notifications` per-category DM toggles | Wk 2 | Last-call DMs default ON and honor opt-out from stage 5; the self-service toggle can follow by a week. |
 
 ## Tier 3 — post-season

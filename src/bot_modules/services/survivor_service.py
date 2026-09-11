@@ -36,10 +36,18 @@ DEFAULT_CONFIG: dict[str, object] = {
     "missed_pick": "auto_assign",   # auto_assign | eliminate
     "max_auto_assigns": 3,
     "double_pick_start_week": 14,   # 0 = never
-    # No double_pick_min_alive / wipeout_annul_through_week / accord_max_alive
-    # here on purpose: the Tier 2 rules that would enforce them (spec §1.5,
-    # §1.6) are unbuilt, and a stored dial nothing reads is a silent no-op —
-    # they come back with the code that honours them.
+    # Wipeout/annul (spec §1.6, stage 6b, 2026-09-11): a week that kills every
+    # living player is annulled through this week — nobody dies, burned teams
+    # stay burned — and from the week after, it ends the season in an equal
+    # split. 0 = never annul (always split); there is no "off", because a
+    # season with nobody alive has to resolve somehow. Read by
+    # survivor/settle.py's wipeout sweep and survivor/payout.py — the rule and
+    # the dial shipped together, which is why this key exists again.
+    "wipeout_annul_through_week": 13,
+    # No double_pick_min_alive / accord_max_alive here on purpose: the Tier 2
+    # rules that would enforce them (§1.5 escalation, §1.6's Accord) are
+    # unbuilt, and a stored dial nothing reads is a silent no-op — they come
+    # back with the code that honours them, exactly as the wipeout dial has.
     "ghost_streak": True,
     "slate_hour": 9,                # Wed, guild-local
     "lastcall_hour": 18,            # Sat
@@ -64,6 +72,13 @@ DEFAULT_CONFIG: dict[str, object] = {
     "last_slate_week": 0,
     "last_lastcall_week": 0,
     "last_reckoned_at": 0,
+    # Which weeks a wipeout annulled (spec §1.6, stage 6b). State, not a rule:
+    # the annul is a *decision* taken once, at the sweep that found the week
+    # had killed everyone, and recorded here so recompute_player can exclude
+    # it forever after. Deriving it instead would let a later correction
+    # dissolve an annul the Reckoning had already announced — and retroactively
+    # bury the whole roster the bot had just told everyone survived.
+    "annulled_weeks": [],
 }
 
 _ENUM_KEYS: dict[str, tuple[str, ...]] = {
@@ -83,6 +98,7 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
     "strikes": (0, 2),
     "max_auto_assigns": (0, 18),
     "double_pick_start_week": (0, 18),
+    "wipeout_annul_through_week": (0, 18),
     "slate_hour": (0, 23),
     "lastcall_hour": (0, 23),
     "reckoning_hour": (0, 23),
@@ -99,6 +115,11 @@ _INT_RANGES: dict[str, tuple[int, int]] = {
 }
 
 _BOOL_KEYS = frozenset({"ghost_streak"})
+
+# Keys holding a sorted list of week numbers. Stored as a JSON array; the
+# validator normalises (dedupes and sorts) so the order can never carry
+# meaning that a re-write would lose.
+_WEEK_LIST_KEYS = frozenset({"annulled_weeks"})
 
 SEASON_STATUSES = ("enrolling", "active", "complete")
 
@@ -247,7 +268,13 @@ def _season_dict(row: sqlite3.Row) -> dict:
 
 def get_config(stored: dict) -> dict:
     """Merge a season's sparse stored config over the defaults."""
-    merged = dict(DEFAULT_CONFIG)
+    merged = {
+        # List defaults are copied, not shared: a shallow dict() would hand
+        # every season the same ``annulled_weeks`` object, and one in-place
+        # append would annul a week across every live season at once.
+        key: list(value) if isinstance(value, list) else value
+        for key, value in DEFAULT_CONFIG.items()
+    }
     for key, value in stored.items():
         if key in merged:
             merged[key] = value
@@ -273,6 +300,17 @@ def validate_config(updates: dict) -> dict:
             if not isinstance(value, bool):
                 raise SeasonError(f"{key} must be true or false.")
             cleaned[key] = value
+        elif key in _WEEK_LIST_KEYS:
+            if not isinstance(value, (list, tuple)):
+                raise SeasonError(f"{key} must be a list of week numbers.")
+            weeks = set()
+            for week in value:
+                if isinstance(week, bool) or not isinstance(week, int):
+                    raise SeasonError(f"{key} must hold whole week numbers.")
+                if not 1 <= week <= 30:
+                    raise SeasonError(f"{key} weeks must be between 1 and 30.")
+                weeks.add(week)
+            cleaned[key] = sorted(weeks)
         else:
             if isinstance(value, bool) or not isinstance(value, int):
                 raise SeasonError(f"{key} must be a whole number.")

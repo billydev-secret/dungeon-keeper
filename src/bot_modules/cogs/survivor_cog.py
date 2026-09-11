@@ -20,6 +20,7 @@ from discord.ext import commands
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import get_tz_offset_hours, open_db
 from bot_modules.core.sticky import PanelContent, StickyPanel
+from bot_modules.services.name_resolver import build_name_fn
 from bot_modules.services.survivor_service import (
     get_active_season,
     panel_ids,
@@ -289,6 +290,9 @@ class SurvivorCog(commands.Cog):
             )
             return
         now = self._now()
+        guild = interaction.guild
+        # Departed members are dropped from the board, not named (todo #203).
+        present = logic.present_member_ids(guild)
 
         def _q():
             with open_db(self.bot.ctx.db_path) as conn:
@@ -296,21 +300,21 @@ class SurvivorCog(commands.Cog):
                     load_econ_settings,
                 )
 
+                hidden = logic.departed_players(conn, season, present)
                 return (
-                    logic.board_data(conn, season, now),
+                    logic.board_data(conn, season, now, hidden=hidden),
                     load_econ_settings(conn, season["guild_id"]),
                 )
 
         board, settings = await asyncio.to_thread(_q)
-        guild = interaction.guild
-
-        def name_of(user_id: int) -> str:
-            member = guild.get_member(user_id)
-            if member is None:
-                return f"soul {user_id}"
-            # Style guide: member text is escaped before it enters an embed —
-            # a name like "**everyone** ·" must not reformat the board.
-            return discord.utils.escape_markdown(member.display_name)
+        name_of = await build_name_fn(
+            guild=guild,
+            db_path=self.bot.ctx.db_path,
+            guild_id=season["guild_id"],
+            user_ids=[
+                p["user_id"] for p in board["alive"] + board["graveyard"]
+            ],
+        )
 
         color = await safe_resolve_accent(self.bot.ctx, guild, log_label="survivor")
         await interaction.response.send_message(
