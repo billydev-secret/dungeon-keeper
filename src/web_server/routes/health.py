@@ -242,8 +242,6 @@ def _sentiment_feed_payload(
     }
 
 
-
-
 # ---------------------------------------------------------------------------
 # Grid endpoint — compact data for all tiles
 # ---------------------------------------------------------------------------
@@ -440,7 +438,6 @@ async def health_tiles(
                         "isolates": cached["isolates"],
                         "node_count": cached["node_count"],
                     }
-
 
                 if _want("newcomer_funnel"):
                     cached = get_cached(conn, guild_id, ck("newcomer_funnel"))
