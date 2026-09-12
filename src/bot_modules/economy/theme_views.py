@@ -40,6 +40,7 @@ from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.core.db_utils import open_db
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.quest_views import can_manage_economy
+from bot_modules.economy.shop import add_shop_pointer
 from bot_modules.economy.view_helpers import coins as _reward_text
 from bot_modules.economy.view_helpers import (
     card_name_fn,
@@ -180,6 +181,10 @@ def render_theme_live_embed(
     One message, not two: the announcement and the pin are the same thing, so
     the channel gets a single card that stays at the top for the window rather
     than an announcement scrolling away from a separate pinned copy.
+
+    It carries the shop pointer (``shop.add_shop_pointer``): this card is the
+    only place most members ever see that a themed day is purchasable, and it
+    reaches them at the moment they are looking at one.
     """
     embed = discord.Embed(
         title=f"🎨 Today's theme: {title[:200]}",
@@ -191,6 +196,8 @@ def render_theme_live_embed(
         value=named_or_anonymous(sponsor_id, name_fn),
         inline=False,
     )
+    add_shop_pointer(embed, "Buy a themed day of your own")
+    apply_section_spacing(embed)
     embed.set_footer(text=f"Flash Theme • running for {_hours_text(settings)}")
     embed.timestamp = discord.utils.utcnow()
     return embed

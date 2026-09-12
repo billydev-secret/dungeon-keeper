@@ -37,6 +37,7 @@ import discord
 
 from bot_modules.core.branding import safe_resolve_accent
 from bot_modules.economy.quest_views import can_manage_economy
+from bot_modules.economy.shop import add_shop_pointer
 from bot_modules.economy.view_helpers import coins as _reward_text
 from bot_modules.services.economy_pin_service import (
     deny,
@@ -129,7 +130,12 @@ def render_pin_live_embed(
     name_fn: NameFn = mention,
     message: str,
 ) -> discord.Embed:
-    """The card that actually gets pinned in the pin channel."""
+    """The card that actually gets pinned in the pin channel.
+
+    Carries the shop pointer (``shop.add_shop_pointer``) for the same reason
+    the flash-theme card does: a member reading a pin somebody paid for is the
+    one reader already interested in buying one.
+    """
     embed = discord.Embed(
         title="📌 Pinned by a Member",
         description=message[:2048],
@@ -140,6 +146,8 @@ def render_pin_live_embed(
         value=named_or_anonymous(sponsor_id, name_fn),
         inline=False,
     )
+    add_shop_pointer(embed, "Pin a message of your own for a day")
+    apply_section_spacing(embed)
     embed.set_footer(text="Pin of the Day • up for 24 hours")
     embed.timestamp = discord.utils.utcnow()
     return embed

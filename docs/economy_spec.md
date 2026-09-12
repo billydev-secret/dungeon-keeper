@@ -301,7 +301,8 @@ to currency.
     member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Pin of the Day (built, sink — migration 108, plan
   `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
-  artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
+  artifact. The shop's **🏠 Server features** section opens a modal; the
+  text is charged `price_pin_of_day`
   at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
   `pending`; a mod Approves/Declines from the card in the approvals channel or
   the todo board's **🧾 Approvals** button (`PinApproveButton`/`PinDenyButton`,
@@ -323,11 +324,14 @@ to currency.
   the spotlight" is a poor invitation if the member has to hunt for their own
   post. The declined branch carries no link: it never became a message. Nor
   does the *expiry* refund — `unpin_and_delete` has already removed it.
+  The live card carries the **shop pointer** — see *The shop pointer on
+  those two cards* under the paid-request review surfaces below.
 - **Flash Themes (built, sink — migration 188):** the sponsor pattern applied
   to a *day* rather than a message, and the fourth consumer of
-  `economy_submission_store`. `/bank theme` opens a modal (theme name +
-  blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
-  out / `flash_theme_refund` back) and queued `pending`; a mod
+  `economy_submission_store`. The shop's **🏠 Server features** section opens
+  a modal (theme name + blurb); both are charged `price_flash_theme` at
+  submit (ledger `flash_theme` out / `flash_theme_refund` back) and queued
+  `pending`; a mod
   Approves/Declines from the card in the approvals channel, the todo board's
   **🧾 Approvals** button (`ThemeApproveButton` / `ThemeDenyButton`,
   persistent), or the dashboard's **Approvals** page.
@@ -352,6 +356,9 @@ to currency.
   The same sweep retires themes past `theme_hours` (clamped 1–168; **no
   refund** — the day ran) and refunds `pending` ones no mod reached within
   `theme_expire_days` (default 3); approved-and-waiting rows never expire.
+  The live card carries the **shop pointer** — see *The shop pointer on
+  those two cards* under the paid-request review surfaces below.
+
   Retiring runs *before* promotion in one transaction, so a handover happens
   inside a single tick rather than leaving the channel bare for an hour.
   Withdrawing a queued theme refunds; **taking down a running one does not**.
@@ -449,6 +456,22 @@ to currency.
   announcement embeds (`render_pin_live_embed`, `render_theme_live_embed`)
   resolve the same way. A `user_id` of 0 is an erasure detaching a live
   purchase from its buyer and renders "a member", never `<@0>`.
+
+  **The shop pointer on those two cards (2026-09-12, `shop.add_shop_pointer`).**
+  Both live cards end with a *Want one of your own?* field routing the reader
+  to `/bank shop` → 🏠 Server features. They are read by a whole channel and
+  bought by one person, which makes them the only place most members learn the
+  thing was for sale at all. One helper for both, so the copy and the route
+  cannot drift apart. The route is the fragile half and is **tested**
+  (`tests/test_shop_pointer_contract.py`): `/bank theme`, `/bank pin` and
+  `/bank sponsor` were deleted when the shop was reorganised into sections
+  (093b118f), so a card naming one would advertise a command Discord answers
+  with "unknown integration" — and the section caption is read from
+  `shop.SECTION_CAPTIONS` rather than retyped, so a rename moves the signpost
+  with the aisle. It is plain text, not a slash-command mention: a clickable
+  chip needs the live command id, which an embed builder has no way to hold.
+  No other paid perk gets one — the sponsored question and the sponsored emoji
+  have no public "this was bought" card to hang it on.
 
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
