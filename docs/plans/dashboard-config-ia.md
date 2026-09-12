@@ -18,7 +18,7 @@ migration 193, #89 as won't-do, #91 as won't-do on 2026-09-11):
   are bot-wide (no `guild_id`, and in `GLOBAL_TABLES`), so one guild's edit
   rewords the prompts for every guild the bot serves. Reason and revisit
   conditions in `docs/games_system_spec.md` § Environment / files, pinned by
-  `tests/web/test_legitlibs_vocabulary_is_seed_content.py`.
+  `tests/web/test_games_legitlibs_vocabulary_is_seed_content.py`.
 * **#89 XP `role_grant_level`** — the milestone level is hard-coded at 5.
   Partly addressed (the report stopped hard-coding it and now reads the
   setting); making it a dial strands three member-facing surfaces that bake
@@ -1334,8 +1334,8 @@ medium = divergence that will bite on the next touch, low = latent debris.
    per-guild rows with a fallback to the seeded set, or a bot-owner-only
    surface — and revalidate published templates when an axis tightens) are in
    `docs/games_system_spec.md` § Environment / files, and
-   `tests/web/test_legitlibs_vocabulary_is_seed_content.py` fails if a write
-   path appears without that pass.
+   `tests/web/test_games_legitlibs_vocabulary_is_seed_content.py` fails if a
+   write path appears without that pass.
 
 92. **[low]** FFA bank draws treat 'truth' and 'dare' as reserved required
    tags (a truth-kind round only serves rows tagged 'truth'), but the games-

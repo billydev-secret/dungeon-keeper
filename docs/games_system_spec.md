@@ -410,11 +410,11 @@ Games are wired into the economy quest system. Quest-relevant actions call `fire
   either per-guild rows (a `guild_id` column plus a fallback chain to the
   seeded set) or an explicit bot-owner-only surface — and published templates
   have to be revalidated when an axis tightens.
-  `tests/web/test_legitlibs_vocabulary_is_seed_content.py` fails if any write
-  path appears anywhere under `src/` outside a migration — it scans the SQL
-  across the whole tree, not just the route modules, because the layering rule
-  would put a spec-compliant editor's writes in `cogs/games_legitlibs/data.py`
-  rather than in a route.
+  `tests/web/test_games_legitlibs_vocabulary_is_seed_content.py` fails if
+  any write path appears anywhere under `src/` outside a migration — it scans
+  the SQL across the whole tree, not just the route modules, because the
+  layering rule would put a spec-compliant editor's writes in
+  `cogs/games_legitlibs/data.py` rather than in a route.
 
 ### In-memory
 
