@@ -47,7 +47,7 @@ from bot_modules.economy.logic import is_economy_manager, local_day_for
 from bot_modules.economy.guide import GuideNotifyButton, HowItWorksButton
 from bot_modules.economy.leaderboard import bar_fill, progress_bar
 from bot_modules.economy.view_helpers import unit as _unit
-from bot_modules.economy.quests import quest_period
+from bot_modules.economy.quests import channel_scope_line, quest_period
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services.economy_quests_service import (
@@ -878,8 +878,13 @@ class QuestDetailSelect(discord.ui.Select):
     """Ephemeral select showing one quest's full story on demand.
 
     The /bank quests list is deliberately terse (one line per quest); this
-    select carries the long form — description, how it completes, progress —
-    without the list paying for it up front.
+    select carries the long form — description, how it completes, progress,
+    and for a channel-scoped quest the channel it counts in — without the
+    list paying for it up front. The scope line lands here rather than on the
+    list because the list's rows are a padded monospace table: a channel
+    mention renders at whatever width the reader's client makes of the
+    channel name, which would pull the reward column out of alignment on
+    every row that had one.
     """
 
     def __init__(
@@ -928,6 +933,14 @@ class QuestDetailSelect(discord.ui.Select):
         if q.get("description"):
             lines.append(str(q["description"]))
         state = str(q.get("state") or "")
+        # Where to do it, for a channel-scoped quest. Suppressed once the
+        # quest is done, matching the login digest: pointing a member at a
+        # channel to earn something they have already earned is worse than
+        # saying nothing.
+        if state != "done":
+            scope = channel_scope_line(q.get("trigger_channel_id"))
+            if scope:
+                lines.append(scope)
         if state == "community":
             lines.append(progress_bar(int(q["current"]), int(q["target"])))
         else:

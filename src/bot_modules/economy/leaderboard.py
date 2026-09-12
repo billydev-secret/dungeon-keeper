@@ -169,6 +169,10 @@ class CommunityGoal:
     # functional TRIGGER_KINDS label), "" for manual goals — shown next to
     # the title, which stays descriptive on its own.
     kind_flavor: str = ""
+    # The goal's trigger channel, None when anything anywhere counts. The
+    # same NULL that makes `today_delta` unknowable above: a scoped goal is
+    # the one case where "chip in" needs an address.
+    channel_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -417,6 +421,11 @@ def collect_leaderboard_data(
                         if auto
                         else ""
                     ),
+                    channel_id=(
+                        int(row["trigger_channel_id"])
+                        if row["trigger_channel_id"] is not None
+                        else None
+                    ),
                 )
             )
         elif row["qtype"] in _QTYPE_LABELS:
@@ -516,7 +525,13 @@ def _pack_board(heading: str, blocks: list[str]) -> list[tuple[str, str]]:
 
 
 def _community_block(g: CommunityGoal) -> str:
-    """One goal's lines: title + flavor, a tier-region bar, then detail."""
+    """One goal's lines: title + flavor, a tier-region bar, then detail.
+
+    A channel-scoped goal names its channel between the bar and the detail.
+    This block is the only member-facing surface a *guild-wide* goal has that
+    the per-member digest doesn't cover, and the scope is exactly the fact a
+    reader needs before they can contribute to one.
+    """
     if g.settled:
         state = " — ✅ paid out"
     elif g.completed:
@@ -530,6 +545,12 @@ def _community_block(g: CommunityGoal) -> str:
     )
     bar = community_progress_bar(g.current, g.target or 0)
     lines = [title, f"{bar}{state}"]
+    # Where to chip in, for a channel-scoped goal — dropped once the goal is
+    # finished, for the same reason a done quest loses its link in the digest.
+    if not g.completed and not g.settled:
+        scope = quest_rules.channel_scope_line(g.channel_id)
+        if scope:
+            lines.append(scope)
     target = int(g.target or 0)
     if g.auto and target > 0 and not g.settled:
         if not g.completed and g.tiers > 0:

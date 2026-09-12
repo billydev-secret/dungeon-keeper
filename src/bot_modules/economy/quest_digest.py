@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from bot_modules.economy.leaderboard import bar_fill
 from bot_modules.services.embeds import EMBED_FIELD_LIMIT
-from bot_modules.economy.quests import TRIGGER_KINDS
+from bot_modules.economy.quests import TRIGGER_KINDS, channel_scope_suffix
 
 # Discord caps an embed field value at 1024 chars; a cadence group that would
 # overrun splits into "<heading> (cont.)" fields.
@@ -91,10 +91,7 @@ def _blurb(q: dict) -> str | None:
     """The italic context line under a quest — its description + any channel."""
     desc = (q.get("description") or "").strip()
     text = _shorten(desc, _BLURB_MAX) if desc else _fallback_text(q)
-    link = ""
-    channel_id = q.get("trigger_channel_id")
-    if channel_id:
-        link = f" → <#{int(channel_id)}>"
+    link = channel_scope_suffix(q.get("trigger_channel_id"))
     if not text and not link:
         return None
     body = f"_{text}_" if text else ""

@@ -828,6 +828,44 @@ def effective_target(
     return max(target_min, min(target_max, draw))
 
 
+# ── channel scope (spec §4.4, trigger_channel_id) ─────────────────────
+
+# A quest can be pointed at one channel; NULL means any channel counts. The
+# member-facing surfaces say **where** in one of two shapes, and both live
+# here so a wording change cannot land on one card and miss the other.
+#
+# `<#id>` is a *channel* mention, which every client resolves from the guild
+# itself. That is the difference from a member mention, which the reading
+# client resolves from its own cache and so degrades to a bare number in an
+# embed (docs/embed_style_guide.md) — channel mentions carry no such hazard
+# and need no name resolver.
+#
+# Nothing is rendered for an unscoped quest: "any channel" is the default a
+# member already assumes, and printing it on every line would bury the few
+# quests where the scope actually matters.
+
+
+def channel_scope_suffix(channel_id: int | None) -> str:
+    """``" → <#123>"`` to trail a blurb, ``""`` when any channel counts.
+
+    The compact shape, for a surface already spending a line on the quest's
+    description (the daily-login digest's three-line block).
+    """
+    return f" → <#{int(channel_id)}>" if channel_id else ""
+
+
+def channel_scope_line(channel_id: int | None) -> str:
+    """``"📍 Only counts in <#123>"`` on its own line, ``""`` when unscoped.
+
+    The standalone shape, for a surface with room to be explicit: the
+    ``/bank quests`` details card and the community-goal block. "Only counts
+    in" rather than a bare link, because the useful fact is not that the
+    channel is related to the quest but that posting anywhere else earns
+    nothing.
+    """
+    return f"📍 Only counts in <#{int(channel_id)}>" if channel_id else ""
+
+
 # ── trigger-phrase verification (spec §4.4) ───────────────────────────
 
 

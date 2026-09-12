@@ -16,6 +16,8 @@ from bot_modules.economy.quests import (
     board_size,
     can_activate,
     can_activate_event,
+    channel_scope_line,
+    channel_scope_suffix,
     community_auto_target,
     compile_trigger_pattern,
     effective_target,
@@ -514,3 +516,33 @@ def test_apply_pair_bundles_never_splits_a_complete_pair():
     # loose quest (3), not a member of the intact pair.
     got = apply_pair_bundles([2, 3, 8, 9], {2: 5, 5: 2, 8: 9, 9: 8})
     assert got == [2, 5, 8, 9]
+
+
+# ── channel scope (spec §4.4) ─────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "channel_id, suffix, line",
+    [
+        pytest.param(123, " → <#123>", "📍 Only counts in <#123>", id="scoped"),
+        pytest.param(None, "", "", id="any-channel"),
+        # A 0 reaches these from a picker that saved "no channel" as an id
+        # rather than a NULL. It is not a channel, and rendering `<#0>` would
+        # print a dead link on every quest in the guild.
+        pytest.param(0, "", "", id="zero-is-not-a-channel"),
+    ],
+)
+def test_channel_scope_shapes(channel_id, suffix: str, line: str) -> None:
+    assert channel_scope_suffix(channel_id) == suffix
+    assert channel_scope_line(channel_id) == line
+
+
+def test_channel_scope_uses_a_channel_mention_not_a_name() -> None:
+    """`<#id>` resolves from the guild, so it survives a channel rename.
+
+    The embed-name rule that bans `<@id>` is about *member* mentions, which
+    the reading client resolves from its own cache; a channel mention has no
+    such failure mode (docs/embed_style_guide.md).
+    """
+    assert channel_scope_line(42).endswith("<#42>")
+    assert "@" not in channel_scope_line(42)

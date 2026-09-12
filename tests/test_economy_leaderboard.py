@@ -225,6 +225,35 @@ def test_collect_auto_goal_live_detail(db):
     assert goal.kind_flavor == "every word keeps the fire crackling"
 
 
+def test_collect_carries_a_goals_trigger_channel(db):
+    """The scoped-goal id reaches the card, and NULL stays None.
+
+    ``today_delta`` is already suppressed for a scoped goal because the
+    kind-activity ledger is scope-blind; this is the other half of the same
+    fact, and the half the member can act on.
+    """
+    with open_db(db) as conn:
+        scoped = quests_svc.create_quest(
+            conn, GUILD_ID, title="Picture week", description="",
+            qtype="community", reward=25, signoff=0, criteria="",
+            starts_at=None, ends_at=None, rotate_tag="", community_target=70,
+            created_by=None, trigger_kind="photo_post",
+            trigger_channel_id=555,
+        )
+        quests_svc.set_quest_active(conn, GUILD_ID, scoped, True)
+        quests_svc.set_community_progress(conn, scoped, 30, target=70)
+        loose = _quest(
+            conn, qtype="monthly", title="Server buzz", target=100,
+            trigger_kind="message_sent",
+        )
+        quests_svc.set_community_progress(conn, loose, 10, target=100)
+        data = collect_leaderboard_data(conn, GUILD_ID, NOW)
+
+    by_title = {g.title: g for g in data.community}
+    assert by_title["Picture week"].channel_id == 555
+    assert by_title["Server buzz"].channel_id is None
+
+
 # ── builder ─────────────────────────────────────────────────────────────────
 
 
@@ -762,6 +791,49 @@ def test_embed_community_pace_crowd_and_deadline():
     assert "🏁 tier 1/3 secured" in goals
     assert "👥 4 contributing" in goals and "+12 today" in goals
     assert f"ends <t:{int(NOW + 5000)}:R>" in goals
+
+
+@pytest.mark.parametrize(
+    "completed, settled, shown",
+    [
+        pytest.param(False, False, True, id="running-shows-where"),
+        # A finished goal drops the address: inviting people to chip in to
+        # something already paid out is the same mistake the login digest
+        # avoids by blanking a done quest's blurb.
+        pytest.param(True, False, False, id="complete-drops-it"),
+        pytest.param(True, True, False, id="settled-drops-it"),
+    ],
+)
+def test_embed_community_goal_names_its_channel(completed, settled, shown):
+    goal = CommunityGoal(
+        "Picture week", 30, 70, completed=completed, settled=settled,
+        auto=True, tiers=1, contributors=4, channel_id=555,
+    )
+    embed = build_leaderboard_embed(
+        EconSettings(),
+        LeaderboardData([], [goal], []),
+        _names({}),
+        now_ts=NOW,
+    )
+    goals = _fields(embed)[BOARD_HEADING]
+    assert ("📍 Only counts in <#555>" in goals) is shown
+
+
+def test_embed_community_goal_with_no_channel_says_nothing():
+    """An unscoped goal gets no line at all — not "any channel"."""
+    goal = CommunityGoal(
+        "Server buzz", 30, 70, completed=False, settled=False,
+        auto=True, contributors=4,
+    )
+    embed = build_leaderboard_embed(
+        EconSettings(),
+        LeaderboardData([], [goal], []),
+        _names({}),
+        now_ts=NOW,
+    )
+    goals = _fields(embed)[BOARD_HEADING]
+    assert "Only counts in" not in goals
+    assert "<#" not in goals
 
 
 def test_embed_spotlight_gets_countdown():

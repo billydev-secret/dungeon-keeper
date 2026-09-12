@@ -105,7 +105,8 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   quests get no section, staying a surprise payout rather than a listed menu); each
   renders as a block — title, a monospace meter (bar in a code span so bars/counts line
   up), and a blurb from the quest's `description` (with a per-cadence fallback), plus a
-  `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`). The
+  `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`,
+  via `quests.channel_scope_suffix` — see §4.5). The
   layout is built by `economy/quest_digest.py` (pure; unit-tested) and packed into
   ≤1024-char embed fields (`… (cont.)` on overflow). Members without the role earn the
   same rewards with no DM. The embed itself is assembled by
@@ -1088,7 +1089,38 @@ claim about the **firing site**: it has to pass `channel_ids` (the message's
 channel plus its thread parent, so a thread counts toward its parent) into
 `fire_trigger_quests`, or a scoped quest on that kind silently never fires —
 the gate refuses a scoped quest from a caller with no channel context at all.
-Adding a kind to the set without plumbing its listener is the bug. Kinds:
+Adding a kind to the set without plumbing its listener is the bug.
+
+**Telling the member where (2026-09-12).** A scope nobody is told about is a
+quest that quietly pays nothing wherever they happen to be posting. Both
+renderings live in `economy/quests.py` so a wording change cannot land on one
+card and miss the other:
+
+- `channel_scope_suffix` → `" → <#123>"`, trailing a blurb that already has a
+  line of its own. Used by the login digest's three-line block.
+- `channel_scope_line` → `"📍 Only counts in <#123>"`, standing alone. Used by
+  the `/bank quests` **details card** (`QuestDetailSelect`) and the
+  **community-goal block** on the leaderboard / login card
+  (`leaderboard._community_block`, off `CommunityGoal.channel_id`).
+
+Three deliberate silences. An **unscoped** quest renders nothing at all — "any
+channel" is the default a member already assumes, and printing it on every row
+would bury the few quests where the scope matters; production is mostly NULLs,
+since the VN quest channel-scope work (`5ebec438`) shipped with the picker
+unset. A **finished** quest or a completed/settled goal drops its channel:
+sending someone to a channel to earn what they have already earned reads as a
+bug, and the digest already blanks a done quest's blurb for the same reason. And
+the terse `/bank quests` **list** gets nothing — its rows are a padded monospace
+table, and a channel mention renders at whatever width the reader's client
+makes of the name, which would pull the reward column out of true on every row
+that carried one. The details card behind it is where the long form lives.
+
+`<#id>` is a *channel* mention and needs no name resolver: every client
+resolves it from the guild itself. The embed-name rule
+(`docs/embed_style_guide.md`) is about **member** mentions, which the reading
+client resolves from its own cache and so degrade to a bare number.
+
+Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
