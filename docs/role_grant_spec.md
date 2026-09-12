@@ -106,11 +106,23 @@ true, useless, and pointing at the wrong person; the allowlist check returned
 before anything had looked at the member, so the one actionable fact never
 surfaced (todo #176).
 
-The cost, accepted deliberately: **anyone who can invoke `/grant` now learns
-whether a member holds a grant's prerequisite**, whether or not they may use
-that grant. In production the prerequisite is the verification role, which is
-visible in the member list anyway — this widens who is *told*, not who can
-find out.
+The cost, accepted deliberately, is wider than the prerequisite alone. The
+allow-list refusal is now the *last* one `_execute_grant` reaches, so a caller
+with no permission on a grant no longer short-circuits at the top of it and
+falls through every refusal above. **Anyone who can invoke `/grant` therefore
+learns, for any grant key:** whether the member holds its prerequisite,
+whether the member **already holds the granted role**, and whether the grant
+is configured at all ("This role is not configured yet", "The configured role
+no longer exists"). None of it is secret — role membership is visible in the
+member list and the grant roster is on the dashboard — so this widens who is
+*told*, not who can find out. It is still more than the prerequisite, and the
+per-grant allow-list exists so that one role can be one keeper's to give, so
+it is written down here rather than left to be discovered.
+
+Narrowing it back — an early `GATE_NO_PERMISSION` return for the refusals a
+caller can't act on — was considered and declined as not worth the extra
+branch: it would have to thread the permission answer past the already-has
+check, which carries its own load-bearing ordering (below).
 
 A deleted prerequisite outranks the allowlist for the same reason plus one
 more: it is the only report that a safety gate has become unsatisfiable, and
@@ -149,7 +161,7 @@ All ephemeral.
 
 | When | The user sees |
 |---|---|
-| Not on the grant's allowlist (and not admin), target clears the prerequisite | "You don't have permission to use this command." |
+| Not on the grant's allowlist (and not admin), and no refusal above it applies | "You don't have permission to use this command." — it is the **last** refusal reached, so every row above it can be seen by a caller who isn't on the list |
 | Grant key isn't configured | "This grant role is not configured." |
 | Used outside a guild | "This command only works in a server." |
 | Target is a bot | "Bots can't receive this role." |
