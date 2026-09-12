@@ -1107,9 +1107,15 @@ Three deliberate silences. An **unscoped** quest renders nothing at all — "any
 channel" is the default a member already assumes, and printing it on every row
 would bury the few quests where the scope matters; production is mostly NULLs,
 since the VN quest channel-scope work (`5ebec438`) shipped with the picker
-unset. A **finished** quest or a completed/settled goal drops its channel:
-sending someone to a channel to earn what they have already earned reads as a
-bug, and the digest already blanks a done quest's blurb for the same reason. And
+unset. A **finished** quest or goal drops its channel: sending someone to a
+channel to earn what they have already earned reads as a bug, and the digest
+already blanks a done quest's blurb for the same reason. "Finished" is asked
+differently on each surface because they hold different facts — a personal
+quest is `state == "done"`, the leaderboard block waits for `completed_at` /
+`settled_at`, and the details card has only the counter, so a goal there is
+finished when `current >= target`. A guild-wide goal never reaches `done` at
+all: its state stays `"community"` for its whole life, so a `state != "done"`
+guard alone silently never fires for one. And
 the terse `/bank quests` **list** gets nothing — its rows are a padded monospace
 table, and a channel mention renders at whatever width the reader's client
 makes of the name, which would pull the reward column out of true on every row

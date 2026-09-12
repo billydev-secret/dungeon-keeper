@@ -933,11 +933,24 @@ class QuestDetailSelect(discord.ui.Select):
         if q.get("description"):
             lines.append(str(q["description"]))
         state = str(q.get("state") or "")
-        # Where to do it, for a channel-scoped quest. Suppressed once the
-        # quest is done, matching the login digest: pointing a member at a
-        # channel to earn something they have already earned is worse than
-        # saying nothing.
-        if state != "done":
+        # Where to do it, for a channel-scoped quest — dropped once there is
+        # nothing left to earn, matching the login digest and the
+        # leaderboard's goal block: pointing a member at a channel to earn
+        # something they have already earned is worse than saying nothing.
+        #
+        # A guild-wide goal never reaches `done` — its state is "community"
+        # for its whole life — so the counter is what answers "is this
+        # finished", the same pair this card already draws its bar from. That
+        # is a hair earlier than the leaderboard block, which waits for
+        # `completed_at`/`settled_at`; reaching the target is the moment the
+        # channel stops being somewhere worth going.
+        goal_target = int(q.get("target") or 0)
+        finished = state == "done" or (
+            state == "community"
+            and goal_target > 0
+            and int(q.get("current") or 0) >= goal_target
+        )
+        if not finished:
             scope = channel_scope_line(q.get("trigger_channel_id"))
             if scope:
                 lines.append(scope)
