@@ -106,23 +106,39 @@ true, useless, and pointing at the wrong person; the allowlist check returned
 before anything had looked at the member, so the one actionable fact never
 surfaced (todo #176).
 
-The cost, accepted deliberately, is wider than the prerequisite alone. The
-allow-list refusal is now the *last* one `_execute_grant` reaches, so a caller
-with no permission on a grant no longer short-circuits at the top of it and
-falls through every refusal above. **Anyone who can invoke `/grant` therefore
-learns, for any grant key:** whether the member holds its prerequisite,
-whether the member **already holds the granted role**, and whether the grant
-is configured at all ("This role is not configured yet", "The configured role
-no longer exists"). None of it is secret — role membership is visible in the
-member list and the grant roster is on the dashboard — so this widens who is
-*told*, not who can find out. It is still more than the prerequisite, and the
-per-grant allow-list exists so that one role can be one keeper's to give, so
-it is written down here rather than left to be discovered.
+The cost, accepted deliberately, is wider than the prerequisite alone and
+reaches further than the allowlist. `/grant` carries no `default_permissions`
+and no `interaction_check`, so absent a server-side Integrations override
+**every member of the guild can invoke it** and autocomplete every grant key —
+this is not a staff-only surface. The allowlist refusal is now the *last* one
+`_execute_grant` reaches, so a caller with no permission on a grant no longer
+short-circuits at the top of it and falls through every refusal above. Any
+member can therefore probe any grant key against any target and learn:
 
-Narrowing it back — an early `GATE_NO_PERMISSION` return for the refusals a
-caller can't act on — was considered and declined as not worth the extra
-branch: it would have to thread the permission answer past the already-has
-check, which carries its own load-bearing ordering (below).
+* whether the target holds the grant's prerequisite,
+* whether the target **already holds the granted role**,
+* whether the grant is configured at all ("This role is not configured yet",
+  "The configured role no longer exists").
+
+**The first two are public information either way** — role membership is
+listed on every member's profile and in the member list, so this changes who
+is *told*, not who can find out. That is the ground the trade-off was accepted
+on.
+
+**The third is a genuinely new disclosure** and is recorded as one rather than
+filed under the same defence: the grant roster lives only on the dashboard,
+which is admin-gated, so an ordinary member has no other route to it. What
+leaks is thin — that a grant key exists but has no role set, or that its role
+was deleted — and it is the cost of the ordering, not something the ordering
+needs.
+
+Two narrowings were considered and declined, so neither is re-derived later as
+an oversight: an early `GATE_NO_PERMISSION` return for the refusals a caller
+can't act on (it would have to thread the permission answer past the
+already-has check, which carries its own load-bearing ordering, below); and
+gating the whole reorder on `AppContext.can_grant_any_role`, which would have
+confined it to callers holding some grant. The second was declined on the
+grounds above — the substance of what leaks is public.
 
 A deleted prerequisite outranks the allowlist for the same reason plus one
 more: it is the only report that a safety gate has become unsatisfiable, and
