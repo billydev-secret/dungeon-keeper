@@ -49,7 +49,9 @@ The same three buckets also render as a channel embed a mod can pin anywhere. Th
 
 ## Behavior
 
-Permission first: **administrators** always pass; everyone else — moderators included — must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks then run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the bot has Manage Roles, and the role sits below the bot's top role.
+**Administrators** always pass; everyone else — moderators included — must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the target clears the prerequisite, **the caller is on the allowlist**, the bot has Manage Roles, and the role sits below the bot's top role.
+
+The allowlist refusal sits *after* the prerequisite one, which is later than it reads: the allowlist is answered in the cog and carried into the executor as `actor_may_grant` rather than acted on there, so the member's own state can outrank it. See *Why the member is checked before the caller* below.
 
 ### Why admin and not mod
 
@@ -94,6 +96,55 @@ A configured prerequisite whose role has been **deleted** fails *closed* (the
 grant is refused as misconfigured), because the alternative silently disables
 a safety gate the moment someone tidies up a role.
 
+### Why the member is checked before the caller
+
+`role_grant_logic.grant_refusal` composes the two gates and fixes their order:
+**a refusal about the member outranks a refusal about the caller.** Until
+2026-09-11 it ran the other way. A greeter who ran `/grant` on a newcomer who
+had not verified got only "You don't have permission to use this command" —
+true, useless, and pointing at the wrong person; the allowlist check returned
+before anything had looked at the member, so the one actionable fact never
+surfaced (todo #176).
+
+The cost, accepted deliberately, is wider than the prerequisite alone and
+reaches further than the allowlist. `/grant` carries no `default_permissions`
+and no `interaction_check`, so absent a server-side Integrations override
+**every member of the guild can invoke it** and autocomplete every grant key —
+this is not a staff-only surface. The allowlist refusal is now the *last* one
+`_execute_grant` reaches, so a caller with no permission on a grant no longer
+short-circuits at the top of it and falls through every refusal above. Any
+member can therefore probe any grant key against any target and learn:
+
+* whether the target holds the grant's prerequisite,
+* whether the target **already holds the granted role**,
+* whether the grant is configured at all ("This role is not configured yet",
+  "The configured role no longer exists").
+
+**The first two are public information either way** — role membership is
+listed on every member's profile and in the member list, so this changes who
+is *told*, not who can find out. That is the ground the trade-off was accepted
+on.
+
+**The third is a genuinely new disclosure** and is recorded as one rather than
+filed under the same defence: the grant roster lives only on the dashboard,
+which is admin-gated, so an ordinary member has no other route to it. What
+leaks is thin — that a grant key exists but has no role set, or that its role
+was deleted — and it is the cost of the ordering, not something the ordering
+needs.
+
+Two narrowings were considered and declined, so neither is re-derived later as
+an oversight: an early `GATE_NO_PERMISSION` return for the refusals a caller
+can't act on (it would have to thread the permission answer past the
+already-has check, which carries its own load-bearing ordering, below); and
+gating the whole reorder on `AppContext.can_grant_any_role`, which would have
+confined it to callers holding some grant. The second was declined on the
+grounds above — the substance of what leaks is public.
+
+A deleted prerequisite outranks the allowlist for the same reason plus one
+more: it is the only report that a safety gate has become unsatisfiable, and
+administrators — the people who would fix it — bypass the gate and never see
+it. Behind the allowlist as well, it would have almost no audience.
+
 **Self-service menus honour it too** (2026-08-29). A Role Menu button is a
 second door to a role, and until now the menu path never consulted the grant
 config: publishing a button for a gated role handed it out to anyone who
@@ -126,7 +177,7 @@ All ephemeral.
 
 | When | The user sees |
 |---|---|
-| Not on the grant's allowlist (and not admin) | "You don't have permission to use this command." |
+| Not on the grant's allowlist (and not admin), and no refusal above it applies | "You don't have permission to use this command." — it is the **last** refusal reached, so every row above it can be seen by a caller who isn't on the list |
 | Grant key isn't configured | "This grant role is not configured." |
 | Used outside a guild | "This command only works in a server." |
 | Target is a bot | "Bots can't receive this role." |
@@ -134,7 +185,7 @@ All ephemeral.
 | Grant has no `role_id` set | "This role is not configured yet." |
 | Configured role was deleted | "The configured role no longer exists." |
 | Target already has the role | "{member} already has {role}." |
-| Target lacks the prerequisite role (non-admin) | "{member} needs {required} before they can receive {role}." |
+| Target lacks the prerequisite role (non-admin) | "{member} needs {required} before they can receive {role}." — **whether or not the caller is on the allowlist** |
 | Prerequisite role was deleted (non-admin) | "This grant is misconfigured — the required role no longer exists. Contact an admin." |
 | Bot lacks Manage Roles | "I need the Manage Roles permission to do that." |
 | Role is above the bot's top role | "I can't grant {role} because it is above my highest role." |

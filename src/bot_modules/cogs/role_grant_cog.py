@@ -10,7 +10,6 @@ from discord import app_commands
 from discord.ext import commands
 
 from bot_modules.commands.role_grant_commands import _execute_grant
-from bot_modules.services.replies import NO_PERMISSION
 
 if TYPE_CHECKING:
     from bot_modules.core.app_context import Bot
@@ -52,11 +51,11 @@ class RoleGrantCog(commands.Cog):
         member: discord.Member,
     ) -> None:
         ctx = self.bot.ctx
-        if not ctx.can_use_grant_role(interaction, role):
-            await interaction.response.send_message(
-                NO_PERMISSION, ephemeral=True
-            )
-            return
+        # The allow-list answer is carried into the executor rather than
+        # refused here: a member who hasn't met the grant's prerequisite is
+        # the more useful thing to report, and only the executor has resolved
+        # the member far enough to know (role_grant_logic.grant_refusal).
+        actor_may_grant = ctx.can_use_grant_role(interaction, role)
         cfg = ctx.guild_config(interaction.guild_id or 0).grant_roles.get(role)
         if cfg is None:
             await interaction.response.send_message(
@@ -72,6 +71,7 @@ class RoleGrantCog(commands.Cog):
             grant_message=cfg["grant_message"],
             ctx=ctx,
             required_role_id=cfg["required_role_id"],
+            actor_may_grant=actor_may_grant,
         )
 
     async def post_audit_card(
