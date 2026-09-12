@@ -62,6 +62,10 @@ export const CHART_BAR    = "#B58030"; // ROLE_COLORS[0], amber
 export const CHART_ACCENT = "#9D79C3"; // ROLE_COLORS[4], orchid
 export const CHART_TEXT   = "#dbdee1";
 export const CHART_GRID   = "#3f4147";
+// A gridline that has to be found rather than ignored: the week boundaries
+// on a 30-bar daily axis. Two steps up from CHART_GRID, still well below the
+// data — a gridline that competes with a bar is worse than no gridline.
+export const CHART_WEEK_GRID = "#5c5f66";
 // --bg-alt: the card a chart sits on. Painted between stacked segments to
 // read as a 2px gap rather than a border.
 export const CHART_SURFACE = "#2b2d31";
@@ -251,10 +255,53 @@ export function makeLineChart(canvas, { labels, series, title: _title }) {
 }
 
 
+// ── Week-marked x-axis ──────────────────────────────────────────────────
+
+/**
+ * Return `axis` with only `marks` labelled, each on a brighter gridline.
+ *
+ * Chart.js autoskips a dense category axis down to whatever happens to fit, so
+ * a 30-day view prints an arbitrary handful of dates and the weeks in it are
+ * invisible. Given the indices that start a week, the same axis prints those
+ * dates instead — an arbitrary subset traded for a meaningful one. Nothing is
+ * lost with it: the tooltip, the caption and "Show the numbers" still carry
+ * every bucket's date.
+ *
+ * The marks come from the server (see `activity_graphs.week_start_indices`) —
+ * the labels carry no weekday, so the browser cannot work them out.
+ *
+ * A no-op when `marks` is empty, which is every resolution but the daily one.
+ */
+export function applyWeekMarks(axis, marks) {
+  if (!Array.isArray(marks) || marks.length === 0) return axis;
+  const marked = new Set(marks);
+  return {
+    ...axis,
+    ticks: {
+      ...(axis.ticks || {}),
+      autoSkip: false,
+      callback(value, index) {
+        // Returning undefined drops the label but keeps the tick, so the bars
+        // stay put; the weekday is spelled out because the reason these dates
+        // are the ones printed should not have to be inferred from spacing.
+        return marked.has(index) ? `Mon ${this.getLabelForValue(value)}` : undefined;
+      },
+    },
+    grid: {
+      ...(axis.grid || {}),
+      color: (c) => (marked.has(c.index) ? CHART_WEEK_GRID : CHART_GRID),
+    },
+  };
+}
+
+
 // ── Bar chart (simple) ──────────────────────────────────────────────────
 
 export function makeBarChart(
-  canvas, { labels, data, title: _title, xLabel, yLabel, color, partialFrom = null }
+  canvas, {
+    labels, data, title: _title, xLabel, yLabel, color, partialFrom = null,
+    weekMarks = null,
+  }
 ) {
   const chart = new Chart(canvas, {
     type: "bar",
@@ -282,7 +329,7 @@ export function makeBarChart(
         legend: { display: false },
       },
       scales: {
-        x: { grid: { color: GRID }, ticks: { color: TEXT, maxRotation: 45 }, title: xLabel ? { display: true, text: xLabel, color: TEXT } : undefined },
+        x: applyWeekMarks({ grid: { color: GRID }, ticks: { color: TEXT, maxRotation: 45 }, title: xLabel ? { display: true, text: xLabel, color: TEXT } : undefined }, weekMarks),
         y: { grid: { color: GRID }, ticks: { color: TEXT, precision: 0 }, beginAtZero: true, title: yLabel ? { display: true, text: yLabel, color: TEXT } : undefined },
       },
     }),

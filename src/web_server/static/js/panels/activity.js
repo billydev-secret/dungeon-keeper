@@ -2,6 +2,7 @@ import { api } from "../api.js";
 import { withLoading } from "../report-helpers.js";
 import {
   makeBarChart, makeOverlayChart, renderChartLegend, renderChartTable,
+  applyWeekMarks,
   liveEdgeBarProps, liveEdgeProps, marksLiveEdge,
   PROVISIONAL_CAPTION, PROVISIONAL_BAR_CAPTION,
   CHART_BAR, CHART_ACCENT, CHART_TEXT, CHART_GRID, CHART_SURFACE, ROLE_COLORS,
@@ -393,6 +394,13 @@ export function mount(container, initialParams) {
             : null;
         const marked = marksLiveEdge(sliced.counts, partialFrom);
 
+        // The week marks are indices into the full series, so the slider has to
+        // translate them the same way the live edge is translated above —
+        // otherwise a scrolled window brightens the wrong columns.
+        const weekMarks = (data.week_marks || [])
+          .filter((i) => i >= lo && i <= hi)
+          .map((i) => i - lo);
+
         // The caption lives in HTML so it wears the page's type rather than
         // whatever the canvas was handed, and can be selected and read aloud.
         // The note is taken from whether a mark will land, never from the index
@@ -403,10 +411,12 @@ export function mount(container, initialParams) {
           + (marked ? ` · ${PROVISIONAL_BAR_CAPTION}` : "");
 
         chart = hasSeries
-          ? _makeActivityChart(canvas, { ...sliced, hide_x_labels: hasMembers, partialFrom })
+          ? _makeActivityChart(
+              canvas, { ...sliced, hide_x_labels: hasMembers, partialFrom, weekMarks }
+            )
           : makeBarChart(canvas, {
               labels: sliced.labels, data: sliced.counts, title: "",
-              yLabel: data.y_label, partialFrom,
+              yLabel: data.y_label, partialFrom, weekMarks,
             });
 
         // A legend only earns its place with two or more series; with one, the
@@ -422,7 +432,7 @@ export function mount(container, initialParams) {
           // Same live edge: the members line's last point counts the same
           // part-hour the bars do.
           membersChart = _makeMembersChart(
-            mCanvas, sliced.labels, sliced.member_counts, partialFrom
+            mCanvas, sliced.labels, sliced.member_counts, partialFrom, weekMarks
           );
         }
 
@@ -617,8 +627,10 @@ function _makeActivityChart(canvas, data) {
       // When the members chart is drawn underneath it repeats this exact axis,
       // so the labels are hidden here rather than printed twice — the two
       // charts share one x-axis, which is the whole point of splitting them.
-      ticks: { color: CHART_TEXT, maxRotation: 45, display: !data.hide_x_labels },
-      grid: { color: CHART_GRID },
+      ...applyWeekMarks({
+        ticks: { color: CHART_TEXT, maxRotation: 45, display: !data.hide_x_labels },
+        grid: { color: CHART_GRID },
+      }, data.weekMarks),
     },
     y: {
       position: "left",
@@ -667,7 +679,7 @@ function _makeActivityChart(canvas, data) {
  * a 12px hit radius so the hover target clears ~24px. They were 2px before,
  * which is a 4px dot you have to land on dead centre.
  */
-function _makeMembersChart(canvas, labels, counts, partialFrom = null) {
+function _makeMembersChart(canvas, labels, counts, partialFrom = null, weekMarks = null) {
   return new Chart(canvas.getContext("2d"), {
     type: "line",
     data: {
@@ -697,7 +709,10 @@ function _makeMembersChart(canvas, labels, counts, partialFrom = null) {
         legend: { display: false },
       },
       scales: {
-        x: { ticks: { color: CHART_TEXT, maxRotation: 45 }, grid: { color: CHART_GRID } },
+        x: applyWeekMarks(
+          { ticks: { color: CHART_TEXT, maxRotation: 45 }, grid: { color: CHART_GRID } },
+          weekMarks,
+        ),
         y: { ticks: { color: CHART_TEXT, precision: 0 }, grid: { color: CHART_GRID }, beginAtZero: true },
       },
     },

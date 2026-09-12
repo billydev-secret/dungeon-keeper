@@ -35,6 +35,7 @@ from bot_modules.services.activity_graphs import (
     overlay_period_start,
     overlay_stride_days,
     overlay_weekday_name,
+    week_start_indices,
     query_activity_overlay,
     query_dropoff_profiles,
     query_greeter_response_times,
@@ -131,6 +132,38 @@ def test_month_buckets_returns_12_entries():
     assert len(buckets) == 12
     for key, _label in buckets:
         assert key.isdigit()
+
+
+def test_week_start_indices_land_on_monday_labels():
+    # A Thursday, so the marks cannot come out right by accident.
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
+    buckets, _ = _day_buckets(now)
+    marks = week_start_indices("day", now)
+    assert marks, "a 30-day window always contains at least four Mondays"
+    for i in marks:
+        # The label carries no year, so the bucket's own date is rebuilt from
+        # the window start rather than parsed back out of the label.
+        assert buckets[i][1] == (now - timedelta(days=29 - i)).strftime("%b %d")
+        assert (now - timedelta(days=29 - i)).weekday() == 0
+
+
+def test_week_start_indices_are_every_seventh_bar():
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
+    marks = week_start_indices("day", now)
+    assert all(b - a == 7 for a, b in zip(marks, marks[1:]))
+
+
+def test_week_start_indices_follow_the_viewer_offset():
+    # 23:30 UTC on a Sunday is already Monday for a reader 8 hours east, so
+    # the marks have to move with the offset the labels were built under.
+    now = datetime(2026, 5, 31, 23, 30, tzinfo=timezone.utc)
+    assert week_start_indices("day", now) != week_start_indices("day", now, 8)
+
+
+@pytest.mark.parametrize("resolution", ["hour", "week", "month", "hour_of_day"])
+def test_week_start_indices_empty_off_the_daily_view(resolution):
+    now = datetime(2026, 5, 28, 12, 0, tzinfo=timezone.utc)
+    assert week_start_indices(resolution, now) == []
 
 
 def test_bucket_builders_dict_covers_four_resolutions():

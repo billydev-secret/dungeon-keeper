@@ -59,6 +59,39 @@ def test_activity_draws_its_chrome_in_html_not_on_the_canvas():
     assert "renderChartTable" in src, "the table view is gone"
 
 
+def _body(src: str, marker: str) -> str:
+    """The source from `marker` to the next top-level `function`/`export`."""
+    start = src.index(marker)
+    rest = src[start + len(marker) :]
+    end = re.search(r"^(function|export function)\s", rest, re.M)
+    return rest[: end.start()] if end else rest
+
+
+@pytest.mark.parametrize(
+    "path,marker",
+    [
+        # The XP view's stacked bars, the Messages view's plain bars (drawn by
+        # the shared helper), and the members line underneath them.
+        (_PANELS / "activity.js", "function _makeActivityChart"),
+        (_PANELS / "activity.js", "function _makeMembersChart"),
+        (_JS / "charts.js", "export function makeBarChart"),
+    ],
+)
+def test_every_chart_under_the_activity_axis_marks_its_weeks(path, marker):
+    """One 30-day axis is drawn by three builders; all three mark it or none do.
+
+    The members line sits directly beneath the bars and repeats their x-axis, so
+    brighter Monday gridlines on one and not the other reads as a rendering
+    fault rather than as a week boundary. `makeBarChart` is in the list because
+    the default Messages view goes through it, not through the panel's own
+    builder — the easiest of the three to add a chart beside and forget.
+    """
+    assert "applyWeekMarks" in _body(_code(path), marker), (
+        f"{marker} builds an x-axis without applyWeekMarks — the daily view's "
+        f"week boundaries will be missing from this chart alone."
+    )
+
+
 def test_stacked_segments_keep_their_surface_gap():
     """The palette's weakest pair is only legal WITH secondary encoding.
 

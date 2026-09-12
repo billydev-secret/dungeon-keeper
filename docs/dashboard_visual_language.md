@@ -432,6 +432,34 @@ through it. The sentences themselves are `PROVISIONAL_CAPTION` /
 `PROVISIONAL_BAR_CAPTION` in charts.js and `PROVISIONAL_NOTE` in
 `activity_graphs.py` — a panel never hand-rolls its own wording.
 
+**A dense category axis prints an arbitrary subset of its labels unless you
+say which ones matter.** Chart.js `autoSkip` keeps whatever fits, so the daily
+Activity view — thirty bars, labelled `"%b %d"` — shows a handful of dates
+chosen by pixel width, and the weeks inside it are invisible. `applyWeekMarks`
+in charts.js turns that arbitrary subset into a meaningful one: `autoSkip` off,
+a `ticks.callback` returning `undefined` for every bar but the week starts (the
+tick stays, so the bars don't move), and a scriptable `grid.color` brightening
+those columns to `CHART_WEEK_GRID`. Two encodings again — a label and a
+gridline — and the printed label spells the weekday (`Mon Sep 07`) so the
+reason *those* dates are the ones shown never has to be inferred from spacing.
+Hiding the others costs nothing: the tooltip, the caption and "Show the
+numbers" all still carry every bucket's date.
+
+**Which bars start a week is the server's answer, not the browser's.** A
+`"%b %d"` label carries neither weekday nor year, so the client cannot work it
+out; `activity_graphs.week_start_indices` derives the indices from
+`_day_buckets`' own start timestamp, under the same viewer UTC offset the
+labels were built with, and ships them as `week_marks`. Deriving them from the
+bucket rather than from the label is what keeps a mark from drifting off the
+bar it points at. It returns `[]` for every other resolution — `hour` already
+prints a weekday in each label, `week` and `month` are coarser than the thing
+being marked — so the helper is a no-op everywhere but the daily view. One
+axis drawn by three builders (the stacked XP chart, the shared `makeBarChart`,
+the members line beneath them) means all three take the marks or the
+boundaries appear on one chart and not the one sharing its axis;
+`tests/web/test_chart_conventions.py` holds them to it. Anything the slider
+re-slices has to re-index them too — they are positions in the full series.
+
 **Canvas draws the plot; HTML draws everything you'd want to select, resize,
 or have read aloud.** Chart.js's own title and legend are canvas text: they
 cannot use the page's type, cannot be selected, and do not exist for a screen

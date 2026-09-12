@@ -277,6 +277,11 @@ class ActivityResponse(BaseModel):
     y_label: str
     tz_label: str
     x_label: str = "Period"
+    # Daily view only: indices of the bars whose date is a Monday, so the axis
+    # can print those dates and leave the rest to the tooltip. Thirty bars is
+    # past the point where the eye finds a week on its own, and the labels
+    # carry no weekday, so the marks have to come from the server.
+    week_marks: list[int] = []
     series: list[ActivitySeriesSchema] = []
     # Overlay views only — the p25/p50/p75 envelope the current period is read
     # against, empty when the sample was too thin to summarise.

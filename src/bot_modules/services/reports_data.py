@@ -32,6 +32,7 @@ from bot_modules.services.activity_graphs import (
     query_nsfw_tag_activity,
     query_xp_activity_with_breakdown,
     query_xp_histogram_with_breakdown,
+    week_start_indices,
     xp_histogram_window_label,
 )
 
@@ -557,6 +558,10 @@ class ActivityData(TypedDict):
     #: fraction of an hour as though it were a whole one.
     partial_from: int | None
     partial_from_smooth: int | None
+    #: Indices of the bars that begin a week, for the x-axis to label with a
+    #: date. ``day`` only — see :func:`~bot_modules.services.activity_graphs
+    #: .week_start_indices` for why the other resolutions want none.
+    week_marks: list[int]
     member_counts: list[int]
     show_members: bool
     y_label: str
@@ -701,6 +706,9 @@ def get_activity_data(
         "smooth_window": 1,
         "partial_from": partial_from,
         "partial_from_smooth": partial_from,
+        "week_marks": week_start_indices(
+            resolution, datetime.now(timezone.utc), utc_offset_hours
+        ),
         "member_counts": member_counts,
         "show_members": show_members,
         "y_label": y_label,
@@ -791,6 +799,7 @@ def _get_overlay_data(
         # leave that sag looking like a settled measurement.
         "partial_from": result_ov.partial_from,
         "partial_from_smooth": result_ov.partial_from_smooth,
+        "week_marks": [],
         "member_counts": [],
         "show_members": False,
         "y_label": "XP Earned" if mode == "xp" else "Messages",

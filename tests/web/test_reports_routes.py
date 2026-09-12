@@ -145,6 +145,42 @@ def test_only_the_hourly_timeline_has_a_bucket_still_filling(
     assert data["partial_from_smooth"] == data["partial_from"]
 
 
+@pytest.mark.parametrize(
+    "resolution,marked",
+    [
+        # Thirty undifferentiated bars: the axis marks the week boundaries so
+        # the reader can see where one week ends and the next begins.
+        ("day", True),
+        # Every other view is either coarser than a week (weekly, monthly),
+        # already prints a weekday in each label (hourly), or is a shape rather
+        # than a timeline — nothing to mark in any of them.
+        ("hour", False),
+        ("week", False),
+        ("month", False),
+        ("day_of_week", False),
+    ],
+)
+def test_only_the_daily_timeline_marks_week_boundaries(
+    open_client, resolution, marked
+):
+    invalidate_report_cache()
+    resp = open_client.get(
+        f"/api/reports/activity?resolution={resolution}&mode=messages"
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+
+    if marked:
+        # Four or five Mondays fall in any 30-day window, one every seven bars.
+        assert 4 <= len(data["week_marks"]) <= 5
+        assert all(0 <= i < len(data["labels"]) for i in data["week_marks"])
+        assert all(
+            b - a == 7 for a, b in zip(data["week_marks"], data["week_marks"][1:])
+        )
+    else:
+        assert data["week_marks"] == []
+
+
 def _seed_overlay_history(db_path, guild_id, weeks, period="week"):
     """One message and one XP event per week, `weeks` weeks back.
 

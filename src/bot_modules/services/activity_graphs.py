@@ -239,6 +239,33 @@ def _strftime_expr(
     )
 
 
+def week_start_indices(
+    resolution: str, now: datetime, utc_offset_hours: float = 0
+) -> list[int]:
+    """Indices of the daily buckets whose labelled date falls on a Monday.
+
+    Thirty bars is past the point where the eye can find a week on its own, and
+    the ``"%b %d"`` label carries neither weekday nor year, so the client cannot
+    work that out for itself — the marks have to come from here.  Only ``day``
+    has any: ``hour`` already prints a weekday in every label, and ``week`` /
+    ``month`` are each coarser than the thing being marked.
+
+    Derived from :func:`_day_buckets`' own start timestamp rather than from the
+    labels, so a mark can never drift out of step with the bar it points at.
+    """
+    if resolution != "day":
+        return []
+    buckets, start_ts = _day_buckets(now, utc_offset_hours)
+    start_local = datetime.fromtimestamp(start_ts, tz=timezone.utc) + timedelta(
+        hours=utc_offset_hours
+    )
+    return [
+        i
+        for i in range(len(buckets))
+        if (start_local + timedelta(days=i + 1)).weekday() == 0
+    ]
+
+
 _BUCKET_BUILDERS = {
     "hour": _hour_buckets,
     "day": _day_buckets,
