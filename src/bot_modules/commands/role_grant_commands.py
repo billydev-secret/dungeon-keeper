@@ -10,10 +10,12 @@ from typing import TYPE_CHECKING
 import discord
 
 from bot_modules.core.utils import format_user_for_log, get_bot_member
+from bot_modules.services.replies import NO_PERMISSION
 from bot_modules.services.role_grant_logic import (
     GATE_MISSING_PREREQUISITE,
+    GATE_NO_PERMISSION,
     GATE_PREREQUISITE_DELETED,
-    prerequisite_gate,
+    grant_refusal,
 )
 
 if TYPE_CHECKING:
@@ -47,8 +49,16 @@ async def _execute_grant(
     grant_message: str,
     ctx: AppContext,
     required_role_id: int = 0,
+    actor_may_grant: bool = True,
 ) -> None:
-    """Shared grant logic for all role-grant commands."""
+    """Shared grant logic for all role-grant commands.
+
+    ``actor_may_grant`` is the caller's allow-list answer, refused **here**
+    rather than before the call so the member's own state can outrank it —
+    see :func:`~bot_modules.services.role_grant_logic.grant_refusal`. It
+    defaults True because every refusal it guards is this function's to make;
+    a caller that omits it is asking for the grant to be attempted.
+    """
     guild = interaction.guild
     if guild is None:
         await interaction.response.send_message(
@@ -96,7 +106,8 @@ async def _execute_grant(
 
     actor_is_admin = ctx.is_admin(interaction)
     req_role = guild.get_role(required_role_id) if required_role_id > 0 else None
-    gate = prerequisite_gate(
+    gate = grant_refusal(
+        actor_may_grant=actor_may_grant,
         required_role_id=required_role_id,
         required_role_exists=req_role is not None,
         target_has_required=req_role in member.roles,
@@ -125,6 +136,9 @@ async def _execute_grant(
             f"{member.mention} needs {req_role.mention} before they can receive {role.mention}.",
             ephemeral=True,
         )
+        return
+    if gate == GATE_NO_PERMISSION:
+        await interaction.response.send_message(NO_PERMISSION, ephemeral=True)
         return
 
     bot_member = get_bot_member(guild)

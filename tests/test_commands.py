@@ -140,10 +140,19 @@ def grant_setup():
 
 
 async def test_no_permission_denied(grant_setup):
+    """Off the allow-list, with nothing wrong on the member's side.
+
+    Needs a real guild: the allow-list refusal now happens inside the executor
+    (so a member's own state can outrank it), and a guild-less interaction is
+    answered with "only works in a server" long before it — which is how this
+    assertion used to pass without the permission branch running at all.
+    """
     ctx, grant = grant_setup
     ctx.can_use_grant_role.return_value = False
-    ix = _make_interaction()
-    await grant(ix, _make_member())
+    ix = _make_interaction(guild=_guild_with_role(_MockRole(position=1, role_id=999)))
+    member = _make_member()
+    await grant(ix, member)
+    member.add_roles.assert_not_awaited()
     ix.response.send_message.assert_awaited_once()
     assert "permission" in ix.response.send_message.call_args[0][0].lower()
     assert ix.response.send_message.call_args[1]["ephemeral"] is True
@@ -292,6 +301,29 @@ async def test_grant_blocked_when_prerequisite_missing(prereq_setup):
     text = ix.response.send_message.call_args[0][0]
     assert verified_role.mention in text
     assert ix.response.send_message.call_args[1]["ephemeral"] is True
+
+
+async def test_unpermitted_actor_is_told_the_member_is_unverified(prereq_setup):
+    """Todo #176, through the glue that caused it.
+
+    The cog used to answer the allow-list itself and return, so this caller
+    saw "You don't have permission to use this command" and never learned the
+    newcomer hadn't verified. The wiring assertion is that the cog now carries
+    the allow-list answer into the executor instead of acting on it.
+    """
+    ctx, grant = prereq_setup
+    ctx.can_use_grant_role.return_value = False
+    member_role = _MockRole(position=1, role_id=999, name="Member")
+    verified_role = _MockRole(position=2, role_id=PREREQ_ROLE_ID, name="Verified")
+    ix = _make_interaction(guild=_guild_with_roles(member_role, verified_role))
+    member = _make_member(roles=[])
+
+    await grant(ix, member)
+
+    member.add_roles.assert_not_awaited()
+    text = ix.response.send_message.call_args[0][0]
+    assert verified_role.mention in text
+    assert "permission" not in text.lower()
 
 
 async def test_grant_allowed_when_prerequisite_held(prereq_setup):

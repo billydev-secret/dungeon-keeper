@@ -49,7 +49,9 @@ The same three buckets also render as a channel embed a mod can pin anywhere. Th
 
 ## Behavior
 
-Permission first: **administrators** always pass; everyone else — moderators included — must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks then run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the bot has Manage Roles, and the role sits below the bot's top role.
+**Administrators** always pass; everyone else — moderators included — must appear in the grant's allowlist (`grant_role_permissions`) either directly by user ID or via any role they hold. The checks run in order — guild-only, target isn't a bot, no granting to yourself (mods may), the grant has a `role_id` configured and the role still exists, the target doesn't already have it, the target clears the prerequisite, **the caller is on the allowlist**, the bot has Manage Roles, and the role sits below the bot's top role.
+
+The allowlist refusal sits *after* the prerequisite one, which is later than it reads: the allowlist is answered in the cog and carried into the executor as `actor_may_grant` rather than acted on there, so the member's own state can outrank it. See *Why the member is checked before the caller* below.
 
 ### Why admin and not mod
 
@@ -94,6 +96,27 @@ A configured prerequisite whose role has been **deleted** fails *closed* (the
 grant is refused as misconfigured), because the alternative silently disables
 a safety gate the moment someone tidies up a role.
 
+### Why the member is checked before the caller
+
+`role_grant_logic.grant_refusal` composes the two gates and fixes their order:
+**a refusal about the member outranks a refusal about the caller.** Until
+2026-09-11 it ran the other way. A greeter who ran `/grant` on a newcomer who
+had not verified got only "You don't have permission to use this command" —
+true, useless, and pointing at the wrong person; the allowlist check returned
+before anything had looked at the member, so the one actionable fact never
+surfaced (todo #176).
+
+The cost, accepted deliberately: **anyone who can invoke `/grant` now learns
+whether a member holds a grant's prerequisite**, whether or not they may use
+that grant. In production the prerequisite is the verification role, which is
+visible in the member list anyway — this widens who is *told*, not who can
+find out.
+
+A deleted prerequisite outranks the allowlist for the same reason plus one
+more: it is the only report that a safety gate has become unsatisfiable, and
+administrators — the people who would fix it — bypass the gate and never see
+it. Behind the allowlist as well, it would have almost no audience.
+
 **Self-service menus honour it too** (2026-08-29). A Role Menu button is a
 second door to a role, and until now the menu path never consulted the grant
 config: publishing a button for a gated role handed it out to anyone who
@@ -126,7 +149,7 @@ All ephemeral.
 
 | When | The user sees |
 |---|---|
-| Not on the grant's allowlist (and not admin) | "You don't have permission to use this command." |
+| Not on the grant's allowlist (and not admin), target clears the prerequisite | "You don't have permission to use this command." |
 | Grant key isn't configured | "This grant role is not configured." |
 | Used outside a guild | "This command only works in a server." |
 | Target is a bot | "Bots can't receive this role." |
@@ -134,7 +157,7 @@ All ephemeral.
 | Grant has no `role_id` set | "This role is not configured yet." |
 | Configured role was deleted | "The configured role no longer exists." |
 | Target already has the role | "{member} already has {role}." |
-| Target lacks the prerequisite role (non-admin) | "{member} needs {required} before they can receive {role}." |
+| Target lacks the prerequisite role (non-admin) | "{member} needs {required} before they can receive {role}." — **whether or not the caller is on the allowlist** |
 | Prerequisite role was deleted (non-admin) | "This grant is misconfigured — the required role no longer exists. Contact an admin." |
 | Bot lacks Manage Roles | "I need the Manage Roles permission to do that." |
 | Role is above the bot's top role | "I can't grant {role} because it is above my highest role." |

@@ -36,6 +36,10 @@ GATE_MISSING_PREREQUISITE = "missing_prerequisite"
 #: the moment someone deletes a role.
 GATE_PREREQUISITE_DELETED = "prerequisite_deleted"
 
+#: The actor isn't on this grant's allow-list. Ranked **below** both
+#: prerequisite verdicts by :func:`grant_refusal` — see its docstring.
+GATE_NO_PERMISSION = "no_permission"
+
 
 def prerequisite_gate(
     *,
@@ -66,6 +70,54 @@ def prerequisite_gate(
     if not target_has_required:
         return GATE_MISSING_PREREQUISITE
     return GATE_OK
+
+
+def grant_refusal(
+    *,
+    actor_may_grant: bool,
+    required_role_id: int,
+    required_role_exists: bool,
+    target_has_required: bool,
+    actor_is_admin: bool,
+) -> str:
+    """Which refusal ``/grant`` owes the caller, or :data:`GATE_OK` to proceed.
+
+    **A refusal about the member outranks a refusal about the actor.** The
+    command used to answer in the opposite order — allow-list first — so a
+    greeter running ``/grant`` on a newcomer who had not verified was told
+    only "You don't have permission to use this command." That sentence is
+    true and useless: it points at the greeter, while the thing anyone could
+    act on is that the member still has to verify. The permission check never
+    got far enough to know a prerequisite existed.
+
+    The cost, accepted deliberately (Billy's call on todo #176): anyone who
+    can invoke ``/grant`` now learns whether a member holds a grant's
+    prerequisite, whether or not they may use that grant. The prerequisite in
+    production is the verification role, which is visible in the member list
+    anyway, so this widens who is *told* rather than who can find out.
+
+    A deleted prerequisite outranks the actor gate for the same reason and one
+    more: it is the only report that a safety gate has become unsatisfiable,
+    and admins — the people who would fix it — bypass the gate and never see
+    it. Hiding it behind the allow-list as well would leave it with almost no
+    audience at all.
+
+    ``actor_may_grant`` is the allow-list answer
+    (:meth:`AppContext.can_use_grant_role`), which has its own admin bypass.
+    ``actor_is_admin`` is still taken separately so the ordering here is
+    self-contained rather than inheriting that bypass from the caller.
+    """
+    gate = prerequisite_gate(
+        required_role_id=required_role_id,
+        required_role_exists=required_role_exists,
+        target_has_required=target_has_required,
+        actor_is_admin=actor_is_admin,
+    )
+    if gate != GATE_OK:
+        return gate
+    if actor_is_admin or actor_may_grant:
+        return GATE_OK
+    return GATE_NO_PERMISSION
 
 
 def prerequisites_for_role(

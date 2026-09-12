@@ -12,8 +12,10 @@ import pytest
 
 from bot_modules.services.role_grant_logic import (
     GATE_MISSING_PREREQUISITE,
+    GATE_NO_PERMISSION,
     GATE_OK,
     GATE_PREREQUISITE_DELETED,
+    grant_refusal,
     prerequisite_gate,
     prerequisites_for_role,
 )
@@ -102,4 +104,69 @@ def test_missing_prerequisite_implies_the_role_exists():
             actor_is_admin=False,
         )
         != GATE_MISSING_PREREQUISITE
+    )
+
+
+# ── which refusal /grant owes the caller (todo #176) ────────────────────────
+#
+# The reported bug: a greeter ran /grant on a newcomer who hadn't verified and
+# got the bare "You don't have permission to use this command." The command
+# checked the *actor's* allow-list before it ever looked at the member, so the
+# one fact worth telling them — the member hasn't verified — was never reached.
+# Billy's call: a refusal about the member outranks a refusal about the actor,
+# accepting that anyone who can run /grant now learns a member's prerequisite
+# state. These rows are that ordering; the strings live in the command.
+
+
+@pytest.mark.parametrize(
+    ("may_grant", "required_role_id", "exists", "held", "is_admin", "expected"),
+    [
+        # Nothing in the way.
+        pytest.param(True, 0, False, False, False, GATE_OK, id="permitted-no-prereq"),
+        pytest.param(True, 555, True, True, False, GATE_OK, id="permitted-prereq-held"),
+        # Permitted actor, member not verified — unchanged by the reorder.
+        pytest.param(
+            True, 555, True, False, False, GATE_MISSING_PREREQUISITE,
+            id="permitted-prereq-missing",
+        ),
+        # THE BUG. Not on the allow-list *and* the member hasn't verified: the
+        # member's state is what the caller can act on, so it wins. Before the
+        # fix this was GATE_NO_PERMISSION and the verification never surfaced.
+        pytest.param(
+            False, 555, True, False, False, GATE_MISSING_PREREQUISITE,
+            id="unpermitted-prereq-missing-reports-the-member",
+        ),
+        # ...and a deleted prerequisite still outranks the actor gate, so a
+        # broken gate is reported as broken rather than hidden behind it.
+        pytest.param(
+            False, 555, False, False, False, GATE_PREREQUISITE_DELETED,
+            id="unpermitted-prereq-deleted-reports-the-config",
+        ),
+        # With nothing wrong on the member's side the actor gate is the honest
+        # answer, so the allow-list keeps working exactly as before.
+        pytest.param(
+            False, 555, True, True, False, GATE_NO_PERMISSION,
+            id="unpermitted-prereq-held",
+        ),
+        pytest.param(
+            False, 0, False, False, False, GATE_NO_PERMISSION,
+            id="unpermitted-no-prereq",
+        ),
+        # An admin passes both gates without being listed anywhere. Asserted on
+        # the logic rather than inherited from can_use_grant_role's own admin
+        # bypass, so the ordering can't quietly start depending on the caller.
+        pytest.param(False, 555, True, False, True, GATE_OK, id="admin-bypasses-both"),
+        pytest.param(False, 555, False, False, True, GATE_OK, id="admin-bypasses-deleted"),
+    ],
+)
+def test_grant_refusal(may_grant, required_role_id, exists, held, is_admin, expected):
+    assert (
+        grant_refusal(
+            actor_may_grant=may_grant,
+            required_role_id=required_role_id,
+            required_role_exists=exists,
+            target_has_required=held,
+            actor_is_admin=is_admin,
+        )
+        == expected
     )
