@@ -461,31 +461,20 @@ async def test_detail_select_says_nothing_for_an_any_channel_quest(ctx, db):
     assert "<#" not in body
 
 
-@pytest.mark.parametrize(
-    "current, target, shown",
-    [
-        pytest.param(30, 70, True, id="running-shows-where"),
-        pytest.param(70, 70, False, id="target-reached-drops-it"),
-        pytest.param(90, 70, False, id="overshot-drops-it"),
-        # A goal with no target can never be "finished" by the counter, so it
-        # keeps its channel rather than hiding it on a 0 >= 0 accident.
-        pytest.param(0, 0, True, id="no-target-keeps-it"),
-    ],
-)
 @pytest.mark.asyncio
-async def test_detail_select_drops_a_finished_goals_channel(
-    ctx, db, current, target, shown
-):
-    """A community goal never reaches `done`, so the counter is the test.
+async def test_detail_select_asks_the_shared_rule_about_a_finished_goal(ctx, db):
+    """Wiring only: the card routes through `quests.scope_worth_showing`.
 
-    Without this the details card went on advertising the channel of a goal
-    that had already hit its target, while the same goal on the leaderboard
-    had correctly stopped — two surfaces of one rule disagreeing.
+    The rule itself — that a community goal is finished by its counter, since
+    its state is never `done` — is covered value-by-value in
+    tests/test_economy_quests_logic.py. This proves the card asks it at all,
+    which is the part that was wrong: it used to test `state != "done"`
+    inline, a guard that never fires for a goal.
     """
     _enable(db)
     goal = _detail_quest(
         id=8, title="Picture week", qtype="community", state="community",
-        current=current, target=target, reward_xp=0, trigger_channel_id=555,
+        current=70, target=70, reward_xp=0, trigger_channel_id=555,
     )
     view = QuestClaimView(
         ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
@@ -496,7 +485,7 @@ async def test_detail_select_drops_a_finished_goals_channel(
     interaction = _button_interaction(_bot(ctx), user=_member())
     await select.callback(interaction)
     body = interaction.response.send_message.await_args.kwargs["embed"].description
-    assert ("📍 Only counts in <#555>" in body) is shown
+    assert "<#555>" not in body
 
 
 @pytest.mark.asyncio

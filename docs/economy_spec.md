@@ -1093,8 +1093,8 @@ Adding a kind to the set without plumbing its listener is the bug.
 
 **Telling the member where (2026-09-12).** A scope nobody is told about is a
 quest that quietly pays nothing wherever they happen to be posting. Both
-renderings live in `economy/quests.py` so a wording change cannot land on one
-card and miss the other:
+renderings — and the rule deciding whether to render at all — live in
+`economy/quests.py` so a change cannot land on one card and miss the other:
 
 - `channel_scope_suffix` → `" → <#123>"`, trailing a blurb that already has a
   line of its own. Used by the login digest's three-line block.
@@ -1111,11 +1111,14 @@ unset. A **finished** quest or goal drops its channel: sending someone to a
 channel to earn what they have already earned reads as a bug, and the digest
 already blanks a done quest's blurb for the same reason. "Finished" is asked
 differently on each surface because they hold different facts — a personal
-quest is `state == "done"`, the leaderboard block waits for `completed_at` /
-`settled_at`, and the details card has only the counter, so a goal there is
-finished when `current >= target`. A guild-wide goal never reaches `done` at
-all: its state stays `"community"` for its whole life, so a `state != "done"`
-guard alone silently never fires for one. And
+quest is `state == "done"`, but a guild-wide goal never reaches `done` at all —
+its state stays `"community"` for its whole life, so a `state != "done"` guard
+alone silently never fires for one, and its counter has to answer instead.
+`quests.scope_worth_showing(state, current, target)` holds that judgement for
+the details card so it is not a fourth hand-written guard. The leaderboard
+block keeps its own, waiting for `completed_at` / `settled_at`: it is a
+settlement record, and it is deliberately a hair behind the card, since
+reaching the target is the moment the channel stops being worth going to. And
 the terse `/bank quests` **list** gets nothing — its rows are a padded monospace
 table, and a channel mention renders at whatever width the reader's client
 makes of the name, which would pull the reward column out of true on every row

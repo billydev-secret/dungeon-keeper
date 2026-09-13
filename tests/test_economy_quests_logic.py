@@ -34,6 +34,7 @@ from bot_modules.economy.quests import (
     previous_local_day,
     quest_period,
     reward_band,
+    scope_worth_showing,
 )
 
 
@@ -518,7 +519,7 @@ def test_apply_pair_bundles_never_splits_a_complete_pair():
     assert got == [2, 5, 8, 9]
 
 
-# ── channel scope (spec §4.4) ─────────────────────────────────────────
+# ── channel scope (spec §4.5) ─────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -546,3 +547,28 @@ def test_channel_scope_uses_a_channel_mention_not_a_name() -> None:
     """
     assert channel_scope_line(42).endswith("<#42>")
     assert "@" not in channel_scope_line(42)
+
+
+@pytest.mark.parametrize(
+    "state, current, target, shown",
+    [
+        pytest.param("community", 30, 70, True, id="goal-running-shows-where"),
+        pytest.param("community", 70, 70, False, id="goal-target-reached"),
+        pytest.param("community", 90, 70, False, id="goal-overshot"),
+        # No target can never be "finished" by the counter, so the scope
+        # stays rather than vanishing on a 0 >= 0 accident.
+        pytest.param("community", 0, 0, True, id="goal-with-no-target"),
+        pytest.param("active", 0, 0, True, id="personal-running"),
+        pytest.param("pending", 0, 0, True, id="personal-awaiting-signoff"),
+        pytest.param("done", 0, 0, False, id="personal-done"),
+    ],
+)
+def test_scope_worth_showing(state: str, current: int, target: int, shown: bool) -> None:
+    """The regression: a guild-wide goal never reaches `done`.
+
+    A `state != "done"` guard therefore never fires for one, so a goal that
+    had already hit its target went on advertising its channel while the same
+    goal on the leaderboard had correctly stopped — two surfaces of one rule
+    disagreeing. The counter is what answers the question for a goal.
+    """
+    assert scope_worth_showing(state, current, target) is shown

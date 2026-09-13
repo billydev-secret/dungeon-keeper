@@ -828,7 +828,7 @@ def effective_target(
     return max(target_min, min(target_max, draw))
 
 
-# ── channel scope (spec §4.4, trigger_channel_id) ─────────────────────
+# ── channel scope (spec §4.5, trigger_channel_id) ─────────────────────
 
 # A quest can be pointed at one channel; NULL means any channel counts. The
 # member-facing surfaces say **where** in one of two shapes, and both live
@@ -864,6 +864,35 @@ def channel_scope_line(channel_id: int | None) -> str:
     nothing.
     """
     return f"📍 Only counts in <#{int(channel_id)}>" if channel_id else ""
+
+
+def scope_worth_showing(state: str, current: int, target: int) -> bool:
+    """Is this quest's channel still somewhere worth sending a member?
+
+    ``False`` once there is nothing left to earn there. Pointing someone at a
+    channel to earn what they have already earned reads as a bug, not a
+    signpost, so every surface drops the scope at that moment.
+
+    The catch is that "finished" is not one fact. A personal quest reaches
+    ``state == "done"``. A guild-wide goal **never** does — its state is
+    ``"community"`` for its whole life — so a bare ``state != "done"`` guard
+    silently never fires for one, which is exactly the bug this replaced.
+    A goal is finished when its counter reaches its target instead.
+
+    A goal with no target set keeps its channel: nothing to reach means
+    nothing is over, and ``0 >= 0`` would otherwise hide the scope by
+    accident.
+
+    This is a hair earlier than ``leaderboard._community_block``, which waits
+    for ``completed_at``/``settled_at``. Deliberate: the block is a settlement
+    record, while reaching the target is the moment the channel stops being
+    somewhere worth going.
+    """
+    if state == "done":
+        return False
+    if state == "community":
+        return not (target > 0 and current >= target)
+    return True
 
 
 # ── trigger-phrase verification (spec §4.4) ───────────────────────────

@@ -47,7 +47,11 @@ from bot_modules.economy.logic import is_economy_manager, local_day_for
 from bot_modules.economy.guide import GuideNotifyButton, HowItWorksButton
 from bot_modules.economy.leaderboard import bar_fill, progress_bar
 from bot_modules.economy.view_helpers import unit as _unit
-from bot_modules.economy.quests import channel_scope_line, quest_period
+from bot_modules.economy.quests import (
+    channel_scope_line,
+    quest_period,
+    scope_worth_showing,
+)
 from bot_modules.core.utils import safe_ephemeral as _core_safe_ephemeral
 from bot_modules.economy.signoff_notice import announce_signoff_outcome
 from bot_modules.services.economy_quests_service import (
@@ -933,24 +937,12 @@ class QuestDetailSelect(discord.ui.Select):
         if q.get("description"):
             lines.append(str(q["description"]))
         state = str(q.get("state") or "")
-        # Where to do it, for a channel-scoped quest — dropped once there is
-        # nothing left to earn, matching the login digest and the
-        # leaderboard's goal block: pointing a member at a channel to earn
-        # something they have already earned is worse than saying nothing.
-        #
-        # A guild-wide goal never reaches `done` — its state is "community"
-        # for its whole life — so the counter is what answers "is this
-        # finished", the same pair this card already draws its bar from. That
-        # is a hair earlier than the leaderboard block, which waits for
-        # `completed_at`/`settled_at`; reaching the target is the moment the
-        # channel stops being somewhere worth going.
-        goal_target = int(q.get("target") or 0)
-        finished = state == "done" or (
-            state == "community"
-            and goal_target > 0
-            and int(q.get("current") or 0) >= goal_target
-        )
-        if not finished:
+        # Where to do it, for a channel-scoped quest. Whether it is still
+        # worth saying is `quests.scope_worth_showing`'s call, not this
+        # card's — the same counter pair the bar below is drawn from.
+        if scope_worth_showing(
+            state, int(q.get("current") or 0), int(q.get("target") or 0)
+        ):
             scope = channel_scope_line(q.get("trigger_channel_id"))
             if scope:
                 lines.append(scope)
