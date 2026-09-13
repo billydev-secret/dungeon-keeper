@@ -176,6 +176,36 @@ SECTION_CAPTIONS = {
     SECTION_GAMES: "🎲 Game features",
 }
 
+#: Where a public paid-perk card sends a reader who wants one of their own.
+#: Both halves have to stay true: ``/bank theme``, ``/bank pin`` and
+#: ``/bank sponsor`` were **deleted** when the shop was reorganised into
+#: sections (2026-08-29), so a card naming one would advertise a command
+#: Discord answers with "unknown integration" — and the section caption is
+#: read from ``SECTION_CAPTIONS`` rather than retyped, so a rename moves the
+#: signpost with the aisle. Plain text, not a slash-command mention: a
+#: clickable chip needs the live command id, which an embed builder has no
+#: way to hold.
+SHOP_POINTER = f"`/bank shop` → {SECTION_CAPTIONS[SECTION_SERVER]}"
+
+#: Field name on every such card, so the two read as one offer, not two.
+SHOP_POINTER_FIELD_NAME = "Want one of your own?"
+
+
+def add_shop_pointer(embed: discord.Embed, offer: str) -> discord.Embed:
+    """Append the "you can buy this too" field to a public paid-perk card.
+
+    The card a member is looking at *is* the advertisement — someone paid for
+    the themed day or the pin they are reading, and this is the one moment
+    the reader is demonstrably interested. ``offer`` is the verb phrase for
+    this product ("Buy a themed day of your own"); the route is shared.
+    """
+    embed.add_field(
+        name=SHOP_POINTER_FIELD_NAME,
+        value=f"{offer} — {SHOP_POINTER}",
+        inline=False,
+    )
+    return embed
+
 
 def stocked_perks(
     settings: EconSettings,

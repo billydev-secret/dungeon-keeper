@@ -419,6 +419,95 @@ async def test_detail_select_community_and_stale(ctx, db):
     assert "no longer on your board" in msg
 
 
+@pytest.mark.asyncio
+async def test_detail_select_names_a_scoped_quests_channel(ctx, db):
+    """A channel-scoped quest tells the member where to go (todo #187).
+
+    The list row can't carry it — its columns are a padded monospace table —
+    so the details card is the surface that does.
+    """
+    _enable(db)
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[_detail_quest(trigger_channel_id=555)],
+    )
+    select = view.children[0]
+    select._values = ["7"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+    body = interaction.response.send_message.await_args.kwargs["embed"].description
+    assert "📍 Only counts in <#555>" in body
+
+
+@pytest.mark.asyncio
+async def test_detail_select_says_nothing_for_an_any_channel_quest(ctx, db):
+    """No trigger channel means no extra line — never "any channel".
+
+    Production is full of these: the VN quest channel-scope work (5ebec438)
+    shipped with the picker unset, so NULL is the common case and it has to
+    render as plainly as it did before the scope line existed.
+    """
+    _enable(db)
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[_detail_quest()],
+    )
+    select = view.children[0]
+    select._values = ["7"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+    body = interaction.response.send_message.await_args.kwargs["embed"].description
+    assert "Only counts in" not in body
+    assert "<#" not in body
+
+
+@pytest.mark.asyncio
+async def test_detail_select_asks_the_shared_rule_about_a_finished_goal(ctx, db):
+    """Wiring only: the card routes through `quests.scope_worth_showing`.
+
+    The rule itself — that a community goal is finished by its counter, since
+    its state is never `done` — is covered value-by-value in
+    tests/test_economy_quests_logic.py. This proves the card asks it at all,
+    which is the part that was wrong: it used to test `state != "done"`
+    inline, a guard that never fires for a goal.
+    """
+    _enable(db)
+    goal = _detail_quest(
+        id=8, title="Picture week", qtype="community", state="community",
+        current=70, target=70, reward_xp=0, trigger_channel_id=555,
+    )
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[goal],
+    )
+    select = view.children[0]
+    select._values = ["8"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+    body = interaction.response.send_message.await_args.kwargs["embed"].description
+    assert "<#555>" not in body
+
+
+@pytest.mark.asyncio
+async def test_detail_select_drops_the_channel_once_the_quest_is_done(ctx, db):
+    """Deliberate: a done quest keeps its channel to itself.
+
+    Same call the login digest makes — sending someone to a channel to earn
+    what they have already earned reads as a bug to them, not a signpost.
+    """
+    _enable(db)
+    view = QuestClaimView(
+        ctx, _settings(db), cast(discord.Guild, FakeGuild(id=GUILD_ID)),
+        [], detailable=[_detail_quest(trigger_channel_id=555, state="done")],
+    )
+    select = view.children[0]
+    select._values = ["7"]  # type: ignore[attr-defined]
+    interaction = _button_interaction(_bot(ctx), user=_member())
+    await select.callback(interaction)
+    body = interaction.response.send_message.await_args.kwargs["embed"].description
+    assert "<#555>" not in body
+
+
 # ── /bank quests claim select ─────────────────────────────────────────────────
 
 

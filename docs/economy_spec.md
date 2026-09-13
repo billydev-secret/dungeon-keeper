@@ -105,7 +105,8 @@ rounds up, writes the wallet balance and an append-only ledger row atomically.
   quests get no section, staying a surprise payout rather than a listed menu); each
   renders as a block — title, a monospace meter (bar in a code span so bars/counts line
   up), and a blurb from the quest's `description` (with a per-cadence fallback), plus a
-  `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`). The
+  `<#channel>` link when the quest is scoped to a channel (`trigger_channel_id`,
+  via `quests.channel_scope_suffix` — see §4.5). The
   layout is built by `economy/quest_digest.py` (pure; unit-tested) and packed into
   ≤1024-char embed fields (`… (cont.)` on overflow). Members without the role earn the
   same rewards with no DM. The embed itself is assembled by
@@ -301,7 +302,8 @@ to currency.
     member for staff latency. `price_qotd_sponsor = 0` disables the feature.
 - **Pin of the Day (built, sink — migration 108, plan
   `docs/plans/pin-of-the-day.md`):** the sponsor pattern applied to a *public*
-  artifact. `/bank pin` opens a modal; the text is charged `price_pin_of_day`
+  artifact. The shop's **🏠 Server features** section opens a modal; the
+  text is charged `price_pin_of_day`
   at submit (ledger `pin_sponsor` out / `pin_sponsor_refund` back) and queued
   `pending`; a mod Approves/Declines from the card in the approvals channel or
   the todo board's **🧾 Approvals** button (`PinApproveButton`/`PinDenyButton`,
@@ -323,11 +325,14 @@ to currency.
   the spotlight" is a poor invitation if the member has to hunt for their own
   post. The declined branch carries no link: it never became a message. Nor
   does the *expiry* refund — `unpin_and_delete` has already removed it.
+  The live card carries the **shop pointer** — see *The shop pointer on
+  those two cards* under the paid-request review surfaces below.
 - **Flash Themes (built, sink — migration 188):** the sponsor pattern applied
   to a *day* rather than a message, and the fourth consumer of
-  `economy_submission_store`. `/bank theme` opens a modal (theme name +
-  blurb); both are charged `price_flash_theme` at submit (ledger `flash_theme`
-  out / `flash_theme_refund` back) and queued `pending`; a mod
+  `economy_submission_store`. The shop's **🏠 Server features** section opens
+  a modal (theme name + blurb); both are charged `price_flash_theme` at
+  submit (ledger `flash_theme` out / `flash_theme_refund` back) and queued
+  `pending`; a mod
   Approves/Declines from the card in the approvals channel, the todo board's
   **🧾 Approvals** button (`ThemeApproveButton` / `ThemeDenyButton`,
   persistent), or the dashboard's **Approvals** page.
@@ -352,6 +357,9 @@ to currency.
   The same sweep retires themes past `theme_hours` (clamped 1–168; **no
   refund** — the day ran) and refunds `pending` ones no mod reached within
   `theme_expire_days` (default 3); approved-and-waiting rows never expire.
+  The live card carries the **shop pointer** — see *The shop pointer on
+  those two cards* under the paid-request review surfaces below.
+
   Retiring runs *before* promotion in one transaction, so a handover happens
   inside a single tick rather than leaving the channel bare for an hour.
   Withdrawing a queued theme refunds; **taking down a running one does not**.
@@ -449,6 +457,22 @@ to currency.
   announcement embeds (`render_pin_live_embed`, `render_theme_live_embed`)
   resolve the same way. A `user_id` of 0 is an erasure detaching a live
   purchase from its buyer and renders "a member", never `<@0>`.
+
+  **The shop pointer on those two cards (2026-09-12, `shop.add_shop_pointer`).**
+  Both live cards end with a *Want one of your own?* field routing the reader
+  to `/bank shop` → 🏠 Server features. They are read by a whole channel and
+  bought by one person, which makes them the only place most members learn the
+  thing was for sale at all. One helper for both, so the copy and the route
+  cannot drift apart. The route is the fragile half and is **tested**
+  (`tests/test_shop_pointer_contract.py`): `/bank theme`, `/bank pin` and
+  `/bank sponsor` were deleted when the shop was reorganised into sections
+  (093b118f), so a card naming one would advertise a command Discord answers
+  with "unknown integration" — and the section caption is read from
+  `shop.SECTION_CAPTIONS` rather than retyped, so a rename moves the signpost
+  with the aisle. It is plain text, not a slash-command mention: a clickable
+  chip needs the live command id, which an embed builder has no way to hold.
+  No other paid perk gets one — the sponsored question and the sponsored emoji
+  have no public "this was bought" card to hang it on.
 
 - **Community Bounty (built, sink — migration 109, plan
   `docs/plans/community-bounty.md`):** the economy's first *many-payer* mechanic.
@@ -1065,7 +1089,47 @@ claim about the **firing site**: it has to pass `channel_ids` (the message's
 channel plus its thread parent, so a thread counts toward its parent) into
 `fire_trigger_quests`, or a scoped quest on that kind silently never fires —
 the gate refuses a scoped quest from a caller with no channel context at all.
-Adding a kind to the set without plumbing its listener is the bug. Kinds:
+Adding a kind to the set without plumbing its listener is the bug.
+
+**Telling the member where (2026-09-12).** A scope nobody is told about is a
+quest that quietly pays nothing wherever they happen to be posting. Both
+renderings — and the rule deciding whether to render at all — live in
+`economy/quests.py` so a change cannot land on one card and miss the other:
+
+- `channel_scope_suffix` → `" → <#123>"`, trailing a blurb that already has a
+  line of its own. Used by the login digest's three-line block.
+- `channel_scope_line` → `"📍 Only counts in <#123>"`, standing alone. Used by
+  the `/bank quests` **details card** (`QuestDetailSelect`) and the
+  **community-goal block** on the leaderboard / login card
+  (`leaderboard._community_block`, off `CommunityGoal.channel_id`).
+
+Three deliberate silences. An **unscoped** quest renders nothing at all — "any
+channel" is the default a member already assumes, and printing it on every row
+would bury the few quests where the scope matters; production is mostly NULLs,
+since the VN quest channel-scope work (`5ebec438`) shipped with the picker
+unset. A **finished** quest or goal drops its channel: sending someone to a
+channel to earn what they have already earned reads as a bug, and the digest
+already blanks a done quest's blurb for the same reason. "Finished" is asked
+differently on each surface because they hold different facts — a personal
+quest is `state == "done"`, but a guild-wide goal never reaches `done` at all —
+its state stays `"community"` for its whole life, so a `state != "done"` guard
+alone silently never fires for one, and its counter has to answer instead.
+`quests.scope_worth_showing(state, current, target)` holds that judgement for
+the details card so it is not a fourth hand-written guard. The leaderboard
+block keeps its own, waiting for `completed_at` / `settled_at`: it is a
+settlement record, and it is deliberately a hair behind the card, since
+reaching the target is the moment the channel stops being worth going to. And
+the terse `/bank quests` **list** gets nothing — its rows are a padded monospace
+table, and a channel mention renders at whatever width the reader's client
+makes of the name, which would pull the reward column out of true on every row
+that carried one. The details card behind it is where the long form lives.
+
+`<#id>` is a *channel* mention and needs no name resolver: every client
+resolves it from the guild itself. The embed-name rule
+(`docs/embed_style_guide.md`) is about **member** mentions, which the reading
+client resolves from its own cache and so degrade to a bare number.
+
+Kinds:
 
 | kind | fires when | fired from | occurrence key |
 |---|---|---|---|
